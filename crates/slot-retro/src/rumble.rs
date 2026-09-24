@@ -4,9 +4,8 @@ use std::sync::Arc;
 
 use crate::ffi::{RUMBLE_STRONG, RUMBLE_WEAK};
 
-/// The core's end of the vibration motor, shared with whoever drives the hardware. The core
-/// writes it from the emulator thread, so setting it is an atomic store and nothing else: a
-/// motor write that waited on a device would cost the frame it happened in.
+/// The core's end of the vibration motor. Written from the emulator thread, so setting it is
+/// only an atomic store: never wait on the device there.
 #[derive(Clone, Default)]
 pub struct Rumble(Arc<Motors>);
 
@@ -17,8 +16,7 @@ struct Motors {
 }
 
 impl Rumble {
-    /// The body of libretro's `set_rumble_state`, refusals and all, so the callback above it
-    /// is one line and everything that can be got wrong is reachable without a core.
+    /// The body of libretro's `set_rumble_state`, testable without a core.
     pub fn set(&self, port: c_uint, effect: c_uint, strength: u16) -> bool {
         // One pad, soldered in.
         if port != 0 {

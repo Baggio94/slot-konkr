@@ -5,11 +5,7 @@ use crate::icon::{haloed, HALO_PX};
 use crate::text;
 use crate::CartFace;
 
-/// Everything the HUD ever says in words. Each answers something the user just did: two confirm
-/// it, two answer the link shortcut where it cannot be carried out — on a core that cannot link
-/// at all, and on a cart whose link gpSP cannot carry — either of which would otherwise do
-/// nothing and say nothing, and the last two are a link session ending, from whichever end ended
-/// it.
+/// Everything the HUD says in words, each answering something the user just did.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Toast {
     StateSaved,
@@ -17,12 +13,11 @@ pub enum Toast {
     NeedsGpsp,
     NoLink,
     LinkEnded,
-    /// The far end of a live session ended it and sent word before going. The other side of
-    /// `LinkEnded`, and a separate sentence because which device ended it is the one thing the
-    /// player on this one cannot see.
+    /// The far end ended the session. Separate from `LinkEnded` because the player here cannot
+    /// see which device ended it.
     PeerEnded,
-    /// TEMPORARY, with `Action::ColourCorrectionToggle`. Two variants because a face is
-    /// rasterised per variant, so the state has to be in the string.
+    /// TEMPORARY, with `Action::ColourCorrectionToggle`. Two variants because faces are
+    /// rasterised per variant.
     ColourOn,
     ColourOff,
 }
@@ -39,7 +34,7 @@ impl Toast {
         Toast::ColourOff,
     ];
 
-    /// Position in `ALL`, which is the order faces are uploaded in.
+    /// Position in `ALL`, the order faces are uploaded in.
     pub fn index(self) -> usize {
         self as usize
     }
@@ -51,11 +46,7 @@ impl Toast {
             Toast::NeedsGpsp => "Please switch to gpSP",
             Toast::NoLink => "No link support",
             Toast::LinkEnded => "Link ended",
-            // Passive, and deliberately so: on this device the link was ended by somebody else,
-            // and "Link was ended" reads as something that happened to you rather than
-            // something you did — which is the one distinction this end cannot see for itself.
-            // Impersonal too, like every other line here ("No link support", "Nobody arrived");
-            // the product says "friend" nowhere, so this is not the screen to start.
+            // Passive: here the link was ended by the other device, not by this player.
             Toast::PeerEnded => "Link was ended",
             Toast::ColourOn => "Correction On",
             Toast::ColourOff => "Correction Off",
@@ -63,28 +54,25 @@ impl Toast {
     }
 }
 
-/// One box for every string, so which one it is never moves the line. Wide enough for the
-/// longest at full size: `fit` would otherwise shrink that one line and no other.
+/// One box for every string, so the line never moves. Wide enough for the longest at full
+/// size, or `fit` would shrink that one line.
 const TOAST_W: u32 = 240;
 const TOAST_H: u32 = 22;
 const TOAST_PX: f32 = 16.0;
 const TOAST_MIN_PX: f32 = 12.0;
 
-/// Where the line lands, in offscreen pixels.
 pub fn toast_rect() -> (f32, f32, f32, f32) {
     let (w, h) = toast_box();
     let (w, h) = (w as f32, h as f32);
     ((OUT_W as f32 - w) / 2.0, (PLATE_H - h) / 2.0, w, h)
 }
 
-/// The box every toast is rastered into, for callers laying the row out before they know
-/// which string it will hold.
+/// The box every toast is rastered into, for laying out before the string is known.
 pub fn toast_box() -> (u32, u32) {
     (TOAST_W + 2 * HALO_PX, TOAST_H + 2 * HALO_PX)
 }
 
-/// Transparent apart from the type and the halo dilated out of it. Nothing backs a toast, so
-/// the halo is the only thing keeping it legible over a bright game frame.
+/// Type and a halo only. Nothing backs a toast, so the halo keeps it legible over the game.
 pub fn toast_face(toast: Toast) -> CartFace {
     let Some(font) = text::label_font() else {
         return CartFace {
@@ -109,8 +97,6 @@ pub fn toast_face(toast: Toast) -> CartFace {
 mod tests {
     use super::*;
 
-    /// The ink's own width in the box, which is what a line actually occupies once the font
-    /// has uppercased it.
     fn ink_width(toast: Toast) -> u32 {
         let font = text::label_font().expect("label font");
         let layout = text::fit(
@@ -131,8 +117,6 @@ mod tests {
         }
     }
 
-    /// The rows of a rastered face with any ink in them: where the line actually sits once it
-    /// is pixels rather than a layout.
     fn ink_rows(face: &CartFace) -> (u32, u32) {
         let mut first = None;
         let mut last = 0;
@@ -146,8 +130,6 @@ mod tests {
         (first.unwrap_or(0), last)
     }
 
-    /// The ink's height in a face rastered at a stated size, for holding the shipped one
-    /// against the fallback it would have been given.
     fn ink_height_at(toast: Toast, px: f32) -> u32 {
         let font = text::label_font().expect("label font");
         let layout = text::fit(font, toast.text(), TOAST_W as f32, 1, px, px);
@@ -161,15 +143,8 @@ mod tests {
         }
     }
 
-    /// The face, not the layout. What reaches the screen is a box of pixels, and a line that
-    /// had to be shrunk arrives as a shorter run of ink in it — the same banner in a smaller
-    /// hand, which is the failure this is here to catch.
-    ///
-    /// Against two references, because neither alone is enough: the 12 px fallback, which the
-    /// shipped line has to stand clearly taller than, and a line already known to fit, which
-    /// it has to match. Matching is to within a pixel rather than exactly, since round and
-    /// pointed capitals (the S and A of STATE SAVED) overshoot the flat tops of LINK ENDED by
-    /// one row at this size — a fact about the typeface, not about the size it is set at.
+    /// LINK ENDED's ink is taller than the 12 px fallback and within a pixel of STATE SAVED
+    /// (round capitals overshoot flat ones by a row).
     #[test]
     fn the_ended_line_is_rastered_the_size_the_others_are() {
         let ended = toast_face(Toast::LinkEnded);
@@ -195,11 +170,7 @@ mod tests {
         );
     }
 
-    /// Every banner shares one box, and `fit` answers a line that will not fit by shrinking it
-    /// — to 12 px, against the 16 every other line is set at. Nothing warns: the banner simply
-    /// comes up smaller, which reads as a different banner rather than as this one saying
-    /// something else. So each line is held to full size here, where adding copy that does not
-    /// fit fails rather than ships.
+    /// `fit` silently shrinks a line that does not fit, so every line is held to full size.
     #[test]
     fn every_toast_is_set_at_full_size() {
         let font = text::label_font().expect("label font");

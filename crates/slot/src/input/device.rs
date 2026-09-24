@@ -13,39 +13,30 @@ use super::trace;
 
 const DEV: &str = "/dev/input";
 const SYS: &str = "/sys/class/input";
-/// Where the power supplies live, which is where this board keeps its lid.
+/// Where this board keeps its lid sensor.
 const PSY: &str = "/sys/class/power_supply";
 
-/// How often the lid is read. It is not an input device on this hardware — no node
-/// advertises `SW_LID`, and the hall sensor is a write-only-ish attribute on the PMIC — so
-/// the only way to see it is to look. Reading that attribute costs an i2c transaction to the
-/// PMIC, so it is looked at a few times a second rather than every frame; a lid is a hinge,
-/// and nobody can perceive 150 ms of it.
+/// The lid is not an input device here, so it is polled. Each read is an i2c transaction to the
+/// PMIC, and 150 ms of hinge latency is imperceptible.
 const LID_POLL_MS: Millis = 150;
 
-/// Every node worth reading, each on a thread parked in `read`. Polling them instead would
-/// mean picking a period and wearing the latency of it, and the kernel already knows the
-/// moment a button moved.
+/// Every node worth reading, each on a thread blocked in `read`, so there is no poll latency.
 pub struct DeviceInput {
     pending: Arc<Mutex<Vec<RawEvent>>>,
-    /// The PMIC attribute the hall sensor reports through, if this board has one. `None` on
-    /// a board that does not, which is not a failure: it is a device without a lid.
+    /// The PMIC hall sensor attribute. `None` means a board without a lid.
     hall: Option<PathBuf>,
-    /// What the lid was last seen doing. `None` until the first read, so the first look
-    /// always reports — a device that booted with the lid shut should know it.
+    /// `None` until the first read, so a device that booted with the lid shut reports it.
     lid_shut: Option<bool>,
     next_lid_poll: Millis,
 }
 
 impl DeviceInput {
-    /// `root` is the card, and only so a trace has somewhere to be written where it can be
-    /// read back. Nothing else here touches it.
+    /// `root` is the card, used only for the trace file.
     pub fn open(root: &Path) -> Self {
         DeviceInput::open_in(Path::new(DEV), Path::new(SYS), root, trace::enabled())
     }
 
-    /// `trace` is passed rather than read from the environment here, so a test can ask for one
-    /// without racing every other test in the process for a variable they all share.
+    /// `trace` is a parameter so tests need not race on a shared environment variable.
     pub fn open_in(dev: &Path, sys: &Path, root: &Path, trace: bool) -> Self {
         let trace = trace.then(|| Trace::start(root, dev, sys)).flatten();
         DeviceInput::open_traced(dev, sys, trace)
@@ -78,14 +69,13 @@ impl DeviceInput {
     }
 }
 
-/// Until the node goes away. The threads are never joined: the process ends by powering the
-/// device off, and a reader blocked on a button nobody pressed has nothing to unwind.
+/// Runs until the node goes away. Never joined: the process ends by powering off.
 fn read_node(node: &Path, queue: &Mutex<Vec<RawEvent>>, trace: Option<&Trace>) {
     let label = node
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| node.display().to_string());
-    // One per node: the axes are that node's, and a second pad would have its own.
+    // One per node: the axes are that node's.
     let mut hat = Hat::default();
     let mut file = match File::open(node) {
         Ok(f) => f,
@@ -94,7 +84,7 @@ fn read_node(node: &Path, queue: &Mutex<Vec<RawEvent>>, trace: Option<&Trace>) {
             return;
         }
     };
-    // Whole events only: the driver refuses a read shorter than one and never splits them.
+    // Whole events only: the driver never splits them.
     let mut buf = [0u8; EVENT_BYTES * 16];
     loop {
         let read = match file.read(&mut buf) {
@@ -106,15 +96,14 @@ fn read_node(node: &Path, queue: &Mutex<Vec<RawEvent>>, trace: Option<&Trace>) {
                 return;
             }
         };
-        // Traced before the mapping rather than after it, because the codes worth seeing are
-        // exactly the ones `to_raw` has no button for.
+        // Traced before mapping: the interesting codes are the ones `to_raw` drops.
         let mut events = Vec::new();
         for ev in buf[..read].chunks_exact(EVENT_BYTES).filter_map(decode) {
             if let Some(trace) = trace {
                 trace.event(&label, ev);
             }
             match ev.kind {
-                // The d-pad, which needs the axis it arrived on to say what it released.
+                // The d-pad needs its axis state to know what it released.
                 EV_ABS => events.extend(hat.feed(ev)),
                 _ => events.extend(to_raw(ev)),
             }
@@ -129,17 +118,15 @@ fn read_node(node: &Path, queue: &Mutex<Vec<RawEvent>>, trace: Option<&Trace>) {
     }
 }
 
-/// The trace file and the clock its lines are stamped against, shared by every reader thread
-/// so the lines interleave in the order the kernel produced them.
+/// Shared by every reader thread so lines interleave in kernel order.
 struct Trace {
     out: Mutex<File>,
     began: Instant,
 }
 
 impl Trace {
-    /// `None` unless asked for, and `None` again if the card will not take the file, which is
-    /// a diagnostic that failed rather than a reason not to boot. The survey goes in first:
-    /// a button that never appears below is explained by a node that was skipped up here.
+    /// `None` unless asked for or if the card refuses the file; not a boot failure. The node
+    /// survey goes first, since a skipped node explains a missing button.
     fn start(root: &Path, dev: &Path, sys: &Path) -> Option<Arc<Trace>> {
         let path = root.join(trace::TRACE_FILE);
         let mut file = match File::create(&path) {
@@ -160,11 +147,9 @@ impl Trace {
         }))
     }
 
-    /// Flushed a line at a time. The device is turned off by holding a button rather than by
-    /// unwinding, so an edge left in a buffer is the one that was being chased.
+    /// Flushed per line: power-off does not unwind, so a buffered edge would be lost.
     fn event(&self, node: &str, ev: Ev) {
-        // The frame marker after every edge, which would be most of the file and none of the
-        // answer.
+        // SYN follows every edge and would be most of the file.
         if ev.kind == EV_SYN {
             return;
         }
@@ -176,9 +161,8 @@ impl Trace {
 }
 
 impl DeviceInput {
-    /// `1` is open and `0` is shut, measured on an RG SP by watching the value while working
-    /// the hinge. `None` where the attribute is missing or will not parse, which leaves the
-    /// lid where it was rather than inventing an edge.
+    /// `1` open, `0` shut, measured on an RG SP. `None` on a missing or unparseable attribute,
+    /// which keeps the last lid state.
     fn read_lid(&self) -> Option<bool> {
         let raw = std::fs::read_to_string(self.hall.as_ref()?).ok()?;
         match raw.trim() {
@@ -197,9 +181,7 @@ impl InputSource for DeviceInput {
             if let Some(shut) = self.read_lid() {
                 if self.lid_shut != Some(shut) {
                     self.lid_shut = Some(shut);
-                    // The same events an `SW_LID` node would have produced, so everything
-                    // above this is unaware that this board reports its hinge through the
-                    // power supply.
+                    // The same events an `SW_LID` node would produce.
                     out.push(if shut {
                         RawEvent::Down(Btn::Lid)
                     } else {
@@ -212,10 +194,8 @@ impl InputSource for DeviceInput {
     }
 }
 
-/// The hall sensor is not an input device here: no node advertises `SW_LID`, and the hinge
-/// is reported by the PMIC's battery node as `hallkey`. Found by looking rather than
-/// hardcoded, so a board that names it differently reads as a device without a lid instead
-/// of one whose lid never moves.
+/// The hinge is reported as `hallkey` on the PMIC's battery node. Searched for rather than
+/// hardcoded, so a board naming it differently reads as having no lid.
 fn find_hall(psy: &Path) -> Option<PathBuf> {
     let mut supplies: Vec<PathBuf> = std::fs::read_dir(psy)
         .ok()?

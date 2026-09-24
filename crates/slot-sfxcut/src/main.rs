@@ -74,9 +74,7 @@ fn run() -> Result<(), String> {
     }
 }
 
-/// Every candidate, with whether each direction would fit around it. Fitting is about the
-/// silence either side: an insert needs 97 ms before the transient and 143 ms after, an
-/// eject 21 ms before and 294 ms after.
+/// Every candidate, with whether an insert or eject clip would fit around it.
 fn list(found: &[Take]) {
     println!(
         "  {:>3}  {:>8}  {:>6}  {:>10}  {:>10}",
@@ -144,9 +142,8 @@ fn write(
     Ok(())
 }
 
-/// A time typed off the listing is close to a detected transient but rarely exactly on it,
-/// and being 10 ms out moves the sound against the picture. Anything within 25 ms of a
-/// candidate snaps to it; anything further is taken as meant.
+/// A typed time within 25 ms of a candidate snaps to it, since a few ms off moves sound
+/// against picture. Anything further is taken as meant.
 fn snap(found: &[Take], at: f32) -> f32 {
     found
         .iter()
@@ -190,8 +187,7 @@ fn parse() -> Result<Args, String> {
     })
 }
 
-/// A 44 byte canonical header in front of the same bytes the .pcm holds. Only so the output
-/// can be listened to; nothing reads these back.
+/// A 44 byte canonical header in front of the .pcm bytes, for auditioning only.
 fn wav(pcm: &[u8]) -> Vec<u8> {
     let hz = HZ as u32;
     let mut out = Vec::with_capacity(44 + pcm.len());

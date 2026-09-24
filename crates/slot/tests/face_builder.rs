@@ -37,14 +37,8 @@ fn a_request_comes_back_as_the_open_carts_faces() {
     assert_eq!((got[0].lid.w, got[0].lid.h), (244, 139));
 }
 
-/// A caret that ran along the shelf has no use for the carts it passed: the last one asked for
-/// is the last one built. Counting every build that comes back, not just the last one seen,
-/// is the point: a worker that dutifully built all three in FIFO order would also have the
-/// newest arrive last, so that alone does not tell the burst was collapsed. The worker can only
-/// ever be partway through the first request when the rest of the burst lands — sending three
-/// requests in a tight loop, with no sleep between them, is over long before even a fast build
-/// finishes — so at most that one build and the newest can come back; a middle request coming
-/// back too means the queue was drained one at a time instead of collapsed to its newest.
+/// A burst of requests collapses to the newest. At most the in-flight first build and the
+/// newest may come back; a middle one means the queue was drained FIFO instead.
 #[test]
 fn the_newest_request_of_a_burst_is_the_last_built() {
     let builder = FaceBuilder::spawn();

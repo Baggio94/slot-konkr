@@ -10,8 +10,7 @@ use slot_input::{Action, Btn};
 use slot_power::{Battery, Charge, LedState};
 use slot_store::{read_slot_state, Core, StateRing};
 
-/// Today's behaviour is what an unknown charge state has to go on reproducing, so the
-/// pre-existing cases read as unknown rather than as a state the device asserted.
+/// The pre-existing cases read as unknown, which must keep today's behaviour.
 fn unknown(percent: u8) -> Battery {
     Battery {
         percent,
@@ -70,13 +69,9 @@ fn a_power_tap_dozes_and_a_second_one_wakes() {
     assert!(matches!(a.phase(), Phase::Playing { .. }));
 }
 
-/// The flush lands when the menu opens, not when a choice is made. The user may hold on
-/// past the PMIC's own six second cutoff, which takes the rails away whatever the software
-/// wanted — so the state has to be durable before they are given anything to read.
-///
-/// Powering off from the menu goes through the OS rather than that hardware cut: the cut
-/// syncs nothing and unloads nothing, and on this board a shutdown that leaves the GPU
-/// module loaded hangs the machine with the rails up.
+/// The flush lands when the menu opens, since the user may hold on to the PMIC's six second
+/// cutoff. Powering off from the menu goes through the OS: the hardware cut syncs nothing, and
+/// a shutdown that leaves the GPU module loaded hangs this board with the rails up.
 #[test]
 fn opening_the_menu_flushes_and_the_choice_powers_off() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -105,8 +100,7 @@ fn opening_the_menu_flushes_and_the_choice_powers_off() {
     );
 }
 
-/// The release stopped meaning anything once the hold started raising a menu: the choice is
-/// the commitment, and it is made with A.
+/// The release commits nothing; the choice is made with A.
 #[test]
 fn a_release_after_the_hold_does_nothing_on_its_own() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -117,9 +111,8 @@ fn a_release_after_the_hold_does_nothing_on_its_own() {
     assert_eq!(a.power_menu(), Some(0), "and leaves the menu up");
 }
 
-/// A dark panel is a grace period, not a state: the machine is still running flat out behind
-/// it at 400-700 mA. When it runs out the device stops for real, because the one thing it
-/// cannot do is wake itself back up from a sleep.
+/// A doze still draws 400-700 mA and the board cannot wake itself from sleep, so when the doze
+/// runs out the device powers off.
 #[test]
 fn an_idle_doze_times_out_into_a_power_off() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -194,8 +187,7 @@ fn counting() -> (Box<dyn Snapshot>, Arc<AtomicUsize>) {
     )
 }
 
-/// Counts what asked it for a state, which is the only way to tell one flush from the
-/// next once they have landed on the same file.
+/// Counts state requests, the only way to tell one flush from the next on the same file.
 struct CountingSnapshot {
     flushes: Arc<AtomicUsize>,
 }
@@ -220,8 +212,7 @@ fn at(percent: u8, charge: Charge) -> Battery {
     Battery { percent, charge }
 }
 
-/// Plug in a flat device, boot it, and the frontend used to flush and power off with the
-/// cable in. The charge state is the whole reason this can now be told apart.
+/// A flat device on the cable is not flushed and powered off.
 #[test]
 fn a_critical_battery_on_a_charger_keeps_running() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -255,10 +246,8 @@ fn a_critical_battery_that_is_discharging_still_powers_off() {
         .is_some());
 }
 
-/// THE INVARIANT. If `status` turns out to be unpopulated on the SP — and on this PMIC
-/// `current_now` already reads empty — every reading is Unknown, and the device has to go
-/// on protecting itself exactly as it did before any of this was added. If this test ever
-/// goes green by doing nothing, the feature has become a regression on real hardware.
+/// THE INVARIANT. On this PMIC `current_now` reads empty and `status` may too; with every
+/// reading Unknown the device must still protect itself exactly as before.
 #[test]
 fn an_unknown_charge_state_powers_off_exactly_as_before() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -271,12 +260,8 @@ fn an_unknown_charge_state_powers_off_exactly_as_before() {
         .is_some());
 }
 
-/// The case band's left shelf used to sit blank for the first ten seconds of every boot,
-/// because `battery_at`'s boot value predated there being any platform to read: the deadline
-/// only started counting down once `App::new` ran, not once a real gauge existed behind it.
-/// `set_power` is the actual moment a reading becomes possible, so that is where the
-/// deadline has to reset to zero-from-now rather than trusting a countdown that had already
-/// been running against nothing.
+/// The battery poll deadline resets at `set_power`, when a reading first becomes possible,
+/// so the case band is not blank for the first ten seconds of boot.
 #[test]
 fn the_battery_is_read_the_moment_power_is_attached_not_ten_seconds_later() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -289,8 +274,7 @@ fn the_battery_is_read_the_moment_power_is_attached_not_ten_seconds_later() {
     );
 }
 
-/// A cable going in is a step change, not a gauge drifting. Ten seconds of a stale bolt is
-/// the thing the second tick exists to prevent.
+/// A cable going in shows on the fast tick, not ten seconds later.
 #[test]
 fn the_charge_state_is_picked_up_inside_a_second() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -306,10 +290,8 @@ fn the_charge_state_is_picked_up_inside_a_second() {
     );
 }
 
-/// The percent rides the slow tick, which is what its existing comment says it is for. The
-/// gauge is moved behind the fast tick's back between the two ticks: if the fast tick ever
-/// re-read the whole snapshot instead of just the charge half, it would pick up the moved
-/// percent and this would catch it.
+/// The percent rides the slow tick. The gauge moves between ticks, so a fast tick re-reading
+/// the whole snapshot would be caught.
 #[test]
 fn the_percent_survives_a_fast_tick_that_only_moved_the_charge_state() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -330,9 +312,8 @@ fn the_percent_survives_a_fast_tick_that_only_moved_the_charge_state() {
     );
 }
 
-/// A flat percent alone would read Low; the point of this test is that a cable in makes it
-/// Charging instead. Left at the rig's default 50%, an inverted precedence would still pass,
-/// so the percent is driven under the threshold here as well.
+/// A cable in reads Charging even under the Low threshold. The percent is driven low so an
+/// inverted precedence fails.
 #[test]
 fn charging_outranks_low_so_a_flat_device_on_a_cable_is_not_red() {
     let d = tmp_root_with_carts(&["Emerald"]);

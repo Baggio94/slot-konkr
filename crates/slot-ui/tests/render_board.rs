@@ -1,5 +1,4 @@
-//! The open cart's face, rasterised to a PNG so the art can be set beside the mockup and the
-//! photograph it follows. Does nothing unless `SCRATCH_PNG` names an output file:
+//! Rasterises the open cart's face to a PNG. Does nothing unless `SCRATCH_PNG` names a file:
 //!
 //! `SCRATCH_PNG=/tmp/board.png cargo test -p slot-ui --test render_board -- --nocapture`
 

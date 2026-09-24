@@ -28,7 +28,6 @@ fn render_sticker() {
     let (w, h) = (STICKER_W as usize, STICKER_H as usize);
     write(&out, &face.rgba, w, h);
 
-    // A crop, scaled up, so one row can be judged without squinting.
     if let Ok(crop) = std::env::var("SCRATCH_CROP") {
         let n: Vec<usize> = std::env::var("SCRATCH_BOX")
             .unwrap_or_else(|_| "0,0,200,60".into())

@@ -13,8 +13,8 @@ use slot_ui::{
 };
 use tempfile::TempDir;
 
-/// On the carousel, beside the card it reads and writes, with a platform clock that reads like
-/// a real date. Two carts, because one is a dedicated device that never shows the carousel.
+/// On the carousel, with a platform clock that reads like a real date. Two carts, because one
+/// is a dedicated device that never shows the carousel.
 fn on_carousel_with(state: SlotState) -> (TempDir, App, Clock) {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
     write_slot_state(
@@ -141,9 +141,9 @@ fn fast_forward_steps_through_its_speeds_and_saves_each_one() {
         (Btn::Left, 2),
         (Btn::Right, 3),
         (Btn::Right, 4),
-        // The row steps over 5: past four a single frame is not a speed anyone can see.
+        // The row skips 5: past four, one skipped frame is not a visible speed.
         (Btn::Right, 6),
-        // Six is the top of the row as well as its default, so Right stops there.
+        // Six is the top of the row as well as its default.
         (Btn::Right, 6),
         (Btn::Left, 4),
     ] {
@@ -173,7 +173,7 @@ fn rumble_and_fast_forward_sound_flip_on_either_arrow_and_save() {
     );
     press(&mut a, Btn::Right);
     assert_eq!(card(&d), (false, true));
-    // Two rows down: Colour Correction now sits between the Fast Forward pair and Rumble.
+    // Two rows down: Colour Correction sits between the Fast Forward pair and Rumble.
     press(&mut a, Btn::Down);
     press(&mut a, Btn::Down);
     press(&mut a, Btn::Right);
@@ -184,10 +184,8 @@ fn rumble_and_fast_forward_sound_flip_on_either_arrow_and_save() {
     assert_eq!(card(&d), (false, true));
 }
 
-/// Colour Correction is a two-value row like the other flags, so either arrow is the other
-/// value, and every press is on the card before the menu closes. The menu is only ever open
-/// with nothing seated, so the card is the whole of where a change has to survive: the next
-/// cart in is what reads it.
+/// Colour Correction is a two-value row: either arrow flips it, and every press is on the card
+/// before the menu closes, since the next cart in is what reads it.
 #[test]
 fn colour_correction_flips_on_either_arrow_and_saves() {
     let (d, mut a, _) = on_carousel();
@@ -220,9 +218,8 @@ fn colour_correction_flips_on_either_arrow_and_saves() {
     }
 }
 
-/// The row changes the picture and nothing else. Its neighbours are the settings most likely to
-/// be hit by a stray arrow on the way past it, and the fast forward speed in particular shares
-/// the arrows it answers to.
+/// The row changes the picture and nothing else, least of all its neighbours, which share its
+/// arrows.
 #[test]
 fn colour_correction_leaves_the_settings_around_it_alone() {
     let (d, mut a, _) = on_carousel();
@@ -269,8 +266,7 @@ fn a_on_about_opens_the_label_and_b_comes_back_to_the_menu() {
     assert_eq!(a.quick_menu(), Some(QuickRow::About));
 }
 
-/// The clock screen from first boot, starting where the clock already is: the time on the wall
-/// and the offset already chosen.
+/// The clock screen from first boot, starting at the current wall time and chosen offset.
 #[test]
 fn a_on_date_and_time_opens_the_clock_at_the_time_it_already_has() {
     let (_d, mut a, _) = on_carousel_with(SlotState {
@@ -301,8 +297,7 @@ fn confirming_the_clock_from_the_menu_sets_it_and_comes_back_to_the_menu() {
         press(&mut a, Btn::Right);
     }
     press(&mut a, Btn::Down); // half an hour further west
-                              // What was changed on the screen, applied to the clock as it stands: the picker opened on
-                              // the minute the clock was in and cannot show its seconds.
+                              // The picker opened on the clock's minute and cannot show seconds.
     let changed = a.picker().expect("not on the clock").secs() - (CLOCK_IS_SET - CLOCK_IS_SET % 60);
     press(&mut a, Btn::A);
     assert_eq!(a.quick_menu(), Some(QuickRow::DateTime), "{:?}", a.phase());
@@ -353,8 +348,7 @@ fn the_first_boot_clock_still_has_no_way_back() {
     );
 }
 
-/// Ruling S4: the device's own keys keep working with the menu up, and the bar they raise is
-/// drawn over it.
+/// Ruling S4: the device's own keys keep working with the menu up, and their bar draws over it.
 #[test]
 fn brightness_and_volume_still_answer_over_the_quick_menu() {
     let (d, mut a, _) = on_carousel();
@@ -384,7 +378,7 @@ fn brightness_and_volume_still_answer_over_the_quick_menu() {
     );
 }
 
-/// Stand-ins for everything the frontend uploads for the menu, so the draw can be read back
+/// Stand-ins for every face the frontend uploads for the menu, so the draw can be read back
 /// without a compositor. Every id distinct.
 fn fake_faces(a: &mut App) {
     let id = TexId::from_raw;
@@ -507,8 +501,8 @@ fn the_bar_runs_edge_to_edge_behind_the_selected_row() {
     }
 }
 
-/// Labels start 32 px in and values end 32 px from the right. Every face is padded either side
-/// of its type by `MENU_PAD`, so that is what is taken back off.
+/// Labels start 32 px in and values end 32 px from the right. Every face is padded by
+/// `MENU_PAD` either side, so that is taken back off.
 #[test]
 fn labels_start_and_values_end_thirty_two_pixels_in() {
     let (_d, mut a, _) = on_carousel();
@@ -526,8 +520,8 @@ fn labels_start_and_values_end_thirty_two_pixels_in() {
     assert_eq!(x + w, right, "the arrow around the selected value");
 }
 
-/// Ruling S6: opened from the menu the clock offers B BACK beside its own key. At first boot it
-/// does not, because there is nothing behind it.
+/// Ruling S6: from the menu the clock offers B BACK beside its own key; at first boot it does
+/// not.
 #[test]
 fn only_the_clock_from_the_menu_offers_b_back() {
     let (_d, mut a, _) = on_carousel();

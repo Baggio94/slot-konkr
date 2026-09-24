@@ -1,12 +1,11 @@
-//! The core picker's own clock: how open the cart is, where the chip is, and what a press does
-//! to either. No drawing and no card — `App` asks it what to show and what to write, and the
-//! whole of its behaviour can be stated against a number of milliseconds.
+//! The core picker's clock: how open the cart is, where the chip is, and what a press does. No
+//! drawing and no card I/O; `App` asks it what to show and what to write.
 
 use slot_store::Core;
 use slot_ui::{ease, Millis, Refusal, CHIP_TIP};
 
-/// The front half slides off the back, then lifts away; the close runs the same progress back,
-/// quicker. `slot_ui::SLIDE_SHARE` is the slide's share of the open, held to these by a test.
+/// The front half slides off the back, then lifts away; the close reverses it, quicker.
+/// `slot_ui::SLIDE_SHARE` is held to these by a test.
 pub const SLIDE_MS: Millis = 160;
 pub const LIFT_MS: Millis = 260;
 pub const OPEN_MS: Millis = SLIDE_MS + LIFT_MS;
@@ -106,11 +105,11 @@ impl CorePicker {
         self.close.is_some()
     }
 
-    /// 0.0 is the cart standing on the shelf, 1.0 open at rest. Linear progress through both
-    /// beats, which `slot_ui::slide_of` and `lift_of` ease on their own shares.
+    /// 0.0 standing on the shelf, 1.0 open at rest. Linear; `slot_ui::slide_of` and `lift_of`
+    /// ease it.
     pub fn openness(&self, now: Millis) -> f32 {
         match (self.close, self.started) {
-            // Reversed from wherever the open had got to, at the close's speed.
+            // Reversed from wherever the open had got to.
             (Some(Close { started, from }), _) => {
                 (from - now.saturating_sub(started) as f32 / CLOSE_MS as f32).max(0.0)
             }
@@ -124,10 +123,8 @@ impl CorePicker {
         self.close.is_some() && self.openness(now) <= 0.0
     }
 
-    /// What a press does to the chip or the lid, and what it asks of `App`. While the cart still
-    /// waits on its faces the arrows do nothing: the chip is not on screen, and a hop run unseen
-    /// would open the cart with the chip already in the other socket, for an `A` to write a core
-    /// the player never saw chosen. `A` and `B` still close it.
+    /// Arrows do nothing while the faces load: an unseen hop would let `A` write a core the
+    /// player never saw chosen. `A` and `B` still close it.
     pub fn press(&mut self, press: Press, now: Millis) -> Outcome {
         if self.close.is_some() {
             return Outcome::Nothing;
@@ -151,16 +148,15 @@ impl CorePicker {
             if target == self.seat {
                 return Outcome::Nothing;
             }
-            // Back toward the socket it is leaving: the new hop starts as far through as the
-            // old one had left to go, which puts the chip exactly where it already was.
+            // Turning back mid-hop: start as far through as the old hop had left, so the chip
+            // does not jump.
             let done = ((1.0 - progress) * HOP_MS as f32) as Millis;
             self.hop = Some(Hop {
                 from: self.seat,
                 started: now.saturating_sub(done),
             });
             self.seat = target;
-            // A hop is happening now, so a shake left over from an earlier refusal is not
-            // this chip's any more.
+            // A new hop clears any leftover refusal shake.
             self.refusal = None;
             return Outcome::Nothing;
         }
@@ -173,8 +169,6 @@ impl CorePicker {
             started: now,
         });
         self.seat = target;
-        // Same rule as the turn above: a hop starting now has nothing to do with whatever was
-        // refused before it, however recently.
         self.refusal = None;
         Outcome::Nothing
     }

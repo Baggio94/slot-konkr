@@ -18,9 +18,7 @@ fn at(percent: u8, charge: Charge) -> Option<Battery> {
     Some(Battery { percent, charge })
 }
 
-/// The reason the bolt went inside the capsule instead of beside it: a leading bolt on the
-/// left-aligned case band would either break the margin or hold a permanent gap for the
-/// times it is absent. Nothing may move when a cable goes in.
+/// Plugging in a cable only adds the bolt; nothing already drawn moves.
 #[test]
 fn nothing_moves_when_the_charge_state_changes() {
     let mut idle = Vec::new();
@@ -50,10 +48,7 @@ fn nothing_moves_when_the_charge_state_changes() {
     }
 }
 
-/// The defect this whole file is guarding against was the bolt drawn *inside* the capsule,
-/// over the fill, knocking a hole in whatever charge was showing. Nothing else stops that
-/// from happening again except this: the bolt's own quad must end at or before the
-/// capsule's leftmost wall begins.
+/// The bolt ends at or before the capsule's left wall, so it never holes the fill.
 #[test]
 fn the_bolt_never_reaches_the_capsule() {
     let mut out = Vec::new();
@@ -72,9 +67,8 @@ fn the_bolt_never_reaches_the_capsule() {
             _ => None,
         })
         .expect("the bolt did not draw while charging");
-    // Every capsule stroke and the fill are drawn as `Draw::Rect`; the bolt is the only
-    // `Draw::Tex`, and the percent's placeholder (also a `Rect`) sits well to the right, so
-    // the leftmost rect is always the capsule's own left wall.
+    // The bolt is the only `Draw::Tex` and the percent sits well right, so the leftmost rect
+    // is the capsule's left wall.
     let capsule_left = out
         .iter()
         .filter_map(|d| match *d {
@@ -106,17 +100,12 @@ fn the_bolt_is_only_drawn_while_charging() {
     assert!(bolt(Charge::Charging));
     assert!(!bolt(Charge::Discharging));
     assert!(!bolt(Charge::Full));
-    // The degraded case on hardware where `status` reads empty: a plain capsule, exactly
-    // what the screen would show if none of this had been added.
+    // `status` reads empty on some hardware: a plain capsule.
     assert!(!bolt(Charge::Unknown));
 }
 
-/// The fill is the one quad in the cluster whose size is meant to move with the percent, and
-/// the name's two clauses are two separate properties: the fill has to grow strictly as the
-/// percent does (or a constant full bar would pass), and it may never cross the capsule's own
-/// inner wall (or a fill formula that outruns 100% above the midpoint would pass). Bounding
-/// against the whole cluster's width — including the gap and the printed number, which sit
-/// well clear of the capsule regardless of the fill — proved neither.
+/// The fill grows strictly with the percent (a constant bar would fail) and stays inside the
+/// capsule's inner wall (a formula overshooting 100% would fail).
 #[test]
 fn the_fill_tracks_the_percent_and_never_leaves_the_capsule() {
     let mut widths = Vec::new();
@@ -130,8 +119,7 @@ fn the_fill_tracks_the_percent_and_never_leaves_the_capsule() {
             None,
             &mut out,
         );
-        // The capsule's own left wall is the leftmost `Rect` in the list: nothing else in
-        // `draw_gauge` ever draws further left of `cx` than the wall itself does.
+        // The capsule's left wall is the leftmost `Rect`.
         let capsule_left = out
             .iter()
             .filter_map(|d| match *d {
@@ -140,8 +128,7 @@ fn the_fill_tracks_the_percent_and_never_leaves_the_capsule() {
             })
             .fold(f32::MAX, f32::min);
         let inner_right = capsule_left + GAUGE_W - 2.0 * WALL;
-        // The fill is the only `Rect` that starts two wall-widths in from the capsule's own
-        // left edge; every other stroke starts either at the wall itself or past the nub.
+        // The fill is the only `Rect` starting two wall widths in from the capsule's left edge.
         let fill = out.iter().find_map(|d| match *d {
             Draw::Rect { x, w, .. } if (x - (capsule_left + 2.0 * WALL)).abs() < 0.01 => Some(w),
             _ => None,
@@ -152,8 +139,7 @@ fn the_fill_tracks_the_percent_and_never_leaves_the_capsule() {
                 "a {percent}% fill burst through the capsule's own wall"
             );
         }
-        // A 0% battery draws no fill rect at all, which is the correct degenerate case of
-        // "the fill tracks the percent": there is nothing to track down to.
+        // 0% draws no fill rect at all.
         widths.push(fill.unwrap_or(0.0));
     }
     for pair in widths.windows(2) {
@@ -164,7 +150,7 @@ fn the_fill_tracks_the_percent_and_never_leaves_the_capsule() {
     }
 }
 
-/// No gauge is no capsule. A device slot has not been ported to yet still has to come up.
+/// No gauge draws no capsule, so an unported device still comes up.
 #[test]
 fn no_reading_draws_nothing() {
     let mut out = Vec::new();

@@ -8,10 +8,8 @@ pub struct TexId(usize);
 
 #[cfg(feature = "test-support")]
 impl TexId {
-    /// A handle by index, for callers that need to name a texture without a live context —
-    /// tests and tools. Gated behind `test-support`, which no consumer enables outside its
-    /// own `[dev-dependencies]`, so a forged handle cannot reach the device build and alias
-    /// whatever real texture happens to sit at that index.
+    /// A handle by index, for tests and tools without a live context. Gated so a forged
+    /// handle cannot reach the device build.
     pub const fn from_raw(id: usize) -> Self {
         TexId(id)
     }
@@ -35,9 +33,7 @@ pub enum Draw {
         tex: TexId,
         alpha: f32,
     },
-    /// `Tex` turned about its own centre by `turn` radians, clockwise on the panel since y
-    /// runs down. For the few faces that tilt: the lid over the core picker and its chip in
-    /// flight. A variant rather than a field on `Tex`, so no existing draw had to change.
+    /// `Tex` turned about its own centre by `turn` radians, clockwise on the panel.
     Turned {
         x: f32,
         y: f32,
@@ -47,14 +43,10 @@ pub enum Draw {
         alpha: f32,
         turn: f32,
     },
-    /// Where the game layer goes. It carries no geometry: the pass owns its own rect, since
-    /// the power on squeezes it. A marker rather than a pass of its own before the list,
-    /// because the panel is the front surface of the device and has to be able to come up
-    /// over a cart that is already in the slot.
+    /// Where the game layer goes in the list. The pass owns its rect, since power on squeezes
+    /// it.
     Game,
-    /// A 240x160 still on the panel, through the game pass. Geometry comes from the pass for
-    /// the same reason `Game`'s does: it is the same screen, showing a picture instead of a
-    /// live frame, so it wears the same mask at the same scale.
+    /// A 240x160 still drawn through the game pass, so it wears the same mask as `Game`.
     Shot { tex: TexId },
 }
 
@@ -107,9 +99,8 @@ impl Sprites {
         self.push(w, h, rgba, gl::LINEAR)
     }
 
-    /// For a texture drawn at a whole number magnification, where a linear tap lands between
-    /// texels and blurs the pixel grid the source is defined on. The switcher's screenshot is
-    /// the only one: everything else is drawn at its own size or smaller.
+    /// For a texture drawn at a whole number magnification, where linear filtering would blur
+    /// the pixel grid.
     pub fn create_texture_nearest(&mut self, w: u32, h: u32, rgba: &[u8]) -> TexId {
         self.push(w, h, rgba, gl::NEAREST)
     }
@@ -120,9 +111,7 @@ impl Sprites {
         TexId(self.textures.len() - 1)
     }
 
-    /// Replaces a texture's contents in place. The polaroid switcher redraws the same ten
-    /// cards every time it opens, and creating a fresh set each time would grow the pool
-    /// for the life of the session.
+    /// Replaces a texture's contents in place, so redrawn cards do not grow the pool.
     pub fn update_texture(&mut self, id: TexId, w: u32, h: u32, rgba: &[u8]) {
         let Some(tex) = self.textures.get(id.0) else {
             return;
@@ -188,8 +177,7 @@ impl Sprites {
                 // The compositor splits the list on these and draws the game pass itself.
                 Draw::Game | Draw::Shot { .. } => continue,
             };
-            // Exactly (1, 0) for anything unturned rather than cos and sin of zero, so the
-            // shader's correction term is zero by construction and not by rounding.
+            // Exactly (1, 0) when unturned, so the shader's correction term is exactly zero.
             let (cos, sin) = if turn == 0.0 {
                 (1.0, 0.0)
             } else {

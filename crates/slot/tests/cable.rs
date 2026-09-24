@@ -6,8 +6,7 @@ use slot_retro::ButtonMask;
 const A: ButtonMask = ButtonMask(ButtonMask::A);
 const B: ButtonMask = ButtonMask(ButtonMask::B);
 
-/// Both ends start able to run `DELAY` frames without hearing anything, which is the whole point
-/// of the delay: neither device waits on the other to draw its first frame.
+/// Both ends can run `DELAY` frames without hearing anything, so neither waits to draw its first.
 #[test]
 fn a_fresh_cable_can_run_the_delay_before_the_peer_says_anything() {
     let mut c = Cable::new(0);
@@ -21,7 +20,7 @@ fn a_fresh_cable_can_run_the_delay_before_the_peer_says_anything() {
     );
 }
 
-/// A mask is stamped for a frame ahead, not this one, so the wire has that long to deliver it.
+/// A mask is stamped for a frame ahead, so the wire has that long to deliver it.
 #[test]
 fn a_sampled_mask_is_stamped_for_a_later_frame() {
     let mut c = Cable::new(0);
@@ -30,16 +29,14 @@ fn a_sampled_mask_is_stamped_for_a_later_frame() {
     assert_eq!(mask, A);
 }
 
-/// Port order, not local-first. Player 1 handing its own mask over first would drive port 0 with
-/// the wrong console, and both ends would disagree about who is who while each looked correct.
+/// Port order, not local-first, or player 1 would drive port 0 with the wrong console.
 #[test]
 fn each_end_reports_the_pair_in_port_order() {
     let mut p0 = Cable::new(0);
     let mut p1 = Cable::new(1);
-    // The state swap is what does this in a real session; here there is no core to copy.
+    // The state swap does this in a real session; here there is no core to copy.
     p1.prime();
-    // Sample, exchange, advance: the order the worker uses, until the seeded frames run out and
-    // the next frame is one whose masks both ends actually sent each other.
+    // Sample, exchange, advance: the worker's order.
     for _ in 0..DELAY {
         let a = p0.sample(A);
         let b = p1.sample(B);
@@ -57,8 +54,7 @@ fn each_end_reports_the_pair_in_port_order() {
     );
 }
 
-/// A frame will not run on a guess. This is the property the whole delay exists to protect: a
-/// stepped frame cannot be taken back, so a missing mask stalls rather than substituting idle.
+/// A stepped frame cannot be taken back, so a missing mask stalls rather than substituting idle.
 #[test]
 fn a_frame_waits_rather_than_guessing_a_missing_mask() {
     let mut c = Cable::new(0);
@@ -78,8 +74,7 @@ fn a_frame_waits_rather_than_guessing_a_missing_mask() {
     assert_eq!(c.stalled(), 0, "the stall count survived a frame running");
 }
 
-/// Two ends fed the same inputs agree on every frame's pair, which is what determinism across
-/// devices rests on.
+/// Two ends fed the same inputs agree on every frame's pair: cross-device determinism.
 #[test]
 fn both_ends_agree_on_every_frame() {
     let mut p0 = Cable::new(0);
@@ -107,11 +102,11 @@ fn both_ends_agree_on_every_frame() {
     assert!(seen0.len() >= script.len() - DELAY as usize);
 }
 
-/// A duplicate is not an error and a short read is not worth ending a session over.
+/// A duplicate is not an error and a short read does not end the session.
 #[test]
 fn junk_and_duplicates_are_dropped_rather_than_raised() {
     let mut c = Cable::new(0);
-    // Junk that is not one of the packet kinds. A leading 1 is a state chunk now.
+    // Not a packet kind. A leading 1 is a state chunk.
     assert!(!c.accept(&[9, 2, 3]), "a short packet was taken");
     assert!(!c.accept(&[]), "an empty packet was taken");
     for _ in 0..DELAY {
@@ -128,10 +123,8 @@ fn junk_and_duplicates_are_dropped_rather_than_raised() {
     );
 }
 
-/// The input delay stays what it was however much the peer stalls, even when `sample` is called
-/// on every present the way the worker does. It used to grow by a frame per stalled present,
-/// without bound, and was felt worst on whichever device stalled more. The invariant lives in
-/// `sample` now rather than in the caller remembering to ask only once per frame.
+/// The input delay stays fixed however long the peer stalls, even when `sample` is called on
+/// every present as the worker does.
 #[test]
 fn a_stall_does_not_add_to_the_input_delay() {
     let mut c = Cable::new(0);
@@ -142,7 +135,7 @@ fn a_stall_does_not_add_to_the_input_delay() {
     let (stamped, _) = decode(&c.sample(B)).expect("packet");
     let ahead = stamped - c.frame();
 
-    // Twenty presents with nothing from the peer, each sampling exactly as the worker does.
+    // Twenty presents with nothing from the peer, sampling as the worker does.
     for _ in 0..20 {
         c.sample(ButtonMask::default());
         c.stall();
@@ -161,10 +154,8 @@ fn a_stall_does_not_add_to_the_input_delay() {
     );
 }
 
-/// The joiner runs nothing until it holds the host's machine. Both devices simulate both
-/// consoles, so identical inputs on different starting states produce two different games: one
-/// device waiting for a cable while the other is already in a race. The seeded frames are not an
-/// exception, which is the trap here, since they need no peer mask and would otherwise run.
+/// The joiner runs nothing, seeded frames included, until it holds the host's machine:
+/// identical inputs on different states produce two different games.
 #[test]
 fn a_joiner_runs_nothing_until_it_has_the_hosts_machine() {
     let mut join = Cable::new(1);
@@ -205,7 +196,7 @@ fn a_host_is_ready_from_the_start() {
     assert!(host.ready().is_some());
 }
 
-/// A state and a mask are told apart by the packet itself, so neither is ever read as the other.
+/// A state and a mask are told apart by the packet itself.
 #[test]
 fn a_state_chunk_is_never_read_as_a_button_mask() {
     let mut c = Cable::new(0);
@@ -217,9 +208,8 @@ fn a_state_chunk_is_never_read_as_a_button_mask() {
     assert!(c.accept(&encode(DELAY, A)));
 }
 
-/// A stall is only a lost peer once both ends are running the agreed machine. A joiner restoring
-/// a megabyte of state stalls every present by design, and on hardware that ended the session a
-/// second into the join, before the swap could finish.
+/// A stall is only a lost peer once both ends run the agreed machine. A joiner restoring a
+/// megabyte of state stalls every present by design.
 #[test]
 fn a_stall_during_the_swap_is_not_a_lost_peer() {
     let mut host = Cable::new(0);
@@ -239,8 +229,7 @@ fn a_stall_during_the_swap_is_not_a_lost_peer() {
     assert!(host.armed(), "the joiner said it was ready and was ignored");
 }
 
-/// The joiner's own side: it is not armed while it is still restoring, so its own stalls waiting
-/// for a state cannot end the session either.
+/// The joiner is not armed while restoring, so its own stalls cannot end the session.
 #[test]
 fn a_joiner_is_not_armed_until_it_has_restored() {
     let mut join = Cable::new(1);

@@ -1,6 +1,4 @@
-//! `header_clean`: whether gpSP takes a cart's header at its word. A file-backed test file,
-//! the same reason `scan.rs` is one — the byte at 3, the byte at 0xB2 and the file's own
-//! length are all facts about something on disk, not about a slice in memory.
+//! `header_clean`, tested against files because it reads the file's length as well as bytes.
 
 use std::fs::File;
 use std::path::PathBuf;
@@ -46,8 +44,7 @@ fn a_wrong_fixed_byte_is_not_clean() {
     assert!(!header_clean(&rom));
 }
 
-/// `set_len` past 16 MiB is sparse and cheap — this proves an expanded ROM is refused without
-/// the test itself having to write 16 MB to disk.
+/// `set_len` past 16 MiB makes a cheap sparse file.
 #[test]
 fn a_clean_header_over_16mb_is_not_clean() {
     let d = tempfile::tempdir().expect("tempdir");

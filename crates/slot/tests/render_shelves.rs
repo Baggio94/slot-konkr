@@ -1,6 +1,5 @@
 //! The shelf through the real frontend: the card scanned, faces uploaded at boot, presses through
-//! the gesture layer, and the frame composited on the GPU and read back. A draw list can say the
-//! right things about a screen that is empty; only the rendered pixels can say the row is carts.
+//! the gesture layer, and the frame composited on the GPU and read back.
 //!
 //! `SCRATCH_PNG_DIR=/tmp cargo test -p slot --test render_shelves -- --nocapture`
 
@@ -36,8 +35,7 @@ fn at(px: &[u8], x: usize, y: usize) -> [u8; 3] {
     [px[o], px[o + 1], px[o + 2]]
 }
 
-/// The average colour of a patch, which is what a cart's label reads as: the type printed across
-/// it makes any single pixel a coin toss between the paper and a letter.
+/// The average colour of a patch. Type across a label makes any single pixel unreliable.
 fn patch(px: &[u8], x: usize, y: usize) -> [u32; 3] {
     let mut sum = [0u32; 3];
     let mut n = 0;
@@ -58,9 +56,8 @@ fn apart(a: [u32; 3], b: [u32; 3]) -> u32 {
     (0..3).map(|k| a[k].abs_diff(b[k])).sum()
 }
 
-/// Lit pixels across the bottom plate, which is where the HUD prints the battery and the clock.
-/// The one thing on screen that is there whatever the shelf holds, so it is what says a frame was
-/// composed at all rather than handed back cleared — the distinction an empty library turns on.
+/// Lit pixels across the bottom plate, where the HUD prints battery and clock. Present whatever
+/// the shelf holds, so it shows a frame was composed rather than cleared.
 fn hud_ink(px: &[u8]) -> usize {
     ((OUT_H as usize - 40)..OUT_H as usize)
         .flat_map(|y| (0..OUT_W as usize).map(move |x| (x, y)))
@@ -86,15 +83,9 @@ fn composed(f: &mut Frontend, c: &mut Compositor, name: &str) -> Vec<u8> {
     px
 }
 
-/// The two side slots of the carousel, in screen pixels: a shrunken cart stands from 26 to 213
-/// on the left and from 506 to 693 on the right, with its foot on the selection's floor, so
-/// these read a band across the middle of one. A shelf of two fills both of them with its other
-/// cart; a shelf of one leaves both of them bare, since the lone cart is only 240 px wide and
-/// stands in the middle.
-///
-/// The same screen row on both, because two side slots are only the same reading if they are
-/// read at the same height up a cart: a side cart is 105 px of face, and 48 px down it is a
-/// different part of the label from 58 px down it.
+/// The two side slots, in screen pixels: a shrunken cart spans 26-213 on the left and 506-693 on
+/// the right. A shelf of two fills both; a shelf of one leaves both bare (the lone 240 px cart
+/// stands in the middle). Same row on both, so they read the same part of a label.
 const SIDE_LEFT: (usize, usize) = (120, 250);
 const SIDE_RIGHT: (usize, usize) = (600, 250);
 /// The middle slot, on the selection itself, which stands full size from 240 to 480.
@@ -102,23 +93,9 @@ const MIDDLE: (usize, usize) = (360, 250);
 /// The ground the carts stand on, which is what an empty place on the row leaves behind.
 const GROUND: [u32; 3] = [0x05, 0x05, 0x08];
 
-/// A card nobody has organised yet, on the panel. slot no longer sweeps loose files into
-/// `GBA/`, so a card whose roms are still sitting at the top of `Games/` has nothing
-/// the scan will read and comes up an empty shelf.
-///
-/// That is a claim about a picture, so it is settled against the picture. The whole risk of
-/// dropping the sweep is that "no carts" turns out to be a crash, a hang or a half-drawn screen
-/// rather than a clean empty shelf, and every one of those reads the same in a draw list: an
-/// empty list and a list of chrome with no carts in it are both "no `Draw::Tex` for a cart". The
-/// panel can tell them apart. So this composes the frame, requires the housing to be up — the
-/// shelf drew itself, it did not fail to draw — and requires all three carousel slots to be the
-/// bare ground behind it, with the organised card from `tmp_root_with_carts` beside it proving
-/// the same readings do find carts when there are carts to find.
-///
-/// It also runs the frontend on for a second of frames and composes again. An empty library is
-/// the one shape with no cart to animate and no selection to move, which is exactly where a
-/// carousel that divides by the number of carts or waits on a face that is never coming would
-/// hang — and a hang is not visible in one frame.
+/// A card with roms loose at the top of `Games/` (not in `GBA/`) renders as a clean empty
+/// shelf: housing drawn, all three slots bare ground, and still so a second of frames later,
+/// since an empty library is where a carousel dividing by the cart count would hang.
 #[test]
 fn a_card_nobody_has_organised_comes_up_an_empty_shelf() {
     let Ok(surface) = HeadlessSurface::new() else {
@@ -128,10 +105,8 @@ fn a_card_nobody_has_organised_comes_up_an_empty_shelf() {
         return;
     };
 
-    // Exactly the card the sweep used to rescue: a rom, its battery save and its label all loose
-    // at the top of their folders, plus a pre-namespacing state directory. `tmp_root_with_carts`
-    // builds the folders and then the files are put beside the `GBA/` directories rather than
-    // in them.
+    // A rom, its battery save and its label loose at the top of their folders, plus a
+    // pre-namespacing state directory, all beside the `GBA/` directories rather than in them.
     let d = tmp_root_with_carts(&[]);
     std::fs::write(d.path().join("Games/Emerald.gba"), vec![0u8; 0x100]).expect("loose rom");
     std::fs::write(d.path().join("Saves/Emerald.sav"), vec![7u8; 0x10000]).expect("loose save");
@@ -144,11 +119,8 @@ fn a_card_nobody_has_organised_comes_up_an_empty_shelf() {
     f.advance(&mut input);
     let empty = composed(&mut f, &mut c, "loose-card");
 
-    // The chrome is up, so what follows is an empty shelf and not an unpainted screen. The
-    // bottom plate is the part of the case that is on screen no matter what the shelf holds —
-    // an empty library draws no carts and no top plate, so the top of the panel is honestly
-    // black — and the HUD's own type is printed across it, which is a live frame rather than a
-    // cleared buffer.
+    // The chrome is up, so this is an empty shelf and not an unpainted screen. An empty library
+    // draws no carts and no top plate, but the bottom plate and its HUD type are always there.
     let plate = patch(&empty, 150, 470);
     assert!(
         apart(plate, GROUND) > 20,
@@ -190,8 +162,8 @@ fn a_card_nobody_has_organised_comes_up_an_empty_shelf() {
         );
     }
 
-    // The contrast. The same three readings on a card whose rom is in `Games/GBA/` find a cart,
-    // so "bare ground" above is the library being empty and not the readings being blind.
+    // Contrast: the same readings find a cart when the rom is in `Games/GBA/`, so they are not
+    // blind.
     let organised = tmp_root_with_carts(&["Emerald", "Fusion"]);
     clocked(organised.path());
     let mut f = Frontend::boot(Box::new(SimPlatform::at(organised.path().to_path_buf())));
@@ -206,17 +178,9 @@ fn a_card_nobody_has_organised_comes_up_an_empty_shelf() {
     );
 }
 
-/// The cart going into the slot from a shelf of two, and what the rest of that row does while it
-/// goes. The selection stands in the middle of a two-cart shelf as it does on any other, so its
-/// travel is straight down the slot and any sideways movement is the handover getting the cart's
-/// starting place wrong.
-///
-/// What the repeat adds is the row it leaves behind: the other cart is drawn twice, once on each
-/// side, and *both* of those have to part and go. One of them left standing while the cart seats
-/// would be the clearest possible sign that the row is drawing a copy it has lost track of.
-///
-/// Composed from the app's own draw list rather than through the frontend, because the travel
-/// is a fifth of a second long and the app's clock can be stepped to the middle of it exactly.
+/// Inserting from a shelf of two: the selection travels straight down the slot, and the other
+/// cart, drawn on both sides, must part and go on both. Composed from the draw list so the
+/// fifth-of-a-second travel can be stepped to exactly.
 #[test]
 fn a_cart_going_in_from_a_repeated_row_takes_both_copies_of_its_neighbour_with_it() {
     let Ok(surface) = HeadlessSurface::new() else {
@@ -227,16 +191,14 @@ fn a_cart_going_in_from_a_repeated_row_takes_both_copies_of_its_neighbour_with_i
     };
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
     clocked(d.path());
-    // No faces are uploaded, so each cart draws as a rect in the colour its label would have
-    // been — which is all this needs, since the question is where the cart is.
+    // No faces are uploaded, so each cart draws as a rect in its label colour.
     let mut app = App::boot(d.path());
     let ink = label_colour(&clean_label("Emerald"));
 
     let standing = shot(&app, &mut c, Some("insert-0-standing"));
     let (from, _) = span(&standing, ink);
-    // Read rather than named: a side cart is drawn dimmed, so the colour of the other cart on
-    // the row is its label colour darkened by however much the row dims a neighbour, and what
-    // matters here is only that the two sides hold the same thing and the middle does not.
+    // Read rather than named: side carts are dimmed. What matters is that both sides match and
+    // the middle does not.
     let west = patch(&standing, SIDE_LEFT.0, SIDE_LEFT.1);
     let east = patch(&standing, SIDE_RIGHT.0, SIDE_RIGHT.1);
     app.apply(Action::Insert);
@@ -285,29 +247,10 @@ fn a_cart_going_in_from_a_repeated_row_takes_both_copies_of_its_neighbour_with_i
     }
 }
 
-/// A whole scroll, frame by frame, on a shelf of two and on a shelf of three.
-///
-/// This is the question the repeat was refused over when it was first proposed: a ring of two
-/// wraps on every press and the same cart is both the selection and a neighbour, so the worry
-/// was that scrolling it would read as two carts swapping places rather than as a row turning.
-/// A still frame cannot answer that, and neither can a draw list — the shape of the motion is
-/// the whole of what is in doubt, so every frame of it is composited, written out to be looked
-/// at, and measured.
-///
-/// What is measured is that the carts on screen are a rigid row: every one of them stands at the
-/// same fraction of a pitch off the middle as the others, that fraction only ever moves one way,
-/// it never moves further in a frame than the spring can carry it, and it ends up home. A row
-/// that swapped its carts, or blinked one out at an edge and back in at the other, breaks the
-/// first of those; a row that teleported breaks the third. The shelf of three is here to say the
-/// same measurements come back unchanged for a row that was never in question.
-///
-/// How many carts are on screen is where the two shelves genuinely differ, and the counts below
-/// are what they are on purpose. A row of three has exactly three images to give: the moment the
-/// press lands, the one that was on the left belongs three slots along instead, which is off the
-/// right hand edge, so for a few frames the row is two carts and a space until it comes back in.
-/// A row of two has an image in every slot, so nothing is ever missing from it — which is the
-/// other half of why the repeat is the layout that scrolls best, and not a thing to tidy into
-/// one number for both.
+/// A whole scroll, frame by frame, on shelves of two and three. The carts on screen must move
+/// as a rigid row: all at the same fraction of a pitch off the middle, moving one way, never
+/// faster than the spring allows, and ending home. A row of three shows two carts and a gap for
+/// a few frames after the press; a row of two has an image in every slot, so the counts differ.
 #[test]
 fn a_scrolled_row_slides_by_a_pitch_rather_than_swapping_its_carts() {
     let Ok(surface) = HeadlessSurface::new() else {
@@ -322,26 +265,22 @@ fn a_scrolled_row_slides_by_a_pitch_rather_than_swapping_its_carts() {
     ] {
         let d = tmp_root_with_carts(stems);
         clocked(d.path());
-        // No faces: every cart is a rect in its own label colour, which is all a row of blocks
-        // sliding across a black backdrop needs to be legible both to the eye and to `pitches`.
+        // No faces: every cart is a rect in its own label colour.
         let mut app = App::boot(d.path());
         let mut frames = vec![shot(&app, &mut c, Some(&format!("scroll-{carts}-00")))];
-        // Pressed and let go: the shoulder that scrolls the row auto repeats while it is held,
-        // and what is being looked at here is one step.
+        // Pressed and let go: the shoulder auto repeats while held.
         app.apply(Action::ShelfRight);
         app.apply(Action::GbaUp(Btn::Right));
-        // Half a second, which is long enough for a spring this stiff to arrive: every frame of
-        // it is measured, and every fourth one is written out, because six pictures of a scroll
-        // settle by eye everything thirty would.
+        // Half a second is long enough for the spring to arrive. Every frame is measured, every
+        // fourth written out.
         for f in 1..=30 {
             app.update(1.0 / 60.0);
             let name = (f % 4 == 0).then(|| format!("scroll-{carts}-{f:02}"));
             frames.push(shot(&app, &mut c, name.as_deref()));
         }
 
-        // Where the row stands, in pitches off the middle, unwrapped frame by frame so that the
-        // ride reads as one continuous number: it starts a whole pitch out, because the press
-        // has already moved the selection and the spring has not caught up yet.
+        // Where the row stands, in pitches off the middle, unwrapped frame by frame. It starts a
+        // whole pitch out: the selection has moved and the spring has not caught up.
         let mut stood = 1.0f32;
         for (f, px) in frames.iter().enumerate() {
             let runs = row_runs(px);
@@ -351,8 +290,7 @@ fn a_scrolled_row_slides_by_a_pitch_rather_than_swapping_its_carts() {
                  720 px row of them holds",
                 runs.len()
             );
-            // Only the carts standing wholly on screen: one hanging off an edge is measured
-            // short, and what these are compared against is each other.
+            // Only carts wholly on screen: one hanging off an edge is measured short.
             let row: Vec<f32> = runs
                 .iter()
                 .filter(|(a, b)| *a > 0 && *b < OUT_W as usize - 1)
@@ -373,8 +311,7 @@ fn a_scrolled_row_slides_by_a_pitch_rather_than_swapping_its_carts() {
                     row[0]
                 );
             }
-            // The nearest reading of that fraction to where the row was last frame. A pitch is
-            // a whole cart, so nothing else could have moved the row this far in one frame.
+            // The nearest reading to last frame's. A pitch is a whole cart, so nothing else fits.
             let now = [phase - 1.0, phase, phase + 1.0]
                 .into_iter()
                 .fold(f32::MAX, |a, b| {
@@ -405,11 +342,8 @@ fn a_scrolled_row_slides_by_a_pitch_rather_than_swapping_its_carts() {
     }
 }
 
-/// The first and last column of every cart on the row, in screen order.
-///
-/// The carts are the only lit thing in this band — the plate is above it and the slot below —
-/// so a run of columns with something in them is a cart, and what separates two of them is the
-/// 26 px of backdrop the pitch leaves between neighbours.
+/// The first and last column of every cart on the row, in screen order. Carts are the only lit
+/// thing in this band, separated by 26 px of backdrop.
 fn row_runs(px: &[u8]) -> Vec<(usize, usize)> {
     let lit = |x: usize| {
         (210..300).any(|y| {
@@ -428,8 +362,7 @@ fn row_runs(px: &[u8]) -> Vec<(usize, usize)> {
     runs
 }
 
-/// The horizontal centre of everything drawn in `ink`, and the lowest row it reaches. The cart
-/// is the only thing on screen wearing its own label colour.
+/// The horizontal centre of everything drawn in `ink`, and the lowest row it reaches.
 fn span(px: &[u8], ink: [u8; 3]) -> (f32, usize) {
     let close = |c: [u8; 3]| (0..3).all(|k| c[k].abs_diff(ink[k]) <= 24);
     let mut cols: Vec<usize> = Vec::new();
@@ -449,19 +382,16 @@ fn span(px: &[u8], ink: [u8; 3]) -> (f32, usize) {
     ((first + last) as f32 / 2.0, bottom)
 }
 
-/// One frame of the app's own draw list, composited and — where it is worth looking at and
-/// there is somewhere to put it — written out under `name`. A frame measured and not named is
-/// still composited: the reading has to come off the same pixels either way.
+/// One frame of the app's draw list, composited and, if `SCRATCH_PNG_DIR` is set, written out
+/// under `name`.
 fn shot(app: &App, c: &mut Compositor, name: Option<&str>) -> Vec<u8> {
     let mut out = Vec::new();
     app.draw(&mut out);
     frame_named(c, &out, name)
 }
 
-/// The same for a draw list somebody built by hand, which is how the insertion below is driven.
-/// The travel is under half a second and the cartridge that goes down it is whichever one the
-/// shelf was on, so every frame of it has to be reachable by seat, not by
-/// stepping a clock and hoping to land somewhere useful.
+/// The same for a hand-built draw list, so every frame of the insertion is reachable by seat
+/// rather than by stepping a clock.
 fn frame(c: &mut Compositor, out: &[Draw], name: &str) -> Vec<u8> {
     frame_named(c, out, Some(name))
 }
@@ -505,8 +435,8 @@ fn label_top() -> usize {
     LABEL_Y as usize
 }
 
-/// The first and last screen rows showing the cartridge's own paper. Only ever asked of a
-/// cartridge standing clear of the machine.
+/// The first and last screen rows showing the cartridge's own paper. Only asked of a cartridge
+/// standing clear of the machine.
 fn paper_rows(px: &[u8], ink: [u8; 3]) -> Option<(usize, usize)> {
     let close = |c: [u8; 3]| (0..3).all(|k| c[k].abs_diff(ink[k]) <= 24);
     let mut rows =
@@ -515,21 +445,14 @@ fn paper_rows(px: &[u8], ink: [u8; 3]) -> Option<(usize, usize)> {
     Some((first, rows.next_back().unwrap_or(first)))
 }
 
-/// Everything this frame is made of that is *not* the cartridge: the black the compositor clears
-/// to, and the four flat theme colours the slot's own bands are painted in. The list under test
-/// holds those and one cart, so whatever is none of them is the cart.
+/// Every colour in the frame that is not the cartridge: the clear black and the slot's four flat
+/// theme colours.
 fn backdrop() -> [[f32; 4]; 5] {
     [[0.0, 0.0, 0.0, 1.0], housing(), opening(), edge(), recess()]
 }
 
-/// The first and last screen rows the cartridge covers, found by its shell.
-///
-/// The cartridge is the one object on screen that is neither the backdrop nor the machine, so
-/// that is what is looked for. Nothing here names a coordinate: the answer is wherever the cart
-/// turns out to be.
-///
-/// The tolerance is 8 a channel against a 17 gap: the nearest a cartridge's plastic comes to a
-/// theme colour is the GBA cart's 0x35 shell against the 0x24 housing.
+/// The first and last screen rows the cartridge covers, found by its shell. Tolerance is 8 a
+/// channel against a 17 gap: the GBA cart's 0x35 shell against the 0x24 housing.
 fn shell_rows(px: &[u8]) -> Option<(usize, usize)> {
     let flat = backdrop();
     let cart = |c: [u8; 3]| {
@@ -545,10 +468,8 @@ fn shell_rows(px: &[u8]) -> Option<(usize, usize)> {
     Some((first, rows.next_back().unwrap_or(first)))
 }
 
-/// The insertion, rendered: the cartridge standing centred on the carousel, travelling at its own
-/// size rather than squashed, and catching on the lip where its foot meets it. None of that is a
-/// claim a draw list can settle, which is why this one goes through the compositor and writes the
-/// frames out to be looked at.
+/// The insertion, rendered: the cartridge centred, travelling at its own size, and catching on
+/// the lip where its foot meets it.
 #[test]
 fn the_cartridge_goes_into_the_slot_at_its_own_size() {
     let Ok(surface) = HeadlessSurface::new() else {
@@ -613,8 +534,8 @@ fn the_cartridge_goes_into_the_slot_at_its_own_size() {
                      screen's own {}",
                     OUT_H as f32 / 2.0
                 );
-                // The paper is the full height the cartridge's own label well is, and starts
-                // its own inset down the shell: a squashed cart shows a squashed label.
+                // The paper is the full height of the label well and starts its inset down the
+                // shell: a squashed cart shows a squashed label.
                 let (paper_top, paper_bottom) =
                     paper_rows(&px, ink).expect("a standing cartridge shows its label");
                 let inset = paper_top - top;
@@ -635,11 +556,8 @@ fn the_cartridge_goes_into_the_slot_at_its_own_size() {
     }
 }
 
-/// How far the cartridge moves on each frame of the travel, at the rate the device runs. Printed
-/// rather than asserted on a number pulled out of the air: what it is for is judging whether the
-/// push through the lip reads as a shove or as a teleport, and that is an eye's call. The one
-/// thing held here is that no frame of it is a jump of more than half the cartridge, which is
-/// where a moving object stops overlapping itself and starts reading as two objects.
+/// How far the cartridge moves each frame of the travel at device rate, printed for judging by
+/// eye. Asserts no frame jumps more than half the cartridge, where it would read as two objects.
 #[test]
 fn no_frame_of_the_travel_jumps_further_than_the_cartridge_is_tall() {
     for (name, cart) in cartridges() {

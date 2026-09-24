@@ -1,6 +1,5 @@
-//! Composes the about screen exactly as `Phase::About` does — backdrop, then label — and
-//! rasterises it to a PNG, so what the ground does behind the label can be looked at rather
-//! than asserted about.
+//! Composes the about screen as `Phase::About` does (backdrop, then label) and rasterises it
+//! to a PNG.
 //!
 //! Does nothing unless `SCRATCH_PNG` names an output file. `SCRATCH_WALL` puts a wallpaper
 //! behind the label:
@@ -68,7 +67,7 @@ fn render_about() {
                 tex,
                 alpha,
             } => {
-                // 0 is the wallpaper, 1 the label — the order they were pushed in.
+                // 0 is the wallpaper, 1 the label, in push order.
                 let (src, sw, sh) = match tex == TexId::from_raw(0) {
                     true => (paper.as_deref().unwrap_or(&[]), OUT_W, OUT_H),
                     false => (label.rgba.as_slice(), label.w, label.h),

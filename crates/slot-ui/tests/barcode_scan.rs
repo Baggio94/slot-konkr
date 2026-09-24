@@ -1,29 +1,21 @@
-//! The only check that proves the Code 39 table: render the encoder's output as an image and
-//! hand it to a real reader. The structural tests in `barcode.rs` catch a pattern with the
-//! wrong number of wide elements, but a table that is internally consistent and still wrong
-//! encodes happily and scans as nothing — which is exactly what a barcode is for.
-//!
-//! Needs `zbarimg` (`brew install zbar`). Without it the test says so and stops, rather than
-//! passing quietly and claiming to have checked something.
+//! Renders the encoder's output and scans it with a real reader, the only check that proves
+//! the Code 39 table. Needs `zbarimg` (`brew install zbar`); without it the test says so.
 
 use std::process::Command;
 
 use slot_ui::{code39, CODE39_NARROW, CODE39_WIDE};
 
-/// Four pixels per narrow element puts the wide one at ten, inside the 2:1 to 3:1 the
-/// symbology allows and well clear of any resampling.
+/// Puts the wide element at ten pixels, inside Code 39's 2:1 to 3:1 range.
 const SCALE: f32 = 4.0;
 
 fn render(payload: &str, to: &std::path::Path) {
     let run = code39(&format!("*{payload}*")).expect("payload is in the alphabet");
     let narrow = (CODE39_NARROW * SCALE) as usize;
     let wide = (CODE39_WIDE * SCALE) as usize;
-    // Code 39 wants a quiet zone of at least ten narrow elements either side. A reader that
-    // cannot find one reports nothing at all, which would look like a bad table.
+    // Code 39 needs a quiet zone of at least ten narrow elements either side.
     let quiet = narrow * 12;
     let elements: usize = run.iter().map(|w| if *w { wide } else { narrow }).sum();
-    // One narrow space between characters, part of the symbology rather than decoration:
-    // without it the last bar of one character runs into the first of the next.
+    // Code 39 requires one narrow space between characters.
     let gaps = (run.len() / 9) * narrow;
     let (w, h) = (quiet * 2 + elements + gaps, 120usize);
 
@@ -57,8 +49,6 @@ fn the_barcode_reads_back_as_what_was_encoded() {
         return;
     }
     let dir = tempfile::tempdir().expect("tempdir");
-    // The whole alphabet, a hash-shaped payload, and one character: the sentinel is the same
-    // pattern in all three, so a wrong one fails every case rather than an awkward edge.
     for payload in ["0123456789ABCDEF", "0473885", "DEADBEEF", "F"] {
         let png = dir.path().join(format!("{payload}.png"));
         render(payload, &png);

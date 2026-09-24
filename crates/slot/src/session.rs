@@ -18,26 +18,23 @@ pub struct Session {
     root: PathBuf,
     app: App,
     emu: Option<EmuHandle>,
-    /// Opened once and outliving every cart. The cart clicks home while it is still on its
-    /// way in, which is exactly when there is no core to own a sink.
+    /// Outlives every cart: the insert click plays before there is a core to own a sink.
     sink: Box<dyn AudioSink>,
     gestures: Gestures,
     pad: Pad,
     rewinding: bool,
     fast: bool,
-    /// What the motor was last set to. On the device that setting is a write to hardware and
-    /// the core asks for the same value most frames.
+    /// Last motor value set. On the device each set is a hardware write, and the core repeats
+    /// the same value most frames.
     motor: u16,
-    /// A reload for a link is underway: the core in the slot was spawned for it, and `App` is
-    /// waiting to hear whether it loaded. See `reload_for_link`.
+    /// A reload for a link is underway and `App` is waiting to hear whether it loaded.
     reloading: bool,
 }
 
 impl Session {
     pub fn boot(root: PathBuf) -> Self {
         let mut sink: Box<dyn AudioSink> = open_sink();
-        // A frontend for one console knows the rate before it knows the cart. A device that
-        // refuses it still opens, and the worker resamples to whatever it did take.
+        // A device that refuses the rate still opens; the worker resamples to what it took.
         if let Err(e) = sink.open(GBA_HZ) {
             eprintln!("slot: audio: {e}");
         }
@@ -64,9 +61,7 @@ impl Session {
             return;
         }
         let mut samples = sfx.render(rate);
-        // The core's audio is levelled by the worker on its way to the ring. A clip mixed in
-        // here never passes that, so the same level has to be applied on this path or the
-        // slot stays loud under a game turned all the way down.
+        // The worker levels core audio, but this path bypasses it, so apply the volume here.
         crate::audio::volume::apply(&mut samples, self.app.output_volume());
         ring.mix(&samples);
     }
@@ -75,8 +70,7 @@ impl Session {
         self.sink.ring().queued_frames()
     }
 
-    /// What the device is about to play, for the tests that need to hear what was queued
-    /// rather than only how much of it there is.
+    /// The queued audio itself, for tests.
     pub fn audio_ring(&self) -> std::sync::Arc<Ring> {
         self.sink.ring()
     }
@@ -104,11 +98,7 @@ impl Session {
         &mut self.app
     }
 
-    /// The emulator thread's own handle, reachable only from here — `App` never touches the
-    /// transport or the core itself (see its `link` field's doc comment). `None` before a
-    /// cart has spawned one. Exists for whoever ends up wiring a link indicator, and for
-    /// tests proving `act`'s own bridge to `EmuHandle::end_link` actually reaches the
-    /// emulator thread rather than only `App`'s bookkeeping.
+    /// The emulator thread's handle, or `None` before a cart spawns one. `App` never touches it.
     pub fn emu(&self) -> Option<&EmuHandle> {
         self.emu.as_ref()
     }
@@ -124,8 +114,6 @@ impl Session {
 
     /// Whether the game layer may be drawn at all. Gate the draw on this, never on
     /// `has_core`: a handle exists before its worker has produced anything.
-    /// Diagnostic: how many frames have been taken out of the handoff buffer. Only the
-    /// render path may take one, so this must equal the number the renderer received.
     pub fn frame_ready(&self) -> bool {
         self.emu.as_ref().is_some_and(EmuHandle::frame_ready)
     }
@@ -136,22 +124,19 @@ impl Session {
         self.emu.as_ref().map_or(0, EmuHandle::published_count)
     }
 
-    /// What the worker last reported reading `speed` as, or `None` with no core to ask. Unlike
-    /// `sync_speed`'s write, this is a fact about the worker's own last pass through its loop —
-    /// see `EmuHandle::observed_speed` for why that is a stronger thing to wait on than a frame
-    /// count holding still.
+    /// The speed the worker last observed, or `None` with no core. See
+    /// `EmuHandle::observed_speed`.
     pub fn observed_speed(&self) -> Option<Speed> {
         self.emu.as_ref().map(EmuHandle::observed_speed)
     }
 
+    /// Diagnostic: frames taken from the handoff buffer. Must equal what the renderer received.
     pub fn frames_taken(&self) -> u64 {
         self.emu.as_ref().map_or(0, EmuHandle::frames_taken)
     }
 
-    /// Gated on the screen being up as well as on a published frame. A core starts loading
-    /// on the way into the slot and publishes long before the cart is home, so without this
-    /// the game is playing behind the cart for most of the animation. The app owns the answer
-    /// because it owns the draw list the game layer is an item in.
+    /// Also gated on the screen being up: a core publishes long before the cart is home, and
+    /// the game would otherwise play behind the cart.
     pub fn game_visible(&self) -> bool {
         self.app.game_visible()
     }
@@ -172,30 +157,14 @@ impl Session {
         }
     }
 
-    /// `App` only ever holds a session's own bookkeeping (see `App::link`'s doc comment) —
-    /// the transport and the core it feeds live on the emulator thread, reachable only
-    /// through `EmuHandle`. Watching the edge here, around whatever `f` does to `App`, is
-    /// what closes that gap for every action that can end a session, without either side
-    /// having to know the other exists.
-    ///
-    /// The one place this is called from used to be inline inside `act`, wrapping only
-    /// `App::apply` — which covered every button but missed a critical battery reading,
-    /// which reaches `App` through `update`/`timers` instead, with no `Action` and no
-    /// `apply` call anywhere on its path. `App::begin_power_off` now ends a live session
-    /// itself (see its own doc comment) the same way `doze` already did, but that ending
-    /// still needed a way to reach the emulator thread — the whole reason this moved out of
-    /// `act` and became the one thing both of `Session`'s own entry points into `App`
-    /// (`act`'s `apply`, `update`'s `update`) route every call through. A session can now
-    /// only ever end from inside `App` on a path this already watches; there is no longer a
-    /// way to add a sixth route that skips it.
+    /// Runs `f` on `App` and, if it ended a link, tells the emulator thread, which owns the
+    /// transport. Every call into `App` that can end a session must go through here.
     fn bridge_link(&mut self, f: impl FnOnce(&mut App)) {
         let had_link = self.app.link_active();
         f(&mut self.app);
         if had_link && !self.app.link_active() {
             if let Some(emu) = &self.emu {
-                // Tells the core the session is over (`RetroCore::stop_link`, if it offered
-                // a `stop` to hear it through) and drops the transport, which is what
-                // actually closes the wire — see `Cmd::EndLink` in `emu.rs`.
+                // Stops the core's link and drops the transport, closing the wire.
                 emu.end_link();
             }
         }
@@ -212,12 +181,10 @@ impl Session {
             Action::FfStop => self.fast = false,
             _ => {}
         }
-        // A button a menu used is not the game's, on either edge of it: the press that opens
-        // one and the press that dismisses it both belong to the menu. Read on both sides of
-        // the `apply`, because either of those two presses is the one that moves the answer.
+        // The presses that open and dismiss a menu both belong to it, so check both sides of
+        // `apply`.
         let menu = self.overlaid();
         self.bridge_link(|app| app.apply(action));
-        // After apply: the level the sink wants is the one the action just produced.
         if matches!(
             action,
             Action::VolumeUp | Action::VolumeDown | Action::MuteToggle
@@ -231,37 +198,29 @@ impl Session {
         } else {
             self.pad.apply(action);
         }
-        // On the action rather than on the next frame: an eject or a doze may be the last
-        // thing this process does, and a motor left running outlives it.
+        // Now, not next frame: an eject or doze may be the process's last act, and a running
+        // motor outlives it.
         self.sync_rumble();
     }
 
     pub fn update(&mut self, dt: f32) {
         self.bridge_link(|app| app.update(dt));
-        // The wire a link that just came up runs over. `App` holds a session's own
-        // bookkeeping and never a transport (see `App::link`), so this is the hop that
-        // carries one to the emulator thread — the mirror of `bridge_link`'s own hop for the
-        // ending. Ahead of `sync_speed` below, so the frame the overlay closes on is already
-        // a frame the game is running again.
+        // Hand a new link's transport to the emulator thread. Before `sync_speed`, so the game
+        // is running again on the frame the overlay closes.
         if let Some((client_id, transport)) = self.app.take_link_transport() {
             match &self.emu {
-                // Which route carries it is decided by whether a port was loaded for: the cable
-                // is the only one that opens the core in link mode, so `link_player` is the one
-                // thing that can tell the two apart by the time the wire arrives.
+                // Only the emulated link loads the core in link mode, so `link_player` tells
+                // the two routes apart.
                 Some(emu) => match self.app.link_player() {
                     Some(player) => emu.begin_cable(player, transport),
                     None => emu.begin_link(client_id, transport),
                 },
-                // No core to carry it. Dropping the transport closes the socket, which is
-                // the only honest thing to do with a session that has nowhere to run.
+                // Dropping the transport closes the socket.
                 None => eprintln!("slot: link: a transport arrived with no core to run it"),
             }
         }
-        // Colour correction, the one option a player can change with a game on screen. Carried
-        // here for the same reason the wire is: `App` never touches the core. Which key to send,
-        // and whether there is one to send at all, is the seated core's business rather than the
-        // menu's: all three cores spell it differently, and a core with no such option at all
-        // would have `colour_option` answer `None` and nothing would be sent.
+        // Colour correction is the one option changeable with a game on screen. The key is
+        // the seated core's, not the menu's.
         if let Some(on) = self.app.take_colour_correction() {
             if let Some((key, value)) = crate::core::colour_option(self.app.core(), on) {
                 if let Some(emu) = &self.emu {
@@ -269,22 +228,13 @@ impl Session {
                 }
             }
         }
-        // A link picked in a mode the running core was not loaded with. Carried out here for the
-        // same reason the wire is: `App` never touches the core.
+        // A link picked in a mode the running core was not loaded with.
         if let Some((stem, serial)) = self.app.take_link_reload() {
             self.reload_for_link(&stem, serial);
         }
-        // The far end going, which happens two ways, and the order between them is the whole
-        // point. A peer that ends a link deliberately sends word and *then* drops its wire, so
-        // by the time this runs both flags can be up on the same frame. Asking the deliberate
-        // question first is what keeps "they ended it" from being reported as "they vanished".
-        //
-        // The two also end the session by different routes. `peer_ended` ends it outright, so
-        // it goes through `bridge_link` — the one hop that carries an ending to the emulator
-        // thread. `peer_lost` only breaks the badge; `App::timers` is what ends that one,
-        // `LINK_LOST_MS` later, from inside the `update` above that `bridge_link` already
-        // wraps. That timeout stays underneath this for every ending nobody could send word
-        // about: a crash, a flat battery, an SP carried out of range.
+        // Check `peer_ended` first: a peer ending deliberately sends word and then drops the
+        // wire, so both can be up on one frame. `peer_lost` only breaks the badge; `App::timers`
+        // ends that session after `LINK_LOST_MS`.
         if self.app.link_active() {
             if self.emu.as_ref().is_some_and(EmuHandle::peer_ended) {
                 self.bridge_link(|app| app.peer_ended());
@@ -297,14 +247,9 @@ impl Session {
         }
         self.sync_core();
         self.sync_reload();
-        // A latched fast forward is the one gesture with nothing holding it: R2 has been let go
-        // of and the speed stays, which is the whole point of the latch. It is meant to outlive
-        // the button, not the cart — left standing through an eject it brought the *next* game
-        // up fast forwarding, boot animation and all, with nobody near R2 and the badge in the
-        // corner the only clue what was wrong. Asked here rather than on the eject itself,
-        // because "no core to run fast" is the condition, and a cart refused at load reaches it
-        // by a different road than a cart ejected. Put through `act` so the session's own flag,
-        // the speed the worker is given and the badge all end in the same breath.
+        // A latched fast forward must not outlive the cart, or the next game boots fast. Keyed
+        // on "no core" so a refused load clears it too; through `act` so flag, speed and badge
+        // end together.
         if !self.has_core() {
             for action in self.gestures.drop_ff_latch() {
                 self.act(action);
@@ -320,11 +265,8 @@ impl Session {
         self.sync_rumble();
     }
 
-    /// The core writes its motor from the emulator thread and this is the one place that
-    /// reaches the hardware with it. The phase has the last word: a cart on its way out, a
-    /// paused switcher and a doze all stop the motor whatever the core last asked for. So does
-    /// rumble being off in the quick menu: the game rumbles on as far as the emulator knows, and
-    /// the motor is only ever told 0.
+    /// The one place the core's motor request reaches hardware. The phase and the quick menu's
+    /// rumble setting override it with 0.
     fn sync_rumble(&mut self) {
         let want = match &self.emu {
             Some(emu) if self.playing() && self.app.rumble_enabled() => emu.rumble().strength(),
@@ -333,11 +275,8 @@ impl Session {
         self.rumble(want);
     }
 
-    /// The badge tracks the speed the game is actually running at, so a cart on its way in, a
-    /// paused switcher, or a live link session refusing the hold all take it down even with
-    /// R2 still latched — a badge that kept showing Held or Latched over a session withholding
-    /// the speed would be telling the player their input landed when it did not, the exact
-    /// lie `sync_rewind_hud`'s own `actually_rewinding` guards against for the rewind bar.
+    /// The badge tracks the speed actually run, not the button, so it drops whenever fast
+    /// forward is withheld.
     fn sync_ff_hud(&mut self) {
         let ff = match (self.actually_fast_forwarding(), self.gestures.ff_latched()) {
             (false, _) => FfState::Off,
@@ -347,10 +286,7 @@ impl Session {
         self.app.set_ff(ff);
     }
 
-    /// The bar belongs to the hold, so it is pushed every frame it lasts and taken down the
-    /// moment L2 stops being a rewind, whether that was the button, the phase, or a live link
-    /// session refusing it — a bar held up over a rewind that never actually happens would be
-    /// showing the player a lie about their own input.
+    /// The bar shows only while a rewind is really happening, not merely while L2 is held.
     fn sync_rewind_hud(&mut self) {
         let fill = self
             .actually_rewinding()
@@ -362,17 +298,12 @@ impl Session {
         }
     }
 
-    /// L2 held, over a game actually in charge of the device, with nothing forbidding it.
-    /// Shared between `sync_speed` (which acts on it) and `sync_rewind_hud` (which shows it),
-    /// so the two can never drift into disagreeing about whether a rewind is really underway.
+    /// Shared by `sync_speed` and `sync_rewind_hud` so they cannot disagree.
     fn actually_rewinding(&self) -> bool {
         self.rewinding && self.playing() && self.app.may_rewind()
     }
 
-    /// R2's counterpart to `actually_rewinding`, for the identical reason: shared between
-    /// `sync_speed` (which acts on it) and `sync_ff_hud` (which shows it), so the badge and
-    /// the speed the core is actually run at can never drift into disagreeing about whether
-    /// fast forward is really underway.
+    /// Shared by `sync_speed` and `sync_ff_hud` so they cannot disagree.
     fn actually_fast_forwarding(&self) -> bool {
         self.fast && self.playing() && self.app.may_fast_forward()
     }
@@ -385,29 +316,14 @@ impl Session {
         matches!(self.app.phase(), Phase::Polaroids { .. })
     }
 
-    /// The screens whose buttons belong to them rather than to the game underneath. All of
-    /// them pause the core as well (`held`, and `sync_speed`'s own `showing_polaroids`), which
-    /// is what keeps a press landing here from being seen — but a pause is not a mask, and a
-    /// press taken while paused whose release arrives after it is a button the game finds
-    /// already down. This is what stops either edge reaching the pad at all.
-    ///
-    /// `held` names every screen that has taken the panel from a seated cart, and this used to
-    /// name only two of the three: the switcher and the in-game menu, but not the power menu or
-    /// the shutdown screen behind it. `App::apply` returns above the phase for the power menu,
-    /// so every press on it is spent there and none of them is the game's — and yet Up, Down and
-    /// the B that dismisses it all reached the pad. The dismissal is the one that bites: B ends
-    /// the menu, the core comes off pause on that same frame, and the game is handed a B it never
-    /// saw pressed and holds until the thumb comes off. There is one set of screens here, so
-    /// there is now one statement of it.
+    /// Screens whose buttons are theirs, not the game's. Pausing is not masking: a press taken
+    /// while paused and released after would reach the game as a held button.
     fn overlaid(&self) -> bool {
         self.showing_polaroids() || self.held()
     }
 
-    /// Whether the game is live and in charge of the device. Not the phase alone: the power
-    /// menu and the shutdown screen are overlays rather than phases — deliberately, so
-    /// cancelling returns to whatever was underneath — and the phase stays `Playing` under
-    /// both. Reading only the phase left the core running flat out, and the motor buzzing,
-    /// behind a screen that had already replaced the game.
+    /// Whether the game is live and in charge of the device. The phase stays `Playing` under
+    /// the power menu and shutdown screen, which are overlays, so the phase alone is not enough.
     fn playing(&self) -> bool {
         matches!(self.app.phase(), Phase::Playing { .. }) && !self.held()
     }
@@ -430,31 +346,16 @@ impl Session {
     /// frames, so the compositor keeps showing the last one behind the cards.
     fn sync_speed(&self) {
         if let Some(emu) = &self.emu {
-            // Ahead of the speed, so the first fast present already runs at the chosen one. The
-            // quick menu lives on the shelf and these cannot change under a seated cart, but the
-            // next cart seated after they did picks them up here.
-            // A ceiling, not a multiplier: the worker runs as many core frames as each present
-            // can afford, up to this.
+            // Before the speed, so the first fast present uses them. A ceiling on core frames
+            // per present, not a multiplier.
             emu.set_fast_steps(u32::from(self.app.ff_speed()));
             emu.set_ff_sound(self.app.ff_sound());
-            // Loading a core and running one are separate things. The insert animation
-            // hides the load, but a core left running behind the cart burns through the
-            // GBA bios intro, so the reveal catches only its tail. Paused until the cart is
-            // home, the boot animation starts from its first frame as the screen comes on.
+            // Paused while inserting so the BIOS intro starts as the screen comes on, and while
+            // ejecting so the game stops being heard once the player ends it.
             //
-            // An eject stops it for the same reason in reverse: the game is over as soon as
-            // the button is held, and a core still running behind a dark screen is a game
-            // still being heard after the player ended it.
-            //
-            // Fast forward belongs to the game, so a cart still sliding in runs at its own
-            // pace no matter what R2 is doing.
-            // `held()` stops pausing for as long as a session is live, and only here. A
-            // paused GBA cannot hold a link open: the far end keeps running and gpSP drops a
-            // peer after 240 frames of silence, so pausing a live session does not protect it
-            // — it ends it about four seconds later. It is also what the hardware does, since
-            // the other player's machine cannot be paused from this one. `Session::overlaid`
-            // is what keeps the menu's buttons out of the game underneath it, which is the
-            // part a pause was doing by accident.
+            // `held()` does not pause a live link: gpSP drops a silent peer after 240 frames
+            // (about four seconds), and real hardware cannot pause the other machine either.
+            // `overlaid` keeps menu buttons out of the game.
             emu.set_speed(
                 if self.inserting()
                     || self.ejecting()
@@ -464,21 +365,12 @@ impl Session {
                 {
                     Speed::Paused
                 } else if self.actually_fast_forwarding() {
-                    // A live link session forbids fast forward the same way it forbids
-                    // rewind: running this device's machine out ahead of what the peer has
-                    // actually been sent is a desync with no way back, and libretro's
-                    // netpacket contract names fast forward in the same breath as pausing
-                    // and rewinding. `App::apply`'s own `FfStart` arm is what shakes the
-                    // screen for the player; this is what actually withholds the speed.
                     Speed::Fast
                 } else {
                     Speed::Normal
                 },
             );
-            // Held through an eject or into the switcher, L2 stops rewinding rather than
-            // eating the history of a cart that is on its way out — and refused outright
-            // during a live link session, since rewinding one device desynchronises the
-            // other with no way back to agreement.
+            // Rewinding one linked device desyncs the other with no way back.
             emu.set_rewinding(self.actually_rewinding());
         }
     }
@@ -504,16 +396,13 @@ impl Session {
             _ => return,
         };
         if self.emu.is_none() {
-            // In whatever mode the cart is in now: what SELECT last switched it to, or what gpSP
-            // picks for it.
             let (_, serial) = self.app.link_mode(&stem);
             self.spawn_core(&stem, serial);
         }
         match self.emu.as_ref().map(EmuHandle::state) {
             Some(CoreState::Loading) => {}
             Some(CoreState::Ready) => self.app.on_core_ready(),
-            // A refused cart leaves a dead worker behind. Dropping it here is what frees the
-            // core for the next insert, since libretro allows only one.
+            // Drop the dead worker to free the core: libretro allows only one.
             Some(CoreState::Failed) | None => {
                 self.emu = None;
                 self.app.on_core_failed();
@@ -531,27 +420,16 @@ impl Session {
         else {
             return;
         };
-        // Resolved once, and only here: this is which dylib gets opened, which
-        // `States/GBA/<core>/` directory the resume lookup below reads from, and, via
-        // `set_core`, every later flush, eject and polaroid read for this cart too. Deriving it
-        // twice let a `gpsp` cart run on mGBA with its state filed under the `gpsp` directory.
-        // `App` stores this rather than re-deriving it later, which is what makes that class of
-        // drift structurally unreachable. `SLOT_CORE` is untouched by this: it names a dylib
-        // rather than a `Core`, and its own doc comment already calls it the trap it is.
+        // Resolve the core once and store it in `App`: the dylib, the `States/GBA/<core>/`
+        // directory and every later read and write must agree.
         let core = slot_store::core_for(&self.root, stem);
         self.app.set_core(core);
-        // gpSP reads its link mode only while a game loads, so what this hands the core is what
-        // the game links over from here on, and what `App` compares a picked link against.
+        // gpSP reads its link mode only while a game loads.
         self.app.set_link_loaded(serial);
-        // A clean start skips the state, it does not delete it: the file stays on the card
-        // for the next tap to resume from.
+        // A clean start skips the state but leaves it on the card.
         let resume = (!self.app.starting_clean())
             .then(|| persist::read_resume(&self.root, core, stem))
             .flatten();
-        // Colour correction is read here, at the one moment a libretro core reads an option at
-        // all. The quick menu that sets it is only ever open on the shelf, with the core already
-        // dropped, so the cart going in now is always the first to see a change made there — the
-        // same way `sync_speed` picks up the fast forward settings.
         let opened = open_core(
             &self.root,
             core,
@@ -559,11 +437,7 @@ impl Session {
             self.app.colour_correction(),
             self.app.link_player(),
         );
-        // Whether the emulator about to run is the one the state directory is named after.
-        // Only this line knows: everything downstream sees a `Box<dyn RetroCore>` that looks
-        // the same either way. `App` needs it because it is about to be told whether the core
-        // refused the resume above, and a refusal from the mock standing in for a missing dylib
-        // means something entirely different from a refusal by the cart's own core.
+        // A refusal from the mock means a missing dylib, not a bad resume state.
         self.app.set_named_core(opened.named);
         let emu = EmuHandle::spawn(
             opened.core,
@@ -578,12 +452,8 @@ impl Session {
         self.emu = Some(emu);
     }
 
-    /// Loads the seated game again with `serial`, carrying on from where it is. Durable first,
-    /// through the flush the lid, the power button and the autosave all use, because the new
-    /// core resumes from exactly what it writes. A load on its way back from one that failed has
-    /// no running core to flush, and the state on the card is already the one it resumes. The
-    /// old core is dropped before the new one opens: dropping joins its worker, which is what
-    /// lets the core go, and libretro allows only one.
+    /// Loads the seated game again with `serial`, resuming from a fresh flush. The old core is
+    /// dropped first: dropping joins its worker, and libretro allows only one core.
     fn reload_for_link(&mut self, stem: &str, serial: &'static str) {
         eprintln!("slot: link: loading {stem} again with gpsp_serial={serial}");
         if self.emu.is_some() {
@@ -594,11 +464,8 @@ impl Session {
         self.reloading = true;
     }
 
-    /// Follows a reload for a link to its end, which `App` is waiting on. A core that will not
-    /// load is dropped, as `sync_core` drops a refused cart's, and `App` decides what follows.
-    /// The first time that is the mode the game came from, carried out here straight away so no
-    /// frame passes with a seated cart and no core behind it; the second time, the cart comes
-    /// back out of the slot.
+    /// Follows a link reload to its end. On failure `App` decides what follows: first a retry in
+    /// the previous mode, started here so no frame has a seated cart without a core; then eject.
     fn sync_reload(&mut self) {
         if !self.reloading {
             return;
@@ -621,9 +488,8 @@ impl Session {
     }
 }
 
-/// `SLOT_TRACE=1` prints every semantic action and the phase it landed in. The one thing
-/// the tests cannot cover is whether a key reaches the window at all, so this is how that
-/// question gets answered without guessing at the platform.
+/// `SLOT_TRACE=1` prints every semantic action and the phase it landed in, to check whether a
+/// key reaches the window at all.
 pub(crate) fn trace() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("SLOT_TRACE").is_some())

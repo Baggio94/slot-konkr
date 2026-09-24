@@ -5,17 +5,12 @@ use crate::shell::{shell_for, Finish, Shell};
 use crate::silhouette::{cart_depth, cart_mask, detail_mask, Detail};
 use crate::text;
 
-/// The traced outline's own aspect, so `cart.svg` rasterises unstretched. Three across a
-/// 720 wide row exactly, so the shelf can show a neighbour either side of the selection.
+/// The traced outline's aspect, so `cart.svg` rasterises unstretched. Three fit a 720 wide row.
 pub const CART_W: u32 = 240;
 pub const CART_H: u32 = 135;
 
-/// The paper label, inset in the shell rather than covering it: 9% to 91% across and 22.8%
-/// to 86.3% down. The vertical placement is the reference's, and the band it leaves above is
-/// the moulded grip; that asymmetry is most of what makes the face read as a cartridge
-/// rather than a bordered rectangle. The horizontal inset is deliberately tighter than the
-/// reference's 14.1%, which was an icon's proportion rather than a cartridge's: a real
-/// label runs nearly the full width with only a thin edge of plastic beside it.
+/// The paper label's inset in the shell: 9% to 91% across and 22.8% to 86.3% down. The band
+/// left above is the moulded grip, and that asymmetry is what makes it read as a cartridge.
 pub const fn label_panel(w: u32, h: u32) -> (u32, u32, u32, u32) {
     (
         (w * 90 + 500) / 1000,
@@ -32,13 +27,11 @@ pub const LABEL_H: u32 = label_panel(CART_W, CART_H).3 - LABEL_Y;
 
 const PAD: u32 = 10;
 const MAX_LINES: usize = 3;
-/// Three lines have to clear the label's height, and Open Sans Bold sets at about 1.36x
-/// the em. The label is landscape now, so it runs out of height long before width.
+/// Three lines must clear the label's height; Open Sans Bold sets at about 1.36x the em.
 const MAX_PX: f32 = LABEL_H as f32 / (MAX_LINES as f32 * 1.36);
 const MIN_PX: f32 = 10.0;
 
-/// How far the translucent edge reaches in. Zero at this depth exactly, so a pixel any
-/// further in is the plastic's own colour.
+/// How far the translucent edge reaches in; any pixel deeper is the plastic's own colour.
 const RIM: u32 = 4;
 pub struct CartFace {
     pub rgba: Vec<u8>,
@@ -46,9 +39,7 @@ pub struct CartFace {
     pub h: u32,
 }
 
-/// Everything about a face that is a property of the object rather than of the game: how big
-/// the cartridge is, where its label sits, the masks its outline and moulding come from, and
-/// the type size its generated label starts at.
+/// The properties of the cartridge itself, as opposed to the game printed on it.
 struct Spec {
     w: u32,
     h: u32,
@@ -58,15 +49,11 @@ struct Spec {
     depth: &'static [u8],
     detail: &'static Detail,
     max_px: f32,
-    /// The height the type block has to fit inside, or infinite where the panel is wide enough
-    /// for its height that only the width can ever bind.
+    /// The height the type block must fit, or infinite where only the width can bind.
     max_h: f32,
-    /// How far in the translucent edge reaches.
     rim: u32,
 }
 
-/// Anything that is a property of the plastic goes here. Anything that is a property of the
-/// game printed on it does not.
 fn spec() -> Spec {
     Spec {
         w: CART_W,
@@ -81,9 +68,8 @@ fn spec() -> Spec {
     }
 }
 
-/// The cart's own shape in black. Drawn under a side cart so the dimming is a cart in shadow
-/// rather than a cart you can see through: over a wallpaper a translucent face is a ghost,
-/// and the shelf's carts are solid objects.
+/// The cart's shape in black, drawn under a dimmed side cart so it reads as solid rather than
+/// translucent over the wallpaper.
 pub fn cart_shadow() -> CartFace {
     shadow(CART_W, CART_H, cart_mask())
 }
@@ -112,16 +98,15 @@ pub fn cart_face(cart: &Cart) -> CartFace {
     face
 }
 
-/// Colour is left alone and only alpha is cut, because the sprite pass blends straight
-/// alpha rather than premultiplied.
+/// Only alpha is cut, because the sprite pass blends straight alpha, not premultiplied.
 fn clip_to_silhouette(s: &Spec, face: &mut CartFace) {
     for (px, cover) in face.rgba.chunks_exact_mut(4).zip(s.mask) {
         px[3] = ((px[3] as u32 * *cover as u32 + 127) / 255) as u8;
     }
 }
 
-/// Stable across runs, which the standard hasher is not: the same game must be the same
-/// colour on every boot, or the shelf is unrecognisable from memory.
+/// FNV rather than the standard hasher, which is not stable across runs: a game must keep its
+/// colour on every boot.
 pub fn label_colour(title: &str) -> [u8; 3] {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in title.as_bytes() {
@@ -131,8 +116,7 @@ pub fn label_colour(title: &str) -> [u8; 3] {
     hsv_to_rgb((h % 360) as f32, 0.52, 0.74)
 }
 
-/// The header title is capped at twelve characters, so it reads `POKEMON EMER`. The
-/// filename holds the real name.
+/// From the filename, because the header title is capped at twelve characters (`POKEMON EMER`).
 pub fn label_text(cart: &Cart) -> String {
     clean_label(&cart.stem)
 }
@@ -165,13 +149,8 @@ pub fn clean_label(stem: &str) -> String {
     }
 }
 
-/// The bracketed groups `clean_label` throws away, in the order they appeared. A dump's
-/// filename carries them as one run of parentheses — `(USA, Europe) (Rev 1)` — and each group
-/// is one fact about this dump rather than about the game, which is why they are worth
-/// keeping apart from the title instead of inside it.
-///
-/// One tag per group, not per comma: `(USA, Europe)` is a single release in two regions, and
-/// splitting it would claim two.
+/// The bracketed groups `clean_label` drops, in order. One tag per group, not per comma:
+/// `(USA, Europe)` is a single release.
 pub fn label_tags(stem: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut depth = 0u32;
@@ -221,8 +200,7 @@ fn shell_face(s: &Spec, shell: &Shell) -> CartFace {
     }
 }
 
-/// Light through the plastic reads as a lighter, less saturated edge. Desaturating as well
-/// as lightening is what keeps it from looking like a white outline drawn on the shell.
+/// Lighter and less saturated; lightening alone looks like a white outline on the shell.
 fn rim_colour(base: [u8; 3]) -> [u8; 3] {
     let mean = (base[0] as u16 + base[1] as u16 + base[2] as u16) / 3;
     base.map(|c| {
@@ -239,20 +217,11 @@ fn lerp(a: [u8; 3], b: [u8; 3], num: u32, den: u32) -> [u8; 3] {
     out
 }
 
-/// The wall of the moulded recess the label sits in. Light comes from the upper left, so
-/// the top and left walls are turned away from it and fall into shadow while the bottom and
-/// right walls catch it. Painted before the label, so the label sits on the floor of the
-/// recess with the wall showing around it.
+/// The wall of the label's recess. Lit from the upper left, so top and left walls are shaded.
 const BEVEL: u32 = 3;
 
-/// The moulding in the shell, the grip ridge and the thumb notch. Neither side is coloured: moulded
-/// plastic is the same plastic, one face turned away from the light and one turned into it.
-///
-/// The shadow is multiplied and the light is mixed toward white, which is not an inconsistency
-/// — it is how a surface behaves. Shade falls off in proportion to the colour underneath it,
-/// so a darker shell shades darker; a highlight is light arriving on top of the surface, so it
-/// lifts a dark shell about as far as a pale one. Multiplying the light as well would leave a
-/// dark shell's moulding invisible.
+/// The grip ridge and thumb notch. Shadow multiplies but light mixes toward white: multiplying
+/// the light too would leave a dark shell's moulding invisible.
 fn mould_detail(s: &Spec, face: &mut CartFace, shell: &Shell) {
     let dark = shell.colour.map(|c| (c as f32 * 0.62) as u8);
     let lit = shell.colour.map(|c| c + ((255 - c) as f32 * 0.24) as u8);
@@ -302,7 +271,6 @@ fn recess_label(s: &Spec, face: &mut CartFace, shell: &Shell) {
             if inside {
                 continue;
             }
-            // Which wall a pixel belongs to: the nearer of the two edges it sits between.
             let from_top = y.saturating_sub(y0);
             let from_left = x.saturating_sub(x0);
             let from_bottom = y1.saturating_sub(y + 1);
@@ -314,8 +282,7 @@ fn recess_label(s: &Spec, face: &mut CartFace, shell: &Shell) {
     }
 }
 
-/// Source over, so a label with an alpha channel shows the shell through it rather than
-/// punching a hole in the cart.
+/// Source over, so a label's transparency shows the shell rather than punching a hole.
 fn paste_label(s: &Spec, face: &mut CartFace, label: &[u8]) {
     let (lx, ly, lw, lh) = s.label;
     for y in 0..lh {
@@ -358,8 +325,7 @@ fn generated_label(s: &Spec, title: &str) -> Vec<u8> {
     rgba
 }
 
-/// Hue rotation alone puts yellow and blue at very different luminance, so the ink flips
-/// rather than sitting at one fixed value.
+/// Label hues vary widely in luminance, so the ink flips between dark and light.
 fn ink(bg: [u8; 3]) -> [u8; 3] {
     let luma = 0.2126 * bg[0] as f32 + 0.7152 * bg[1] as f32 + 0.0722 * bg[2] as f32;
     if luma > 140.0 {

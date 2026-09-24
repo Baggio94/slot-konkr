@@ -53,16 +53,11 @@ fn a_starved_ratio_stretches_and_a_full_one_compresses() {
     );
 }
 
-/// `src_hz` is whatever a core put in `retro_system_av_info.timing.sample_rate`, and the only
-/// guard used to be on `dst_hz`. A rate that is not a rate has to come out as a passthrough,
-/// because `process` walks its input by `step` until it reaches the end and every degenerate
-/// value stops it getting there: NaN and infinity fail the comparison and the resampler goes
-/// silent for the rest of the session, while zero and anything negative never advance and the
-/// emulator thread spins inside one call pushing output until the device is out of memory.
+/// `src_hz` comes from the core's `retro_system_av_info.timing.sample_rate`. A degenerate rate
+/// must pass through: NaN and infinity would silence the resampler for the session, and zero
+/// or negative would spin `process` until the device runs out of memory.
 ///
-/// The NaN case is asserted first on purpose. It is the one that fails rather than hangs, so a
-/// suite run against a resampler with the guard taken back out stops here instead of at the two
-/// below it.
+/// NaN is asserted first because it fails rather than hangs.
 #[test]
 fn a_core_rate_that_is_not_a_rate_passes_the_samples_through() {
     for (name, hz) in [

@@ -22,12 +22,11 @@ impl fmt::Display for AudioError {
 
 impl std::error::Error for AudioError {}
 
-/// The device, and nothing else. Everything about occupancy, rate and muting belongs to the
-/// ring it drains, which is what lets the emulator and the UI both write to it without
-/// either of them owning the hardware.
+/// The device only. Occupancy, rate and muting belong to the ring it drains, so the emulator and
+/// UI can both write without owning the hardware.
 pub trait AudioSink: Send {
-    /// The rate is a preference. A device that will not take it opens at its own, which the
-    /// ring then reports and the resampler converts to.
+    /// The rate is a preference. A device that refuses it opens at its own, which the ring
+    /// reports and the resampler converts to.
     fn open(&mut self, sample_rate: u32) -> Result<(), AudioError>;
     fn ring(&self) -> Arc<Ring>;
 }

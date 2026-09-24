@@ -32,8 +32,7 @@ fn an_unlisted_stem_defaults_to_mgba() {
     assert_eq!(core_for(d.path(), "Metroid Fusion"), Core::Mgba);
 }
 
-/// A card is user editable. Every one of these is a typo someone will make, and not one
-/// of them may cost them their shelf.
+/// Hand-edit typos cost only their own line, never the shelf.
 #[test]
 fn malformed_lines_are_ignored_rather_than_fatal() {
     let d = root_with(Some(concat!(
@@ -68,21 +67,8 @@ fn a_later_duplicate_wins() {
     assert_eq!(core_for(d.path(), "Emerald"), Core::Gpsp);
 }
 
-/// The same rule where the later line is the unreadable one. `crate::ini` keeps the last line
-/// for a key whatever it says, and the value is parsed after that — so a typo on the last line
-/// falls back to the default exactly as a typo on the only line does.
-///
-/// Worth pinning because it has not always been so, and the change arrived quietly with the ini
-/// extraction: `read_selected_cores` used to parse line by line and insert only what it could
-/// read, which left `Emerald = gpsp` followed by `Emerald = notacore` running gpSP. That is a
-/// cart running a core no readable line in the file asks for, and nothing the person holding the
-/// card could work out from looking at it. The rule now is the one `ini::write`'s own comment
-/// has always claimed — "the later line already won when read" — which is also what entitles it
-/// to drop earlier duplicates when it rewrites a line.
-///
-/// Pinned both ways round, so this is a claim about order rather than about `notacore` losing to
-/// whatever it is put beside, and asked of both readers, because the whole point of the
-/// extraction is that `core_for` and `read_selected_cores` cannot come to disagree.
+/// The last line for a key wins even when it is unparseable, so the cart gets the default.
+/// Checked in both orders and through both readers, which must agree.
 #[test]
 fn the_last_line_for_a_cart_wins_even_when_it_is_the_typo() {
     let d = root_with(Some("Emerald = gpsp\nEmerald = notacore\n"));
@@ -164,8 +150,7 @@ fn writing_a_core_appends_a_cart_the_file_has_never_seen() {
 
 #[test]
 fn writing_the_default_still_records_it() {
-    // Not a no-op: a cart set to gpsp and then back to mgba must actually change, and the
-    // absence of a line means "default", which is the same answer for a different reason.
+    // Must write a line, not just remove the gpsp one.
     let d = root_with(Some("Emerald = gpsp\n"));
     slot_store::write_selected_core(d.path(), "Emerald", Core::Mgba).unwrap();
     assert_eq!(core_for(d.path(), "Emerald"), Core::Mgba);
@@ -173,7 +158,6 @@ fn writing_the_default_still_records_it() {
     assert!(text.contains("Emerald = mgba"));
 }
 
-/// The ini escape hatch: a cart naming a core that is not the default gets the one it asked for.
 #[test]
 fn a_cart_can_ask_for_a_non_default_core_by_hand() {
     let d = tempfile::tempdir().unwrap();
@@ -184,7 +168,6 @@ fn a_cart_can_ask_for_a_non_default_core_by_hand() {
 
 #[test]
 fn the_picker_board_has_exactly_two_sockets() {
-    // The picker is drawn as a two-socket GBA cartridge PCB traced from real hardware, so a
-    // third socket would be a liberty taken with the drawing.
+    // The picker is a two-socket PCB drawing.
     assert_eq!(Core::ALL.len(), 2);
 }

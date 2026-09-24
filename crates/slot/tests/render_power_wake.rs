@@ -1,11 +1,6 @@
 //! POWER on a dozing device, through the real frontend: the frame composited on the GPU and
-//! read back, with the backlight the device would actually write recorded beside it.
-//!
-//! Both halves are needed and neither is enough on its own. The panel is off during a doze
-//! because `doze` writes `set_backlight(0)`, and no pixel can say that; the screen behind it is
-//! the doze's own black, and no backlight reading can say that. The bug this pins was a
-//! perfectly correct draw list rendered onto a panel nobody could see, so a draw-list assertion
-//! would have passed straight through it.
+//! read back, with the backlight the device would write recorded beside it. Both are needed:
+//! pixels cannot show the panel is off, and the backlight cannot show what is drawn.
 //!
 //! `SCRATCH_PNG_DIR=/tmp cargo test -p slot --test render_power_wake -- --nocapture`
 
@@ -34,10 +29,7 @@ impl InputSource for Script {
     }
 }
 
-/// `SimPlatform` with the one write this file is about kept rather than dropped. A Mac has no
-/// panel the frontend may drive, so the host platform throws `set_backlight` away — and that is
-/// precisely the value that decides whether the frame the compositor just drew is one anybody
-/// could have seen.
+/// `SimPlatform` that records `set_backlight`, which the host platform otherwise drops.
 struct RecordingPanel {
     inner: SimPlatform,
     backlight: Arc<AtomicU8>,
@@ -90,9 +82,7 @@ fn at(px: &[u8], x: usize, y: usize) -> [u8; 3] {
     [px[o], px[o + 1], px[o + 2]]
 }
 
-/// Whether the whole panel is the flat black `Phase::Doze` paints. Sampled on a lattice rather
-/// than every pixel, but across the whole frame: what separates a doze from every other screen
-/// in the tree is that nothing at all is drawn over it.
+/// Whether the whole panel is `Phase::Doze`'s flat black, sampled on a lattice.
 fn all_black(px: &[u8]) -> bool {
     (0..OUT_H as usize).step_by(7).all(|y| {
         (0..OUT_W as usize)
@@ -101,9 +91,8 @@ fn all_black(px: &[u8]) -> bool {
     })
 }
 
-/// Whether anything on the panel is bright enough to read. The menu's own ground is nearly as
-/// dark as the doze it replaced, so "not black" is a weaker claim than it sounds: what says a
-/// screen is there to be looked at is its type.
+/// Whether anything on the panel is bright enough to read. The menu's ground is nearly as dark
+/// as the doze, so "not black" is not enough.
 fn any_ink(px: &[u8]) -> bool {
     (0..OUT_H as usize).step_by(3).any(|y| {
         (0..OUT_W as usize)
@@ -138,13 +127,8 @@ fn tap(f: &mut Frontend, input: &mut Script, btn: Btn) {
     f.advance(input);
 }
 
-/// The reported bug, on the panel. Hold POWER while the device is dozing and the power menu was
-/// raised onto a screen the backlight had been taken away from: no feedback of any kind, so the
-/// user keeps holding and at six seconds the PMIC cuts the rails — the ungraceful stop
-/// `POWER_HOLD_MS` exists to get in front of.
-///
-/// `Frontend::advance` runs off the wall clock, so the hold is a real second. That is the price
-/// of driving the same loop the device runs rather than a stand-in for it.
+/// Holding POWER while dozing must light the panel before the power menu, or the user keeps
+/// holding until the PMIC cuts the rails at six seconds. The hold is a real second of wall clock.
 #[test]
 fn power_on_a_dozing_device_brings_the_screen_back_before_the_menu() {
     let Ok(surface) = HeadlessSurface::new() else {
@@ -182,8 +166,7 @@ fn power_on_a_dozing_device_brings_the_screen_back_before_the_menu() {
     );
     assert!(all_black(&dozing), "the doze left something on the screen");
 
-    // And POWER pressed again. The press, held: the screen has to come back before the menu
-    // does, not a second after it.
+    // POWER held: the screen has to come back before the menu does.
     input.0.push_back(vec![RawEvent::Down(Btn::Power)]);
     f.advance(&mut input);
     let woken = composed(&mut f, &mut c, "woken");

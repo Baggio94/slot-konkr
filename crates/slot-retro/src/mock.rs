@@ -8,9 +8,8 @@ const TONE_HZ: f64 = 440.0;
 const AMPLITUDE: f64 = 6000.0;
 const SRAM_LEN: usize = 8 * 1024;
 
-/// Total samples the tone has produced by the start of `frame`. Deriving the count from the
-/// frame number rather than accumulating per frame is what keeps the mock free of the
-/// half-sample-per-frame drift a naive `SAMPLE_RATE / FPS` would collect.
+/// Total samples the tone has produced by the start of `frame`. Derived from the frame number
+/// so it never collects the rounding drift of adding `SAMPLE_RATE / FPS` per frame.
 fn samples_at(frame: u64) -> u64 {
     (frame as f64 * SAMPLE_RATE / FPS) as u64
 }
@@ -20,11 +19,7 @@ pub struct MockCore {
     video: Vec<u8>,
     audio: Vec<i16>,
     sram: Option<Vec<u8>>,
-    /// What `set_frame_skip` last said about the frame about to run. Honoured rather than
-    /// ignored so a host test can tell a fresh published picture from a stale one: a skipped
-    /// frame leaves `video` holding the previous frame's pattern, exactly as both real cores
-    /// leave their own buffer, so publishing after the wrong frame shows up as a mismatch
-    /// rather than as nothing at all.
+    /// Honoured like a real core, leaving `video` stale, so tests can catch a stale publish.
     skip_next: bool,
 }
 
@@ -47,8 +42,7 @@ impl MockCore {
         c
     }
 
-    /// Purely a function of the frame counter, so `unserialize` can regenerate the exact
-    /// frame from the counter alone.
+    /// Purely a function of the frame counter, so `unserialize` can regenerate it.
     fn render(&mut self) {
         let t = self.frame as u32;
         let mut i = 0;

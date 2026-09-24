@@ -1,8 +1,7 @@
 use std::path::Path;
 
-/// Decodes `path` and returns RGBA scaled to cover `w` by `h`, centre cropped. Cover rather
-/// than fit, because a letterboxed face would break the shelf's one-set look, and cropping
-/// beats squashing box art. Any decode failure is `None`; the caller draws a label instead.
+/// Decodes `path` to RGBA scaled to cover `w` by `h`, centre cropped. Any decode failure is
+/// `None`.
 pub fn cover(path: &Path, w: u32, h: u32) -> Option<Vec<u8>> {
     let (src, sw, sh) = decode(path)?;
     if sw == 0 || sh == 0 {
@@ -27,8 +26,7 @@ pub fn cover(path: &Path, w: u32, h: u32) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Averages the source footprint of one destination pixel. Collapses to a single sample when
-/// upscaling, so it doubles as nearest neighbour there.
+/// Averages the source footprint of one destination pixel; nearest neighbour when upscaling.
 fn box_average(src: &[u8], sw: u32, sh: u32, x0: f32, y0: f32, x1: f32, y1: f32) -> [u8; 4] {
     let xa = (x0.floor().max(0.0) as u32).min(sw - 1);
     let ya = (y0.floor().max(0.0) as u32).min(sh - 1);
@@ -90,11 +88,8 @@ fn decode(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
     Some((rgba, info.width, info.height))
 }
 
-/// The traced shape, at the size the face wants. `tiny_skia` hands back premultiplied RGBA,
-/// which is the same thing straight through wherever alpha is 0 or 255, but every caller here
-/// pastes this over another face or hands it to the sprite pass expecting straight alpha — so
-/// the antialiased edges, the only place the two differ, are un-premultiplied before they go
-/// back.
+/// Rasterises `svg` to straight-alpha RGBA, since every caller expects straight alpha and
+/// `tiny_skia` returns premultiplied.
 pub(crate) fn render_svg(svg: &str, w: u32, h: u32) -> Option<Vec<u8>> {
     let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).ok()?;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h)?;
@@ -107,9 +102,7 @@ pub(crate) fn render_svg(svg: &str, w: u32, h: u32) -> Option<Vec<u8>> {
     Some(rgba)
 }
 
-/// Undoes `tiny_skia`'s premultiply in place. Opaque and fully transparent pixels are already
-/// their own straight-alpha value, so only the antialiased edges, where `0 < a < 255`, need the
-/// divide.
+/// Undoes `tiny_skia`'s premultiply in place. Only pixels with `0 < a < 255` differ.
 fn unpremultiply(rgba: &mut [u8]) {
     for px in rgba.chunks_exact_mut(4) {
         let a = px[3];

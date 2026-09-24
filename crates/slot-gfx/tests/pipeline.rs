@@ -6,8 +6,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 /// `gl::load_with` writes global function pointers, so two GL tests must not overlap.
 static GL: Mutex<()> = Mutex::new(());
 
-/// A GL context is not available everywhere. Skip rather than fail, the same way the mGBA
-/// test skips a missing dylib.
+/// None where no GL context is available, so the test skips rather than fails.
 fn compositor() -> Option<(MutexGuard<'static, ()>, HeadlessSurface, Compositor)> {
     let guard = GL.lock().unwrap_or_else(PoisonError::into_inner);
     let surface = HeadlessSurface::new().ok()?;
@@ -52,8 +51,7 @@ fn game_pass_multiplies_every_output_cell_by_the_lcd3x_mask() {
     assert!(worst <= 1, "max channel deviation {worst} from the mask");
 }
 
-/// The FBO is stored bottom up and the source is top down, so a missing flip anywhere in
-/// upload, draw or readback shows up as a frame that is upside down or mirrored.
+/// A missing flip in upload, draw or readback shows up as an upside down or mirrored frame.
 #[test]
 fn the_game_frame_keeps_its_orientation_from_upload_to_readback() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -88,8 +86,7 @@ fn the_game_frame_keeps_its_orientation_from_upload_to_readback() {
     );
 }
 
-/// The power on is a uniform on the game pass, so only a readback says whether the picture
-/// is genuinely being squeezed and flashed rather than the curve merely being computed.
+/// Power on really squeezes and brightens the drawn picture.
 #[test]
 fn the_picture_strikes_as_a_band_at_the_centre_before_it_fills_the_frame() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -126,10 +123,7 @@ fn the_picture_strikes_as_a_band_at_the_centre_before_it_fills_the_frame() {
     );
 }
 
-/// The game layer is an item in the draw list rather than a pass before it, which is the
-/// only way the picture can come up in front of a cart that is already seated. Both
-/// directions matter: what is listed before the marker is covered by the picture, and what
-/// is listed after it is drawn over the picture.
+/// Items before `Draw::Game` are covered by the picture and items after it are drawn over it.
 #[test]
 fn the_game_marker_draws_the_picture_where_it_sits_in_the_list() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -162,8 +156,7 @@ fn the_game_marker_draws_the_picture_where_it_sits_in_the_list() {
     );
 }
 
-/// The switcher shows a still of the same panel, at the same 3x, so it has to carry the same
-/// 3x3 cell structure. Blitted flat it reads as a different machine to the game behind it.
+/// A shot carries the same 3x3 mask cells as the live game.
 #[test]
 fn a_saved_shot_is_drawn_through_the_lcd_pass() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -223,8 +216,7 @@ fn draw_list_rects_land_in_top_left_pixel_space() {
     assert_ne!(px(&frame, 2, 3), [255, 0, 0], "rect runs one row long");
 }
 
-/// The switcher reuses one texture per ring slot instead of minting a fresh set on every
-/// opening. A replace that quietly kept the old contents would show the previous ring.
+/// Updating a texture replaces its contents.
 #[test]
 fn a_replaced_texture_draws_its_new_contents() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -263,9 +255,7 @@ fn blue_light_warms_monotonically_and_clamps_at_the_last_step() {
     }
 }
 
-/// A turn of nothing is the image as it was. The rotation is extra arithmetic in the vertex
-/// shader every sprite goes through, so this is what proves the rest of the chrome did not
-/// move by a single value.
+/// A zero turn draws exactly what an unturned `Tex` draws.
 #[test]
 fn an_unturned_image_draws_exactly_as_a_plain_one() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -302,8 +292,7 @@ fn an_unturned_image_draws_exactly_as_a_plain_one() {
     assert!(plain == turned, "a turn of zero moved something");
 }
 
-/// Positive is clockwise on the panel, since y runs down. A quarter turn about the centre
-/// takes the texture's top left corner to the top right.
+/// Positive turns are clockwise on the panel.
 #[test]
 fn a_quarter_turn_takes_the_top_left_corner_to_the_top_right() {
     let Some((_g, _s, mut c)) = compositor() else {

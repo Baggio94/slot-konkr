@@ -53,8 +53,7 @@ fn relative_time_reads_off_the_stamp() {
     );
 }
 
-/// A save an hour old reads as an hour old whether or not the clock crossed midnight in
-/// between. On the calendar day alone this one is yesterday.
+/// An hour-old save reads as an hour old across midnight.
 #[test]
 fn an_hour_before_midnight_is_not_yesterday() {
     assert_eq!(
@@ -72,8 +71,7 @@ fn a_stamp_ahead_of_the_clock_does_not_read_as_a_lifetime_ago() {
     );
 }
 
-/// A push cut between the thumbnail and the state leaves an entry with no picture. It still
-/// has to fill the screen, or the switcher shows the paused game through the hole.
+/// An entry with no thumbnail still fills the screen, or the paused game shows through.
 #[test]
 fn an_entry_whose_thumbnail_is_missing_still_has_a_face() {
     let face = photo_face(&entry(Path::new("/nonexistent"), "2026-08-09_14-32-05"));
@@ -84,8 +82,7 @@ fn an_entry_whose_thumbnail_is_missing_still_has_a_face() {
     );
 }
 
-/// The screenshot is the whole face now, so nothing is inset and nothing is cropped. A
-/// swapped pair of channels here would make every entry disagree with the game.
+/// The screenshot is the whole face, uninset and uncropped, with channels in order.
 #[test]
 fn the_photo_fills_the_face_and_keeps_its_colours() {
     let d = tempfile::tempdir().expect("tempdir");
@@ -101,8 +98,7 @@ fn the_photo_fills_the_face_and_keeps_its_colours() {
     }
 }
 
-/// The row is walked, not wrapped, and the ends hold. Wrapping would let a flick past the
-/// oldest land on the newest and load the wrong state.
+/// The row is walked, not wrapped: a flick past the oldest must not load the newest.
 #[test]
 fn the_index_clamps_at_both_ends() {
     let d = Path::new("/nonexistent");
@@ -122,8 +118,7 @@ fn the_index_clamps_at_both_ends() {
     );
 }
 
-/// The title is a fixed 360px texture centred at 180..540. The gauge now sits at the left
-/// margin, like the case band's, and may never reach into the title's own box.
+/// The title is a fixed 360px texture at 180..540; the left-margin gauge never reaches into it.
 #[test]
 fn the_gauge_stays_clear_of_the_title_on_the_left() {
     let p = switcher();
@@ -138,11 +133,8 @@ fn the_gauge_stays_clear_of_the_title_on_the_left() {
         Printed::default(),
         &mut out,
     );
-    // Excludes only the plate background: it is a `Rect` too, full width, and would otherwise
-    // pin `leftmost` to 0. Filtering by `x < 180.0` instead would silently drop a gauge that
-    // had grown wide enough to poke *past* the title's box back out the other side, which is
-    // exactly the failure this test exists to catch — so every non-background quad on the top
-    // plate counts, wherever it landed.
+    // Excludes only the full-width plate background. Filtering by x would miss a gauge grown
+    // past the title's box.
     let gauge: Vec<_> = out
         .iter()
         .filter_map(|d| match *d {
@@ -164,8 +156,7 @@ fn the_gauge_stays_clear_of_the_title_on_the_left() {
     );
 }
 
-/// The clock stays where Task 6 originally put it — right-aligned at the margin, past the
-/// title's own box — even though the gauge has since moved to the other end.
+/// The clock stays right-aligned at the margin, past the title's box.
 #[test]
 fn the_clock_stays_clear_of_the_title_on_the_right() {
     let p = switcher();
@@ -196,7 +187,7 @@ fn the_clock_stays_clear_of_the_title_on_the_right() {
     assert_eq!(rightmost, OUT_W as f32 - 16.0, "the plate margin is 16");
 }
 
-/// The same degradation as the case band: no gauge, no capsule, and the clock still lands.
+/// No gauge draws no capsule, and the clock still lands.
 #[test]
 fn a_switcher_with_no_gauge_still_shows_its_clock() {
     let p = switcher();
@@ -215,8 +206,7 @@ fn a_switcher_with_no_gauge_still_shows_its_clock() {
     );
 }
 
-/// The same invariant `draw_gauge` itself holds, checked one layer up through `Polaroids::draw`:
-/// a cable going in must not move or erase anything the gauge already drew, only add the bolt.
+/// Through `Polaroids::draw`: plugging in a cable only adds the bolt.
 #[test]
 fn nothing_on_the_plate_moves_when_the_charge_state_changes() {
     let p = switcher();

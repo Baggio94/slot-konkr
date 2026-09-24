@@ -30,9 +30,8 @@ pub trait Surface {
     fn proc_address(&self, name: &str) -> *const c_void;
 }
 
-/// Largest whole multiple of the 720x480 output that fits in the window, floored at 1.
-/// A fractional blit would resample the LCD3x mask and destroy its per pixel phase, so
-/// undersized windows crop rather than shrink.
+/// Largest whole multiple of 720x480 that fits, floored at 1. A fractional blit would
+/// resample the LCD3x mask and break its per pixel phase.
 pub fn fit_scale(win_w: u32, win_h: u32) -> u32 {
     (win_w / OUT_W).min(win_h / OUT_H).max(1)
 }
@@ -44,10 +43,8 @@ pub fn fit_rect(win_w: u32, win_h: u32) -> (i32, i32, i32, i32) {
     ((win_w as i32 - w) / 2, (win_h as i32 - h) / 2, w, h)
 }
 
-/// The composite scaled to fit, aspect preserved, for a panel too small to hold it whole.
-/// The scale is fractional, so the mask is resampled and the picture is soft. That is the
-/// bring-up trade on a 640x480 device panel, where the integer path would crop 80 px of
-/// chrome off the sides instead.
+/// The composite scaled down to fit, aspect preserved, for a panel smaller than 720x480.
+/// Soft, since the mask is resampled, but a 640x480 panel would otherwise lose 80 px of chrome.
 pub fn blit_rect_fit(panel: (u32, u32), shake: f32) -> (i32, i32, i32, i32) {
     let scale = (panel.0 as f32 / OUT_W as f32).min(panel.1 as f32 / OUT_H as f32);
     let w = (OUT_W as f32 * scale).round() as i32;
@@ -61,13 +58,9 @@ pub fn blit_rect_fit(panel: (u32, u32), shake: f32) -> (i32, i32, i32, i32) {
     )
 }
 
-/// The rect the composite is presented in, displaced by a refusal. `shake` is in offscreen
-/// pixels and is multiplied by the blit scale, so the flinch is the same fraction of the
-/// picture at any size. Horizontal only: side to side is the gesture that means no, and
-/// adding the other axis would make it a rumble.
+/// The rect the composite is presented in, displaced horizontally by `shake` offscreen
+/// pixels times the blit scale.
 pub fn blit_rect(window: (u32, u32), shake: f32) -> (i32, i32, i32, i32) {
-    // Below native there is no whole multiple left to crop to, so a target that cannot hold
-    // the composite shows all of it softly rather than part of it sharply.
     if window.0 < OUT_W || window.1 < OUT_H {
         return blit_rect_fit(window, shake);
     }

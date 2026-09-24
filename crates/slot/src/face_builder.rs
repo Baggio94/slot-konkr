@@ -1,8 +1,5 @@
-//! The open cart's faces, built off the render thread. On the H700 a board takes the better part
-//! of half a second to rasterise, which on the frame loop is half a second of frozen shelf, so
-//! the frontend asks for the highlighted cart's faces as the caret lands and uploads them when
-//! they come back. Only the newest request matters: a caret that has moved on has no use for the
-//! cart it passed.
+//! The open cart's faces, built off the render thread: a board takes ~0.5 s to rasterise on the
+//! H700. Only the newest request matters.
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -25,15 +22,11 @@ impl FaceBuilder {
     pub fn spawn() -> Self {
         let (requests, inbox) = mpsc::channel::<Cart>();
         let (outbox, built) = mpsc::channel();
-        // Named and built the way every other worker in this crate is (`link_start`,
-        // `rewind`, `emu`, `audio/host`): a `Builder` rather than the bare `thread::spawn`, so
-        // a `ps`/`top` on the device names this thread instead of just another anonymous one.
         let spawned = thread::Builder::new()
             .name("slot-faces".into())
             .spawn(move || {
                 while let Ok(mut cart) = inbox.recv() {
-                    // Straight to the newest: the requests before it were for carts the caret
-                    // has already left.
+                    // Skip to the newest: earlier requests are for carts the caret has left.
                     while let Ok(newer) = inbox.try_recv() {
                         cart = newer;
                     }
@@ -47,11 +40,7 @@ impl FaceBuilder {
                     }
                 }
             });
-        // A thread that never started leaves both ends of `inbox`/`outbox` dropped with it, so
-        // `request` below sends into a channel nobody drains and `take` only ever sees it
-        // disconnected — the same shape as a worker too far behind to answer in time. `App`
-        // already waits on that and gives up after `FACES_WAIT_MS`, so this is reported rather
-        // than turned into a panic that would take the whole frontend down with it.
+        // Not fatal: `App` gives up waiting after `FACES_WAIT_MS`, same as a slow worker.
         if let Err(e) = spawned {
             eprintln!("slot: faces: worker thread failed to start: {e}");
         }

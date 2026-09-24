@@ -35,12 +35,8 @@ impl From<std::io::Error> for StoreError {
     }
 }
 
-/// An unmounted card, or a card with no `Games/GBA/`, is an empty shelf, not a boot failure.
-///
-/// A folder that exists and cannot be read is not a boot failure either. The only caller is
-/// `App::boot`, which does `scan(root).unwrap_or_default()`, so an `Err` out of here is not an
-/// error message anywhere, it is an empty shelf. A single directory entry that will not stat
-/// costs that one cart and nothing else.
+/// The carts in `Games/GBA/`, sorted. A missing or unreadable folder is an empty shelf, and an
+/// entry that will not stat costs only that cart.
 pub fn scan(root: &Path) -> Result<Vec<Cart>, StoreError> {
     let mut carts = Vec::new();
     let dir = root.join("Games").join(crate::CART_DIR);
@@ -85,14 +81,7 @@ fn is_gba(path: &Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("gba"))
 }
 
-/// Where a title files on the shelf: digits first, then A to Z, and case ignored.
-///
-/// Plain byte order put `apple` after `Zebra`, because every lowercase letter sorts above every
-/// uppercase one, so a card's row depended on how its files happened to be capitalised.
-///
-/// The group runs ahead of the text rather than being folded into it, so that one digit-led title
-/// cannot land between two letters however it is spelled, and anything led by neither, a bracket
-/// or a quote, files after both rather than silently first.
+/// Shelf order: digit-led titles, then letters A to Z ignoring case, then everything else.
 pub fn sort_key(stem: &str) -> (u8, String) {
     (group_of(stem), stem.to_uppercase())
 }
@@ -105,10 +94,8 @@ fn group_of(stem: &str) -> u8 {
     }
 }
 
-/// The letter a title is filed under, for skipping a row a letter at a time. Every digit-led
-/// title shares one bucket, and so does everything led by neither a digit nor a letter: a row of
-/// thirty carts has few enough of either that giving each its own stop would be a stop that moves
-/// by one, which is what the shoulder buttons are already for.
+/// The letter a title is filed under, for skipping a row a letter at a time. Anything not led
+/// by a letter shares the `#` stop.
 pub fn initial(stem: &str) -> char {
     match group_of(stem) {
         1 => stem
@@ -120,11 +107,8 @@ pub fn initial(stem: &str) -> char {
     }
 }
 
-/// A leading dot is card metadata rather than content, and every folder on the card is read
-/// through this. macOS writes `._<name>` beside each file it copies onto a FAT volume, which
-/// carries the extension of the file it shadows, so the extension alone cannot tell them
-/// apart. It also sorts first, which is why the sidecar rather than the file is what a picker
-/// walking the folder in order tends to land on.
+/// A leading dot is metadata, not content. macOS writes `._<name>` sidecars onto FAT volumes
+/// with the shadowed file's extension, so the extension alone cannot filter them.
 pub fn is_hidden(p: &Path) -> bool {
     p.file_name()
         .and_then(|n| n.to_str())

@@ -70,11 +70,8 @@ fn the_lid_key_toggles_because_the_host_has_no_hinge() {
     );
 }
 
-/// Escape and L used to be power and the lid. They are the two buttons that end a live link
-/// session, and a session that ends cannot be resumed — so the cost of a stray press went up
-/// sharply when linking landed, while the bindings did not. Escape is the key every player
-/// reaches for to back out of something; L is a letter. Both are now bound to nothing, and
-/// this is what stops either quietly coming back.
+/// Escape and L are bound to nothing: both would end a live link session, which cannot be
+/// resumed.
 #[test]
 fn the_two_reflex_keys_no_longer_end_a_session() {
     let mut h = HostInput::new();
@@ -86,15 +83,8 @@ fn the_two_reflex_keys_no_longer_end_a_session() {
     }
 }
 
-/// The window losing focus takes the key releases with it. A key-up is delivered to whatever
-/// took focus, and this never hears about it — so a key that was down when the window went
-/// away is a key nothing downstream can tell apart from a finger still on it. The bit stays set
-/// on the pad and the game goes on holding the button for the rest of the session.
-///
-/// Cmd-tab out of a game with Z down and the game is still pressing A when the window comes
-/// back; the only thing that clears it is pressing and releasing that one key again, by which
-/// point the player is guessing which key it was. So the keys are let go of here instead, which
-/// is what actually happened: the window stopped being what the keyboard was talking to.
+/// Losing focus releases every held key. The key-up goes to whatever took focus, so without
+/// this a key down at cmd-tab stays held on the pad for the rest of the session.
 #[test]
 fn a_window_that_loses_focus_lets_go_of_the_keys_held_in_it() {
     let mut h = HostInput::new();
@@ -106,8 +96,7 @@ fn a_window_that_loses_focus_lets_go_of_the_keys_held_in_it() {
         edge(&mut h, KeyCode::ArrowRight, true),
         vec![RawEvent::Down(Btn::Right)]
     );
-    // One key let go of the ordinary way, so what follows cannot be "release everything ever
-    // pressed".
+    // One key released normally, so the rest is not "release everything ever pressed".
     assert_eq!(
         edge(&mut h, KeyCode::KeyZ, false),
         vec![RawEvent::Up(Btn::A)]
@@ -118,11 +107,10 @@ fn a_window_that_loses_focus_lets_go_of_the_keys_held_in_it() {
         vec![RawEvent::Up(Btn::Right)],
         "the key still down when the window went away was never released"
     );
-    // And nothing is released twice: a second loss with nothing pressed in between has nothing
-    // left to let go of, and a release the game already had would put the button down again.
+    // Nothing is released twice: a release the game already had would put the button down again.
     h.on_window_event(&WindowEvent::Focused(false));
     assert!(h.poll(0).is_empty());
-    // Focus coming back says nothing about what is held, so it says nothing at all.
+    // Focus coming back says nothing about what is held.
     h.on_window_event(&WindowEvent::Focused(true));
     assert!(h.poll(0).is_empty());
 }

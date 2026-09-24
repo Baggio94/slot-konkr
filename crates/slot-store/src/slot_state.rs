@@ -6,52 +6,18 @@ pub const BRIGHTNESS_MAX: u8 = 9;
 pub const BLUE_LIGHT_MAX: u8 = 9;
 pub const VOLUME_MAX: u8 = 100;
 
-/// What a real zone can be, in minutes. The card keeps UTC because the base system's clock
-/// and its ntp both assume it; this is the only thing that turns it into the time on the
-/// shelf. Minutes rather than hours: several zones are offset by thirty and forty five.
+/// Real zone offsets, in minutes (some zones are off by 30 or 45). The card keeps UTC because
+/// the base system's clock and ntp assume it.
 pub const UTC_OFFSET_MIN: i16 = -720;
 pub const UTC_OFFSET_MAX: i16 = 840;
 
-/// The fast forward ceilings the quick menu offers, in game frames per screen refresh, left to
-/// right along the row. These four and nothing else are what `ff_speed` may hold.
-///
-/// A list rather than a range. The row steps 2, 3, 4, 6 because past four a single frame of
-/// difference is not a speed anyone can tell apart, so 5 is not on it — and a `MIN..=MAX`
-/// check, which is what this used to be, would have quietly accepted it.
-///
-/// It stops at six because eight was measured and bought nothing. On mGBA gameplay a ceiling of
-/// eight ran 281 game frames a second against six's 280, while presents that ran past 16.67 ms
-/// went from 1% to 7% and the loop started a frame it could not finish in 56% of presents
-/// rather than 19%. On the heaviest content it changed nothing at all: Pokémon under mGBA held
-/// 2.1 frames a present at four, six and eight alike. A row should not offer a ceiling only one
-/// core can reach.
-///
-/// What an older build does with the number six, said plainly rather than left to be found out:
-/// every slot that shipped before this row reads this line as "a number from 2 to 4, anything
-/// else is not mine", so a card written here at 6 falls back to that build's default, 4×, when
-/// read by it. That is acceptable — 4× was the fastest speed it had, so it is as close to what
-/// was asked as that build can get, and neither build ever finds a speed it cannot explain. A
-/// card written at 8 by a build from the night this row had five ceilings falls back the same
-/// way, through the same list, exactly as the 255 an adaptive-era card can still hold. The cost,
-/// accepted: an older build that goes on to *write* the card spells 4 here, so a round trip
-/// through one forgets the choice.
+/// The quick menu's fast forward ceilings, in game frames per refresh, left to right. The only
+/// values `ff_speed` may hold, so 5 must be rejected. 8 was measured and bought nothing: 281 fps
+/// against 6's 280 on mGBA, while 16.67 ms overruns rose from 1% to 7%.
 pub const FF_SPEEDS: [u8; 4] = [2, 3, 4, 6];
 
-/// The speed a card that never chose one gets, and the one the row opens on.
-///
-/// Six, chosen on the device rather than reasoned about, and now the top of the row as well as
-/// its default. Eight was on the row for a few hours and measured worth nothing: the same speed
-/// as six on mGBA gameplay, no speed at all on heavy content, and less steady on both. Six is
-/// the one that reads as fast without feeling like a different game, and it is a ceiling both
-/// cores can actually reach. The old default of 4x was inherited from when gpSP ran its
-/// interpreter and could not serve more; the core slot builds now runs its dynarec, so 4x had
-/// stopped being what the hardware could do and become merely what it was told.
-///
-/// This deliberately sits outside the 2..=4 an older build accepts, which the default used to
-/// stay inside so the common card read identically everywhere. A fresh card written here reads
-/// as 4x on any build that predates this row — the same fallback 6x takes as a choice.
-/// Accepted knowingly: the compatibility being given up is with builds nobody runs, and pinning
-/// the default to what the oldest build could read would keep a number the hardware outgrew.
+/// Default fast forward ceiling, chosen on the device. Builds that only accept 2..=4 read it as
+/// their default, 4x.
 pub const FF_SPEED_DEFAULT: u8 = 6;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -61,41 +27,24 @@ pub struct SlotState {
     pub brightness: u8,
     pub blue_light: u8,
     pub volume: u8,
-    /// Silence on top of the level rather than instead of it, so unmuting gives back the
-    /// number the user last chose.
+    /// Separate from `volume`, so unmuting restores the last level.
     pub muted: bool,
-    /// Whether anyone has ever confirmed the wall clock. The marker for slot's own first
-    /// launch, and the one field a fresh card must read as false.
+    /// Whether the wall clock was ever confirmed. Marks first launch, so a fresh card must
+    /// read false.
     pub clock_set: bool,
-    /// Minutes to add to the card's UTC to get local time. Zero is a device that never left
-    /// Greenwich, which is also what a card that has never been asked reads as.
+    /// Minutes to add to the card's UTC to get local time.
     pub utc_offset_min: i16,
-    /// Whether the motor may move. Off, a game still asks for it and is simply never obeyed.
     pub rumble: bool,
     /// The most game frames a screen refresh runs while fast forwarding: one of `FF_SPEEDS`.
     pub ff_speed: u8,
     /// Whether fast forward is heard, sped up, rather than dropped.
     pub ff_sound: bool,
-    /// Whether the core is asked to simulate the washed-out tint of the console's own LCD.
-    ///
-    /// A device-wide preference rather than a per-cart one, because the quick menu is only
-    /// ever open on the shelf with nothing seated, so there is no cart whose platform it
-    /// could be read against. Both cores slot ships have an option for it; see
-    /// `slot::core::apply_core_options` for what each is told.
-    ///
-    /// Off by default, for two reasons. It is what every card already renders as — both
-    /// cores default this option off, and slot has never set it — so an update does not
-    /// change the look of a library nobody asked to have changed. And the tint it simulates
-    /// was a consequence of an unlit reflective screen: on a backlit panel it subtracts
-    /// brightness and saturation without reproducing the conditions that made the original
-    /// look that way. Someone who wants it back can now ask for it, which is the whole point
-    /// of the row.
+    /// Whether the core simulates the original LCD's washed-out tint. Device-wide, since the
+    /// quick menu only opens with no cart seated. See `slot::core::apply_core_options`.
     pub colour_correction: bool,
 }
 
-/// Not derived. `read_slot_state` falls back here on a first boot, and all zeroes would
-/// be a device with the backlight off and the mixer muted. The quick menu's four settings
-/// default to what slot did before they were settings.
+/// Not derived: all zeroes would boot with the backlight off and the mixer silent.
 impl Default for SlotState {
     fn default() -> Self {
         SlotState {
@@ -144,14 +93,9 @@ pub fn write_slot_state(root: &Path, s: &SlotState) -> std::io::Result<()> {
     atomic_write(&state_path(root), text.as_bytes())
 }
 
-/// The lines every build has written are all or nothing. A file missing one of those, or
-/// holding one out of range, is not one we wrote, and inheriting the missing fields from the
-/// defaults would hide the corruption behind plausible values.
-///
-/// Everything else is forgiven. A line this build does not know was written by a later one,
-/// and is skipped rather than costing the user their levels and their clock. The quick menu's
-/// settings arrived after cards were already in use, so each of those that is missing or
-/// unreadable reads as its own default and leaves the rest of the card alone.
+/// The original fields are all or nothing: a missing or out-of-range one means corruption, and
+/// defaults would hide it. Unknown lines (a newer build) are skipped, and the later quick menu
+/// fields fall back to their own defaults individually.
 fn parse(text: &str) -> Option<SlotState> {
     let mut cart = None;
     let mut other_platform = false;
@@ -171,9 +115,8 @@ fn parse(text: &str) -> Option<SlotState> {
         };
         match key {
             "cart" => cart = Some(value.to_string()),
-            // Written by the builds that ran Game Boy carts too, naming the folder the seated cart
-            // came from. Any answer but `gba` was a Game Boy cart, and its stem must not seat
-            // a GBA cart that happens to share it.
+            // Cards from builds that also ran Game Boy carts: a non-`gba` stem must not seat a
+            // GBA cart of the same name.
             "cart_platform" => {
                 other_platform = !value.is_empty() && !value.eq_ignore_ascii_case("gba")
             }
@@ -214,9 +157,7 @@ fn offset(value: &str) -> Option<i16> {
         .filter(|n| (UTC_OFFSET_MIN..=UTC_OFFSET_MAX).contains(n))
 }
 
-/// A fast forward ceiling the menu offers. Anything else was not written by a build of slot and
-/// reads as the default, the way every other quick menu setting out of range does — 5 and 7
-/// included, which sit between the row's ends without being on it.
+/// One of `FF_SPEEDS`; anything else, including 5 and 7, reads as the default.
 fn ff_speed_value(value: &str) -> Option<u8> {
     value.parse().ok().filter(|n| FF_SPEEDS.contains(n))
 }

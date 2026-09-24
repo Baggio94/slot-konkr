@@ -2,10 +2,8 @@ use crate::surface::{GfxError, Surface};
 use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Whether the context this process loaded is GLES rather than desktop GL. The two disagree
-/// on two things the tree uses: sized internal formats, and whether a draw needs a vertex
-/// array object. Read from the driver rather than from a build feature, so a host build
-/// pointed at a GLES context still draws.
+/// Whether the loaded context is GLES, which changes internal formats and VAO use. Read from
+/// the driver, not a build feature, so a host build on a GLES context still draws.
 static ES: AtomicBool = AtomicBool::new(false);
 
 pub fn load(surface: &dyn Surface) {
@@ -67,7 +65,6 @@ pub fn program(vert: &str, frag: &str) -> Result<gl::types::GLuint, GfxError> {
             gl::BindAttribLocation(p, crate::quad::POS_LOCATION, pos.as_ptr());
         }
         gl::LinkProgram(p);
-        // Shaders stay alive until the program is linked, then the program owns the code.
         gl::DeleteShader(vs);
         gl::DeleteShader(fs);
         let mut ok = 0;
@@ -109,8 +106,8 @@ unsafe fn info_log(
     String::from_utf8_lossy(&buf).into_owned()
 }
 
-/// An RGBA8 texture. `format` is the layout of `data`, which the GBA frame needs because
-/// libretro hands over XRGB8888, little endian, so its bytes arrive B, G, R, X.
+/// An RGBA8 texture. `format` is the layout of `data`: libretro's XRGB8888 is little endian,
+/// so the GBA frame arrives as B, G, R, X.
 pub fn texture(
     w: u32,
     h: u32,

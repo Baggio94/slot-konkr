@@ -1,9 +1,8 @@
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 
-/// What the vibration motor was last set to. A shared handle rather than a field because the
-/// platform it belongs to is boxed into `Power` and never comes back out, and on a host with
-/// no motor the recorded value is the whole of the implementation.
+/// What the vibration motor was last set to. Shared because the platform is boxed into `Power`
+/// and never comes back out.
 #[derive(Clone, Default)]
 pub struct Motor(Arc<AtomicU16>);
 

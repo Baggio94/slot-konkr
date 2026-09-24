@@ -21,77 +21,33 @@ use crate::rewind::{RewindThread, REWIND_BYTES};
 /// 0.456% the GBA runs slow lands entirely on audio rate control.
 const PRESENT: Duration = Duration::from_nanos(16_666_667);
 
-/// The speed a card that never chose one gets, and what the quick menu's 6× asks for. The menu
-/// picks 2, 3, 4 or this, through `EmuHandle::set_fast_steps`, and this is the top of the row as
-/// well as its default: the fastest ceiling offered is the one a card opens on.
-///
-/// Kept equal to `slot_store::FF_SPEED_DEFAULT` on purpose: a worker that starts before a card
-/// has been read must fast forward at the speed that card is about to ask for, or the first
-/// press after boot runs at a speed nobody chose.
+/// Default fast forward ceiling, and the top of the quick menu's row. Must equal
+/// `slot_store::FF_SPEED_DEFAULT` so a worker started before the card is read agrees with it.
 pub const FAST_STEPS: u32 = 6;
 
-/// The top of the Fast Forward row, and so the most core frames one present will ever run.
-///
-/// A ceiling is not a multiplier. It is the most a present may run, never what it must: the
-/// budget below stops a present that cannot afford the whole of it, so a game too heavy for the
-/// speed asked gives that speed back a frame at a time instead of overrunning the present and
-/// dropping off 60 Hz. That is what lets a single number sit at the top of the row for both
-/// cores.
-///
-/// Six, because eight was measured on the device and bought nothing (`.superpowers/flags/
-/// results.md`). On mGBA gameplay eight ran 281 game frames a second against six's 280, and on
-/// the heaviest content it changed nothing at all: Pokémon under mGBA held 2.1 frames a present
-/// at four, six and eight alike, because the budget ended every present long before the ceiling
-/// did. What eight did change was steadiness — presents running past 16.67 ms went from 1% to
-/// 7%, and the share where the loop started a frame it could not finish went from 19% to 56%.
-/// Only gpSP could reach it at all, at 5.4 frames a present against six's 5.3, and a row that
-/// offers a ceiling one core can never serve is the same dishonesty as offering a link a cart
-/// cannot carry.
-///
-/// It also stays well under the 30 consecutive skips both cores force a render after
-/// (`RETRO_FRAMESKIP_MAX` in mGBA, `FRAMESKIP_MAX` in gpSP), which would draw a picture
-/// mid-present that nothing goes on to show: a present of six frames skips five in a row,
-/// because its last frame always draws and resets their counters.
+/// The most core frames one fast forward present may run. On the SP eight was no faster than
+/// six (mGBA 281 vs 280 fps, gpSP 5.4 vs 5.3 frames a present) and overran far more often.
+/// Also stays under the 30 consecutive skips after which both cores force a render.
 pub const FAST_STEPS_MAX: u32 = 6;
 
-/// What one fast forward present aims to spend altogether: its core frames, and the publish,
-/// snapshot, audio and link pump that always follow them.
-///
-/// The constant this replaces was a core-only budget of 13.5 ms, reserving the rest of the
-/// present for that trailing work. The reserve was honest arithmetic on dishonest numbers: it
-/// came from a spike that timed the core alone and never paid the trailing cost, and from a
-/// benchmark that did the same. Measured inside this loop on the SP, the trailing work is 0.4 ms
-/// on gpSP and 1.2 to 1.3 ms on mGBA — less than was reserved — and yet presents ran to 15.2 ms
-/// on Apotris with only four fifths of them reaching the deadline sleep. What overran was the
-/// tail, not the mean: a present runs about 1.5 ms past its own average, because the snapshot
-/// lands every second present and the last frame regularly costs more than the estimate said.
-///
-/// Aiming the whole present at 14 ms puts that tail at about 15.5, inside the 16.67 ms deadline
-/// with a millisecond of sleep still to come, and leaves the lightest content where it already
-/// was: gpSP pays 0.4 ms of trailing work, so its core still gets 13.6.
+/// What one fast forward present aims to spend in total: core frames plus the publish,
+/// snapshot, audio and link pump after them. 14 ms puts the measured tail near 15.5 ms on the
+/// SP, inside the 16.67 ms present.
 const FAST_TARGET: Duration = Duration::from_micros(14_000);
 
-/// How much of the running per-frame estimate one present's measurement replaces: a quarter.
-/// Slow enough that one descheduled present does not collapse the next one to a single frame,
-/// quick enough to follow a game walking from a menu into a busy scene within a few presents.
+/// Share of the running per-frame estimate each measurement replaces: a quarter. Slow enough to
+/// ride out one descheduled present, quick enough to follow a scene change.
 const COST_BLEND: u32 = 4;
 
-/// Snapshot every other frame, so rewinding at one pop per present runs back at 2x.
-///
-/// Not raiseable to 1 without a fight: measured on the H700 a snapshot is 9.2 ms of the
-/// 16.67 ms frame — serialize 6.6, compress 2.6 — so every frame would spend most of the
-/// budget before the core has run at all. The Mac does the same work in 0.33 ms, which is
-/// why this has to be measured on the device and not the desk.
+/// Snapshot every other frame, so rewinding at one pop per present runs back at 2x. On the H700
+/// a snapshot costs 9.2 ms of the 16.67 ms frame, too much for every frame.
 const SNAPSHOT_EVERY: u32 = 2;
 
 /// Frames between traced pacing lines, about five seconds.
 const TRACE_EVERY: u64 = 300;
 
-/// A per-present cap on how many packets the worker will move from the transport into the
-/// core's inbound queue. Real GBA serial hardware never comes close to this in a present's
-/// worth of traffic; it exists for a peer that floods, so one present's worth of a flood
-/// costs one present's worth of work — the transport's `try_recv` is a queue poll, not a
-/// syscall, so this is cheap insurance rather than a real constraint on anything legitimate.
+/// Per-present cap on packets moved from the transport into the core, so a flooding peer costs
+/// bounded work. Real serial traffic never approaches it.
 const MAX_LINK_PACKETS_PER_PRESENT: u32 = 256;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -102,9 +58,7 @@ pub enum Speed {
 }
 
 impl Speed {
-    /// The one place the wire encoding is decided, so the worker's read of what it was told
-    /// and the handle's read of what the worker saw cannot drift apart by having two matches
-    /// that quietly stop agreeing.
+    /// The one place the atomic encoding is decoded, for both the worker and the handle.
     fn from_u8(v: u8) -> Speed {
         match v {
             0 => Speed::Paused,
@@ -127,9 +81,8 @@ pub struct EmuHandle {
     cmds: Sender<Cmd>,
     join: Option<JoinHandle<()>>,
     rumble: Rumble,
-    /// The core's end of its own serial traffic, cloned off the core exactly once — see
-    /// `spawn` for why calling `RetroCore::net` a second time would not do, for a core (the
-    /// mock) whose default hands back a fresh, unrelated queue every time it is asked.
+    /// Taken from the core exactly once: `RetroCore::net`'s default returns a fresh, unrelated
+    /// queue on each call.
     link: Link,
 }
 
@@ -141,29 +94,20 @@ enum Cmd {
     /// Wires a transport to the core's serial traffic. `client_id` is libretro's own: 0 the
     /// host, 1 the joiner.
     BeginLink(u16, Box<dyn LinkChannel>),
-    /// Drops the transport — which is what actually closes the wire, see `TcpLink`'s `Drop`
-    /// — and marks the session no longer active.
+    /// Drops the transport, which closes the wire, and ends the session.
     EndLink,
-    /// The emulated cable, rather than netpacket. `player` is which port this device drives.
-    /// The core runs both consoles, so the frame clock moves to `cable.rs` and the transport
-    /// carries button masks instead of the core's own packets.
+    /// The emulated link instead of netpacket. `player` is which port this device drives; the
+    /// core runs both consoles and the transport carries button masks.
     BeginCable(u8, Box<dyn LinkChannel>),
-    /// A core option set on a core that is already running.
-    ///
-    /// Almost every option is handed over once, before `load`, because that is when a libretro
-    /// core reads them, and `core::apply_core_options` is where that happens. The exception is a
-    /// setting the player can reach while a game is on screen: it has to arrive afterwards too,
-    /// or the row that changed it does nothing until the cart is next inserted. Owned `String`s
-    /// rather than `&'static str` because this crosses a channel to another thread.
+    /// A core option for a running core, for settings the player can change mid-game. The rest
+    /// are set before `load` in `core::apply_core_options`.
     SetOption(String, String),
 }
 
 struct Shared {
     input: AtomicU16,
     speed: AtomicU8,
-    /// What the worker last read `speed` as, stored right after that read with `Release` so
-    /// `EmuHandle::observed_speed` can tell a stopped core from a merely descheduled one — see
-    /// its doc comment.
+    /// What the worker last read `speed` as; see `EmuHandle::observed_speed`.
     observed: AtomicU8,
     state: AtomicU8,
     rewind: AtomicBool,
@@ -172,44 +116,34 @@ struct Shared {
     stop: AtomicBool,
     /// 0 to 100. Read by the worker every batch, so a change lands within one frame.
     volume: AtomicU8,
-    /// The most core frames a fast forward present may run, 1 to `FAST_STEPS_MAX`. A ceiling
-    /// rather than a count: the worker runs as many frames as the present's budget affords, up
-    /// to this. Read by the worker every present, so a change lands on the next one.
+    /// Most core frames a fast forward present may run, 1 to `FAST_STEPS_MAX`. A ceiling, not a
+    /// count.
     fast_steps: AtomicU32,
     /// Whether fast forward is heard, sped up, rather than dropped.
     ff_sound: AtomicBool,
-    /// Frames this core has published. Counted rather than peeked because `Frames::latest`
-    /// consumes: anything that asks the buffer a question steals a frame from the renderer.
+    /// Frames published. Counted because `Frames::latest` consumes, so peeking would steal a
+    /// frame from the renderer.
     published: AtomicU64,
-    /// Set once, at open, if the core refused the resume state it was handed. A core running
-    /// with an `unserialize` it rejected is not resuming the player's session — it is
-    /// wherever `load` left it, most often frame zero — so its own `serialize()` is not the
-    /// player's progress and must not be allowed to overwrite the resume file that state was
-    /// refused instead of replacing. See `EmuSnapshot::resume_trusted`.
+    /// Set at open if the core refused the resume state. Its `serialize()` is then not the
+    /// player's progress and must not overwrite the resume file. See `EmuSnapshot::resume_trusted`.
     resume_refused: AtomicBool,
-    /// The save-ram twin of `resume_refused`, and deliberately a separate flag rather than
-    /// one shared bit: a core can accept one and refuse the other (save ram is a fixed-size
-    /// cartridge byte count that can coincidentally match across two unrelated cores; a
-    /// serialized machine state almost never does), so only the region actually refused may
-    /// be withheld. See `EmuSnapshot::save_ram_trusted`.
+    /// Save-ram twin of `resume_refused`, separate because a core can accept one and refuse the
+    /// other. See `EmuSnapshot::save_ram_trusted`.
     sav_refused: AtomicBool,
     /// The transport's far end went away during a session. Cleared when a session begins or
     /// ends. See `EmuHandle::link_lost`.
     link_lost: AtomicBool,
-    /// Frames stepped through `run_frame_linked`. The one thing that separates a cable session
-    /// that is running from one that is merely begun.
+    /// Frames stepped through `run_frame_linked`: tells a running emulated link from one merely
+    /// begun.
     linked: AtomicU64,
-    /// The transport's far end said it was ending the session, rather than merely going away.
-    /// Cleared when a session begins or ends, exactly like `link_lost` — and deliberately a
-    /// flag of its own, because a peer that says goodbye and then drops its wire sets both,
-    /// and only this one can tell the screen which of the two actually happened. See
-    /// `EmuHandle::peer_ended`.
+    /// The far end said it was ending the session, rather than merely going away. Separate from
+    /// `link_lost` because a goodbye then a dropped wire sets both. Cleared like `link_lost`.
     peer_ended: AtomicBool,
 }
 
 impl EmuHandle {
-    /// The ring rather than the device: it was opened before this cart and it outlives it,
-    /// so the slot can still make a noise with no core running.
+    /// Takes the ring, not the device: the ring outlives the cart, so the slot can make sound
+    /// with no core running.
     pub fn spawn(
         core: Box<dyn RetroCore>,
         rom: PathBuf,
@@ -217,22 +151,16 @@ impl EmuHandle {
         sav: Option<Vec<u8>>,
         resume: Option<Vec<u8>>,
     ) -> Self {
-        // Taken before the core goes to its thread, which is the last moment this side can
-        // reach it. `net()` exactly once, for the same reason `rumble()` is: `RetroCore`'s
-        // default hands back a fresh, disconnected queue on every call (there is nothing to
-        // persist for a core with no serial traffic of its own), so calling it again inside
-        // the worker to get "the same" link would not be the same link at all for the mock.
+        // Taken before the core moves to its thread. `net()` only once: the default returns a
+        // fresh, disconnected queue on every call.
         let rumble = core.rumble();
         let link = core.net();
         let frames = Frames::new((GBA_W * GBA_H * 4) as usize);
         let shared = Arc::new(Shared {
             input: AtomicU16::new(0),
-            // Paused until told otherwise. A core spawned during the insert would
-            // otherwise run a frame or two before the session's first `sync_speed` lands,
-            // and those frames are the start of the bios boot animation.
+            // Paused until `sync_speed` says otherwise, or the insert would run the start of the
+            // BIOS boot animation.
             speed: AtomicU8::new(Speed::Paused as u8),
-            // Matches `speed`'s own initial value: no iteration has run yet, so nothing has
-            // been observed but the value it will start from.
             observed: AtomicU8::new(Speed::Paused as u8),
             state: AtomicU8::new(CoreState::Loading as u8),
             rewind: AtomicBool::new(false),
@@ -254,8 +182,7 @@ impl EmuHandle {
             shared: shared.clone(),
             cmds: rx,
         };
-        // A clone rather than the value itself: the worker needs its own handle to pump every
-        // frame, and this side keeps one so `EmuHandle::net` can hand it out too.
+        // The worker pumps its own clone; this side keeps one for `EmuHandle::net`.
         let worker_link = link.clone();
         let join = std::thread::Builder::new()
             .name("slot-emu".into())
@@ -276,63 +203,52 @@ impl EmuHandle {
         }
     }
 
-    /// The core's end of the motor, written from the emulator thread and read from the
-    /// render one. Keeping the device write on this side is the whole reason it is a cell.
+    /// The core's end of the motor, written from the emulator thread and read on the render
+    /// thread, which does the device write.
     pub fn rumble(&self) -> &Rumble {
         &self.rumble
     }
 
-    /// The core's end of its own serial traffic, the same shape `rumble` above is. Exists for
-    /// whoever ends up showing a link indicator, and is what a test pushes a packet onto or
-    /// reads one off to prove the worker's own pump moved it — see `crates/slot/tests/emu.rs`.
+    /// The core's end of its own serial traffic. Tests push and read packets through it.
     pub fn net(&self) -> &Link {
         &self.link
     }
 
-    /// The transport's far end went away during a session. Cleared when a session begins or
-    /// ends.
-    /// Frames stepped through the emulated cable.
+    /// Frames stepped through the emulated link.
     pub fn linked_frames(&self) -> u64 {
         self.shared.linked.load(Ordering::Relaxed)
     }
 
+    /// The transport's far end went away during a session. Cleared when a session begins or
+    /// ends.
     pub fn link_lost(&self) -> bool {
         self.shared.link_lost.load(Ordering::Relaxed)
     }
 
-    /// The transport's far end said it was ending the session, rather than merely vanishing.
-    /// Cleared when a session begins or ends.
-    ///
-    /// Read ahead of `link_lost` by whoever acts on either (`Session::update`), because the
-    /// peer that sends this drops its wire immediately behind it: both flags are up within a
-    /// frame of each other, and only the order they are asked in decides whether the player is
-    /// told the link was ended or that it broke.
+    /// The far end said it was ending the session, rather than merely vanishing. Check it before
+    /// `link_lost`: the peer drops its wire right after, so both are soon up.
     pub fn peer_ended(&self) -> bool {
         self.shared.peer_ended.load(Ordering::Relaxed)
     }
 
-    /// Wires a transport into the core's serial traffic, on the emulator thread — the only
-    /// place a call into a libretro core is ever allowed to happen. `client_id` is libretro's
-    /// own: 0 the host, 1 the joiner, the only two this product has.
+    /// Wires a transport into the core's serial traffic on the emulator thread, the only thread
+    /// allowed to call into a libretro core. `client_id`: 0 the host, 1 the joiner.
     pub fn begin_link(&self, client_id: u16, transport: Box<dyn LinkChannel>) {
         let _ = self.cmds.send(Cmd::BeginLink(client_id, transport));
     }
 
-    /// Wires a transport to the emulated cable instead of netpacket. `player` is which port
-    /// this device drives: the core runs both consoles, and the frame clock moves to `cable.rs`.
+    /// Wires a transport to the emulated link instead of netpacket. `player` is which port this
+    /// device drives; the frame clock moves to `cable.rs`.
     pub fn begin_cable(&self, player: u8, transport: Box<dyn LinkChannel>) {
         let _ = self.cmds.send(Cmd::BeginCable(player, transport));
     }
 
-    /// Drops the transport and marks the session no longer active. Safe to call whether or
-    /// not one was ever begun — the peer vanishing and this end asking to stop are the same
-    /// request as far as the worker is concerned.
+    /// Drops the transport and ends the session. Safe whether or not one was begun.
     pub fn end_link(&self) {
         let _ = self.cmds.send(Cmd::EndLink);
     }
 
-    /// Hands a core option to the running core. Dropped if the worker has already gone, the
-    /// way every other command here is: a core that is not running has nothing to be told.
+    /// Hands a core option to the running core. Dropped if the worker has gone.
     pub fn set_option(&self, key: &str, value: &str) {
         let _ = self
             .cmds
@@ -343,9 +259,8 @@ impl EmuHandle {
         self.shared.input.store(mask.0, Ordering::Relaxed);
     }
 
-    /// What the worker will read on its next pass. The far side of the one boundary a
-    /// button crosses to become the game's, and the only place a test can ask whether a
-    /// press a menu was using reached the core anyway.
+    /// What the worker will read on its next pass. Lets tests check whether a press a menu used
+    /// reached the core.
     pub fn input(&self) -> ButtonMask {
         ButtonMask(self.shared.input.load(Ordering::Relaxed))
     }
@@ -358,11 +273,8 @@ impl EmuHandle {
         self.shared.speed.store(speed as u8, Ordering::Relaxed);
     }
 
-    /// L2 is momentary and takes precedence over fast forward, so this is a separate axis
-    /// from `Speed` rather than another value of it: releasing it returns to whatever the
-    /// speed already was.
-    /// Whether this core has produced anything yet. Never gate the game layer on the
-    /// handle existing: it is built before its worker has run a single frame.
+    /// Whether this core has produced anything yet. Never gate the game layer on the handle
+    /// existing: it is built before its worker has run a frame.
     pub fn has_published(&self) -> bool {
         self.shared.published.load(Ordering::Relaxed) > 0
     }
@@ -379,11 +291,9 @@ impl EmuHandle {
         self.shared.published.load(Ordering::Relaxed)
     }
 
-    /// What the worker last read `speed` as, not what this side last told it to be — the gap
-    /// between those two is exactly the race an eject has to close. `Acquire`, paired with the
-    /// worker's `Release` store, means a caller who sees `Paused` here is also guaranteed to
-    /// see every frame `publish` counted before that store: a fact about the last iteration
-    /// the worker actually ran, not an inference from a count that merely has not moved yet.
+    /// What the worker last read `speed` as, not what it was told: the gap is the race an eject
+    /// must close. `Acquire` pairs with the worker's `Release`, so seeing `Paused` also means
+    /// seeing every frame published before it.
     pub fn observed_speed(&self) -> Speed {
         Speed::from_u8(self.shared.observed.load(Ordering::Acquire))
     }
@@ -392,10 +302,8 @@ impl EmuHandle {
         self.shared.volume.store(level.min(100), Ordering::Relaxed);
     }
 
-    /// The most core frames a fast forward present may run: one of the quick menu's five
-    /// ceilings. Never none, which is a pause, and never more than `FAST_STEPS_MAX`, which is
-    /// the top of that row — the clamp is there so a number from anywhere else cannot ask the
-    /// worker for a present it was never measured to finish.
+    /// The most core frames a fast forward present may run, clamped to 1..=`FAST_STEPS_MAX`,
+    /// the range the budget was measured for.
     pub fn set_fast_steps(&self, steps: u32) {
         self.shared
             .fast_steps
@@ -417,6 +325,8 @@ impl EmuHandle {
         self.shared.ff_sound.load(Ordering::Relaxed)
     }
 
+    /// L2 is a separate axis from `Speed`: it overrides fast forward, and releasing it returns
+    /// to whatever the speed was.
     pub fn set_rewinding(&self, on: bool) {
         self.shared.rewind.store(on, Ordering::Relaxed);
     }
@@ -453,10 +363,8 @@ impl EmuHandle {
     }
 }
 
-/// The flush paths need the core's bytes, not its thread or its frames. Cloning the
-/// command sender is most of that; `shared` rides along too, because the two flags on it are
-/// how a flush path learns a region it is about to ask for was never the player's to begin
-/// with — see `resume_trusted`/`save_ram_trusted` below.
+/// What the flush paths need: the command sender, and the refusal flags behind
+/// `resume_trusted`/`save_ram_trusted`.
 #[derive(Clone)]
 pub struct EmuSnapshot {
     cmds: Sender<Cmd>,
@@ -486,10 +394,8 @@ impl Snapshot for EmuSnapshot {
         let _ = self.cmds.send(Cmd::Load(state));
     }
 
-    /// `false` exactly when `Worker::run` handed this core a resume it went on to refuse.
-    /// `state()` above still answers with whatever the core serializes regardless — a running
-    /// core always has *some* state — so a flush path must check this before it is allowed to
-    /// treat those bytes as the player's session and write them over the resume file.
+    /// `false` when the core refused its resume. `state()` still returns bytes, so a flush must
+    /// check this before writing them over the resume file.
     fn resume_trusted(&self) -> bool {
         !self.shared.resume_refused.load(Ordering::Acquire)
     }
@@ -532,29 +438,20 @@ impl Worker {
                 .store(CoreState::Failed as u8, Ordering::Release);
             return;
         }
-        // After the load: there is no save ram to copy into until the rom says how much of
-        // it there is. A game with none at all is not a failure to boot.
+        // After the load, which sizes save ram. A game with none is not a failure to boot.
         if let Some(sav) = sav {
             if let Err(e) = core.load_save_ram(&sav) {
                 eprintln!("slot: save ram: {e}");
-                // The core is about to run with its own idea of save ram rather than the
-                // player's — most often a mock's or a mismatched core's own default — so
-                // `save_ram()` from here on must never be allowed to overwrite the real file
-                // that refusal left untouched. `EmuSnapshot::save_ram_trusted` is what a
-                // flush path checks before it will.
+                // The core now runs its own save ram, which must not overwrite the player's.
                 self.shared.sav_refused.store(true, Ordering::Release);
             }
         }
-        // Before Ready, so the reveal shows where the cart left off rather than a frame of
-        // the intro. A state the core will not take leaves the save ram loaded above, which
-        // costs the player their position but not their progress.
+        // Before Ready, so the reveal shows where the cart left off. A refused state still
+        // leaves the save ram loaded: position lost, progress kept.
         if let Some(resume) = resume {
             if let Err(e) = core.unserialize(&resume) {
                 eprintln!("slot: resume: {e}");
-                // Same reasoning as `sav_refused` above, for the resume half: a core running
-                // from wherever `load` left it is not resuming anything, and its `serialize()`
-                // must not be allowed to overwrite the resume file that was refused instead of
-                // replacing.
+                // As with `sav_refused`: this core's `serialize()` is not the player's session.
                 self.shared.resume_refused.store(true, Ordering::Release);
             }
         }
@@ -565,10 +462,8 @@ impl Worker {
             0 => av.sample_rate,
             hz => hz as f64,
         };
-        // The core is stepped once per present, so a 60 Hz frame carries a 59.7275 Hz frame's
-        // worth of audio. That surplus is the resampler's to absorb in its base rate. Left to
-        // DRC's trim, which is proportional and only reaches full authority at twice target,
-        // it parks occupancy at 91% of the ring: measured, and one late frame from the top.
+        // Stepped once per 60 Hz present, each frame carries 59.7275 Hz worth of audio. Absorb
+        // it in the base rate: left to DRC, occupancy parks at a measured 91% of the ring.
         let core_hz = match av.fps {
             fps if fps > 0.0 => av.sample_rate / (fps * PRESENT.as_secs_f64()),
             _ => av.sample_rate,
@@ -584,47 +479,21 @@ impl Worker {
         let mut gated = (false, false);
         let rewind = RewindThread::spawn(REWIND_BYTES);
         let mut since_snapshot = 0;
-        // What the most expensive core frame has been costing lately, kept across presents so a
-        // fast forward present can tell before it runs a frame whether there is room for another
-        // one after it.
-        //
-        // The worst frame rather than the average of them, because the question this answers is
-        // "can the present finish what it is about to start", and a mean is wrong half the time
-        // by construction: the drawn frame that ends a present costs more than the skipped ones
-        // before it, and a game walking into a busy scene costs more than the average of where
-        // it has been. Predicting with the mean made the loop start a frame it could not finish
-        // in 54% of presents on mGBA gameplay, and the overruns were what pushed presents past
-        // their deadline.
-        //
-        // It rises the instant a frame costs more and falls back through the same quarter blend
-        // as everything else here, so it follows a game into a heavy scene immediately and out
-        // of one over a few presents. Seeded at a whole present, which is pessimistic on
-        // purpose: an estimate that starts too low would let the very first fast present run to
-        // the ceiling before anything had been measured. Normal play updates it too — one frame
-        // a present is still a measurement — so by the time anyone reaches for the trigger this
-        // already holds the real cost of a drawn frame on this machine, for this game.
+        // Worst recent core frame cost, to predict whether another fits in a fast present. Worst,
+        // not mean: the mean overran 54% of mGBA presents. Seeded at a whole present, cautious.
         let mut frame_peak = PRESENT;
-        // What a present must leave for the work that follows its core frames — publish, the
-        // snapshot every second present, the audio resample, the link pump — measured last
-        // present rather than assumed. Seeded at the whole margin `FAST_TARGET` leaves, which is
-        // the pessimistic direction and the only honest guess before anything has been timed; a
-        // quarter of each measurement replaces it, so it reaches the truth for this core and
-        // this game within about four presents of the trigger going down.
+        // Measured cost of a present's work after its core frames, blended. Seeded
+        // pessimistically at the full margin `FAST_TARGET` leaves.
         let mut post_cost = PRESENT - FAST_TARGET;
-        // Set by a fast present for the pacing below to measure its trailing work from: when the
-        // present began, and how much of it the core frames took.
+        // Set by a fast present: when it began and how long its core frames took.
         let mut fast_span: Option<(Instant, Duration)> = None;
         let mut deadline = Instant::now();
         let mut paced = 0u64;
-        // `None` until a session begins. Held here rather than on `Shared`: the transport is
-        // not `Sync`-shaped state a render-thread read would make sense of, only something
-        // this loop drains and feeds once a frame.
+        // `None` until a session begins. Owned by this loop, which alone drains and feeds it.
         let mut transport: Option<Box<dyn LinkChannel>> = None;
-        // `Some` only on the in-core route. Netpacket sessions leave this `None` and keep the
-        // frame clock they always had.
+        // `Some` only on the emulated link route; netpacket sessions leave it `None`.
         let mut cable: Option<Cable> = None;
-        // Cable diagnostics, printed rarely. A link that is slow and a link that is stalling look
-        // identical from the outside, and the card's own log is the only way to ask on hardware.
+        // Emulated link diagnostics: slow and stalling look alike except in the device log.
         let mut cable_presents = 0u32;
         let mut cable_stalls = 0u32;
         let mut cable_said = Instant::now();
@@ -635,22 +504,17 @@ impl Worker {
                 self.apply(cmd, core.as_mut(), &mut transport, &mut cable, &link);
             }
 
-            // Pumped every present regardless of speed or phase, not only while the core is
-            // stepping frames: a trade partner reading the local device's power menu, or
-            // sitting in the switcher, must not see the link go quiet just because this
-            // device paused its own picture. Neither direction may block the frame —
-            // `try_recv` already never does — so this is always safe to run.
+            // Pumped every present at any speed, so pausing locally never makes the link go
+            // quiet. Never blocks.
             if let Some(t) = transport.as_mut() {
-                // One transport, two routes, and only one of them may read it: `drain_transport`
-                // empties the wire into the core's own packet queue, which on the cable route
-                // would swallow every button mask before `cable` ever saw it.
+                // Only one route may read the wire: `drain_transport` would swallow the emulated
+                // link's button masks.
                 match cable.as_mut() {
                     Some(c) => {
                         while let Some(buf) = t.try_recv() {
                             c.accept(&buf);
                         }
-                        // The host's machine, once it is whole. Restored here rather than in
-                        // `cable.rs`, which holds no core and never should.
+                        // The host's machine, once whole. Restored here: `cable.rs` holds no core.
                         if let Some(state) = c.take_state() {
                             match core.unserialize(&state) {
                                 Ok(()) => {
@@ -661,18 +525,14 @@ impl Worker {
                                     c.prime();
                                     t.send(NETPACKET_RELIABLE, &cable::ready_packet());
                                 }
-                                // Nothing to run in step with. Better to sit refusing to start
-                                // than to play a different game to the other device.
+                                // Refuse to start rather than run a different game.
                                 Err(e) => eprintln!("slot: cable: the state was refused: {e}"),
                             }
                         }
                     }
                     None => drain_transport(t.as_mut(), &link, MAX_LINK_PACKETS_PER_PRESENT),
                 }
-                // Both checked after the drain, so the last packets a peer sent before leaving
-                // still reach the core. Which of the two the screen acts on is decided by
-                // whoever reads them (`Session::update`), not here: a peer that ends a session
-                // deliberately sets this one and then, a moment later, the other.
+                // After the drain, so a leaving peer's last packets still reach the core.
                 if t.peer_ended() {
                     self.shared.peer_ended.store(true, Ordering::Relaxed);
                 }
@@ -686,29 +546,12 @@ impl Worker {
             flush_outbound(&mut transport, &link);
 
             let speed = self.speed();
-            // Published before anything below acts on it, and with `Release`: a reader who
-            // observes `Paused` from this store is thereby also guaranteed to see every frame
-            // `publish` counted on an earlier pass, because that publish happened-before this
-            // store in program order and `Release`/`Acquire` makes that ordering visible across
-            // threads. `publish`'s own counter is `Relaxed` and leans on this pairing for it —
-            // `Relaxed` here would leave that unordered, trading the scheduling race this exists
-            // to close for a subtler visibility one.
+            // `Release` pairs with `observed_speed`'s `Acquire`, so a reader seeing `Paused`
+            // also sees every earlier `publish`, whose counter is `Relaxed`.
             self.shared.observed.store(speed as u8, Ordering::Release);
             let ff_sound = self.shared.ff_sound.load(Ordering::Relaxed);
-            // Fast forward with its sound off produces audio nobody asked to hear, so it is
-            // gated; with it on, that audio is the point and the ring stays open. A pause
-            // produces none at all and `fill` pads a dry ring with silence, so there is
-            // nothing to gate: what is left simply runs out. Muting on a pause silenced the
-            // insert as well, which is mixed into this ring while the core is held still and
-            // does not come from the core at all.
-            //
-            // A held core feeds it nothing, so the device reading silence out of it is the
-            // arrangement working rather than a starve worth reporting. A rewinding one feeds
-            // it nothing either — reverse audio is noise, so the branch below throws the
-            // core's samples away — and it has to say so for the same reason: without this
-            // every second of rewind counted about 65000 samples of starvation the device was
-            // never owed, so a session where anyone touched the trigger reported a fault on
-            // its way out and the counter stopped meaning "the emulator could not keep up".
+            // Fast forward without sound mutes the ring. Paused and rewinding mark it idle
+            // instead: the insert click still mixes in, and that silence is not a starve.
             let rewinding = speed != Speed::Paused && self.shared.rewind.load(Ordering::Relaxed);
             let gate = (
                 speed == Speed::Fast && !ff_sound,
@@ -730,22 +573,8 @@ impl Worker {
                     if let Err(e) = core.unserialize(&state) {
                         eprintln!("slot: rewind: {e}");
                     }
-                    // A core is not obliged to repaint from a load, so the frame the user
-                    // sees comes from running one. `pop` walks back two frames and this
-                    // runs one forward, so the picture travels back two frames per present:
-                    // reverse at 2x, showing every other frame.
-                    //
-                    // Empty input, never the live mask. The live one necessarily holds L2 —
-                    // it is what is being held to rewind — so replaying with it re-simulated
-                    // the frame under buttons that were not pressed at the time, and the
-                    // state landed on when the trigger was released inherited the
-                    // difference. Nothing was being replayed faithfully; it was being
-                    // re-played.
-                    //
-                    // Drawn, not skipped: this frame is the picture the rewind shows. Every
-                    // present already leaves the core with skipping off — the last frame of one
-                    // is always a drawn frame — but saying so here keeps that a property of
-                    // this branch rather than an inheritance from whatever ran before it.
+                    // A core need not repaint from a load, so run one drawn frame. `pop` goes
+                    // back two: 2x reverse. Empty input: the live mask holds L2.
                     core.set_frame_skip(false);
                     core.run_frame(ButtonMask(0));
                     self.publish(core.video_xrgb8888());
@@ -756,19 +585,8 @@ impl Worker {
                 // Reverse audio is noise, and the sink runs itself dry into silence.
                 let _ = core.take_audio();
             } else if ceiling > 0 {
-                // As many core frames as this present can afford, up to the ceiling, and only
-                // the last of them draws a picture.
-                //
-                // A count rather than a multiplier is what makes a heavy game slow down
-                // smoothly instead of falling off 60 Hz: the chosen speed is the most this may
-                // run, not what it must, so content that cannot afford the whole ceiling gives
-                // back speed a frame at a time while still presenting every 16.67 ms.
-                //
-                // Whether a frame is the last has to be decided *before* it runs, because that
-                // is the only moment either core can still be told not to draw it — so the test
-                // is predictive: there is room for another frame after this one only if the
-                // present has time for both. Being wrong costs one frame of speed, never a
-                // dropped present.
+                // As many core frames as the present can afford, up to the ceiling; only the
+                // last draws. "Last" is predicted before it runs, the only time a core can skip.
                 // What is left of the present for core frames once what follows them is paid.
                 let budget = FAST_TARGET.saturating_sub(post_cost);
                 let began = Instant::now();
@@ -780,25 +598,16 @@ impl Worker {
                     core.set_frame_skip(!last);
                     let frame_began = Instant::now();
                     match cable.as_mut() {
-                        // The in-core route. One `run_frame_linked` steps both consoles, so the
-                        // frame cannot start until both masks are in hand; a late peer stalls the
-                        // present rather than being guessed at, because a stepped frame is not
-                        // something either device can take back.
+                        // One `run_frame_linked` steps both consoles, so wait for both masks.
+                        // A stepped frame cannot be taken back, so a late peer stalls.
                         Some(c) => {
-                            // Before the wait, so the frame this present is about to run has
-                            // already offered its buttons. `sample` decides a frame once, so
-                            // asking every present costs nothing and a stalled present cannot
-                            // add to the input delay.
+                            // Offer this frame's buttons before waiting. `sample` decides a
+                            // frame once, so repeats are free.
                             if let Some(t) = transport.as_deref_mut() {
                                 t.send(NETPACKET_RELIABLE, &c.sample(input));
                             }
-                            // Waited for inside this present rather than by giving the present
-                            // up. The two devices' loops are not in phase, so a mask landing a
-                            // moment after the drain at the top of the loop would otherwise cost
-                            // a whole 16.7 ms, and a steady offset would halve the frame rate
-                            // outright while both devices sat well inside their own budget.
-                            // Bounded by what is left of the present, so a peer that really has
-                            // gone still stalls rather than holding the frame open.
+                            // Wait within the present: the loops are out of phase, so giving
+                            // up the present would halve the frame rate. Bounded by the budget.
                             let waited = Instant::now();
                             let ready = loop {
                                 if let Some(pair) = c.ready() {
@@ -840,9 +649,7 @@ impl Worker {
                     }
                 }
                 let core_time = began.elapsed();
-                // Up at once, down slowly: a frame that costs more is believed immediately,
-                // because the next present has to survive it, while one cheap present is not
-                // enough to conclude the heavy scene is over.
+                // Up at once, down slowly: the next present must survive a heavy frame.
                 frame_peak = if worst > frame_peak {
                     worst
                 } else {
@@ -870,38 +677,20 @@ impl Worker {
                     }
                 }
                 fast_span = Some((began, core_time));
-                // Immediately, and this is the one that decides whether a link is playable.
-                // The emulated serial hardware only executes inside `run_frame`, so every
-                // packet a session actually produces is born here. Sending them from the top
-                // of the loop instead means each one waits for the next present: a whole
-                // frame, 16.7 ms, added to a wire measured at about 2 ms, in both directions
-                // and on both devices. A GBA that asked a question and heard nothing for four
-                // frames reports a communication error, which is what it should do.
+                // Send now: serial only runs inside `run_frame`, and waiting a present adds
+                // 16.7 ms to a ~2 ms wire. A GBA unanswered for four frames reports an error.
                 flush_outbound(&mut transport, &link);
                 self.publish(core.video_xrgb8888());
 
-                // Counted per present rather than per frame, so a fast forward pays the
-                // same snapshot cost per present as normal play and simply records a
-                // coarser trail that follows the speed actually reached: twice however many
-                // frames a present ran, rather than two.
-                //
-                // This used to sit inside the `Normal` arm below, which exists to gate the
-                // audio, and was swept in with it. The effect was a hole: nothing recorded
-                // while fast forwarding, so the newest state was whatever predated the
-                // trigger and the first pop of a rewind swallowed the entire stretch in one
-                // step instead of walking back through it.
-                // Not while a session is live. `App::may_rewind` refuses rewinding outright for
-                // as long as one is, so every snapshot taken here is work nobody can ever use,
-                // and in link mode it is the priciest work in the present: a link state is both
-                // consoles, so `serialize` is twice a single GBA's and runs every other present.
+                // Per present, fast forward included, so rewind covers it. Skipped during a
+                // link session: rewind is refused, and a two-console state is the costliest work.
                 since_snapshot += 1;
                 if cable.is_some() {
                     since_snapshot = 0;
                 }
                 if since_snapshot >= SNAPSHOT_EVERY {
                     since_snapshot = 0;
-                    // A core that will not serialize has already said so through the save
-                    // path. Rewind is not the place to say it again at 30 Hz.
+                    // A serialize failure was already reported by the save path.
                     if let Ok(state) = core.serialize() {
                         rewind.push(state);
                         self.shared
@@ -911,15 +700,12 @@ impl Worker {
                 }
 
                 let audio = core.take_audio();
-                // Fast forward drops the core's audio unless its sound is on. On, the several
-                // frames of audio a fast present produced are squeezed into one present's
-                // worth by stepping through them that many times as fast: it comes out faster
-                // and higher, at the device's own pace rather than backing the ring up.
+                // Fast forward audio plays only with its sound on, squeezed into one present:
+                // faster and higher.
                 if speed == Speed::Normal || ff_sound {
                     let target = drc_target(ring.capacity_frames());
                     let queued = ring.queued_frames();
-                    // `ran`, not the ceiling: the audio squeezed into this present is however
-                    // many frames of it the present actually produced.
+                    // `ran`, not the ceiling: the audio the present actually produced.
                     resampler.set_ratio(drc_ratio(queued, target) / f64::from(ran));
                     resampler.process(&audio, &mut out);
                     crate::audio::volume::apply(
@@ -927,8 +713,7 @@ impl Worker {
                         self.shared.volume.load(Ordering::Relaxed),
                     );
                     ring.push_blocking(&out);
-                    // Where occupancy actually sits against target is the one thing a
-                    // crackle complaint needs and no test can watch on real hardware.
+                    // Occupancy against target is what a crackle report needs.
                     paced += 1;
                     if crate::session::trace() && paced.is_multiple_of(TRACE_EVERY) {
                         let (dropped, starved) = (ring.overruns(), ring.underruns());
@@ -939,11 +724,8 @@ impl Worker {
                 }
             }
 
-            // The write above holds this thread whenever the device has no room, which is
-            // the backstop. This is the pacing the rest of the time, and the only pacing at
-            // all with no audio to pace against: paused, fast forwarding, rewinding.
-            // Everything this present did after its core frames, which is what the next one
-            // budgets around. Taken here, before the sleep, or it would measure the sleep too.
+            // `push_blocking` is the backstop; this deadline paces everything else. Measure
+            // trailing work before the sleep.
             if let Some((began, core_time)) = fast_span.take() {
                 post_cost = blend(post_cost, began.elapsed().saturating_sub(core_time));
             }
@@ -956,20 +738,8 @@ impl Worker {
                 None => deadline = now,
             }
         }
-        // Once more, after the flag rather than before it: `stop` is only read at the top of
-        // the loop, so everything asked for during the present it was set in — or during the
-        // one before it, if the ask landed a moment after that pass drained the queue — is
-        // still sitting in the channel with nobody left to read it. Dropping the receiver
-        // there is silent, and two of these commands are not things a caller can go without.
-        //
-        // `Cmd::EndLink` is the one that shows. It is the single seam every ending passes
-        // through, and its whole job is to say goodbye before the wire goes; lost here, a
-        // deliberate ending reaches the peer as a FIN and the other player is told they were
-        // abandoned rather than that the session ended. `Cmd::Save` is the other: a flush that
-        // asked for the player's state gets a closed channel and writes nothing, which is
-        // their position lost. Draining once more costs nothing on the ordinary path, where
-        // the queue is already empty, and the core is still alive here to answer with — it is
-        // dropped when this function returns, not when the flag went up.
+        // Drain once more after `stop`, while the core is alive. A lost `EndLink` reaches the
+        // peer as a FIN rather than a goodbye; a lost `Save` loses the player's position.
         for cmd in self.cmds.try_iter() {
             self.apply(cmd, core.as_mut(), &mut transport, &mut cable, &link);
         }
@@ -983,12 +753,7 @@ impl Worker {
         }
     }
 
-    /// One command, against the core this worker is running.
-    ///
-    /// A method rather than the body of the loop it is called from, because the loop is not
-    /// the only place it has to run: the shutdown drain at the end of `run` applies whatever
-    /// was still queued when `stop` went up, and an ending that says goodbye cannot be written
-    /// twice and stay written.
+    /// One command, against the core this worker is running. Also used by the shutdown drain.
     fn apply(
         &self,
         cmd: Cmd,
@@ -1018,26 +783,11 @@ impl Worker {
             Cmd::BeginLink(client_id, t) => {
                 self.shared.link_lost.store(false, Ordering::Relaxed);
                 self.shared.peer_ended.store(false, Ordering::Relaxed);
-                // Both queues emptied before the session is live, the mirror of the clear
-                // `Cmd::EndLink` does on its way out and for the same reason on the other
-                // side of the same seam. `netpacket_send` (slot-retro's `libretro.rs`) pushes
-                // whatever the core hands it without asking whether a session is running, and
-                // `RetroCore::stop_link` is a no-op for a core that registered no `stop` —
-                // libretro documents that callback as OPTIONAL — so a core can go on producing
-                // packets for a session that has already ended. Those would otherwise wait
-                // here and go out as the *next* session's opening traffic, to a peer that
-                // never asked for them, which is the exact failure the ending's own clear
-                // exists to prevent in the other direction.
-                //
-                // Ahead of `start_link`, so a core that sends a handshake from inside its own
-                // `start` callback still has it carried.
+                // Clear before going live: a core with no `stop` (OPTIONAL in libretro) may keep
+                // sending, and that would open the next session. Before `start_link` to keep a
+                // handshake sent from `start`.
                 link.clear();
-                // Set here as well as by `LibretroCore::start_link` itself: this is
-                // the thing that actually knows a transport is wired and about to be
-                // pumped, whatever the concrete core does or does not do with
-                // `client_id` — the mock, in particular, has no session of its own to
-                // start and would otherwise leave `is_active` false with real traffic
-                // already flowing through it.
+                // Set here too: the mock starts no session of its own.
                 core.start_link(client_id);
                 link.set_active(true);
                 *transport = Some(t);
@@ -1045,16 +795,11 @@ impl Worker {
             Cmd::BeginCable(player, t) => {
                 self.shared.link_lost.store(false, Ordering::Relaxed);
                 self.shared.peer_ended.store(false, Ordering::Relaxed);
-                // No `start_link` and no `link.set_active`: this route never goes through
-                // libretro's netpacket interface at all, so a core with no `start` callback is
-                // not a gap here the way it is for `BeginLink`.
+                // This route never uses libretro netpacket: no `start_link`, no `set_active`.
                 let mut c = Cable::new(player);
                 let mut wire = t;
-                // The host's machine is the one the session runs. Both devices simulate both
-                // consoles, so they have to start from the same bytes or identical inputs drive
-                // two different games: one device sat on "insert the link cable" while the other
-                // was already choosing a character. Serialized before a single frame runs, so
-                // what crosses is frame zero rather than wherever the host had got to.
+                // Both devices simulate both consoles, so both start from the host's bytes,
+                // sent before any frame runs.
                 if player == 0 {
                     match core.serialize() {
                         Ok(state) => {
@@ -1071,49 +816,24 @@ impl Worker {
                 *transport = Some(wire);
             }
             Cmd::SetOption(key, value) => {
-                // The core re-reads its options on its next `retro_run`, through the
-                // `GET_VARIABLE_UPDATE` flag `set_option` raises, so nothing here has to reload
-                // the game or reach into the frame loop. A core that does not have this option
-                // ignores it, which is why `core::colour_option` decides whether to send one at
-                // all rather than sending to everyone and hoping.
+                // The core re-reads options on its next `retro_run` via `GET_VARIABLE_UPDATE`.
                 core.set_option(&key, &value);
             }
             Cmd::EndLink => {
                 self.shared.link_lost.store(false, Ordering::Relaxed);
                 self.shared.peer_ended.store(false, Ordering::Relaxed);
                 *cable = None;
-                // `Cmd::BeginLink`'s counterpart: tells the core the session is over,
-                // if it registered a `stop` to hear it through (`RetroCore::stop_link`
-                // — libretro documents `stop` as OPTIONAL, unlike `start`, so this is
-                // a no-op for a core that never offered one). Without this the core
-                // keeps believing a session is live and keeps producing packets
-                // nobody is left to carry.
+                // A no-op for a core with no `stop` callback (OPTIONAL in libretro).
                 core.stop_link();
-                // Word to the far end before the wire goes, so a deliberate ending
-                // arrives as one rather than as a peer that fell silent. This is the
-                // single seam every ending already passes through — the menu's own A,
-                // a power press, a shut lid, an eject, a critical battery — so none of
-                // them has to remember to say goodbye for itself.
-                //
-                // Ahead of the drop, and bounded inside `send_end`: the drop is what
-                // unblocks the transport's own threads, and a goodbye still queued when
-                // that happens would never reach the wire. Harmless on a wire the peer
-                // has already dropped, which is the lost-peer timeout arriving here —
-                // the write simply fails or goes nowhere.
+                // Goodbye before the wire goes, so the peer sees an ending, not silence. Every
+                // ending passes here. Before the drop, which unblocks the transport's threads.
                 if let Some(t) = transport.as_mut() {
                     t.send_end();
                 }
-                // The drop is what actually closes the wire (see `TcpLink`'s `Drop`);
-                // this is just letting go of it.
+                // Dropping closes the wire (see `TcpLink`'s `Drop`).
                 *transport = None;
-                // Cleared *before* the flag flips, not after: `Link::clear` empties
-                // both queues (a packet that arrived a moment before this command
-                // would otherwise sit here until the *next* session begins and gets
-                // fed to a core that never sent or asked for it), and `set_active`'s
-                // `Release` store only carries a happens-before guarantee for what
-                // ran on this thread *before* it. Clearing first is what lets a
-                // reader who observes `is_active() == false` (`Acquire`) also see the
-                // queues already empty, with no sleep needed to bridge the gap.
+                // Clear before `set_active(false)`: its `Release` store makes the empty queues
+                // visible to anyone who then reads `is_active() == false`.
                 link.clear();
                 link.set_active(false);
             }
@@ -1133,19 +853,8 @@ impl Worker {
     }
 }
 
-/// Moves up to `cap` packets from `transport` into `link`'s inbound queue, in order, and
-/// leaves the rest — however many there are — queued in the transport for the next call.
-/// A free function, rather than inline in `Worker::run`'s loop, so the cap can be driven
-/// directly against a fake transport in a test with no worker thread and no real timing
-/// involved (`MAX_LINK_PACKETS_PER_PRESENT`'s own point is to bound work in one present,
-/// which a test racing a real 60 Hz loop could never pin down deterministically).
-/// Everything the core has queued for its peer, onto the wire.
-///
-/// The flag `netpacket_send` was called with never reaches this queue — only the bytes do —
-/// so this asks every transport for reliable delivery. Safe for `TcpLink`, which is reliable
-/// regardless of what is asked: TCP cannot honour "unreliable" any other way, and
-/// `LinkChannel::send`'s own contract is to fall back to reliable when a flag cannot be
-/// honoured.
+/// Everything the core has queued for its peer, onto the wire. Always reliable: the
+/// `netpacket_send` flag is not queued, and `LinkChannel::send` falls back to reliable anyway.
 fn flush_outbound(transport: &mut Option<Box<dyn LinkChannel>>, link: &Link) {
     let Some(t) = transport.as_deref_mut() else {
         return;
@@ -1161,6 +870,8 @@ fn blend(estimate: Duration, measured: Duration) -> Duration {
     (estimate * (COST_BLEND - 1) + measured) / COST_BLEND
 }
 
+/// Moves up to `cap` packets from `transport` into `link`'s inbound queue, leaving the rest
+/// queued. Free so tests can drive the cap without a worker.
 fn drain_transport(transport: &mut dyn LinkChannel, link: &Link, cap: u32) {
     for _ in 0..cap {
         let Some(packet) = transport.try_recv() else {
@@ -1175,10 +886,7 @@ mod tests {
     use super::*;
     use slot_retro::LoopbackLink;
 
-    /// I6: an unbounded drain here gives a flooding peer unbounded work in a single present.
-    /// `LoopbackLink` holds everything sent to it in a plain queue, so filling it past the
-    /// cap and draining once is enough to prove the cap actually holds — no thread, no
-    /// timing, no worker loop needed.
+    /// A flooding peer's packets stop at the cap and the rest stay queued.
     #[test]
     fn drain_transport_stops_at_the_cap_and_leaves_the_rest_queued() {
         let mut transport = LoopbackLink::default();
@@ -1205,8 +913,7 @@ mod tests {
         );
     }
 
-    /// The ordinary case: a present's worth of traffic never comes close to the cap, so
-    /// everything waiting moves in one call, same as an unbounded drain would.
+    /// Under the cap, everything moves in one call.
     #[test]
     fn drain_transport_moves_everything_under_the_cap() {
         let mut transport = LoopbackLink::default();

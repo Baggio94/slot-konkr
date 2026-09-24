@@ -14,9 +14,7 @@ fn the_link_shortcut_on_the_wrong_core_says_to_switch() {
     assert!(f.rgba.chunks(4).any(|p| p[3] > 0), "the banner is blank");
 }
 
-/// gpSP fakes named protocols and has no generic cable, so for any other cart there is no link
-/// to make. The shortcut says so in the same banner rather than bringing a radio up for a game
-/// that will never see a packet.
+/// gpSP only fakes named protocols, so on any other cart the shortcut says there is no link.
 #[test]
 fn a_cart_gpsp_cannot_link_says_there_is_no_link() {
     assert_eq!(Toast::NoLink.text(), "No link support");
@@ -24,14 +22,8 @@ fn a_cart_gpsp_cannot_link_says_there_is_no_link() {
     assert!(f.rgba.chunks(4).any(|p| p[3] > 0), "the banner is blank");
 }
 
-/// Every banner the HUD can raise answers something the user just did, and none of them merely
-/// describes what is already on screen. The carousel briefly had three that named the shelf it
-/// had moved to; that is the plate corner's job now — see `slot_ui::mark` — and a banner saying it
-/// as well would be the same fact told twice. So the list is held by name, because the way a
-/// line like that comes back is one variant at a time.
-///
-/// The last two are TEMPORARY, with `Action::ColourCorrectionToggle`: each answers the chord just
-/// pressed, so they hold to the rule rather than sitting outside it.
+/// Every banner answers something the user just did, never what is already on screen. Held
+/// by name. The last two are TEMPORARY, with `Action::ColourCorrectionToggle`.
 #[test]
 fn the_banner_says_what_happened_and_never_what_is_on_screen() {
     assert_eq!(
@@ -58,17 +50,8 @@ fn the_banner_says_what_happened_and_never_what_is_on_screen() {
     }
 }
 
-/// Every line is rastered into one box at one size, so a line too long for it would be shrunk on
-/// its own and read as a different banner from the others. Measured off the pixels rather than
-/// off the layout: the type is uppercased and has no descenders, so a banner set at the same
-/// size covers the same rows.
-///
-/// To within a row, which is the typeface rather than the size. Round and pointed capitals
-/// overshoot the flat ones — the S and A of STATE SAVED sit a row below the K and D of LINK
-/// ENDED at 16 px — so a line built only from flat capitals is a row shorter while being set at
-/// exactly the same size. A shrunk line is not a row out; it is four, which is what the bound
-/// below actually catches. `toast.rs`'s own unit test holds the size itself, against both the
-/// full size and the fallback.
+/// Every banner's ink covers the same rows, to within one (round capitals overshoot flat ones;
+/// a shrunk line is four rows out).
 #[test]
 fn no_toast_is_shrunk_to_fit_its_box() {
     let rows = |t: Toast| {
@@ -98,25 +81,18 @@ fn a_toast_fades_on_the_same_curve_as_the_bar() {
     assert!(!h.toast_visible(2_500));
 }
 
-/// Saying something twice re-shows the one banner rather than queueing a second behind it: the
-/// HUD holds one line and one clock, and a second call re-stamps that clock. It matters wherever
-/// a button can be worked faster than a banner fades, which is every button that raises one.
-///
-/// Held here rather than through the app, which is where it used to be: the three shelf banners
-/// were what exercised it, and the shelf says which system it is in the plate's corner now.
+/// A repeated toast re-stamps the one clock rather than queueing a second banner.
 #[test]
 fn saying_the_same_thing_twice_re_shows_it_rather_than_stacking() {
     let mut h = Hud::new();
     h.toast(Toast::StateSaved, 1_000);
     h.toast(Toast::StateSaved, 2_400);
-    // Past the first stamp's own fade and short of the second's, so the banner is up here only
-    // because the second call moved the clock forward.
+    // Past the first stamp's fade and short of the second's.
     assert_eq!(h.said(3_400), Some(Toast::StateSaved), "it did not re-show");
     assert_eq!(h.said(3_900), None, "it never faded");
 }
 
-/// A different banner replaces the one showing rather than waiting behind it. The same one slot,
-/// read the other way round: what is on screen is always the last thing that happened.
+/// A different banner replaces the one showing rather than waiting behind it.
 #[test]
 fn a_second_banner_replaces_the_first() {
     let mut h = Hud::new();
@@ -131,8 +107,7 @@ fn a_toast_is_centred() {
     assert_eq!(x + w / 2.0, OUT_W as f32 / 2.0);
 }
 
-/// Nothing backs the type, so the type carries its own contrast or it disappears on a white
-/// game frame. Same halo the badge beside it uses.
+/// The type carries its own halo, like the badge, or it vanishes on a white frame.
 #[test]
 fn a_toast_carries_its_own_halo() {
     let f = toast_face(Toast::StateSaved);
@@ -143,8 +118,7 @@ fn a_toast_carries_its_own_halo() {
     assert!(dark, "there is nothing dark behind the type");
 }
 
-/// The toast reads against the same plate the level bar does, in the same place. It used to
-/// sit below the band with no backing, which put two different treatments on one screen.
+/// The toast reads against the same plate as the level bar, in the same place.
 #[test]
 fn a_toast_sits_in_the_plate_band_and_is_backed_by_it() {
     let mut h = Hud::new();
@@ -169,8 +143,7 @@ fn a_toast_sits_in_the_plate_band_and_is_backed_by_it() {
     );
 }
 
-/// They share one strip, so only one can have it. A toast names something that just
-/// happened; a level is visible in its own effect.
+/// They share one strip, and a toast outranks a level bar.
 #[test]
 fn a_toast_takes_the_band_from_the_bar() {
     let mut h = Hud::new();

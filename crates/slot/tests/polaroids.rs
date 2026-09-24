@@ -29,8 +29,7 @@ fn double_tap_menu_with_no_states_does_not_open_the_switcher() {
     assert!(matches!(a.phase(), Phase::Playing { .. }));
 }
 
-/// The same no-op, but on a real card with a real cart that simply has never been saved.
-/// This is the path a first-time player takes.
+/// The same no-op on a real card with a cart that has never been saved.
 #[test]
 fn a_cart_that_has_never_been_saved_does_not_open_the_switcher() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -117,8 +116,7 @@ fn menu_dismisses_the_switcher_it_opened() {
     assert!(matches!(a.phase(), Phase::Playing { .. }));
 }
 
-/// Left and right walk the ring rather than the shelf behind it, and A loads what they
-/// landed on.
+/// Left and right walk the ring, not the shelf behind it, and A loads the one landed on.
 #[test]
 fn flicking_selects_which_state_a_loads() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -157,8 +155,8 @@ fn load_state_takes_the_newest_entry_without_the_switcher() {
     assert!(matches!(a.phase(), Phase::Playing { .. }));
 }
 
-/// The switcher is not a place a cart can be ejected from, and the shelf is not underneath
-/// it either. Both would leave the emulator paused with no way back.
+/// The switcher cannot eject and has no shelf underneath: both would leave the emulator paused
+/// with no way back.
 #[test]
 fn the_switcher_swallows_the_shelf_and_eject_bindings() {
     let d = tmp_root_with_carts(&["Emerald"]);

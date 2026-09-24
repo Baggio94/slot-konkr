@@ -1,5 +1,5 @@
-//! The link screen's artwork, built once on its own thread. Rasterising it on the H700 costs
-//! seconds, and anything built on the frame loop costs the animation that frame.
+//! The link screen's artwork, built once on its own thread: rasterising it on the H700 takes
+//! seconds.
 
 use std::sync::mpsc::{channel, Receiver};
 

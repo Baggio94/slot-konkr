@@ -1,8 +1,6 @@
-//! The core picker's open cart: the back half of the shell with the board in it, rasterised
-//! per cart because the shell is that cart's plastic and the ROM carries that cart's name.
-//!
-//! Drawn from `board.svg` and not from rects: the notch round the centre post, the patterned
-//! legs and contacts and the 45° traces are drawings, not a layout.
+//! The core picker's open cart: the back half of the shell with the board in it, rasterised per
+//! cart for its plastic and ROM name. Drawn from `board.svg`, since the notch, legs, contacts and
+//! 45° traces are drawings, not a layout.
 
 use slot_gfx::OUT_W;
 use slot_store::{Cart, Core};
@@ -31,20 +29,17 @@ const PLASTIC: &str = "#ff00ff";
 const FLOOR: &str = "#800080";
 const DEEP: &str = "#400040";
 
-/// Words to a line on the ROM, and lines to the chip. Counted in characters rather than
-/// measured, so the split is a fact about the name and the tests can state it; the fitter
-/// then shrinks any line that is still too wide.
+/// Words to a line on the ROM, and lines to the chip. Counted in characters so the split is
+/// testable; the fitter shrinks any line still too wide.
 const MARK_LINE_CHARS: usize = 10;
 const MARK_LINES: usize = 3;
 const MARK_PAD: u32 = 4;
 const MARK_PX: f32 = 10.0;
 const MARK_MIN_PX: f32 = 6.0;
-/// Grey on black, as a mask ROM is marked: legible, and nothing like the socket names, which
-/// are the words on the board that mean something.
+/// Grey on black, as a mask ROM is marked, so it does not compete with the socket names.
 const MARK_INK: [u8; 3] = [0xbd, 0xbd, 0xbd];
 
-/// The game's title, a few words to a line. The dump's bracketed tags are facts about the file
-/// rather than the game, and the chip does not carry them.
+/// The game's title, a few words to a line, without the dump's bracketed tags.
 pub fn rom_marking(stem: &str) -> Vec<String> {
     let mut title: Vec<String> = Vec::new();
     for word in clean_label(stem).to_uppercase().split_whitespace() {
@@ -87,9 +82,8 @@ pub fn rom_marking_face(stem: &str) -> CartFace {
 
 pub fn board_face(cart: &Cart) -> CartFace {
     let shell = shell_for(cart);
-    // Deepest placeholder first and the wall last, so a shell whose own hex or shade matches
-    // a placeholder still further down the list finds nothing left to replace: once a
-    // placeholder's `.replace` call has run, its literal text is gone from the SVG.
+    // Deepest placeholder first: once replaced, a shell colour matching a later placeholder
+    // cannot be replaced again.
     let svg = BOARD_SVG
         .replace(DEEP, &hex(shade(shell.colour, 0.35)))
         .replace(FLOOR, &hex(shade(shell.colour, 0.62)))
@@ -105,11 +99,9 @@ pub fn board_face(cart: &Cart) -> CartFace {
     face
 }
 
-/// One line of type, centred across the face, in `band` rows from `top`, its coverage scaled by
-/// `strength`. Composited straight-over whatever is already there: on a transparent pixel that
-/// is ink colour at the coverage's own alpha, same as writing it outright, but on an opaque one
-/// — the chip's body — the glyph's antialiased edge blends toward what was under it instead of
-/// snapping to full ink.
+/// One line of type, centred across the face in `band` rows from `top`, coverage scaled by
+/// `strength`. Composited over what is there, so on the opaque chip body the antialiased edge
+/// blends instead of snapping to full ink.
 fn ink_band(
     face: &mut CartFace,
     top: u32,
@@ -181,11 +173,11 @@ pub const CHIP_TIP: f32 = 4.0 * std::f32::consts::PI / 180.0;
 /// How far the chip rises at mid-flight, in board units.
 pub const HOP_LIFT: f32 = 10.0;
 
-/// The open is one progress in two beats, and this is the slide's share of it: 160 ms of the
-/// 420 ms in `slot::core_picker`, which a test there holds to its own constants.
+/// The slide's share of the open: 160 ms of the 420 ms in `slot::core_picker`, which a test
+/// there holds.
 pub const SLIDE_SHARE: f32 = 160.0 / 420.0;
-/// How far the front half slides up off the back before it lifts: a third of the cart, the
-/// travel that unhooks a real shell once its screw is out.
+/// How far the front half slides off the back before it lifts: a third of the cart, the travel
+/// that unhooks a real shell.
 pub const SLIDE_UP: f32 = CART_H as f32 / 3.0;
 
 /// The slide, eased on its own share of the progress: 0.0 closed, 1.0 unhooked.
@@ -235,23 +227,14 @@ pub struct Placed {
     pub h: f32,
 }
 
-/// The highlighted cart as a shelf centred on its selection stands it, once the row has
-/// settled. `shelf_cart_at` is what serves a row that has not.
+/// The highlighted cart where a settled shelf stands it.
 pub fn shelf_cart() -> Placed {
     shelf_cart_at((OUT_W - CART_W) as f32 / 2.0, 1.0)
 }
 
-/// The same, off a row that is still moving. `x` and `scale` are what `Shelf::selected_at`
-/// gives, so the cart the picker opens grows out of the quad the row had it in rather than out
-/// of a rest the spring has not reached: START pressed a frame after a shoulder otherwise opens
-/// the board in the middle of the screen at full size while the cartridge it came out of is
-/// still a shrunken thing sliding past.
-///
-/// The foot is on the row's floor at any scale, because that is where the row puts it: a
-/// neighbour shrinks upward off the line the selection stands on rather than about its own
-/// middle. So the height comes off the foot and not off `rest_y`, which is only the top of a
-/// cart the row has finished growing.
-///
+/// The same, off a row still moving, with `x` and `scale` from `Shelf::selected_at`, so the
+/// picker opens out of the quad the row drew. The height comes off the foot, since the row
+/// shrinks carts upward off its floor.
 pub fn shelf_cart_at(x: f32, scale: f32) -> Placed {
     let (w, h) = (CART_W as f32 * scale, CART_H as f32 * scale);
     Placed {
@@ -267,8 +250,7 @@ pub fn board_at(progress: f32) -> Placed {
     board_from(shelf_cart(), progress)
 }
 
-/// The same, growing out of wherever the row was standing the cart rather than out of the
-/// middle of the screen.
+/// The same, growing out of wherever the row was standing the cart.
 pub fn board_from(shelf: Placed, progress: f32) -> Placed {
     let rest = Placed {
         x: BOARD_X,
@@ -386,8 +368,8 @@ pub fn chip_shadow_face() -> CartFace {
     CartFace { rgba, w, h }
 }
 
-/// A core's name exactly as the player reads it — `mGBA`, not `MGBA`. `text::fit` capitalises
-/// everything it lays out, so this builds the layout itself, shrinking only if it must.
+/// A core's name as the player reads it (`mGBA`, not `MGBA`). `text::fit` capitalises, so this
+/// builds the layout itself.
 fn name_layout(core: Core, max_w: f32) -> Option<text::Layout> {
     let font = text::label_font()?;
     let tracking = |px: f32| (px * 0.10).round();

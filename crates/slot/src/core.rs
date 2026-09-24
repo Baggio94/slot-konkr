@@ -5,19 +5,11 @@ use slot_store::Core;
 
 use crate::root;
 
-/// Names the dylib outright, for a build that keeps it somewhere the search does not look.
-///
-/// This wins over `System/selected_core.ini` for which dylib loads — it stays a developer
-/// escape hatch, not a second way to pick a core. It is not silent about that: it does not
-/// touch which `Core` a cart resolves to (still the ini, still what the core half of
-/// `States/GBA/<core>/` is named after), only which file `open_core` opens. Pointing
-/// this at gpSP for a cart the ini never mentions runs gpSP with its states filed under the
-/// `mgba` directory: correct for a developer who set the override on purpose, a
-/// trap for anyone who forgot it was set.
+/// Names the dylib outright, overriding the search. Developer escape hatch: it changes only which
+/// file opens, not which `Core` a cart resolves to, so states still file under the ini's core.
 const CORE_ENV: &str = "SLOT_CORE";
 
-/// Which dylib backs a core. The device keeps both in `System/`, so this is a filename
-/// rather than a search: whichever the cart asked for is either there or it is not.
+/// Which dylib backs a core. The device keeps both in `System/`.
 pub fn dylib_name(core: Core) -> String {
     format!(
         "{}_libretro.{}",
@@ -26,18 +18,12 @@ pub fn dylib_name(core: Core) -> String {
     )
 }
 
-/// Most specific first: the environment, then the content root's own `System/` — where the
-/// device actually keeps a core, and, on the device, also where the binary itself lives, so
-/// the next candidate coincides with this one there. Off the device — a host build, or a
-/// test with its own tmp root — the binary's directory and `root` are different places, and
-/// only searching the root's own `System/` gives a cart's own content root somewhere a test
-/// can plant a dylib under. The `vendor` directory `scripts/fetch-core.sh` writes into is
-/// last: a host development convenience, not anywhere a shipped device looks.
+/// Most specific first: the environment, the content root's `System/` (where the device keeps
+/// cores, and where tests plant one), the binary's directory, then the host-only `vendor`.
 fn candidates(root: &Path, core: Core) -> Vec<PathBuf> {
     if let Some(named) = std::env::var_os(CORE_ENV) {
         return vec![PathBuf::from(named)];
     }
-    // Spelled from the platform's own convention so the same search finds the device's `.so`.
     let name = dylib_name(core);
     let mut paths = vec![root.join("System").join(&name)];
     if let Some(dir) = std::env::current_exe()
@@ -51,35 +37,18 @@ fn candidates(root: &Path, core: Core) -> Vec<PathBuf> {
     paths
 }
 
-/// What `open_core` opened: the core to run, and whether it is the one that was asked for.
+/// What `open_core` opened, and whether it is the real core.
 ///
-/// The second half is not a line for the log. A card whose dylib is missing runs the mock, and
-/// the mock refuses every state it did not write itself — so a refusal from it says the
-/// emulator is absent, not that the state on the card is bad. Anything that acts on a refusal
-/// has to be able to tell those two apart, and this is the only moment either is knowable:
-/// `Box<dyn RetroCore>` is the same type whichever opened. `App::set_named_core` is where the
-/// answer goes, and `App::retire_refused_resume` is what it protects.
+/// The mock refuses every state it did not write, so a refusal only means a bad state when
+/// `named` is true. Retiring a resume on the mock's refusal would lose the save.
 pub struct Opened {
     pub core: Box<dyn RetroCore>,
-    /// `true` when one of the candidate dylibs really opened, `false` when every one of them
-    /// was missing or would not load and `MockCore` is standing in for it.
+    /// `false` when no candidate dylib loaded and `MockCore` is standing in.
     pub named: bool,
 }
 
-/// The one place a cart's `Core` becomes a dylib path. Callers that already know which core
-/// they want — `session.rs` resolves it once per insert — pass it straight through, which is
-/// what keeps this call from disagreeing with the caller's own choice. It says nothing about
-/// what the caller does with that `Core` afterward: `App` is the one that has to keep using
-/// the same value for every later read and write, and it does that by storing it rather than
-/// asking again.
-///
-/// `serial` is the `gpsp_serial` a gpSP core loads with, and `colour` the quick menu's Colour
-/// Correction. See `apply_core_options`.
-///
-/// The `named` half of what comes back is what lets a caller tell "the real core refused this
-/// state" from "there was no real core to ask": the mock refuses everything, so without it a
-/// missing dylib looks exactly like a state the core rejected — and retiring a save on that
-/// evidence would lose it to a file that simply was not there.
+/// The one place a cart's `Core` becomes a dylib path. `serial` is gpSP's `gpsp_serial` and
+/// `colour` the quick menu's Colour Correction; see `apply_core_options`.
 pub fn open_core(root: &Path, core: Core, serial: &str, colour: bool, link: Option<u8>) -> Opened {
     let paths = candidates(root, core);
     match open_named(root, core, serial, colour, link, &paths) {
@@ -94,20 +63,9 @@ pub fn open_core(root: &Path, core: Core, serial: &str, colour: bool, link: Opti
     }
 }
 
-/// The named core if one of these opens, the mock if none of them do. A missing core is not
-/// a failure to boot: the shelf, the slot and every gesture are reachable either way.
-///
-/// The core is told the content root's own folders, never the dylib's: on the device the
-/// core lives in `System/` and the user's BIOS does not.
-///
-/// `core` is redundant with `paths` in production — `open_core` derived both from the same
-/// `Core` — but this function stays the seam that takes `paths` explicitly, because tests
-/// plant a dylib somewhere `candidates` would not otherwise look. `apply_core_options` needs
-/// `core` too, and only `open_core_for` ever holds a concrete `slot_retro::LibretroCore` to
-/// call it on: everything above here deals in `Box<dyn RetroCore>`, which has no `set_option`.
-/// That is also why the call sits here rather than at a caller — after `open_with` succeeds,
-/// before the `Box<dyn RetroCore>` is handed back and `load` becomes reachable at all. `serial`
-/// and `colour` go the same way, for the same reason.
+/// The named core if one of these opens, the mock if none do. `paths` is explicit so tests can
+/// plant a dylib where `candidates` would not look. The core is given the content root's
+/// folders, never the dylib's.
 pub fn open_core_for(
     root: &Path,
     core: Core,
@@ -121,10 +79,8 @@ pub fn open_core_for(
     })
 }
 
-/// The search itself, with no fallback of its own: `None` means every candidate was missing or
-/// would not load. Split out so `open_core` can say which of the two happened without deriving
-/// it a second time — a stat of the candidate paths from outside would be a second opinion, and
-/// free to disagree with this one about a dylib that exists but will not open.
+/// The search with no fallback: `None` means every candidate was missing or would not load.
+/// Options are applied here, the only place holding a concrete `LibretroCore`, before `load`.
 fn open_named(
     root: &Path,
     core: Core,
@@ -142,9 +98,8 @@ fn open_named(
         match LibretroCore::open_with(path, &bios, &saves) {
             Ok(mut opened) => {
                 apply_core_options(&mut opened, core, serial, root::has_real_bios(root), colour);
-                // Only while a cable session is being loaded for. mGBA reads these during
-                // `retro_load_game` and never again, so a core already running cannot be put
-                // into link mode; `Session::reload_for_link` is what re-opens it.
+                // mGBA reads link options only in `retro_load_game`, so a running core cannot
+                // enter link mode; `Session::reload_for_link` re-opens it.
                 if let Some(player) = link {
                     apply_link_options(&mut opened, core, player);
                 }
@@ -157,10 +112,7 @@ fn open_named(
     None
 }
 
-/// Name the core and every path that was tried. The mock renders a rainbow test pattern and a
-/// sine tone, which on screen reads as "this core is broken" rather than "this core is
-/// missing" — the one time that happened it cost an afternoon, so the log says which file was
-/// wanted and where it was looked for.
+/// Log every path tried. The mock's test pattern looks like a broken core, not a missing one.
 fn report_missing(core: Core, paths: &[PathBuf]) {
     eprintln!(
         "slot: no {} core found, running the mock test pattern instead. Looked in: {}",
@@ -173,22 +125,10 @@ fn report_missing(core: Core, paths: &[PathBuf]) {
     );
 }
 
-/// The core option that turns colour correction on and off, and the word this core spells each
-/// state with. `None` for a core that has no such option.
+/// The colour correction option key and value for a core, shared by the load path and the quick
+/// menu so they cannot drift: a core silently ignores an option it does not have.
 ///
-/// One function rather than two call sites, because there are now two moments this is needed and
-/// they must not drift: once before `load`, where every option is handed over, and once while a
-/// game is on screen, when the quick menu row is toggled. A key that was right in one place and
-/// stale in the other would be invisible from both, since a libretro core ignores an option it
-/// does not have without saying so.
-///
-/// mGBA declares its own as `OFF|GBA|GBC|Auto`, and `GBA` is the console slot runs. `Auto`
-/// resolves to the same AGB model for a GBA cart; naming it says so rather than leaving mGBA to
-/// work it out. gpSP declares its own as `disabled|enabled`, a different key and a different pair
-/// of words.
-///
-/// Both shipped cores have the option, so nothing returns `None` today. The shape stays: a core
-/// with nothing to set is a thing this has had to express once and may again.
+/// mGBA declares `OFF|GBA|GBC|Auto`; gpSP declares `disabled|enabled`.
 pub fn colour_option(which: Core, on: bool) -> Option<(&'static str, &'static str)> {
     match which {
         Core::Mgba => Some(("mgba_color_correction", if on { "GBA" } else { "OFF" })),
@@ -199,59 +139,12 @@ pub fn colour_option(which: Core, on: bool) -> Option<(&'static str, &'static st
     }
 }
 
-/// Options a core needs before `load`, because libretro cores read them during
-/// `retro_load_game` rather than continuously.
+/// mGBA's in-core link: `mgba_link_player` says which console this device drives. Other cores
+/// are left alone.
 ///
-/// `serial` is gpSP's link mode, and loading a game is the only time gpSP reads it: a reset
-/// does not, and a save state does not carry it. `auto` resolves the protocol from the ROM, so
-/// two devices running the same game agree on a mode without either being told which, and it
-/// is what every cart loads with until its link screen is switched to the other hardware (see
-/// `link_kind::serial_option`). mGBA gets none of gpSP's options: it has no `gpsp_serial`, and
-/// handing it one anyway is a landmine the day it grows one. It does get a frameskip option,
-/// below, but under its own prefix: neither core reads the other's.
-///
-/// `bios` is whether the card carries a real BIOS (`root::has_real_bios`), and it buys the
-/// player the boot logo and chime. gpSP defaults to `game`, which drops straight into the
-/// cart; `bios` runs the BIOS first. It is only set when the file is really there, because
-/// booting through gpSP's built-in replacement instead spends those seconds on a blank screen
-/// — a pause that reads as a hang rather than as the hardware starting up.
-///
-/// `gpsp_bios` is deliberately left alone. Its default, `auto`, already loads
-/// `<system>/gba_bios.bin` and uses it whenever the image passes gpSP's own first-byte test,
-/// which is the same test `has_real_bios` applies — so naming `official` would select the
-/// identical image. All it would change is the failure path, where `official` puts a warning
-/// on screen through the core's OSD ("Could not load BIOS image file", "BIOS image seems
-/// incorrect") before falling back to exactly the built-in BIOS `auto` falls back to silently.
-/// That is a core-drawn message over slot's own chrome, bought for no change in behaviour.
-///
-/// Setting this on every load, rather than only on a fresh start, is safe because a resume
-/// does not survive to be seen: `emu::Worker::run` unserializes the resume state after `load`
-/// and before it publishes a single frame, so the restored machine replaces the BIOS's before
-/// anything reaches the screen. That covers a reload for a link too — `session::reload_for_link`
-/// flushes and resumes through the same path.
-///
-/// `colour` is the quick menu's Colour Correction, and unlike everything else here it is set on
-/// both cores, because both of them have the option — which is worth stating outright, since it
-/// was assumed for a while that only mGBA did. Each spells it its own way; see below.
-/// The in-core cable, on a core that has one. mGBA runs both consoles itself and `mgba_link_player`
-/// says which of them this device drives; every other core has no such mode and is left alone.
-///
-/// `mgba_use_bios` is forced off, and it is the one option here that is about the *other* device.
-/// Nothing above sets it, so mGBA decides for itself: it uses `gba_bios.bin` when the card has
-/// one and its own replacement when it does not. Two cards need not agree about that, and two
-/// devices in a session are not running one game each, they are each running both. A pair booted
-/// on different BIOSes is a pair of different machines, so they drift apart from the first frame
-/// even if nothing complains.
-///
-/// It failed louder than drift, which is how it was found: the host serializes the moment a
-/// session begins, while a real BIOS is still booting, so the saved PC is inside the BIOS. A
-/// state whose BIOS checksum differs is refused outright in exactly that case, and only in that
-/// case (`src/gba/serialize.c`, GBADeserialize). One card had `gba_bios.bin` and the other did
-/// not, and the joiner answered the swap with "unserialize refused".
-///
-/// Off rather than on, because off is the only answer both devices can always give: the image is
-/// Nintendo's and a card without one cannot be made to have one. The cost is the boot logo and
-/// chime for a session, on a screen the players are about to leave anyway.
+/// `mgba_use_bios` is forced off so both devices boot the same machine. A state saved during a
+/// real BIOS boot is refused by a peer without that BIOS (`GBADeserialize` checks the checksum),
+/// and a card without Nintendo's image cannot be given one.
 pub fn apply_link_options(core: &mut LibretroCore, which: Core, player: u8) {
     if which != Core::Mgba {
         return;
@@ -262,6 +155,13 @@ pub fn apply_link_options(core: &mut LibretroCore, which: Core, player: u8) {
     eprintln!("slot: core: link mode on, player {player}, built-in bios");
 }
 
+/// Options a core reads only during `retro_load_game`, so they must be set before `load`.
+///
+/// `serial` is gpSP's link mode; `auto` lets two devices on the same ROM agree without being told.
+/// `bios` boots gpSP through the card's real BIOS, only when present: the built-in one shows a
+/// blank pause that reads as a hang. A resume replaces the BIOS boot before any frame is shown.
+/// `gpsp_bios` stays `auto`, which already uses a valid `gba_bios.bin`; `official` only adds an
+/// on-screen warning on failure.
 pub fn apply_core_options(
     core: &mut LibretroCore,
     which: Core,
@@ -269,27 +169,13 @@ pub fn apply_core_options(
     bios: bool,
     colour: bool,
 ) {
-    // Auto frameskip, on whichever core this is, for the whole session. Nothing is skipped by
-    // merely turning it on: both cores only skip a frame when the frontend says its audio
-    // buffer is about to run dry, and `RetroCore::set_frame_skip` is the one thing that ever
-    // says so — once per frame of a fast forward present, for every frame but the one that
-    // will be shown. At normal speed the answer is always no and every frame draws.
-    //
-    // Set here with the rest, rather than switched on and off around a fast forward, because
-    // a libretro core reads its options during `retro_load_game`; changing this one later
-    // would mean re-entering `set_option`, whose doc comment spells out the aliasing that
-    // invites. The option is the standing arrangement; the callback is the per-frame lever.
-    //
-    // The key is the core's own name with `_frameskip` after it, which is how mGBA and gpSP
-    // both spell it.
+    // Auto frameskip only skips when the frontend reports audio running dry, which
+    // `RetroCore::set_frame_skip` does only during fast forward. Set at load, since cores read
+    // options in `retro_load_game`.
     core.set_option(&format!("{}_frameskip", which.as_str()), "auto");
     if which == Core::Mgba {
-        // mGBA declares colour correction as `OFF|GBA|GBC|Auto`, read off the vendored dylib
-        // rather than guessed at, because nothing in this tree can tell a correct option value
-        // from a typo: `SET_VARIABLES` is answered `true` and the declared list thrown away, so a
-        // misspelt value is accepted in silence and simply never takes.
-        //
-        // Through `colour_option`, which is also what the quick menu pushes at a running core.
+        // Values were read off the vendored dylib: a misspelt value is accepted silently and
+        // never takes.
         if let Some((key, value)) = colour_option(which, colour) {
             core.set_option(key, value);
         }
@@ -299,15 +185,8 @@ pub fn apply_core_options(
         if bios {
             core.set_option("gpsp_boot_mode", "bios");
         }
-        // gpSP has its own, declared `disabled|enabled` — a different key and a different pair of
-        // words from mGBA's, which is why this is spelled out here rather than shared. gpSP only
-        // ever runs GBA carts, so there is no console for an `Auto` to choose between and it
-        // offers none: on or off is the whole option.
-        //
-        // Setting it here is what keeps the row from being a lie on a gpSP cart. The quick menu
-        // is a device-wide screen shown on the shelf with nothing seated, so it cannot know which
-        // core the next cart will use; a row that only reached mGBA would do nothing, silently,
-        // for every cart whose `selected_core.ini` line says gpsp.
+        // The quick menu cannot know the next cart's core, so gpSP must get colour too or the
+        // row would silently do nothing on gpSP carts.
         if let Some((key, value)) = colour_option(which, colour) {
             core.set_option(key, value);
         }
@@ -319,15 +198,10 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    /// Both tests below mutate `SLOT_CORE`, which is process-global; the test harness runs
-    /// tests in this module on separate threads by default, so without this they can
-    /// interleave and read back a value neither of them set.
+    /// Serialises tests that mutate the process-global `SLOT_CORE`.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    /// One spelling per core, and the two words each of them uses. The load path and the live
-    /// path both go through here, so this is the thing that stops them drifting apart, which is
-    /// a drift neither side could see: a libretro core ignores an option it does not have
-    /// without a word.
+    /// One key and value pair per core and state, for both load and live paths.
     #[test]
     fn each_core_spells_colour_correction_its_own_way() {
         assert_eq!(
@@ -352,16 +226,11 @@ mod tests {
         ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// The half of "the dylib chosen and the state directory used agree" that lives entirely
-    /// in this module: `candidates`, and therefore `open_core`, never spells a filename that
-    /// does not match the `Core` it was handed. `crates/slot/tests/gpsp.rs` pins the other
-    /// half — that a cart resolved to the same `Core` reads its resume state from the
-    /// matching `States/GBA/<core>/` directory, through the real `Session`.
+    /// `candidates` only ever names the dylib of the `Core` it was given.
     #[test]
     fn candidates_search_the_named_cores_own_filename_only() {
         let _g = lock();
-        // A developer's shell leaking `SLOT_CORE` into this run would short-circuit the
-        // search this test exists to check, so it cannot assume the var is unset.
+        // A developer's shell may have `SLOT_CORE` set.
         std::env::remove_var(CORE_ENV);
 
         let root = Path::new("/root");
@@ -380,12 +249,7 @@ mod tests {
         }
     }
 
-    /// The property `crates/slot/tests/gpsp.rs`'s integration test relies on: a content root
-    /// with its own tmp directory is not near `current_exe()` or `./vendor`, so without this
-    /// candidate an integration test has nowhere to plant a fake dylib for `open_core` to
-    /// find. Root cause of the gap F3 closed — before this candidate existed, a mutation
-    /// that fed `open_core` the wrong `Core` had no candidate list a test could observe
-    /// disagree.
+    /// The content root's `System/` is searched first, so integration tests can plant a dylib.
     #[test]
     fn candidates_search_the_roots_own_system_directory() {
         let _g = lock();
@@ -397,8 +261,7 @@ mod tests {
         );
     }
 
-    /// The override is a filename, not a `Core`: it must win regardless of which core asked,
-    /// which is what makes it a trap when the ini disagrees rather than a second selector.
+    /// The override wins regardless of which core asked.
     #[test]
     fn the_env_override_ignores_which_core_was_asked_for() {
         let _g = lock();

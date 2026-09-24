@@ -1,7 +1,7 @@
-//! mGBA's link mode: two GBAs from one game, joined by mGBA's own lockstep link cable, stepped
-//! together on one thread, with only the local player's GBA shown. Real core only: every test
-//! skips when `vendor/mgba_libretro.dylib` is absent, and fails with a rebuild hint when the
-//! vendored core predates link mode.
+//! mGBA's link mode: two GBAs from one game, joined by mGBA's lockstep link, stepped together on
+//! one thread, with only the local player's GBA shown. Every test skips when
+//! `vendor/mgba_libretro.dylib` is absent, and fails with a rebuild hint when it predates link
+//! mode.
 
 mod common;
 
@@ -23,9 +23,7 @@ fn rom(name: &str, bytes: Vec<u8>) -> PathBuf {
     p
 }
 
-/// `common::gba_rom` with its vblank counter swapped for KEYINPUT. Every vblank the rom reads
-/// the buttons and writes them into the first pixel, so the picture says which buttons that
-/// GBA was holding. Two instructions change, and the branches around them stay put.
+/// `common::gba_rom` that paints KEYINPUT into the first pixel every vblank instead of a counter.
 fn keys_rom() -> Vec<u8> {
     let mut rom = common::gba_rom();
     let mut set = |index: usize, word: u32| {
@@ -37,11 +35,9 @@ fn keys_rom() -> Vec<u8> {
     rom
 }
 
-/// `common::gba_rom` wired to the link port. At start it clears RCNT, which puts the port in
-/// serial mode rather than GPIO. Every vblank it writes SIOCNT for multiplayer mode and paints
-/// what SIOCNT reads back into the first pixel. mGBA fills in SIOCNT's multiplayer id from the
-/// cable on each write, so the picture says which player a GBA is on a cable, if it is on one
-/// at all.
+/// `common::gba_rom` that clears RCNT (serial mode), writes SIOCNT for multiplayer every vblank
+/// and paints what it reads back into the first pixel. mGBA fills in the multiplayer id on each
+/// write, so the picture says which player a GBA is, if it is linked at all.
 fn sio_rom() -> Vec<u8> {
     let mut rom = common::gba_rom();
     let mut set = |index: usize, word: u32| {
@@ -61,13 +57,10 @@ fn sio_rom() -> Vec<u8> {
     rom
 }
 
-/// `common::gba_rom` as a multiplayer game that starts a transfer every frame. At start it clears
-/// RCNT, for serial mode, and sets SIOCNT's multiplayer mode on its own: player 0's GBA waits on
-/// player 1's to take a new mode, so a start bit in the same write would wait twice. Every vblank
-/// it writes SIOCNT again with the start bit, which starts a transfer on player 0's GBA and does
-/// nothing on player 1's, then paints the buttons into the first pixel as `keys_rom` does. Player
-/// 0's GBA waits on player 1's when a transfer starts and again when it ends, 63,427 cycles later.
-/// Branches are to `0xc0 + index * 4 + 8 + offset * 4`.
+/// `common::gba_rom` as a multiplayer game that starts a transfer every frame and paints the
+/// buttons. It sets multiplayer mode alone first: player 0 waits on player 1 to take a new mode,
+/// so a start bit in the same write would wait twice. Player 0 waits again when a transfer ends,
+/// 63,427 cycles later. Branches are to `0xc0 + index * 4 + 8 + offset * 4`.
 fn transfer_rom() -> Vec<u8> {
     let mut rom = common::gba_rom();
     let mut set = |index: usize, word: u32| {
@@ -90,9 +83,8 @@ fn transfer_rom() -> Vec<u8> {
 }
 
 /// `keys_rom` that starts a long DMA before its first vblank, as Mario Kart: Super Circuit's boot
-/// does: 0x10000 32-bit words from the cartridge into EWRAM. A DMA holds the CPU until it is done,
-/// almost three frames here, so the GBA reaches its first frame ends with its CPU blocked. Branches
-/// are to `0xc0 + index * 4 + 8 + offset * 4`.
+/// does (0x10000 words, almost three frames), so the first frame end comes with the CPU blocked.
+/// Branches are to `0xc0 + index * 4 + 8 + offset * 4`.
 fn dma_rom() -> Vec<u8> {
     let mut rom = common::gba_rom();
     let mut set = |index: usize, word: u32| {
@@ -112,14 +104,10 @@ fn dma_rom() -> Vec<u8> {
     rom
 }
 
-/// `common::gba_rom` as a multiplayer game that talks over the cable every frame and paints what it
-/// last heard. At start it clears RCNT, for serial mode, and sets SIOCNT's multiplayer mode. Every
-/// vblank it paints SIOCNT into the second pixel, and SIOMULTI0 and SIOMULTI1, what the last
-/// transfer carried from player 0 and from player 1, into the third and fourth. Then it writes
-/// SIOCNT's mode again, which has mGBA fill in the GBA's multiplayer id from the cable, puts
-/// 0x1000 plus that id times 0x10 into SIOMLT_SEND (0x1000 on player 0's GBA, 0x1010 on player
-/// 1's) and starts a transfer. Like a game, it fills SIOMLT_SEND before every transfer: mGBA does
-/// not keep that register in a savestate. Branches are to `0xc0 + index * 4 + 8 + offset * 4`.
+/// `common::gba_rom` as a multiplayer game that transfers every frame. It paints SIOCNT into the
+/// second pixel and SIOMULTI0/1 into the third and fourth, then puts 0x1000 plus id times 0x10
+/// into SIOMLT_SEND and starts a transfer. It fills SIOMLT_SEND every time because mGBA does not
+/// save that register. Branches are to `0xc0 + index * 4 + 8 + offset * 4`.
 fn multiplayer_rom() -> Vec<u8> {
     let mut rom = common::gba_rom();
     let mut set = |index: usize, word: u32| {
@@ -151,13 +139,10 @@ fn multiplayer_rom() -> Vec<u8> {
     rom
 }
 
-/// `transfer_rom` as a game that fills SIOMLT_SEND once and then leaves it alone, which is what
-/// makes it a probe for everything a savestate does not carry. Three changes: it transfers at
-/// VCOUNT 140 rather than at the frame end, it writes SIOMLT_SEND only while A is held, and it
-/// paints SIOMULTI1, the last word it heard from player 1, instead of the buttons. A GBA that has
-/// run with A held holds 0x2080 in a register mGBA never saves, and its transfers have left RCNT's
-/// SC bit set; a freshly loaded one holds neither. Restoring the same link state into both has to
-/// give the same machine. Branches are to `0xc0 + index * 4 + 8 + offset * 4`.
+/// `transfer_rom` that probes what a savestate does not carry: it transfers at VCOUNT 140, writes
+/// SIOMLT_SEND only while A is held, and paints SIOMULTI1. Run with A held, a GBA holds 0x2080 in
+/// an unsaved register and has RCNT's SC bit set; a fresh one holds neither. Branches are to
+/// `0xc0 + index * 4 + 8 + offset * 4`.
 fn probe_rom() -> Vec<u8> {
     let mut rom = transfer_rom();
     let mut set = |index: usize, word: u32| {
@@ -175,11 +160,8 @@ fn probe_rom() -> Vec<u8> {
     rom
 }
 
-/// `dma_rom` that starts its long DMA when it reads A rather than before its first vblank, so a
-/// test can choose which frame end the two GBAs reach with player 0's CPU blocked. The boot DMA is
-/// the one the join now plays alone, before the cable goes in; this one lands mid-session, where
-/// the cable is already in and the next hard sync is a long way off. Branches are to
-/// `0xc0 + index * 4 + 8 + offset * 4`.
+/// `dma_rom` that starts its long DMA when it reads A, so the blocked frame end lands
+/// mid-session with the link already in. Branches are to `0xc0 + index * 4 + 8 + offset * 4`.
 fn dma_a_rom() -> Vec<u8> {
     let mut rom = dma_rom();
     let mut set = |index: usize, word: u32| {
@@ -195,16 +177,10 @@ fn dma_a_rom() -> Vec<u8> {
     rom
 }
 
-/// `common::gba_rom` as a game sitting in the serial port's normal 8-bit mode rather than in
-/// multiplayer mode. At start it clears RCNT, for serial rather than GPIO, and writes SIOCNT for
-/// normal 8-bit with an external clock, which is the mode a game holds while it waits to be
-/// clocked. Every vblank it writes SIODATA8 and paints the buttons into the first pixel, as
-/// `keys_rom` does. Nothing transfers, and that is the point: a normal-mode slave waits for a clock
-/// that never comes, so the cable has to take up the mode the restored registers hold with no
-/// transfer to carry it. It paints the buttons rather than SIOCNT because SIOCNT on a cable is
-/// player-dependent by design - `sio_rom`'s test turns on the two GBAs reading different values -
-/// and these starts compare the two devices' pictures. Branches are to
-/// `0xc0 + index * 4 + 8 + offset * 4`.
+/// `common::gba_rom` holding the serial port's normal 8-bit mode with an external clock, writing
+/// SIODATA8 and painting the buttons every vblank. Nothing transfers, so the link must take up the
+/// restored mode unprompted. It paints buttons, not SIOCNT, because SIOCNT differs by player.
+/// Branches are to `0xc0 + index * 4 + 8 + offset * 4`.
 fn normal_rom() -> Vec<u8> {
     let mut rom = common::gba_rom();
     let mut set = |index: usize, word: u32| {
@@ -225,21 +201,17 @@ fn normal_rom() -> Vec<u8> {
     rom
 }
 
-/// The 15-bit colour a rom wrote into pixel `x` of the first row, read back from the picture. A
-/// register painted this way loses its top bit.
+/// The 15-bit colour a rom wrote into pixel `x` of the first row. A painted register loses its
+/// top bit.
 fn painted(picture: &[u8], x: usize) -> u16 {
     let pixel = &picture[x * 4..x * 4 + 4];
     u16::from(pixel[2] >> 3) | u16::from(pixel[1] >> 3) << 5 | u16::from(pixel[0] >> 3) << 10
 }
 
-/// A player can open a game's link menu before the two SPs connect, so a session can start from
-/// states already in multiplayer mode: the game chose that mode before there was a cable, and does
-/// not write it again. The cable has to take up the mode each GBA's registers hold as it goes in,
-/// as if the game had just written them. From the first transfer after the restore, each GBA has
-/// to hear the other's value, and SIOCNT has to show every GBA on the cable ready. Before, the
-/// fresh cable only learned a GBA's mode when its game wrote a new one, so player 0's GBA never
-/// saw player 1's as ready. A link state of a pair that was transferring restores the same way.
-/// The first frame is left out: what it paints was heard before the restore.
+/// A session can start from states already in multiplayer mode that the game will not write
+/// again, so the link must take up the mode each GBA's registers hold as it connects. From the
+/// first transfer each GBA hears the other and SIOCNT shows both ready. The first frame is left
+/// out: what it paints was heard before the restore.
 #[test]
 fn a_pair_restored_in_multiplayer_mode_talks_from_the_first_transfer() {
     let _g = common::core_lock();
@@ -338,8 +310,7 @@ fn single_picture(dylib: &Path, rom: &Path, keys: u16, frames: usize) -> Vec<u8>
     core.video_xrgb8888().to_vec()
 }
 
-/// Player 0 holds A on port 0 and player 1 holds B on port 1. Each device must show its own
-/// player's GBA, and that GBA must be holding its own player's buttons.
+/// Each device shows its own player's GBA, holding its own player's buttons.
 #[test]
 fn link_mode_shows_the_local_players_gba_holding_its_own_port() {
     let _g = common::core_lock();
@@ -385,7 +356,7 @@ fn link_mode_saves_both_gbas_in_one_link_state() {
     }
 }
 
-/// A guard for single-player: an explicit `off` is today's core, one GBA and its own state.
+/// An explicit `off` gives one GBA and its own state.
 #[test]
 fn link_mode_off_keeps_the_single_gba_state() {
     let _g = common::core_lock();
@@ -401,8 +372,7 @@ fn link_mode_off_keeps_the_single_gba_state() {
     assert!(state.len() > 100_000, "state is {} bytes", state.len());
 }
 
-/// How a link session starts: two ordinary one-GBA states, each player's own, restored into link
-/// mode. Each GBA has to carry on exactly as it would have alone.
+/// Two one-GBA states restored into link mode each carry on exactly as they would alone.
 #[test]
 fn a_link_state_of_two_single_gba_states_restores_each_player_where_they_were() {
     let _g = common::core_lock();
@@ -451,8 +421,7 @@ fn a_link_state_of_two_single_gba_states_restores_each_player_where_they_were() 
     }
 }
 
-/// Plan 2 restores what came over the network, so anything but a whole link state is refused, and
-/// the core still takes its own link state afterwards.
+/// Anything but a whole link state is refused, and the core still takes its own afterwards.
 #[test]
 fn link_mode_refuses_anything_but_a_whole_link_state() {
     let _g = common::core_lock();
@@ -490,10 +459,8 @@ fn link_mode_refuses_anything_but_a_whole_link_state() {
         .expect("link mode refused its own link state");
 }
 
-/// A restore the core refuses part way leaves both GBAs where they were. Player 0's state here
-/// is sound, but player 1's claims a savestate version from the future, which the core refuses
-/// only once it is already loading. Stopping there would leave player 0 restored and player 1
-/// not, so both have to go back.
+/// A restore the core refuses part way (player 1's state claims a future version) leaves both
+/// GBAs where they were.
 #[test]
 fn a_link_state_the_core_refuses_leaves_both_gbas_where_they_were() {
     let _g = common::core_lock();
@@ -569,10 +536,8 @@ fn script(frame: usize) -> (ButtonMask, ButtonMask) {
     (ButtonMask(p0), ButtonMask(p1))
 }
 
-/// Each SP runs both GBAs and shows its own player's. The two SPs stay in lockstep only if both
-/// compute the same pair of machines whichever player they show. So after the same start and
-/// the same buttons, the link state must hash the same for `mgba_link_player` 0 and 1, and the
-/// same again on a second run.
+/// Both SPs must compute the same pair of machines whichever player they show: the link state
+/// hashes the same for `mgba_link_player` 0 and 1, and again on a second run.
 #[test]
 fn both_players_devices_compute_the_same_machines() {
     let _g = common::core_lock();
@@ -613,9 +578,8 @@ fn both_players_devices_compute_the_same_machines() {
     );
 }
 
-/// The same buttons for both players, pressed on frame 10 and released on 40, then B on 50 to 53
-/// and for frame 70 alone, then RIGHT for three frames in every seven from 84 to 119. Every change
-/// is an edge a GBA reading its buttons a frame late would paint differently.
+/// The same buttons for both players, with frequent edges that a GBA reading its buttons a frame
+/// late would paint differently.
 fn shared_script(frame: usize) -> ButtonMask {
     let mut keys = 0;
     if (10..40).contains(&frame) {
@@ -630,12 +594,8 @@ fn shared_script(frame: usize) -> ButtonMask {
     ButtonMask(keys)
 }
 
-/// `dma_a_rom`'s buttons: A on frame 3 alone, which is the frame that starts the long DMA, then
-/// RIGHT for frames 60 to 62 and again for frame 70, then B for frames 80 to 83. A is pressed on an
-/// odd frame on purpose. A DMA started on frame 3, 5, 7, 9 or 11 leaves the two GBAs at a frame end
-/// with player 0's CPU blocked while the cable's next hard sync is still more than a frame away,
-/// which is the one case the sync's early exit is there for. Every later change is an edge a GBA a
-/// frame behind would paint differently.
+/// `dma_a_rom`'s buttons. A on odd frame 3 starts the DMA at a frame end with player 0 blocked
+/// and the next hard sync over a frame away, the case the sync's early exit exists for.
 fn dma_script(frame: usize) -> ButtonMask {
     let mut keys = 0;
     if frame == 3 {
@@ -695,13 +655,9 @@ fn single_state(dylib: &Path, rom: &Path, frames: usize) -> Vec<u8> {
     single.serialize().expect("no state")
 }
 
-/// Two identical GBAs given the same buttons have to read each change on the same frame, or two
-/// games that wait on each other's input start a frame apart. Restoring one one-GBA state into
-/// both slots puts the two GBAs' frames in phase, ending at the same emulated moment, and every
-/// link session starts from two such states. The cable keeps player 1 a little behind player 0,
-/// so player 0 finishes each frame while player 1 is still short of its own. Had player 0 run on
-/// into its next frame there, it would read that frame's buttons before they were set. Mario
-/// Kart: Super Circuit's two GBAs did that, entered the link lobby a frame apart and stalled.
+/// Two identical GBAs given the same buttons must read each change on the same frame. The link
+/// keeps player 1 slightly behind, so player 0 must stop at its frame end rather than run on and
+/// read the next frame's buttons early (which stalled Mario Kart: Super Circuit's lobby).
 #[test]
 fn two_identical_gbas_read_the_same_buttons_on_the_same_frame() {
     let _g = common::core_lock();
@@ -725,14 +681,9 @@ fn two_identical_gbas_read_the_same_buttons_on_the_same_frame() {
     );
 }
 
-/// Every way we know a linked pair can start, by name, with the rom it runs, the link state it
-/// restores, if any, and the buttons both ports hold on each frame. Five starts of `transfer_rom`:
-/// a fresh load, and a restore of each pairing of a state taken at a frame end, 20 frames in, with
-/// a state taken straight after a load, which stands at VCOUNT 126, 41,000 cycles short of its
-/// first vblank. A fresh load of `dma_rom`, whose GBAs are blocked by a DMA at their first frame
-/// ends, which the join plays alone. A fresh load of `dma_a_rom`, which blocks them at a frame end
-/// mid-session instead, with the cable already in. And a restore of two `normal_rom` states, which
-/// hold the serial port's normal 8-bit mode rather than multiplayer mode.
+/// Every known way a linked pair can start: rom, link state if any, and buttons per frame.
+/// Covers fresh loads, restores pairing a frame-end state with a just-loaded one (VCOUNT 126),
+/// `dma_rom` and `dma_a_rom` DMA stalls, and `normal_rom`'s 8-bit serial mode.
 type Start = (
     &'static str,
     PathBuf,
@@ -795,14 +746,11 @@ fn every_start(dylib: &Path) -> Vec<Start> {
     ]
 }
 
-/// When a GBA's next frame ends on the cable's shared clock, read from its half of a link state.
-/// The core state gives the GBA's own clock, masterCycles at 0x0c plus the CPU's cycles at 0x68,
-/// and how far its video is from the next vblank: the video event's countdown at 0x1f4, VCOUNT at
-/// 0x406, and DISPSTAT's hblank bit at 0x404, which says whether that countdown ends a line's
-/// hdraw or its hblank. The lockstep driver's cycleOffset turns the GBA's clock into the shared
-/// one. mGBA appends the driver's state as extdata after the 0x61000-byte core state: headers of
-/// {u32 tag, i32 size, i64 offset} ending at tag 0, where tag 0x41 is a u32 driver id followed by
-/// the driver's state, with cycleOffset 0x34 into it. The arithmetic wraps, as mGBA's clocks do.
+/// When a GBA's next frame ends on the link's shared clock, read from its half of a link state.
+/// Core state: masterCycles 0x0c, CPU cycles 0x68, video event countdown 0x1f4, VCOUNT 0x406,
+/// DISPSTAT 0x404 (hblank bit). The lockstep driver's state is extdata after the 0x61000-byte core
+/// state: {u32 tag, i32 size, i64 offset} headers ending at tag 0; tag 0x41 is a u32 driver id
+/// then the driver state, with cycleOffset at 0x34. The arithmetic wraps, as mGBA's clocks do.
 fn next_frame_end(gba: &[u8]) -> u32 {
     let u32_at = |at: usize| u32::from_le_bytes(gba[at..at + 4].try_into().unwrap());
     let u16_at = |at: usize| u16::from_le_bytes(gba[at..at + 2].try_into().unwrap());
@@ -825,18 +773,9 @@ fn next_frame_end(gba: &[u8]) -> u32 {
         .wrapping_add(hblank + lines * 1232)
 }
 
-/// Two GBAs given the same buttons have to read each change on the same frame however a session
-/// starts, or two games that wait on each other's input start a frame apart. A link state may pair
-/// any two GBA states, so the cable goes in only once both GBAs stand at a frame end. Before it
-/// waited for that, [end, reset] ended player 1's frames about 240,000 cycles before player 0's:
-/// while player 0 slept waiting on player 1, at a transfer or a hard sync, player 1 ran on into
-/// its next frame still holding the old buttons. And a GBA that reaches the frame end where the
-/// cable syncs with its CPU blocked by a DMA runs on through that sync to its next vblank unless
-/// the sync asks it to stop, which leaves player 1 a whole frame behind for the rest of the
-/// session. Mario Kart: Super Circuit's boot reaches its first frame end that way, but the join
-/// now plays that first frame alone, so `dma_a_rom` starts its DMA mid-session instead, with the
-/// cable already in and the next hard sync more than a frame away. Every frame is compared, the
-/// first too: a GBA restored mid-frame has finished that frame before the cable goes in.
+/// However a session starts, both GBAs read each button change on the same frame. The link goes
+/// in only once both stand at a frame end, and a DMA-blocked GBA must stop at the sync rather
+/// than run on a frame. Every frame is compared, the first too.
 #[test]
 fn every_start_gives_both_gbas_the_same_buttons_on_the_same_frame() {
     let _g = common::core_lock();
@@ -856,18 +795,9 @@ fn every_start_gives_both_gbas_the_same_buttons_on_the_same_frame() {
     );
 }
 
-/// The pictures cannot catch every wrong start. A pair whose player 1 ends each frame after player
-/// 0's reads its buttons on time, but [reset, end] ran at under a third of the speed of the other
-/// starts. So each start also has to leave the two GBAs' frames ending together, read off the link
-/// state after 120 frames: each GBA's next frame end on the cable's shared clock has to be within
-/// 256 cycles of the other's. Two GBAs whose frames end together can stand a few cycles apart,
-/// since each frame ends on whichever instruction or event crosses its vblank, but only a few:
-/// every start here has measured 0. The threshold is well inside a scanline's 1,232 cycles on
-/// purpose. The join calls a GBA standing anywhere in the 1,008 cycles between its vblank and that
-/// line's hblank "at a frame end" and joins it as it is, so a link state from before the join
-/// waited for a frame end, or a run-on regression, could put the two GBAs that far apart while
-/// still reading their buttons on time. Out of phase they stood about 240,000 cycles apart, and a
-/// GBA a frame behind stands 280,896 cycles behind.
+/// Each start must also leave both GBAs' next frame ends within 256 cycles on the shared clock,
+/// since pictures alone miss a slow pair. Every start measured 0; 256 is well inside the 1,008
+/// cycles the join accepts as "at a frame end". Out of phase is ~240,000; a frame is 280,896.
 #[test]
 fn every_start_joins_the_two_gbas_with_their_frames_ending_together() {
     let _g = common::core_lock();
@@ -899,19 +829,9 @@ fn every_start_joins_the_two_gbas_with_their_frames_ending_together() {
     );
 }
 
-/// A restore has to be a function of the link state alone. Plan 2 resyncs a desynced pair, and a
-/// player can reconnect or join late, so one SP restores the shared link state into cores that have
-/// been running while the other restores it into freshly loaded ones. If the two come out
-/// different, the devices have stopped computing the same machines from the restore on.
-///
-/// A GBA savestate does not carry everything a GBA holds. RCNT's SC, SD, SI and SO bits are put
-/// back through `GBASIOWriteRCNT`, which keeps them from whatever the core held before. SIOMLT_SEND
-/// is not a register mGBA saves at all, so a restored GBA sends whatever its core last had there.
-/// `haltPending` and the idle-loop counters are not saved either. `probe_rom` shows the first two:
-/// run with A held it fills SIOMLT_SEND with 0x2080 and its transfers set SC, and it never writes
-/// SIOMLT_SEND again unless A is held, so a restore that carried the old value over sends it on the
-/// cable and paints it. Both devices are run, and the same link state has to give one machine at
-/// the restore and one machine ten frames on, whichever cores it landed in.
+/// A restore must be a function of the link state alone: one SP may restore into running cores
+/// and the other into fresh ones. mGBA's savestate misses RCNT's SC/SD/SI/SO bits, SIOMLT_SEND,
+/// `haltPending` and the idle-loop counters; `probe_rom` exposes the first two.
 #[test]
 fn a_restore_does_not_depend_on_what_the_cores_ran_before_it() {
     let _g = common::core_lock();
@@ -969,10 +889,8 @@ fn a_restore_does_not_depend_on_what_the_cores_ran_before_it() {
     );
 }
 
-/// Mario Kart: Super Circuit's scripted walk from the title screen into a linked two-player race.
-/// It is DOWN and A at the title, then A for 3 frames every 30 from frame 4300, which carries both
-/// players through the menus into the race. The spike that proved link mode on the SP ran exactly
-/// this script.
+/// Mario Kart: Super Circuit's scripted walk from the title screen into a linked two-player race:
+/// DOWN and A at the title, then A for 3 frames every 30 from frame 4300.
 fn race_script(frame: usize) -> ButtonMask {
     let mut keys = 0;
     if (1500..=1506).contains(&frame) {
@@ -993,9 +911,8 @@ fn write_ppm(path: &Path, xrgb: &[u8]) {
     std::fs::write(path, out).expect("write picture");
 }
 
-/// Needs a Mario Kart: Super Circuit ROM, which is not in the tree. With `SLOT_MKSC_ROM` set to
-/// it, `cargo test --release -p slot --test mgba_link mario_kart -- --ignored` runs the Mario Kart
-/// tests.
+/// Needs a Mario Kart: Super Circuit ROM, not in the tree. With `SLOT_MKSC_ROM` set,
+/// `cargo test --release -p slot --test mgba_link mario_kart -- --ignored` runs it.
 /// 25,000 frames covers the menus, the link handshake and minutes of racing. Each device's last
 /// picture lands in the test's temp directory as a PPM.
 #[test]
@@ -1034,16 +951,10 @@ fn mario_kart_super_circuit_is_the_same_race_on_both_devices() {
     );
 }
 
-/// The Mario Kart walk, started the way every link session starts: both players' GBAs restored
-/// from a one-GBA state taken at the title screen (frame 1400), then linked from there. It has to
-/// race exactly as a reset boot does. At frame 25,000, each device shows the very picture a reset
-/// boot's shows, mid-race, and both devices compute the same machines. Before the cable synced at
-/// player 0's frame end, player 0 read the lobby's A press a frame late here, and the pair stalled
-/// at character select behind a "WAIT" box. Player 1's picture only matches since a reset boot
-/// stopped leaving player 1 a frame behind: its boot reaches its first frame end inside a DMA,
-/// and the cable's sync there used to carry player 0 through a second frame. The states are not
-/// compared: a one-GBA state's clock is not a linked boot's, so neither GBA's state can match the
-/// boot's byte for byte. It needs the ROM too, and runs the way the test above says.
+/// The Mario Kart walk from two one-GBA states taken at the title (frame 1400) must race exactly
+/// as a reset boot does: at frame 25,000 each device shows the boot's picture and both compute the
+/// same machines. States are not compared byte for byte, since a lone GBA's clock differs.
+/// Needs the ROM, as above.
 #[test]
 #[ignore]
 fn mario_kart_super_circuit_races_linked_after_a_restore() {
@@ -1113,12 +1024,8 @@ fn mario_kart_super_circuit_races_linked_after_a_restore() {
     }
 }
 
-/// Every link session starts by restoring two one-GBA states, so the cable has to be plugged in
-/// after a restore as well as after a fresh load. mGBA sets SIOCNT's multiplayer id from the cable
-/// each time the game writes it, so player 1's GBA paints something different from player 0's, and
-/// from a lone GBA's, only while a cable joins it to player 0's. The test asserts "different" rather
-/// than exact bits because mGBA ORs SIOCNT's old bits back in: a restored state keeps the slave bit
-/// it had while it ran alone.
+/// The link must connect after a restore as well as after a load: player 1 paints a different
+/// SIOCNT only while linked. "Different", not exact, because mGBA ORs SIOCNT's old bits back in.
 #[test]
 fn the_cable_is_plugged_in_after_a_load_and_after_a_restore() {
     let _g = common::core_lock();
@@ -1173,10 +1080,7 @@ fn the_cable_is_plugged_in_after_a_load_and_after_a_restore() {
     );
 }
 
-/// The session's own state swap, which is how two devices come to simulate the same machine: a
-/// link-mode core serializes its pair, and another link-mode core loads it. On hardware this came
-/// back as `unserialize refused` with the whole 1,057,876 bytes across, so the question is whether
-/// the container is at fault or the core that received it was never in link mode.
+/// A link-mode core's state loads into another link-mode core.
 #[test]
 fn a_link_states_travels_between_two_link_mode_cores() {
     let _g = common::core_lock();
@@ -1200,8 +1104,7 @@ fn a_link_states_travels_between_two_link_mode_cores() {
         .expect("a link-mode core refused a link state from its own build");
 }
 
-/// And the failure the device saw, reproduced deliberately: a core that is *not* in link mode
-/// cannot take a link state, because it is expecting one GBA's worth and this is two.
+/// A core not in link mode cannot take a link state: it expects one GBA and gets two.
 #[test]
 fn a_single_core_refuses_a_link_state() {
     let _g = common::core_lock();
@@ -1221,10 +1124,8 @@ fn a_single_core_refuses_a_link_state() {
     );
 }
 
-/// The swap against a real commercial cart with a real save, which is where it failed on
-/// hardware. `a_link_states_travels_between_two_link_mode_cores` proves the same thing on a
-/// synthetic rom; this proves the cart and its save are not what made the difference. The BIOS
-/// was, and `apply_link_options` pins it now.
+/// The state swap with a real commercial cart and save. The BIOS options made the difference on
+/// hardware, which `apply_link_options` pins.
 #[test]
 fn the_card_cart_link_state_travels_between_two_link_mode_cores() {
     let _g = common::core_lock();
@@ -1259,14 +1160,9 @@ fn the_card_cart_link_state_travels_between_two_link_mode_cores() {
         .expect("the joiner refused the host's link state");
 }
 
-/// Each device skips both the picture and the sound of the console it never shows, and the two
-/// devices skip *different* consoles. That is only safe if skipping cannot change the machine, so
-/// this asks the machine. Identical inputs from both sides have to leave byte-identical state, or
-/// two SPs would drift apart the moment a race started and no test below this one would notice.
-///
-/// It guards the audio skip as much as the video one: the mixing deliberately still runs, because
-/// `GBAAudioSerialize` carries `chA.samples` and `chB.samples`, and only the write into an output
-/// ring nobody drains is dropped. If that line ever moved to cover the mixing, this fails.
+/// Skipping the video and audio of the unshown GBA must not change the machine, since the two
+/// devices skip different ones. Audio mixing still runs because `GBAAudioSerialize` carries
+/// `chA.samples` and `chB.samples`; only the output ring write may be skipped.
 #[test]
 fn skipping_the_peers_picture_and_sound_does_not_change_the_machine() {
     let _g = common::core_lock();

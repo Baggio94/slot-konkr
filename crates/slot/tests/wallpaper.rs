@@ -22,8 +22,8 @@ fn a_card_with_no_wallpapers_picks_nothing() {
     assert!(pick(d.path(), 7).is_none(), "an empty folder picked a file");
 }
 
-/// The seed is the wall clock at boot, so a card that has been off overnight comes back with
-/// a different picture. Two seeds that land on the same file is fine; never moving is not.
+/// The seed is the wall clock at boot, so the picture changes between boots. Two seeds landing
+/// on the same file is fine.
 #[test]
 fn the_seed_chooses_between_the_files_present() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -48,8 +48,8 @@ fn the_seed_chooses_between_the_files_present() {
     );
 }
 
-/// The card is loaded from a Mac, which leaves a sidecar beside every file it copies. They
-/// carry the extension of the file they shadow and decode as nothing.
+/// macOS leaves `._` sidecars beside copied files. They carry the shadowed extension and decode
+/// as nothing.
 #[test]
 fn a_sidecar_is_never_the_wallpaper() {
     let d = common::tmp_root_with_carts(&["Emerald"]);

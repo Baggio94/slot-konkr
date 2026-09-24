@@ -2,8 +2,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const DAY: i64 = 86_400;
 
-/// `%Y-%m-%d_%H-%M-%S` in UTC. UTC rather than local because the stamp is a filename and a
-/// timezone change must not reorder a ring that is already on the card.
+/// `%Y-%m-%d_%H-%M-%S` in UTC, so a timezone change cannot reorder a ring already on the card.
 pub fn stamp_now() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -23,8 +22,7 @@ pub fn format_stamp(secs: i64) -> String {
     )
 }
 
-/// Seconds since the epoch, or `None` for anything that is not a stamp. The ring's
-/// directory is visible to the user, so "not a stamp" is a file they dropped in.
+/// Seconds since the epoch, or `None` for anything that is not a stamp.
 pub fn parse_stamp(s: &str) -> Option<i64> {
     let b = s.as_bytes();
     if b.len() != 19

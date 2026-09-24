@@ -38,8 +38,7 @@ fn at(px: &[u8], x: usize, y: usize) -> [u8; 3] {
     [px[o], px[o + 1], px[o + 2]]
 }
 
-/// The columns in `xs` with type in them anywhere across a row's bar: brighter than both the
-/// ground and the bar, which grey values are as well.
+/// The columns in `xs` with type anywhere across a row's bar: brighter than both ground and bar.
 fn inked(px: &[u8], xs: std::ops::Range<usize>, top: usize) -> Vec<usize> {
     xs.filter(|&x| (top + 8..top + 44).any(|y| at(px, x, y)[0] > 0x80))
         .collect()
@@ -80,9 +79,7 @@ fn the_quick_menu_renders_full_screen() {
 
     let bar = [0x4d, 0x4d, 0x57];
     let ground = [0x05, 0x05, 0x08];
-    // Walked down from wherever the bar was left, counted off the rows' own indices rather than
-    // written out: a row added to the menu then moves the bar the right distance on its own
-    // instead of leaving this quietly one press short of where it says it is.
+    // Counted off the rows' own indices, so an added row still moves the bar the right distance.
     let mut bar_on = QuickRow::ALL[0];
     for (name, selected) in [
         ("fast-forward", QuickRow::FastForward),
@@ -100,10 +97,7 @@ fn the_quick_menu_renders_full_screen() {
         for x in [1, OUT_W as usize - 2] {
             assert_eq!(at(&px, x, top + 26), bar, "{name}: no bar at x {x}");
         }
-        // Edge to edge means unbroken all the way across, which is a stronger claim than the two
-        // ends and the panel's centre — and a truer one, now that Colour Correction's label is
-        // long enough to have type sitting on that centre. Ink over the bar is not a gap in it,
-        // and every ink here is lighter than the bar, so only the ground would be a real break.
+        // Unbroken edge to edge. Ink over the bar is lighter than it, so only ground is a break.
         assert!(
             (0..OUT_W as usize).all(|x| at(&px, x, top + 26) != ground),
             "{name}: the bar breaks somewhere across the row"
@@ -119,11 +113,8 @@ fn the_quick_menu_renders_full_screen() {
             "{name}: not on the ground"
         );
 
-        // Labels start 32 px in and values end 32 px from the right, on every row, measured the
-        // way the mockup's type is placed: by where its line starts and ends, not by its ink.
-        // The type's own side bearings are the only slack. A capital's stem stands a pixel or
-        // three inside its line, and a tabular 1, which the clock can end on, stands about seven
-        // inside its own advance.
+        // Labels start 32 px in and values end 32 px from the right, measured by line, not ink.
+        // Side bearings are the only slack: a capital stem sits 1-3 px in, a tabular 1 about 7.
         for row in QuickRow::ALL {
             let top = (QUICK_TOP + QUICK_PITCH * row.index() as f32) as usize;
             let label = inked(&px, 0..360, top);
@@ -144,9 +135,8 @@ fn the_quick_menu_renders_full_screen() {
         }
     }
 
-    // Ruling S6: Date & Time opens the clock with B BACK beside its own key. Centred as a pair,
-    // B's cap runs from about x 225 to 244. The first boot's lone key is centred on its own and
-    // its cap starts near x 279, so only ink left of x 270 on this row can be B BACK.
+    // Ruling S6: Date & Time opens the clock with B BACK beside its key. B's cap spans about
+    // x 225 to 244; the first boot's lone key starts near x 279, so ink left of x 270 is B BACK.
     tap(&mut f, &mut input, Btn::Up);
     tap(&mut f, &mut input, Btn::A);
     let px = composed(&mut f, &mut c, "clock");
@@ -156,11 +146,8 @@ fn the_quick_menu_renders_full_screen() {
     );
 }
 
-/// Every value the Fast Forward row can show, each one rendered and read off the panel rather
-/// than off the draw list. What matters is that the set type lands on the same right edge as
-/// every other value, arrows and all, and still leaves the label its side of the row — and only
-/// the rendered pixels can answer that. Walked end to end because a row whose values are all one
-/// shape is exactly where a draw-list assertion would pass on a screen that was wrong.
+/// Every Fast Forward value, read off the rendered panel: each must end on the same right edge,
+/// arrows included, and leave the label its side of the row.
 #[test]
 fn every_fast_forward_speed_sits_on_the_rows_right_edge_and_clears_the_label() {
     let Ok(surface) = HeadlessSurface::new() else {
@@ -175,8 +162,7 @@ fn every_fast_forward_speed_sits_on_the_rows_right_edge_and_clears_the_label() {
     f.upload_faces(&mut c);
     let mut input = Script(VecDeque::new());
     tap(&mut f, &mut input, Btn::Menu);
-    // The menu opens on Fast Forward, showing the default 4×. Two presses left is the bottom of
-    // the row, and from there each value is one press right of the last.
+    // The menu opens on Fast Forward at 4×. Two presses left is the bottom of the row.
     tap(&mut f, &mut input, Btn::Left);
     tap(&mut f, &mut input, Btn::Left);
 
@@ -191,8 +177,7 @@ fn every_fast_forward_speed_sits_on_the_rows_right_edge_and_clears_the_label() {
             (679..=688).contains(&last),
             "{name} ends at x {last}, off the edge every other value keeps"
         );
-        // The row in hand carries an arrow either side of its value, so nothing on it may be
-        // inked across the middle of the row, where the label is heading.
+        // Arrows flank the value, so nothing may be inked across the middle where the label is.
         assert!(
             inked(&px, 350..370, top).is_empty(),
             "{name} and its arrows reach the middle of the row"

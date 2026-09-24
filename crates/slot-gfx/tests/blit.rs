@@ -23,8 +23,7 @@ fn the_shake_scales_with_the_window_so_it_reads_the_same_at_any_size() {
     );
 }
 
-/// Both ways, and the same distance each way. A blit that only ever moved right would read as
-/// the picture having slid rather than the device having flinched.
+/// The shake moves the same distance left and right.
 #[test]
 fn the_shake_is_symmetric_about_the_centred_rect() {
     let still = blit_rect((1440, 960), 0.0).0;
@@ -34,8 +33,7 @@ fn the_shake_is_symmetric_about_the_centred_rect() {
     assert!(left < still && still < right);
 }
 
-/// The shake is a displacement of the same rect, so with none of it the geometry is exactly
-/// what a still frame gets. Anything else and every frame would be a shaken frame.
+/// With no shake the rect is exactly the still one.
 #[test]
 fn no_shake_is_the_plain_centred_rect() {
     assert_eq!(blit_rect((1500, 1000), 0.0), slot_gfx::fit_rect(1500, 1000));

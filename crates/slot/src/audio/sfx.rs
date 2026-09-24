@@ -1,7 +1,4 @@
-/// Cut from a recording of the real thing by `slot-sfxcut`, mono signed 16 bit little endian
-/// at 48 kHz. One continuous take per direction, played as recorded: no stretching, no
-/// envelope, nothing joined. Everything the sound needs to do it already does, and the sync
-/// is a question of when it starts rather than what is done to it.
+/// Recorded clips cut by `slot-sfxcut`: mono s16le at 48 kHz, played as recorded.
 const INSERT: &[u8] = include_bytes!("../../assets/insert.pcm");
 const EJECT: &[u8] = include_bytes!("../../assets/eject.pcm");
 const ASSET_HZ: f32 = 48_000.0;
@@ -16,8 +13,8 @@ pub enum Sfx {
 }
 
 impl Sfx {
-    /// How far into the clip the contacts are. The caller starts the clip this long before
-    /// the cart reaches them, which is the whole of how the two are kept together.
+    /// Seconds into the clip where the contacts sound. The caller starts the clip this long
+    /// before the cart reaches them.
     pub fn lead(self) -> f32 {
         match self {
             Sfx::Insert => 0.097,
@@ -25,8 +22,7 @@ impl Sfx {
         }
     }
 
-    /// What is left of the clip after the contacts: the shell settling on the way in, the
-    /// shell still moving on the way out. Nothing should cut across it.
+    /// Seconds of clip after the contacts. Nothing should cut across it.
     pub fn tail(self) -> f32 {
         let pcm = match self {
             Sfx::Insert => INSERT,
@@ -51,8 +47,7 @@ impl Sfx {
     }
 }
 
-/// Linear, from the asset's 48 kHz to whatever the sink runs at. Both are the same rate on
-/// every platform this has met so far, so this is a safeguard rather than a hot path.
+/// Linear resampling from 48 kHz to the sink rate. A safeguard: they have matched everywhere.
 fn resampled(pcm: &[u8], sample_rate: u32) -> Vec<f32> {
     let src: Vec<f32> = pcm
         .chunks_exact(2)

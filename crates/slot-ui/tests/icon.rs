@@ -1,7 +1,7 @@
 use slot_ui::{badge_face, icon_box, icon_face, Badge, Icon, HUD_ICON_PX, LINK_HOST_INK};
 
-/// Faces are uploaded in `ALL` order and looked up by `index`, which is the discriminant.
-/// Reordering `ALL` alone would silently put the wrong glyph on the HUD.
+/// Faces are uploaded in `ALL` order and looked up by `index`, the discriminant. Reordering
+/// `ALL` alone would put the wrong glyph on the HUD.
 #[test]
 fn icons_are_indexed_in_declaration_order() {
     for (i, icon) in Icon::ALL.iter().enumerate() {
@@ -27,9 +27,8 @@ fn every_icon_rasterises_to_something_visible() {
     }
 }
 
-/// A missing glyph renders as tofu or nothing, and both look like a layout bug rather than
-/// a font problem. This is the test that catches picking a codepoint the font lacks: every
-/// pair, because two glyphs the font is missing come back as the same box.
+/// Catches a codepoint the font lacks: missing glyphs come back as the same box, so every pair
+/// must differ.
 #[test]
 fn icons_are_distinguishable_from_each_other() {
     let faces: Vec<_> = Icon::ALL
@@ -43,8 +42,7 @@ fn icons_are_distinguishable_from_each_other() {
     }
 }
 
-/// The whole reason for the Mono variant: a HUD row must not reflow as the glyph under it
-/// changes.
+/// The Mono variant exists so a HUD row does not reflow as its glyph changes.
 #[test]
 fn all_icons_share_one_box() {
     let first = icon_face(Icon::Volume, 18.0, [255, 255, 255]);
@@ -97,8 +95,7 @@ fn a_bigger_size_gives_a_bigger_face() {
     );
 }
 
-/// The fast forward badge has no plate under it, so the icon has to survive being drawn on
-/// a white game frame. A dilated dark halo is what makes that work.
+/// The fast forward badge has no plate, so its dark halo must hold up on a white frame.
 #[test]
 fn icons_carry_a_halo_so_they_read_without_a_plate() {
     let f = icon_face(Icon::FastForward, 18.0, [255, 255, 255]);
@@ -112,13 +109,11 @@ fn icons_carry_a_halo_so_they_read_without_a_plate() {
     );
 }
 
-/// The frame is the union of every glyph's extent, so a new icon can quietly grow the box
-/// that all of them are rastered into and shove the whole HUD row sideways. The bolt has to
-/// fit inside the box the existing eight already agreed on.
+/// The frame is the union of every glyph's extent, so a new icon must not grow it and shift
+/// the HUD row.
 #[test]
 fn a_new_icon_does_not_resize_the_box_the_others_share() {
-    // Tracks HUD_ICON_PX: this is the union at 24 px. If it moves without the size moving,
-    // the new glyph is wider or taller than every icon before it.
+    // The union at HUD_ICON_PX = 24. A change without the size changing means a glyph grew it.
     assert_eq!(
         icon_box(HUD_ICON_PX),
         (26, 27),
@@ -126,8 +121,7 @@ fn a_new_icon_does_not_resize_the_box_the_others_share() {
     );
 }
 
-/// Callers lay out against `icon_box` before they know which glyph lands in it, so it has to
-/// include the halo or every icon overflows its slot by a pixel.
+/// Callers lay out against `icon_box` before knowing the glyph, so it must include the halo.
 #[test]
 fn icon_box_accounts_for_the_halo() {
     let (bw, bh) = icon_box(18.0);

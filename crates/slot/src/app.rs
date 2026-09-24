@@ -26,95 +26,67 @@ use crate::link_screen::LinkSprites;
 use crate::link_start::{link_port, LinkFail, LinkProgress, LinkStarter, LinkStep};
 use crate::persist::{self, Snapshot};
 
-/// A floor, not a delay. The animation is where the core load hides, so a slow load
-/// extends it and a load that is already done still waits it out.
+/// A floor, not a delay: a slow core load extends the insert, a fast one still waits it out.
 pub const INSERT_S: f32 = 0.73;
-/// The tail of the insert, spent on a cart that has already landed. The game arriving on the
-/// frame the cart seats reads as a cut; a beat of nothing first says the cart caused it.
-///
-/// Long enough to cover the rest of the sound of it landing and leave a little air after it,
-/// which `the_game_waits_for_the_cart_to_finish_landing` holds against the clip.
+/// The tail of the insert, after the cart has landed, so the game does not appear on the seating
+/// frame. Covers the landing sound: see `the_game_waits_for_the_cart_to_finish_landing`.
 const INSERT_HOLD_S: f32 = 0.28;
 
-/// When the travel ends and the cart is against the contacts, which is what it clicks on.
+/// When the cart reaches the contacts, which is when it clicks.
 pub const SEATED_AT: f32 = INSERT_S - INSERT_HOLD_S;
 
-/// The eject is the insert played backwards, so it is the same length. It used to be shorter,
-/// on the grounds that pulling something out is a quicker movement than pushing it in, but
-/// every part of the screen is driven off one progress and two lengths make every one of them
-/// come back faster than it left.
+/// The insert played backwards. Everything on screen runs off one progress, so the lengths match.
 pub const EJECT_S: f32 = SEATED_AT;
 
-/// Between the picture going out and the cart starting to move. Long enough for the game to
-/// have actually stopped: the core is paused the moment the button is held, but what it has
-/// already handed the device is up to a ring's worth of audio, and the cart must not start
-/// coming out over the last of it.
+/// Pause before the cart moves, so it does not come out over the last ring of queued audio.
 const EJECT_HOLD_S: f32 = 0.35;
 
-/// The panel striking, once the cart is home. Long enough to read as a screen coming up,
-/// short enough that it is not something to sit through.
+/// The panel striking once the cart is home.
 const POWER_ON_S: f32 = 0.22;
 
-/// Going out is quicker than coming up, the way a panel dies faster than it strikes.
+/// Quicker than power-on, as a panel dies faster than it strikes.
 const POWER_OFF_S: f32 = 0.16;
 
-/// Volume has ten times the range of the other two, so it moves ten times as far. Twenty
-/// presses end to end is close enough to their ten that the three feel like one control.
+/// Volume has ten times the range of the other two, so twenty presses end to end match their ten.
 const VOLUME_STEP: u8 = 5;
 
 /// Crash insurance, and the only durable write that happens with the game still running.
 const AUTOSAVE_MS: Millis = 60_000;
 
-/// A dead battery is a far likelier hard cutoff than anyone holding POWER for eight
-/// seconds, so the last of the charge goes on the state and then on stopping.
+/// At this charge the state is saved and the device stops: a dead battery is the likeliest cutoff.
 const BATTERY_CRITICAL: u8 = 5;
 
-/// The gauge moves by a percent over minutes and on the device it is a sysfs read, so it
-/// is not worth a look every frame.
+/// The gauge moves over minutes and is a sysfs read.
 const BATTERY_POLL_MS: Millis = 10_000;
 
-/// The gauge moves over minutes but the charge state is a step change: it flips the instant
-/// a cable goes in. Ten seconds of a stale bolt on screen, and a stale colour on the LED, is
-/// worse than the read costs — `status` is a short string, far cheaper than the pair.
+/// Charge state flips the instant a cable goes in, and reading `status` is cheap.
 const CHARGE_POLL_MS: Millis = 1_000;
 
-/// Below this the LED goes red. Well clear of `BATTERY_CRITICAL`, since it is a warning with
-/// time to act on it rather than a cutoff.
+/// The LED goes red below this. A warning, well clear of `BATTERY_CRITICAL`.
 const BATTERY_LOW: u8 = 20;
 
-/// Long enough to notice the wrong state loading, short enough that the offer is gone by the
-/// time the switcher is opened for any other reason.
+/// Long enough to notice the wrong state loaded, short enough to be gone by the next opening.
 pub const UNDO_GRACE_MS: Millis = 30_000;
 
 /// How long a link whose other end went away shows its broken badge before the session ends.
 pub const LINK_LOST_MS: Millis = 2000;
 
-/// How long A has to be down on the shelf before it means "start this cart clean". Past the
-/// point a press could be a tap, and short enough to hold without wondering whether the
-/// device is still listening.
+/// How long A is held on the shelf to start a cart clean.
 const PLAY_HOLD_MS: Millis = 500;
 
-/// How far apart the menu's rows sit, and what marks the one in hand. The pitch clears the
-/// 40 px face with a little air; the bar is drawn to the face's own width, padding included,
-/// so it wraps the words rather than the panel.
-/// How long the shutdown screen is on the panel before the machine is allowed to stop. Only
-/// needs to outlast a couple of frames — it exists so the ordinary loop presents the screen,
-/// rather than the binary rendering one out of band on a GPU that is about to go away.
+/// How long the shutdown screen shows before the machine stops. A few frames, so the ordinary loop
+/// presents it: rendering out of band can block on a GPU that is going away.
 const SHUTDOWN_SHOW_MS: Millis = 250;
 
+/// Row pitch: clears the 40 px face with a little air.
 const POWER_MENU_PITCH: f32 = 44.0;
-/// How much shorter the bar is than the row it marks, top and bottom. Enough that the rows
-/// stay separate things rather than one continuous block when the selection moves.
+/// Bar inset top and bottom, so adjacent rows stay separate.
 const POWER_MENU_BAR_INSET: f32 = 4.0;
-/// How far the row makes way while a cart is open, as `Shelf::draw_row` counts `recede`. It is
-/// set by where the neighbours stand: here they come to rest at -41 and 574, where the mockup
-/// frames the open cart with them. Parted far enough for the recede alone to dim them to a
-/// quarter, they left the open cart alone in the frame.
+/// How far the row recedes while a cart is open, as `Shelf::draw_row` counts it. Puts the
+/// neighbours at -41 and 574, where the mockup frames the open cart.
 const CORE_PICKER_RECEDE: f32 = 0.26;
-/// How much further the neighbours' faces darken while a cart is open, since the recede that
-/// stands them in place dims them only part of the way. At it a side cart's face is at
-/// `SIDE_ALPHA * (1 - CORE_PICKER_RECEDE)` = 0.55 * 0.74 = 0.407, and the mockup has it at a
-/// quarter: 0.25 / 0.407 = 0.614.
+/// Extra dim on the neighbours while a cart is open: a side face at
+/// `SIDE_ALPHA * (1 - CORE_PICKER_RECEDE)` = 0.407 goes to the mockup's 0.25 (0.25 / 0.407).
 const CORE_PICKER_DIM: f32 = 0.614;
 /// The legend's line, under the open cart and clear of the case band.
 const CORE_LEGEND_Y: f32 = 386.0;
@@ -123,37 +95,30 @@ const LINK_TEXT_Y: f32 = 44.0;
 /// The legend, centred on the console strip (y 388–480).
 const LINK_LEGEND_Y: f32 = 422.0;
 const LINK_LEGEND_GAP: f32 = 40.0;
-/// The soft oval under the resting lid, as the mockup draws it: its size, how far below the
-/// lid's bottom edge its centre falls, and how dark it is. Scaled with the lid as it lifts.
+/// The soft oval under the resting lid, from the mockup: size, drop below the lid's bottom edge,
+/// and darkness. Scaled with the lid as it lifts.
 const LID_SHADOW_W: f32 = 168.0;
 const LID_SHADOW_H: f32 = 18.0;
 const LID_SHADOW_DROP: f32 = 29.0;
 const LID_SHADOW_ALPHA: f32 = 0.8;
-/// The longest the cart stands on the shelf waiting for its faces before it opens anyway, so a
-/// face that never comes cannot freeze the picker. A fast scroll can leave the worker still
-/// finishing the cart it was already building before it starts on this one, so the cap has to
-/// cover that wait too, not just this cart's own build.
+/// Longest the cart waits for its faces before opening anyway. Also covers the worker finishing a
+/// previous cart's build after a fast scroll.
 const FACES_WAIT_MS: Millis = 1500;
 
-/// How far through a refused cart's exit the alert holds at full, and where it has finished
-/// going. Fractions of that exit rather than seconds, because a cart refused early has a
-/// short way to come back and the symbol has to fit inside it either way. It is gone before
-/// the end: an alert still lit on the frame the shelf returns reads as a thing to dismiss.
+/// Fractions of a refused cart's exit: where the alert starts to fade and where it is gone. It must
+/// be gone before the shelf returns, or it reads as something to dismiss.
 const ALERT_HOLD: f32 = 0.45;
 const ALERT_GONE: f32 = 0.9;
 
-/// Any clock reading earlier than this was never set. An RTC that has lost power reports a
-/// fault rather than a time, the kernel then starts at the epoch, and nothing that reaches
-/// this frontend can legitimately be older than the frontend itself.
+/// Any clock reading before this (2020-01-01) was never set: an RTC that lost power leaves the
+/// kernel at the epoch.
 const CLOCK_FLOOR: i64 = 1_577_836_800;
 
-/// The most recent undoable action. There is exactly one slot for it and a new save or load
-/// replaces it: a stack of undos would be a knob.
+/// The most recent undoable action. A new save or load replaces it.
 pub enum PendingUndo {
     Save {
         stamp: String,
-        /// Read out of the ring before the push that dropped it, which is what makes the
-        /// undo a restore rather than a reconstruction.
+        /// Read out of the ring before the push evicted it, so undo restores it.
         evicted: Option<(String, Vec<u8>, Vec<u8>)>,
     },
     Load {
@@ -161,10 +126,8 @@ pub enum PendingUndo {
     },
 }
 
-/// One side of a live netpacket session. Nothing about the transport or the packets lives
-/// here — only what a session being live at all means for the rest of `App`, and which of
-/// libretro's two client ids this device is, for whatever the UI ends up showing while one
-/// is open.
+/// One side of a live netpacket session: what the rest of `App` needs, and this device's libretro
+/// client id.
 struct LinkSession {
     client_id: u16,
     /// When the other end was found gone. The session lasts `LINK_LOST_MS` past it, so the
@@ -172,9 +135,7 @@ struct LinkSession {
     lost_at: Option<Millis>,
 }
 
-/// A link being started: the worker doing the slow parts, and which of libretro's two client
-/// ids this device becomes if it succeeds. The id is decided by the row that was picked and
-/// has to outlive the pick, because it is `Ready`, frames later, that needs it.
+/// A link being started. `client_id` comes from the picked row and `Ready` needs it frames later.
 struct LinkStarting {
     starter: LinkStarter,
     client_id: u16,
@@ -187,20 +148,16 @@ struct Reload {
     stem: String,
     /// The role A picked.
     role: LinkRow,
-    /// No link starts when the reload finishes: B was pressed while the game was still loading,
-    /// or the screen was closed out from under it.
+    /// No link starts when the reload finishes: B was pressed during it, or the screen closed.
     cancelled: bool,
-    /// The hardware the game was running before the switch, and the `gpsp_serial` it was loaded
-    /// with. That mode is known to load, so it is what a reload that fails goes back to.
+    /// The mode before the switch, known to load, so a failed reload goes back to it.
     from: LinkKind,
     from_serial: &'static str,
     /// This load is already the way back to `from`.
     fallback: bool,
 }
 
-/// The in-game menu, over a paused game rather than instead of it. `Phase::Playing` carries
-/// the session; leaving it to show a menu would mean rebuilding it to come back, and "cancel
-/// returns you to your game" is the entire requirement.
+/// The in-game menu, an overlay on a paused game so cancelling returns to the same session.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum GameMenu {
     /// Choosing a role. Left/Right swaps, SELECT switches the hardware, A links, B leaves.
@@ -211,11 +168,8 @@ pub enum GameMenu {
         step: LinkStep,
         since: Millis,
     },
-    /// The link is up. `worked` is when Working began.
-    ///
-    /// Two screens in one state. The flash a link comes up on says so for `LINKED_HOLD_MS` and
-    /// then leaves by itself; the one the player opens over a live session stays until they
-    /// choose, and carries the legend that ends it. `opened` is which of the two this is.
+    /// The link is up. `worked` is when Working began. `opened` is false for the flash that leaves
+    /// after `LINKED_HOLD_MS`, true when opened over a live session, where it stays.
     Linked {
         role: LinkRow,
         worked: Millis,
@@ -229,16 +183,12 @@ pub enum GameMenu {
         worked: Millis,
         since: Millis,
     },
-    /// The link is over and the plug is coming back out. `since` is when it began.
-    ///
-    /// The session has already ended by the time this state exists — it is the screen catching
-    /// up with a teardown that is already under way, not a step in one. Nothing waits on it and
-    /// nothing can be pressed during it; it leaves on its own after `UNPLUG_HOLD_MS`.
+    /// The plug coming back out after the session has already ended. Takes no input and leaves on
+    /// its own after `UNPLUG_HOLD_MS`.
     Unplug { role: LinkRow, since: Millis },
 }
 
-/// Which end of a link this device is offering to be. The player picks; there is no
-/// discovery on this network and nothing to negotiate it with.
+/// Which end of a link this device offers to be. The player picks; there is no discovery.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum LinkRow {
     Host,
@@ -268,9 +218,7 @@ impl LinkRow {
         }
     }
 
-    /// libretro's own client id, not ours — 0 the host and 1 the joiner, the only two this
-    /// product has. The two devices must never both think they are the same one, which is
-    /// exactly what the role they picked decides.
+    /// libretro's client id: 0 the host, 1 the joiner. The two devices must never share one.
     pub fn client_id(self) -> u16 {
         match self {
             LinkRow::Host => 0,
@@ -326,32 +274,25 @@ impl LinkLegend {
 /// How long LINKED stays on screen once a link is up.
 pub const LINKED_HOLD_MS: Millis = 1000;
 
-/// How long the unplug stays on screen when a link ends, motion included.
-///
-/// Comfortably past the 260 ms the plug takes to come out, so it is seen resting out of the
-/// port for a beat rather than vanishing on the frame it lands. Short enough that nobody is
-/// sitting through it: the game underneath is paused for exactly this long and no longer.
+/// How long the unplug stays on screen when a link ends. Past the plug's 260 ms travel so it is
+/// seen at rest; the game is paused for exactly this long.
 pub const UNPLUG_HOLD_MS: Millis = 420;
 
 #[derive(Debug)]
 pub enum Phase {
-    /// Slot's own first launch, ahead of the shelf and ahead of a seated cart. Three things
-    /// run off the wall clock and a cartridge RTC is the one that breaks silently. Also the
-    /// quick menu's Date & Time, which is the same screen opened again.
+    /// Slot's first launch, before the shelf: three things run off the wall clock and a cartridge
+    /// RTC breaks silently. Also the quick menu's Date & Time.
     SetClock {
         picker: ClockPicker,
-        /// The UTC the picker opened on, to the minute it shows. The clock keeps running under
-        /// the screen, so confirming sets it to now plus however far the picker was moved from
-        /// here, never to the picker's own reading.
+        /// The UTC the picker opened on. Confirming sets now plus the picker's offset from this,
+        /// since the clock keeps running under the screen.
         seed: i64,
-        /// Opened from the quick menu, so B goes back to it and confirming returns to it. At
-        /// first boot there is nothing behind the screen, and confirming goes on to the shelf.
+        /// Opened from the quick menu, so B and confirming return to it. At first boot,
+        /// confirming goes on to the shelf.
         from_menu: bool,
     },
     Shelf,
-    /// The settings, off a tap of MENU on the carousel. A screen of its own, as the label is,
-    /// holding the row in hand. The shelf keeps its place underneath, so MENU or B puts the
-    /// carousel back exactly where it was.
+    /// The settings, from MENU on the carousel. The shelf keeps its place underneath.
     QuickMenu {
         row: QuickRow,
     },
@@ -359,12 +300,9 @@ pub enum Phase {
         cart: String,
         t: f32,
         core_ready: bool,
-        /// A cart already in the slot at boot. It is drawn seated from the first frame and
-        /// the shelf is never drawn behind it, because a resume is not a movement the user
-        /// made and there is nothing for the cart to have come from.
+        /// A cart already seated at boot: drawn seated from the first frame, with no shelf behind.
         resumed: bool,
-        /// Start the cart from the beginning, ignoring whatever `resume.state` holds. The
-        /// state is skipped rather than deleted, so a later tap still resumes it.
+        /// Start clean, skipping (not deleting) `resume.state`.
         clean: bool,
     },
     Playing {
@@ -377,9 +315,7 @@ pub enum Phase {
     Polaroids {
         cart: String,
     },
-    /// The label. A screen of its own rather than a panel, because it is one object being
-    /// looked at and there is nothing else on it. Opened from the quick menu, and left back
-    /// to it.
+    /// The label, opened from the quick menu and left back to it.
     About,
     Doze {
         cart: Option<String>,
@@ -388,223 +324,148 @@ pub enum Phase {
 
 pub struct App {
     phase: Phase,
-    /// The carousel. Where it stands is not written to the card: `Shelf::index` is where the
-    /// carousel happens to be.
+    /// The carousel. Its position is not persisted.
     shelf: Shelf,
-    /// When A went down on the shelf, and `None` the rest of the time. The hold lives here
-    /// rather than in the gesture layer because A is the GBA's A button everywhere else, and
-    /// `Gestures` is deliberately blind to which screen is up.
+    /// When A went down on the shelf. Held here because `Gestures` does not know the screen.
     play_held: Option<Millis>,
-    /// The last refused action, and the only thing that tells an eject apart from a cart
-    /// that would not seat: both leave down the same path.
+    /// The last refused action: the only thing telling an eject from a cart that would not seat.
     refusal: Option<Refusal>,
-    /// The `t` a refused cart's exit started from, which is also how long there is left to
-    /// say so. `None` for an eject the user asked for: nothing was refused.
+    /// The `t` a refused cart's exit started from. `None` for a requested eject.
     refused_from: Option<f32>,
     alert_face: Option<TexId>,
-    /// What the shutdown says, one per `PowerChoice::ALL` in that order and rastered at the
-    /// menu's own size. "Powering down" under a restart was the screen contradicting the row
-    /// the user had just chosen.
+    /// Shutdown text, one per `PowerChoice::ALL` in that order, at the menu's size.
     shutdown_faces: Vec<(TexId, u32, u32)>,
-    /// Open when a held POWER raised the menu, holding the highlighted row. An overlay
-    /// rather than a phase, so cancelling returns to whatever was underneath without the
-    /// phase having to be remembered anywhere.
+    /// The highlighted row while the POWER menu is open. An overlay, so cancelling needs no phase.
     power_menu: Option<usize>,
     /// One per `PowerChoice::ALL`, in that order, with the size each was rastered at.
     power_menu_faces: Vec<(TexId, u32, u32)>,
-    /// The picker while the cart is open, and while its lid is going back on. The cart it acts
-    /// on is whichever the shelf has, read when it opens rather than held here: the shelf cannot
-    /// move while it is up, so there is only ever one answer.
+    /// The picker while the cart is open and while its lid goes back on. Acts on the shelf's cart,
+    /// which cannot move while it is up.
     core_picker: Option<CorePicker>,
-    /// The open cart under the highlight, and its lid: the shelf face with a transparent border
-    /// so it can be turned. Rebuilt by the frontend when the highlighted cart changes.
+    /// The open cart's board and lid (the shelf face with a transparent border so it can turn).
+    /// Rebuilt when the highlighted cart changes.
     core_board_face: Option<TexId>,
     core_lid_face: Option<TexId>,
     /// The cart the uploaded board and lid were built for.
     core_faces_stem: Option<String>,
-    /// In `Core::ALL` order: each socket empty, and the chip seated and named in each. Uploaded
-    /// at boot, since none of them ever changes.
+    /// In `Core::ALL` order: empty sockets, and seated named chips. Uploaded once at boot.
     core_socket_faces: Vec<TexId>,
     core_chip_faces: Vec<TexId>,
     /// The chip in flight, blank, and the shadow under it.
     core_blank_chip_face: Option<TexId>,
     core_chip_shadow_face: Option<TexId>,
-    /// `B` Cancel, the two arrows, `A` Choose, each with the width it was rastered at, laid out
-    /// by role in that order: Cancel under the cart's left edge, Swap on the panel's centre,
-    /// Choose under its right edge.
+    /// Cancel, the Swap arrows and Choose, with raster widths. Laid out under the cart's left edge,
+    /// the panel centre and the cart's right edge.
     core_legend_faces: Vec<(TexId, u32)>,
-    /// Open when SELECT+MENU raised the in-game menu over a running game. An overlay rather
-    /// than a phase, and for a stronger reason than the power menu's: `Phase::Playing` is
-    /// what holds the seated cart, and a menu that left it would have to rebuild the session
-    /// to come back from cancelling.
+    /// Open when SELECT+MENU raised the in-game menu. An overlay because `Phase::Playing` holds the
+    /// seated session.
     game_menu: Option<GameMenu>,
     link_sprites: Option<LinkSprites>,
-    /// The hardware the link screen shows and a link it starts runs over. Read once when the
-    /// screen opens (see `link_mode`) rather than every frame `draw_game_menu` runs, and
+    /// The hardware the link screen shows and a link runs over. Read when the screen opens,
     /// switched by SELECT.
     link_hardware: LinkKind,
-    /// The role last picked, Host or Join, so opening the screen again lands back on it
-    /// rather than always starting at Host.
+    /// The last picked role, so the screen reopens on it.
     last_role: LinkRow,
-    /// The hardware SELECT last switched each cart to, by stem. Kept for as long as slot is
-    /// running and never written to the card, so a cart nobody has switched since boot opens
-    /// on whatever gpSP would pick for it.
+    /// The hardware SELECT last chose, per cart stem. Not persisted.
     link_choices: HashMap<String, LinkKind>,
-    /// The `gpsp_serial` the core in the slot was loaded with, as `Session` reported when it
-    /// spawned it. gpSP reads its link mode only while a game loads, so this, not whatever the
-    /// screen shows, is what a link would run over. `None` with the slot empty, and for a core
-    /// nobody reported, which was loaded on `auto`.
+    /// The `gpsp_serial` the seated core was loaded with. gpSP reads link mode only at load, so
+    /// this is what a link would run over. `None` when empty, or for a core loaded on `auto`.
     link_loaded: Option<&'static str>,
-    /// A reload the link screen needs carried out — the cart, and the `gpsp_serial` to load it
-    /// with — until `Session::update` collects it, the same hop `link_transport` makes for a
-    /// wire.
+    /// A reload (cart, `gpsp_serial`) waiting for `Session::update` to collect.
     link_reload: Option<(String, &'static str)>,
-    /// The reload that request belongs to, from A until the game is running again in one mode
-    /// or the other, or has come back out of the slot. `None` the rest of the time.
+    /// The reload in progress, from A until the game runs again or leaves the slot.
     reload: Option<Reload>,
-    /// One per `LinkRow::ALL`, in that order — the HOST and JOIN labels `Pick` shows.
+    /// One per `LinkRow::ALL`, in that order.
     link_menu_faces: Vec<(TexId, u32, u32)>,
     /// What `Linked` says, at the menu's own size.
     link_linked_face: Option<(TexId, u32, u32)>,
-    /// One per `LinkStep::ALL`, and one per `LinkFail::SHOWN`, in those orders. A sentence
-    /// each rather than a list, so nothing is ever in hand on either.
+    /// One per `LinkStep::ALL` and one per `LinkFail::SHOWN`, in those orders.
     link_step_faces: Vec<(TexId, u32, u32)>,
     link_fail_faces: Vec<(TexId, u32, u32)>,
     /// One per `LinkLegend::ALL`, in that order, with the width each was rastered at.
     link_legend_faces: Vec<(TexId, u32)>,
-    /// The worker behind `GameMenu::Working`, and `None` the rest of the time. It has no
-    /// `Drop` of its own, so `close_game_menu` is what stops it: see there.
+    /// The worker behind `GameMenu::Working`. It has no `Drop`, so `close_game_menu` stops it.
     starting: Option<LinkStarting>,
-    /// The wire a finished starter handed over, waiting for whoever owns the emulator thread
-    /// to collect it. `App` holds a session's own bookkeeping and never a transport (see
-    /// `link`), and this is the one hop between the two — `Session::update` drains it into
-    /// `EmuHandle::begin_link`, mirroring the hop `Session::bridge_link` already makes for
-    /// an ending.
+    /// The wire a finished starter handed over, drained by `Session::update` into
+    /// `EmuHandle::begin_link`.
     link_transport: Option<(u16, Box<dyn LinkChannel>)>,
     /// Set when the menu's Restart is chosen. The binary acts on it, like `powering_off`.
     restarting: bool,
-    /// When the binary is allowed to act. The screen is drawn from the instant the choice is
-    /// made, but the shutdown itself waits a few frames so the ordinary loop has drawn and
-    /// presented it. Rendering out of band instead — one extra draw and swap between the
-    /// choice and `poweroff` — hung the device: the swap can block on a GPU about to be torn
-    /// down, and slot then never reached `poweroff` at all, leaving a machine that needed
-    /// the PMIC held to recover.
+    /// When the binary may act on a shutdown. Waits a few frames so the ordinary loop presents
+    /// the screen: an extra out-of-band draw and swap can block on a GPU being torn down.
     act_at: Millis,
     /// `None` outside the binary, where there is no content root and nothing persists.
     root: Option<PathBuf>,
     state: SlotState,
-    /// The volume and the silence as they stood before each of the last two volume presses,
-    /// oldest first. The mute chord is delivered behind the two presses that make it, so
-    /// toggling has to give back what they already moved.
+    /// Volume and mute before each of the last two volume presses, oldest first. The mute chord
+    /// arrives after its two presses, so toggling must undo what they moved.
     vol_before: Vec<(u8, bool, Millis)>,
     /// `None` until a cart is in the slot. There is nothing to flush without a core.
     snapshot: Option<Box<dyn Snapshot>>,
-    /// The seated cart's `Core`, resolved once by whoever spawned `snapshot` and handed here
-    /// through `set_core` rather than re-read. `ring`, `flush_resume` and the eject path all
-    /// take this instead of calling `core_for` themselves, which is what makes it structurally
-    /// impossible for a later read or write to disagree with the dylib actually running: there
-    /// is nowhere left in this file to derive a second opinion from. Stale between carts in
-    /// exactly the way `snapshot` is — both are set together and neither is cleared on eject —
-    /// which is safe because every reader of either is gated on a cart actually being seated.
+    /// The seated cart's `Core`, set by whoever spawned `snapshot`. Used instead of `core_for` so
+    /// nothing can disagree with the running dylib. Stale between carts, like `snapshot`; every
+    /// reader is gated on a seated cart.
     core: Core,
-    /// A colour correction change waiting to be carried to the running core, and `None` the rest
-    /// of the time. `App` never touches the core itself, so this is the same shape
-    /// `link_reload` and the link transport use: set here, drained by `Session::update`.
-    ///
-    /// It exists because colour correction is the one option a player can reach while a game is
-    /// on screen. Every other option is handed over once before `load`, which is where
-    /// `core::apply_core_options` puts them, and a row that only did that would appear to do
-    /// nothing until the cart was next inserted.
+    /// A colour correction change for `Session::update` to carry to the running core. The only
+    /// option reachable in game; the rest are applied once before `load`.
     colour_pending: Option<bool>,
-    /// Which port this device drives once a cable session is loaded for, and `None` whenever the
-    /// seated core is not being opened for one. Read by `Session::spawn_core`.
+    /// The port this device drives in a cable session, read by `Session::spawn_core`.
     link_player: Option<u8>,
-    /// Whether the emulator actually running is the one `core` names, or the mock standing in
-    /// for a dylib that is not on this card. Set in the same breath as `core` by whoever opened
-    /// it (see `set_named_core`), because it is knowable at exactly that
-    /// moment and nowhere else.
-    ///
-    /// `false` until told otherwise, which is the reading that acts on nothing: the one thing
-    /// this gates is `retire_refused_resume`, and a caller that has not said which emulator it
-    /// opened has not established that a refusal means the state is at fault.
+    /// Whether the running emulator is the one `core` names, not the mock for a missing dylib. Set
+    /// with `core` via `set_named_core`. Gates `retire_refused_resume`, so `false` acts on nothing.
     named_core: bool,
-    /// `Some` for as long as a netpacket session is live. `App` never touches the transport
-    /// or the core itself — those live on the emulator thread, wherever `EmuHandle::begin_link`
-    /// was called from the same gesture this answers — this is only what the interlocks below
-    /// need: that one is live at all, and which side of it this device is.
+    /// `Some` while a netpacket session is live. The transport lives on the emulator thread.
     link: Option<LinkSession>,
-    /// What the slot itself is about to sound like, drained by whoever owns the device. One
-    /// slot: two of these in a frame is not a movement the cart can make.
+    /// The slot's sound for this frame, drained by the device owner.
     sfx: Option<Sfx>,
-    /// `Some` exactly while the switcher is showing. It holds the ring as it was when it
-    /// opened, so a save behind it cannot renumber what the user is looking at.
+    /// `Some` while the switcher shows, holding the ring as it opened so a save cannot renumber it.
     polaroids: Option<Polaroids>,
-    /// The one undoable action and the moment it happened. Belongs to the cart in the slot,
-    /// so it leaves with it.
+    /// The one undoable action and when it happened. Leaves with the cart.
     pending: Option<(PendingUndo, Millis)>,
-    /// The key caps on the switcher's bottom plate. The three fixed ones never change what
-    /// they say and are uploaded once; the undo says which action it will take back, so it is
-    /// rasterised on the way into the switcher. All of them outlive any one opening.
+    /// The switcher's key caps. The undo cap names its action, so it is rasterised on entry.
     legend_faces: Vec<TexId>,
     undo_face: Option<TexId>,
-    /// The clock screen's line of type and its one instruction. Rasterised by the binary
-    /// whenever the line changes.
+    /// The clock screen's line and instruction, rasterised when the line changes.
     clock_faces: Option<(TexId, TexId)>,
     /// The quick menu's rows, values, arrows and legend, uploaded once at boot.
     quick_menu_faces: Option<QuickMenuFaces>,
-    /// Date & Time's value, grey then lit. Rebuilt by the binary when the minute turns, and only
-    /// while the menu is up.
+    /// Date & Time's value, grey then lit. Rebuilt when the minute turns while the menu is up.
     quick_clock_faces: Option<[(TexId, u32, u32); 2]>,
     /// The label, rasterised whole. Re-uploaded when the gauge moves.
     sticker_face: Option<TexId>,
-    /// One picture from `Wallpapers`, behind everything the shelf draws. `None` on a card
-    /// that carries none, which is the common case.
+    /// One picture from `Wallpapers`, behind the shelf. Usually `None`.
     wallpaper: Option<TexId>,
     /// What is printed on the case: the battery's percent, and the time as it stands.
     battery_percent: slot_ui::Printed,
-    /// The charging glyph, uploaded once at boot with the other icons rather than whenever
-    /// the percent changes: unlike the percent, its face never varies.
+    /// The charging glyph, uploaded once at boot.
     bolt: Option<TexId>,
     shelf_clock: slot_ui::Printed,
     hud: Hud,
-    /// How far up the game layer's own screen is. Not a phase: it outlives the insert, since
-    /// the cart is home and the chrome is still on screen while the picture arrives.
+    /// How far up the game layer's screen is. Not a phase: it outlives the insert.
     screen: f32,
-    /// Whether the core behind the slot has published anything yet. Pushed in, because only
-    /// whoever owns the emulator knows: the compositor still holds the last cart's frame.
+    /// Whether the core has published a frame. Pushed in, since the compositor still holds the
+    /// last cart's frame.
     game_ready: bool,
-    /// Accumulated from `update`, which is the only clock the app has. Milliseconds, since
-    /// that is what the HUD fade is stated in.
+    /// Milliseconds accumulated from `update`, the app's only clock.
     clock: f64,
     /// `None` in unit tests, where there is no panel to darken and no battery to run out.
     power: Option<Power>,
     dozed_at: Millis,
-    /// The POWER press being held right now is the one that woke the panel. Set on every press
-    /// — assigned, never or-ed — so it is always about the press in hand and heals itself if a
-    /// release never reaches `power_press`. See that function for what it is for.
+    /// The held POWER press is the one that woke the panel. Assigned on every press so a lost
+    /// release heals. See `power_press`.
     woke_on_press: bool,
-    /// When the state next has to be on the card. Moved by every resume write, not only by
-    /// the autosave itself.
+    /// When the state next has to be on the card. Moved by every resume write.
     autosave_at: Millis,
     battery_at: Millis,
     charge_at: Millis,
-    /// The last full reading, with its charge half kept current by the fast tick. One
-    /// snapshot rather than two values, so nothing on screen can show a percent and a bolt
-    /// that never coexisted.
+    /// The last full reading, its charge half kept current by the fast tick. One snapshot, so
+    /// percent and bolt always agree.
     battery: Option<Battery>,
-    /// What the platform was last told to show. The fast tick recomputes `led_state()` every
-    /// second whether or not anything moved, and `set_led` is a real write on a real device —
-    /// `motor_change` two crates over exists for exactly the same reason, translating a strength
-    /// asked for every frame into a write only on the edge between still and moving. This is
-    /// that same edge kept here rather than behind the platform boundary: unlike the motor, the
-    /// LED has no protocol-specific state of its own to translate through (`LedState` is
-    /// already the discrete value the tick computes), and `App` is where the state it is
-    /// computed from already lives, so every `Platform` gets the deduplication for free instead
-    /// of each one having to grow its own copy of it.
+    /// What the LED was last set to. The tick recomputes it every second and `set_led` is a real
+    /// write, so only changes go through.
     last_led: Option<LedState>,
     powering_off: bool,
-    /// Where the radio's slow work goes: loading the driver before a link and dropping it
-    /// afterwards. One queue, in order, off the frame loop — see `link_radio::RadioQueue`.
+    /// The radio's slow work (driver load and unload), queued in order off the frame loop.
     radio: Box<dyn RadioJobs>,
 }
 
@@ -685,16 +546,11 @@ impl App {
         }
     }
 
-    /// A seated cart goes back in through the insert animation rather than appearing
-    /// already playing, so a boot and a resume are the same movement. A card with no
-    /// `Games` directory scans empty, which is a shelf, not a boot failure — and so is a
-    /// card whose files are all still loose at the top of `Games/`, because boot reads
-    /// `Games/GBA/` and nothing else. Nothing on the card is moved on the way past:
-    /// `ensure` creates the folders a person files into and that is the whole of it.
+    /// A seated cart goes back in through the insert, so boot and resume are the same movement.
+    /// Only `Games/GBA/` is read; a missing directory is an empty shelf. Nothing is moved.
     pub fn boot(root: &Path) -> Self {
         crate::root::ensure(root);
-        // Before anything is drawn. The card's palette cannot change while the device is on,
-        // so it is read once and never asked for again.
+        // Before anything is drawn. The card's palette is read once.
         slot_ui::set_theme(Theme::read(root));
         let mut app = App::new(scan(root).unwrap_or_default());
         app.root = Some(root.to_path_buf());
@@ -702,19 +558,15 @@ impl App {
         if app.state.clock_set {
             app.start();
         } else {
-            // Seeded from the system clock and re-seeded by `set_power`, which is the first
-            // moment there is a platform whose clock is the device's rather than the host's.
+            // Re-seeded by `set_power`, the first moment the device's own clock can be read.
             app.phase = clock_screen(system_secs(), 0, false);
         }
         app
     }
 
-    /// Into the slot or onto the shelf. Reached on boot once the clock is known, and from
-    /// the clock screen when it becomes known.
+    /// Into the slot or onto the shelf, once the clock is known.
     fn start(&mut self) {
-        // One cart is a dedicated device. There is nothing to choose between, so whatever
-        // `slot.state` remembers, including a cart that is no longer on the card, names the
-        // only thing it could have meant.
+        // One cart is a dedicated device: seat it whatever `slot.state` remembers.
         let seated = if self.single_cart() {
             Some(0)
         } else {
@@ -724,19 +576,18 @@ impl App {
         self.phase = Phase::Shelf;
         match seated {
             Some(i) => {
-                // The carousel opens on the resumed cart, so ejecting it lands where it left.
+                // The carousel opens on the resumed cart, so ejecting lands where it left.
                 self.shelf.select(i);
-                // Never clean: a resume is the whole point of the cart still being in there.
+                // Never clean: resuming is the point.
                 self.insert(false);
                 if let Phase::Inserting { resumed, t, .. } = &mut self.phase {
                     *resumed = true;
-                    // Seated already. The floor still runs, so the core has the same time to
-                    // load; the cart simply does not travel to get there.
+                    // Already seated. The floor still runs so the core has the same time to load.
                     *t = INSERT_S;
                 }
             }
-            // A cart the library no longer has is an empty slot. Left uncorrected on disk:
-            // the next seat rewrites it, and a boot is the worst moment to need a write.
+            // A cart no longer on the card is an empty slot. Not rewritten on disk: the next
+            // seat does that, and boot is the worst moment for a write.
             None => self.state.cart = None,
         }
     }
@@ -749,9 +600,8 @@ impl App {
         &mut self.shelf
     }
 
-    /// Confirms whatever is on the clock screen, setting the clock and the offset the same way
-    /// however the screen was reached. At first boot this is the only way off it and it goes on
-    /// to the shelf; opened from the quick menu, it goes back to the menu.
+    /// Confirms the clock screen: sets the clock and offset, then goes to the shelf at first
+    /// boot or back to the quick menu.
     pub fn confirm_clock(&mut self) {
         let Phase::SetClock {
             picker,
@@ -761,14 +611,11 @@ impl App {
         else {
             return;
         };
-        // All read off before the borrow ends. The platform is given utc, because that is
-        // what the base system's clock and its ntp both assume the card holds; the offset is
-        // kept beside it as the only thing that turns it back into the time on the wall.
+        // The platform is given UTC, which the base system and its ntp assume; the offset turns
+        // it back into wall time.
         let (moved, offset, from_menu) = (picker.secs() - *seed, picker.offset_min(), *from_menu);
-        // Only what was changed, on top of the clock as it stands. The picker shows the minute
-        // and stands still while it is up, so setting the clock to what it says turned it back
-        // by the seconds past that minute and by however long the screen was open, on the clock
-        // every cartridge RTC reads.
+        // Only the change, on top of the running clock. Setting the picker's own reading would
+        // lose the seconds past its minute and however long the screen was open.
         let utc = self.utc_secs() + moved;
         if let Some(power) = &mut self.power {
             power.set_clock(utc);
@@ -785,16 +632,13 @@ impl App {
         }
     }
 
-    /// Seconds since the epoch, from the platform once there is one. The shelf clock and the
-    /// polaroid captions both read it, so neither can disagree with the cartridge RTC.
-    /// Where the card is mounted. `None` only in the tests that never touch one.
+    /// Where the card is mounted. `None` only in tests that never touch one.
     pub fn root(&self) -> Option<&Path> {
         self.root.as_deref()
     }
 
-    /// Local, not utc. The shelf clock, the polaroid captions and the stamps the states are
-    /// named by all come through here, so the offset is applied once rather than at each of
-    /// them, and none of them can disagree with the others about what time it is.
+    /// Local, not UTC. Everything that shows or stamps time reads this, so the offset is applied
+    /// in one place.
     pub fn wall_secs(&self) -> i64 {
         self.utc_secs() + i64::from(self.state.utc_offset_min) * 60
     }
@@ -804,8 +648,7 @@ impl App {
         self.power.as_ref().map_or_else(system_secs, |p| p.now())
     }
 
-    /// What the clock screen is showing, or `None` off it. The binary rasterises from it and
-    /// watches its text to know when to do so again.
+    /// What the clock screen shows, or `None` off it. The binary rasterises from its text.
     pub fn picker(&self) -> Option<&ClockPicker> {
         match &self.phase {
             Phase::SetClock { picker, .. } => Some(picker),
@@ -813,7 +656,7 @@ impl App {
         }
     }
 
-    /// The row in hand while the quick menu is up, and `None` everywhere else.
+    /// The highlighted row while the quick menu is up.
     pub fn quick_menu(&self) -> Option<QuickRow> {
         match self.phase {
             Phase::QuickMenu { row } => Some(row),
@@ -821,8 +664,8 @@ impl App {
         }
     }
 
-    /// What a row of the quick menu shows. `None` for the two rows that open something: Date &
-    /// Time's value is the clock, which the binary rasterises, and About has none.
+    /// What a quick menu row shows. `None` for Date & Time (the binary rasterises the clock) and
+    /// About.
     pub fn quick_value(&self, row: QuickRow) -> Option<QuickValue> {
         match row {
             QuickRow::FastForward => QuickValue::speed(self.state.ff_speed),
@@ -880,8 +723,7 @@ impl App {
         self.shelf.carts.iter()
     }
 
-    /// The cartridge in the slot, on every screen that has one: on its way in, playing, showing
-    /// its polaroids, asleep, or on its way back out. `None` wherever the slot is empty.
+    /// The cartridge in the slot, on every screen that has one. `None` when the slot is empty.
     pub fn seated_cart(&self) -> Option<&Cart> {
         let stem = match &self.phase {
             Phase::Inserting { cart, .. }
@@ -904,42 +746,32 @@ impl App {
         self.shelf.set_faces(faces);
     }
 
-    /// Handed over when the core is spawned, which is on the way into the slot.
+    /// Handed over when the core is spawned on the way into the slot.
     pub fn set_snapshot(&mut self, snapshot: Box<dyn Snapshot>) {
         self.snapshot = Some(snapshot);
     }
 
-    /// The `Core` that `session.rs` resolved for the cart it just spawned. Called in the same
-    /// breath as `set_snapshot`, from the one place a cart's core is ever decided, so every
-    /// later read or write in this file has a stored answer to take rather than a reason to
-    /// ask `core_for` again.
+    /// The `Core` `session.rs` resolved for the cart it just spawned. Called with `set_snapshot`.
     pub fn set_core(&mut self, core: Core) {
         self.core = core;
     }
 
-    /// Whether the dylib `core` names is what actually opened. Handed over alongside `set_core`
-    /// by `session.rs`, which is the only caller that can know — see `crate::core::Opened`.
-    ///
-    /// Worth a field of its own rather than folding into `set_core` because it is a different
-    /// kind of fact: `core` is what the card says this cart should run, and this is whether
-    /// that turned out to be there. `retire_refused_resume` is the one thing that reads it, and
-    /// it is what stops a card with a missing core file from filing away every cart's session.
+    /// Whether the dylib `core` names is what actually opened (see `crate::core::Opened`).
+    /// Read only by `retire_refused_resume`, so a card missing a core file does not retire every
+    /// cart's session.
     pub fn set_named_core(&mut self, named: bool) {
         self.named_core = named;
     }
 
-    /// The `gpsp_serial` the core `Session` just spawned was loaded with. Called in the same
-    /// breath as `set_core`, from the same one place, so a picked link is compared against what
-    /// the running core was actually handed rather than against what the screen last showed.
+    /// The `gpsp_serial` the just-spawned core was loaded with, so a picked link is compared
+    /// against what the core was handed, not what the screen showed.
     pub fn set_link_loaded(&mut self, serial: &'static str) {
         self.link_loaded = Some(serial);
     }
 
-    /// The hardware the cart named `stem` links over, and the `gpsp_serial` a core has to load
-    /// with for it: what SELECT last switched the cart to, or what gpSP picks for it when nobody
-    /// has. A core loading on the way into the slot and a picked link both read it here, so the
-    /// core and the screen cannot come to disagree about which mode a cart is in. A cart the
-    /// shelf cannot name links by cable, on gpSP's own pick.
+    /// A cart's link hardware and the `gpsp_serial` to load it with: SELECT's last choice, else
+    /// gpSP's pick. Core loads and picked links both read this so they cannot disagree. An unknown
+    /// cart links by cable.
     pub fn link_mode(&self, stem: &str) -> (LinkKind, &'static str) {
         let Some((cart, auto)) = self.auto_link(stem) else {
             return (LinkKind::Cable, "auto");
@@ -948,19 +780,14 @@ impl App {
         (chosen, serial_option(chosen, auto, &cart.code, &cart.title))
     }
 
-    /// Whether a netpacket session is live right now. libretro disables an entire class of
-    /// time manipulation for as long as one is — see `may_rewind`/`may_load_state` — because
-    /// rewinding or loading a state on one device desynchronises the other with no way back
-    /// to agreement.
+    /// Whether a netpacket session is live. libretro forbids rewind, state loads and fast forward
+    /// during one, since they desync the peer with no way back.
     pub fn link_active(&self) -> bool {
         self.link.is_some()
     }
 
-    /// Begins a session. `client_id` is libretro's own: 0 the host, 1 the joiner — the only
-    /// two this product has. Nothing here touches a transport or a core; that lives on the
-    /// emulator thread, wherever `EmuHandle::begin_link` is called from the same gesture this
-    /// answers. A session always starts from the cart's battery save, never a state — that
-    /// falls out for free here, since nothing on this path touches the state ring at all.
+    /// Begins a session. `client_id` is libretro's: 0 host, 1 joiner. Bookkeeping only; the
+    /// transport and core live on the emulator thread. A session starts from the battery save.
     pub fn begin_link(&mut self, client_id: u16) {
         self.link = Some(LinkSession {
             client_id,
@@ -969,59 +796,43 @@ impl App {
         self.sync_link_badge();
     }
 
-    /// Which side of the session this device is, for whatever the UI ends up showing while
-    /// one is live. `None` when there is nothing to ask about.
+    /// This device's side of the session, or `None` with none live.
     pub fn link_client_id(&self) -> Option<u16> {
         self.link.as_ref().map(|s| s.client_id)
     }
 
-    /// Rewinding one device desynchronises the other with no way back, which is exactly what
-    /// libretro's netpacket contract forbids for as long as a session is open.
+    /// libretro's netpacket contract forbids it during a session: it desyncs the peer.
     pub fn may_rewind(&self) -> bool {
         !self.link_active()
     }
 
-    /// Loading a state is the same hazard rewinding is: it moves this device's machine to a
-    /// moment the peer never agreed to and has no way to follow.
+    /// Same hazard as rewinding: it moves this machine to a moment the peer cannot follow.
     pub fn may_load_state(&self) -> bool {
         !self.link_active()
     }
 
-    /// Fast forward runs this device's machine out ahead of what the peer has actually been
-    /// sent — the same desync `may_rewind` refuses for running it backwards instead, and
-    /// named in the very libretro.h sentence `may_rewind`'s own contract comes from
-    /// ("pausing, slow motion, fast forward, rewinding, save state loading... are disabled").
+    /// Runs this machine ahead of the peer. libretro.h lists fast forward among what a session
+    /// disables.
     pub fn may_fast_forward(&self) -> bool {
         !self.link_active()
     }
 
-    /// Ends the session and leaves the cart playing single player. Never an error: the peer
-    /// vanishing and the user ending it deliberately look the same from here.
-    ///
-    /// This is the app's own bookkeeping only, exactly like `link` itself (see its doc
-    /// comment) — it does not touch the core or the transport, both of which live on the
-    /// emulator thread. `Session::act` is what actually reaches them: it watches
-    /// `link_active()` around every `apply`, and mirrors an ending onto
-    /// `EmuHandle::end_link()`, which is what tells the core (`RetroCore::stop_link`, if it
-    /// offered one to call) and drops the transport. Anything that ends a session without
-    /// going through `apply` would need to repeat that mirroring by hand — there is no such
-    /// call site today.
+    /// Ends the session and leaves the cart playing single player. Bookkeeping only:
+    /// `Session::act` watches `link_active()` around every `apply` and mirrors an ending onto
+    /// `EmuHandle::end_link()`. Anything ending a session outside `apply` must do that itself.
     pub fn end_link(&mut self) {
         self.link = None;
-        // The core is still in link mode until it is opened again, but nothing is being loaded
-        // for a session any more, so the next cart in does not inherit one.
+        // The core stays in link mode until reopened, but the next cart must not load for one.
         self.link_player = None;
         self.sync_link_badge();
-        // `down` ends the session's own network and, on a BaseOS that has it, cools on the
-        // way out; the `cool` behind it is for the one that does not, and costs nothing
-        // either way. Both are queued rather than run: a teardown shells out for a second or
-        // two, and this is called from the frame loop.
+        // `down` ends the session's network and cools where BaseOS can; `cool` covers the one
+        // that cannot. Queued: a teardown shells out for a second or two.
         self.radio.ask(RadioJob::Down);
         self.radio.ask(RadioJob::Cool);
     }
 
-    /// The emulator thread found the transport closed. The badge breaks now; `timers` ends the
-    /// session once the broken badge has been up for `LINK_LOST_MS`.
+    /// The emulator thread found the transport closed. `timers` ends the session after
+    /// `LINK_LOST_MS` of broken badge.
     pub fn peer_lost(&mut self) {
         if matches!(self.game_menu, Some(GameMenu::Linked { .. })) {
             self.game_menu = None;
@@ -1033,32 +844,20 @@ impl App {
         self.sync_link_badge();
     }
 
-    /// The other player ended the link and sent word before going.
-    ///
-    /// What separates this from `peer_lost` is that there is nothing to wait out and nothing
-    /// ambiguous to report: the session ends on this frame and the banner says which device
-    /// ended it. It is the same ending `end_link_from_menu` performs on the device that pressed
-    /// the key, seen from the other end — same teardown, same radio jobs, same game carrying on
-    /// in the mode it was loaded with.
-    ///
-    /// `peer_lost` and its timeout stay underneath this rather than being replaced by it: a
-    /// crash, a flat battery or an SP carried out of range never sends this word, and the
-    /// broken badge is still the only honest thing to show for those.
+    /// The other player ended the link and said so. Ends now, with the same teardown as
+    /// `end_link_from_menu`. `peer_lost` still covers a crash or going out of range.
     pub fn peer_ended(&mut self) {
         if !self.link_active() {
             return;
         }
-        // Read before `end_link` clears it, the same way `end_link_from_menu` does.
+        // Read before `end_link` clears it.
         let role = self
             .link_client_id()
             .map_or(self.last_role, LinkRow::from_client_id);
         self.end_link();
         self.hud.toast(Toast::PeerEnded, self.now());
-        // The same unplug the device that pressed the key plays, on the device that pressed
-        // nothing. A link is one cable between two handhelds: it cannot come out of one end
-        // and stay in the other, and this end has just as much of it to put away. It replaces
-        // whatever screen was up — including no screen at all, which is the ordinary case here,
-        // since this player was in their game rather than in a menu.
+        // The same unplug the other device plays: one cable cannot stay in at one end. Replaces
+        // whatever screen was up, usually none.
         self.unplug(role);
     }
 
@@ -1083,49 +882,36 @@ impl App {
         self.hud.set_link(badge);
     }
 
-    /// The app has no device, so the sound it wants is left here for whoever does.
+    /// The sound the app wants, for whoever owns the device.
     pub fn take_sfx(&mut self) -> Option<Sfx> {
         self.sfx.take()
     }
 
-    /// The panel comes up at the level the card remembers rather than at whatever the
-    /// kernel left it at.
+    /// The panel comes up at the card's remembered level, not the kernel's.
     pub fn set_power(&mut self, mut power: Power) {
         power.set_backlight(self.state.brightness);
-        // The device's own clock, which the host's stands in for. Boot has nothing better to
-        // seed the picker from, so a device with a live RTC only gets its confirmation here.
-        // The first moment the device's own clock can be asked, and so the first moment a
-        // clock that was never set can be told apart from one that was. Boot has already
-        // taken `clock_set` at its word by here, which is exactly the case that leaves a
-        // dead RTC with no way back to the one screen that could fix it.
+        // The first moment the device's own clock can be read. Boot trusted `clock_set`, so a
+        // dead RTC has to be caught here or it never reaches the clock screen.
         let secs = power.now();
         if matches!(self.phase, Phase::SetClock { .. }) || secs < CLOCK_FLOOR {
             self.phase = clock_screen(secs, 0, false);
         }
         self.power = Some(power);
-        // There is nothing to read before this call — no gauge for `battery_at`, no charge
-        // for `charge_at`, and whatever `led_state` computed with no battery is not a real
-        // state to have already told a platform that did not exist yet either. All three are
-        // placeholders with nothing behind them, not real deadlines or a real prior write, so
-        // the first tick after this one has to act as if nothing has been read or written
-        // yet — or the case band's left shelf sits blank and the LED sits stale for the first
-        // poll of whichever cadence is longer, which is the one moment either is cheapest to
-        // have been wrong to skip.
+        // Nothing was read or written before this, so the first tick must poll and set the LED
+        // at once, or the band sits blank and the LED stale for a whole poll.
         self.battery_at = self.now();
         self.charge_at = self.now();
         self.last_led = None;
     }
 
-    /// The motor. Never persisted and never a level: it belongs to the cart that asked for
-    /// it and stops with it.
+    /// The motor. Never persisted: it belongs to the cart that asked for it.
     pub fn set_rumble(&mut self, strength: u16) {
         if let Some(power) = &mut self.power {
             power.set_rumble(strength);
         }
     }
 
-    /// Whether the quick menu lets the motor move at all. `Session::sync_rumble` is what holds
-    /// it still when it does not.
+    /// Whether the quick menu allows rumble. `Session::sync_rumble` enforces it.
     pub fn rumble_enabled(&self) -> bool {
         self.state.rumble
     }
@@ -1140,26 +926,19 @@ impl App {
         self.state.ff_sound
     }
 
-    /// Whether a core loaded from here on is asked to tint its picture like the console's own
-    /// LCD. Read by `Session::spawn_core` on the way into `open_core`, which is the only moment
-    /// a libretro core reads an option; the quick menu is only open on the shelf, with nothing
-    /// seated, so the next cart in is always the first to see a change made here.
+    /// Whether cores loaded from here on tint for the console LCD. Read by `Session::spawn_core`,
+    /// since a core reads options only at open.
     pub fn colour_correction(&self) -> bool {
         self.state.colour_correction
     }
 
-    /// Set by the doze timeout and by a graceful power off. The binary is what acts on it:
-    /// everything durable has already been written by the time it is true.
-    ///
+    /// Set by the doze timeout and a graceful power off, once everything durable is written.
     pub fn powering_off(&self) -> bool {
         self.powering_off
     }
 
-    /// What the binary waits for. The decision is made the instant the choice is, but the
-    /// machine is not allowed to stop until the ordinary loop has drawn and presented the
-    /// shutdown screen. Rendering out of band instead — one extra draw and swap between the
-    /// choice and `poweroff` — hung the device: the swap can block on a GPU about to be torn
-    /// down, and slot then never reached `poweroff` at all.
+    /// Waits until the ordinary loop has presented the shutdown screen. An out-of-band draw and
+    /// swap can block on a GPU about to be torn down and hang the device before `poweroff`.
     pub fn ready_to_power_off(&self) -> bool {
         self.powering_off && self.now() >= self.act_at
     }
@@ -1168,15 +947,13 @@ impl App {
         self.restarting && self.now() >= self.act_at
     }
 
-    /// Whether the shutdown screen is what should be on the panel. True from the instant the
-    /// choice is made, which is earlier than `powering_off`.
+    /// Whether the shutdown screen should show. True from the choice, before `powering_off`.
     pub fn shutting_down(&self) -> bool {
         self.powering_off || self.restarting
     }
 
-    /// Set by the menu's Restart. Goes through the same shutdown as a power off — busybox
-    /// init runs rcK for a reboot too — so the GPU module is unloaded either way, which is
-    /// what stops this hardware hanging with the rails up.
+    /// Set by the menu's Restart. Takes the same shutdown path (busybox init runs rcK for a
+    /// reboot too), so the GPU module is unloaded and the hardware does not hang with rails up.
     pub fn restarting(&self) -> bool {
         self.restarting
     }
@@ -1191,8 +968,7 @@ impl App {
         self.power_menu
     }
 
-    /// The core the chip is in or heading for, and `None` once the picker has gone. Still
-    /// `Some` while the lid is going back on.
+    /// The core the chip is in or heading for. Still `Some` while the lid goes back on.
     pub fn core_picker(&self) -> Option<Core> {
         self.core_picker.map(|p| p.seat())
     }
@@ -1202,55 +978,44 @@ impl App {
         self.core_picker.map(|p| p.chip(self.now()))
     }
 
-    /// Whether the in-game menu is up. Read by whoever owns the emulator as well as by the
-    /// draw: the game underneath is paused for as long as it is.
+    /// Whether the in-game menu is up. The game underneath is paused while it is.
     pub fn game_menu_open(&self) -> bool {
         self.game_menu.is_some()
     }
 
-    /// Which screen of the in-game menu is up, and `None` while it is closed.
+    /// Which in-game menu screen is up.
     pub fn game_menu(&self) -> Option<GameMenu> {
         self.game_menu
     }
 
-    /// The wire a link that just came up runs over, handed on exactly once. `App` never
-    /// touches a transport itself — the core and the socket both live on the emulator
-    /// thread — so this is left here for whoever owns that thread to collect.
+    /// The wire a link that just came up runs over, taken once by the emulator thread's owner.
     pub fn take_link_transport(&mut self) -> Option<(u16, Box<dyn LinkChannel>)> {
         self.link_transport.take()
     }
 
-    /// The reload a picked link is waiting on — which cart, and the `gpsp_serial` to load it
-    /// with — handed on exactly once. `App` never touches the core, so like the transport this
-    /// is left for whoever owns the emulator thread, who answers with `link_reload_done` or
-    /// `link_reload_failed`.
+    /// The reload a picked link waits on (cart, `gpsp_serial`), taken once. Answered with
+    /// `link_reload_done` or `link_reload_failed`.
     pub fn take_link_reload(&mut self) -> Option<(String, &'static str)> {
         self.link_reload.take()
     }
 
-    /// A colour correction change to carry to the running core, once. `Session::update` drains
-    /// it and decides from the seated core whether there is an option to send at all.
-    /// The port a cable session is being loaded for. Not `take`n: a reload re-reads it, and it
-    /// stays set for as long as the session does.
+    /// The port a cable session is loaded for. Not taken: a reload re-reads it.
     pub fn link_player(&self) -> Option<u8> {
         self.link_player
     }
 
+    /// A colour correction change for the running core, taken once by `Session::update`.
     pub fn take_colour_correction(&mut self) -> Option<bool> {
         self.colour_pending.take()
     }
 
-    /// The seated cart's core. Read by `Session` to work out which option name a setting has on
-    /// the core that is actually running, which is not a thing `App` should be spelling itself.
+    /// The seated cart's core, so `Session` can name options for the core actually running.
     pub fn core(&self) -> Core {
         self.core
     }
 
-    /// The game is loaded again and back where it was. After a switch, the link starts now in
-    /// the role that was picked — unless B asked in the meantime for it not to, and then the
-    /// screen closes and hands the game back the way a cancelled start does. After a reload that
-    /// failed and went back, the switch never happened: the cart's choice goes back with it, the
-    /// screen closes, and the game is handed back with the shake every refusal gets.
+    /// The game is loaded again. After a switch, the link starts in the picked role unless B
+    /// cancelled it. After a failed switch that fell back, the choice is reverted and refused.
     pub fn link_reload_done(&mut self) {
         let Some(reload) = self.reload.take() else {
             return;
@@ -1274,11 +1039,8 @@ impl App {
         );
     }
 
-    /// The game would not load in the mode it was switched to. The mode it came from loaded a
-    /// moment ago, from the same state that was flushed for this reload, so that is asked for
-    /// next, of whoever carried this one out. Only if that fails as well is there no game left to
-    /// hand back, and the cart comes back out of the slot refused rather than sitting seated with
-    /// no core behind it.
+    /// The game would not load in the new mode. Asks for the previous mode, which just loaded;
+    /// if that fails too, the cart is refused out of the slot rather than seated with no core.
     pub fn link_reload_failed(&mut self) {
         let Some(mut reload) = self.reload.take() else {
             return;
@@ -1293,7 +1055,7 @@ impl App {
         self.refuse_seated();
     }
 
-    /// The cart under the highlight, and `None` on an empty shelf.
+    /// The highlighted cart, or `None` on an empty shelf.
     pub fn selected_stem(&self) -> Option<&str> {
         self.shelf()
             .carts
@@ -1301,26 +1063,22 @@ impl App {
             .map(|c| c.stem.as_str())
     }
 
-    /// The cached reading. `None` until the first slow tick, and on any device with no gauge.
+    /// The cached reading. `None` until the first slow tick, or with no gauge.
     pub fn battery(&self) -> Option<Battery> {
         self.battery
     }
 
-    /// Does not return when there is a platform to power off. A unit test has none, and
-    /// there the flag is the whole of it.
+    /// Does not return when there is a platform. In unit tests the flag is all there is.
     pub fn poweroff(&mut self) {
         if let Some(power) = &mut self.power {
             power.poweroff();
         }
     }
 
-    /// The face buttons belong to whatever is on screen. The shelf and the switcher each
-    /// take them; while the game is playing they are the game's and the app sees only the
-    /// gestures that are never the game's.
+    /// The face buttons belong to whatever is on screen. While playing they are the game's and
+    /// the app sees only gestures.
     pub fn apply(&mut self, action: Action) {
-        // Ahead of everything, including the device's own keys: the menu is a decision the
-        // user is in the middle of making, and a volume press underneath it would be one
-        // more thing happening while they read.
+        // First, even before device keys: nothing else should happen while the user decides.
         if self.power_menu.is_some() {
             match action {
                 Action::LidClose => return self.doze(),
@@ -1328,40 +1086,19 @@ impl App {
                 _ => return self.power_menu_input(action),
             }
         }
-        // The lid, the light and the sound belong to the device rather than to whatever is
-        // on screen, so they are taken before the phase gets a look at the action.
+        // Lid, light and sound belong to the device, so they come before the phase.
         match action {
             Action::LidClose => return self.doze(),
             Action::LidOpen => return self.wake(),
             Action::PowerPress => {
                 // A live session ends here rather than flushing: this is the one button a
-                // trade partner mid-exchange can still reach, and ending the session is a
-                // decision, not "nothing to flush" — the two must not be the same press.
+                // trade partner mid-exchange can reach.
                 if self.link_active() {
                     self.end_link();
                     return;
                 }
-                // A press on a dark panel lights it, here on the press rather than on the
-                // release the wake used to wait for. Holding POWER on a dozing device raised
-                // the power menu into a framebuffer nobody could see — `doze` writes
-                // `set_backlight(0)` and nothing on that path lit it again — so the user got a
-                // second of nothing, kept holding, and reached the PMIC's own six second
-                // cutoff, which is the ungraceful stop `POWER_HOLD_MS` exists to get in front
-                // of.
-                //
-                // The press, because a thumb going down on a dark device is asking for it back
-                // and the answer should not wait to hear whether this is a tap. The hold runs
-                // on from here unchanged, so the user who really did mean "turn this off" still
-                // gets the menu off the one press — and now on a panel they can read it on.
-                //
-                // This is the only thing a POWER press may do to the panel, and the direction
-                // matters: a press may light it, never darken it. Darkening still waits for the
-                // release, so a press on its way to becoming a hold does not put the screen out
-                // on the way through.
-                //
-                // Assigned rather than or-ed, so the flag is always about the press in hand.
-                // Nothing clears it on the `PowerOff` path — a hold's release is swallowed by
-                // the menu it raised — and nothing needs to: the next press overwrites it.
+                // Light a dark panel on the press, or a hold raises the menu unseen and the user
+                // holds on into the PMIC's six second cut. A press may light, never darken.
                 self.woke_on_press = matches!(self.phase, Phase::Doze { .. });
                 if self.woke_on_press {
                     self.wake();
@@ -1370,13 +1107,12 @@ impl App {
             }
             Action::PowerTap => return self.power_press(),
             Action::PowerHold => return self.open_power_menu(),
-            // The release no longer means anything once the menu is what a hold raises:
-            // the choice is the commitment, and it is made with A.
+            // The hold raises the menu; the choice there is made with A.
             Action::PowerOff => return,
             _ => {}
         }
-        // Ahead of the levels too. The clock owns all four directions, and at first boot it is
-        // a screen with no way back, which is not one to be adjusting the backlight from.
+        // Before the levels: the clock owns all four directions, and at first boot there is no
+        // way back from it.
         if let Phase::SetClock {
             picker, from_menu, ..
         } = &mut self.phase
@@ -1400,41 +1136,30 @@ impl App {
         if self.adjust(action) {
             return;
         }
-        // The release reaches the shelf whatever is on screen. A direction let go of during
-        // an insert would otherwise still be held when the cart comes back out.
+        // Releases reach the shelf on any screen, or a direction let go during an insert stays
+        // held.
         match action {
             Action::GbaUp(Btn::Left) => self.shelf_mut().release_left(),
             Action::GbaUp(Btn::Right) => self.shelf_mut().release_right(),
             _ => {}
         }
-        // Beside the power menu's own block rather than inside the phase match, so the two
-        // menus can never both take a press: that one returns above this, and this returns
-        // above the phase. Below the lid, the button and the levels, unlike that one — this
-        // is a menu over a game that is still running, not a machine about to stop, so the
-        // device's own keys keep working while it is up.
+        // Before the phase match, so it and the power menu never both take a press. Below the
+        // device keys, which keep working over a running game.
         if self.game_menu.is_some() {
             return self.game_menu_input(action);
         }
         let now = self.now();
         match self.phase {
             Phase::Shelf => match action {
-                // START rather than SELECT, and the difference is not cosmetic. SELECT is
-                // the chord key: held, it turns Up/Down into brightness and Left/Right into
-                // blue light, and `adjust` answers those on every screen including this one.
-                // Opening a menu the instant SELECT goes down would eat the first half of
-                // every one of those chords; waiting out the 600 ms window instead would put
-                // that delay in front of the menu. START is bound to nothing here and reaches
-                // no core from the shelf, so it costs neither.
+                // START, not SELECT: SELECT is the chord key for brightness and blue light, so
+                // opening on it would eat or delay those chords. START is unbound here.
                 Action::GbaDown(Btn::Start) if self.core_picker.is_none() => {
                     self.open_core_picker()
                 }
-                // Ahead of the shelf's own movement, so an open picker takes the arrows
-                // before the row of carts underneath it does.
+                // Before the shelf's own movement, so an open picker takes the arrows.
                 _ if self.core_picker.is_some() => self.core_picker_input(action),
-                // Up and Down cross the row a letter at a time, where Left and Right cross it a
-                // cart at a time. A thirty cart library is a long hold on Left or Right and two
-                // presses here. SELECT+Up is brightness and reaches `adjust` before this, so the
-                // chord is unaffected.
+                // Up and Down jump a letter at a time. SELECT+Up (brightness) reaches `adjust`
+                // first.
                 Action::GbaDown(Btn::Up) => self.shelf_mut().jump_prev_letter(),
                 Action::GbaDown(Btn::Down) => self.shelf_mut().jump_next_letter(),
                 Action::ShelfLeft | Action::GbaDown(Btn::Left) => self.shelf_mut().hold_left(now),
@@ -1442,9 +1167,7 @@ impl App {
                     self.shelf_mut().hold_right(now)
                 }
                 Action::QuickMenu => self.open_quick_menu(),
-                // A is two actions and the press cannot tell them apart yet, so the cart
-                // goes in on the release. The hold has already taken it if it got there
-                // first, and then the release is not a second press.
+                // A tap inserts on release; a hold that got there first has already taken it.
                 Action::GbaDown(Btn::A) => self.play_held = Some(now),
                 Action::GbaUp(Btn::A) => {
                     if self.play_held.take().is_some() {
@@ -1454,8 +1177,7 @@ impl App {
                 Action::Insert => self.insert(false),
                 _ => {}
             },
-            // Eject reaches an insert as well, so a cart whose core never arrived can still
-            // be got out. Nothing else here applies until there is a game.
+            // Eject reaches an insert too, so a cart whose core never arrived can be got out.
             Phase::Inserting { .. } if action == Action::Eject => self.eject(),
             Phase::Playing { .. } => match action {
                 Action::Eject => self.eject(),
@@ -1463,13 +1185,10 @@ impl App {
                 Action::Polaroids => self.open_polaroids(),
                 Action::SaveState => self.save_state(),
                 Action::LoadState => self.load_newest(),
-                // Rewinding interrupts communication libretro's contract says must not be
-                // interrupted. Declined the same way every other "nothing doing" action in
-                // this file is, so the press reads as answered rather than dropped.
+                // libretro forbids rewinding during a session. Refused so the press reads as
+                // answered.
                 Action::RewindStart if !self.may_rewind() => self.refuse(),
-                // Fast forward is the same interruption run forwards. `Session::sync_speed`
-                // is what actually withholds `Speed::Fast` for as long as `may_fast_forward`
-                // says no — this is only the shake, so the press reads as answered.
+                // `Session::sync_speed` is what withholds `Speed::Fast`; this is only the shake.
                 Action::FfStart if !self.may_fast_forward() => self.refuse(),
                 _ => {}
             },
@@ -1478,14 +1197,12 @@ impl App {
                 Action::ShelfRight | Action::GbaDown(Btn::Right) => self.flick(Polaroids::right),
                 Action::GbaDown(Btn::A) => self.load_selected(),
                 Action::GbaDown(Btn::B) | Action::Polaroids => self.close_polaroids(),
-                // The offer lives on this screen and nowhere else. X and Y are free
-                // everywhere: the GBA has neither, so the game can never want them.
+                // X and Y are free everywhere: the GBA has neither.
                 Action::GbaDown(Btn::X) => self.undo(self.now()),
                 Action::GbaDown(Btn::Y) => self.delete_selected(),
                 _ => {}
             },
-            // Back to the menu it was opened from, on the row that opened it. MENU as well as B,
-            // as it always has been, so the button that brought the user here gets them back.
+            // Back to the quick menu on the row that opened it. MENU works as well as B.
             Phase::About if action == Action::GbaDown(Btn::B) || action == Action::QuickMenu => {
                 self.phase = Phase::QuickMenu {
                     row: QuickRow::About,
@@ -1496,15 +1213,15 @@ impl App {
         }
     }
 
-    /// MENU on the carousel. On the top row every time, however the menu was last left.
+    /// MENU on the carousel. Always opens on the top row.
     fn open_quick_menu(&mut self) {
         self.phase = Phase::QuickMenu {
             row: QuickRow::ALL[0],
         };
     }
 
-    /// Up and Down move the bar and stop at the ends, Left and Right change the row in hand, A
-    /// opens the two rows that open, and MENU or B puts the carousel back.
+    /// Up/Down move the bar and stop at the ends, Left/Right change the row, A opens, MENU or B
+    /// returns to the carousel.
     fn quick_menu_input(&mut self, row: QuickRow, action: Action) {
         let row = match action {
             Action::GbaDown(Btn::Up) => row.up(),
@@ -1525,8 +1242,7 @@ impl App {
     fn open_quick_row(&mut self, row: QuickRow) {
         match row {
             QuickRow::DateTime => {
-                // Started from the clock as it stands, offset and all: this is a clock being
-                // corrected, not one being asked for the first time.
+                // Seeded from the current clock and offset: this is a correction.
                 self.phase = clock_screen(self.utc_secs(), self.state.utc_offset_min, true);
             }
             QuickRow::About => self.phase = Phase::About,
@@ -1537,9 +1253,8 @@ impl App {
         }
     }
 
-    /// Left or Right on the row in hand. It takes effect at once and goes straight to the card,
-    /// the way brightness does, with no save step to forget. A press against an end changes
-    /// nothing and writes nothing.
+    /// Left or Right on the highlighted row. Takes effect and persists at once; a press against an
+    /// end writes nothing.
     fn change_setting(&mut self, row: QuickRow, right: bool) {
         let s = &mut self.state;
         match row {
@@ -1550,13 +1265,11 @@ impl App {
                 }
                 s.ff_speed = to;
             }
-            // Two values each, so either arrow is the other one.
+            // Two values each, so either arrow toggles.
             QuickRow::FastForwardSound => s.ff_sound = !s.ff_sound,
             QuickRow::ColourCorrection => {
                 s.colour_correction = !s.colour_correction;
-                // Carried to the running core as well as written down. Without this the row
-                // would take effect only the next time a core was opened, which is to say the
-                // next time the cart was inserted, which from the player's side is not at all.
+                // Also sent to the running core, or it would only apply at the next insert.
                 self.colour_pending = Some(s.colour_correction);
             }
             QuickRow::Rumble => s.rumble = !s.rumble,
@@ -1565,16 +1278,14 @@ impl App {
         self.persist();
     }
 
-    /// Applied at a stated moment rather than at whatever the accumulated clock has reached.
-    /// The clock is set rather than advanced: a caller that says when something happened is
-    /// stating the whole timeline, not adding to one.
+    /// Applied at a stated moment. The clock is set, not advanced.
     pub fn apply_at(&mut self, action: Action, now: Millis) {
         self.clock = now as f64;
         self.apply(action);
     }
 
-    /// `true` if the action was one of the three levels, whether or not it moved. A press
-    /// that hits an end still shows the bar, which is how the end announces itself.
+    /// `true` if the action was one of the three levels, moved or not. A press at an end still
+    /// shows the bar.
     fn adjust(&mut self, action: Action) -> bool {
         if action == Action::MuteToggle {
             self.mute_toggle();
@@ -1607,12 +1318,12 @@ impl App {
             HudKind::Brightness => &mut self.state.brightness,
             HudKind::BlueLight => &mut self.state.blue_light,
             HudKind::Volume => &mut self.state.volume,
-            // The bar is shared with rewind, which is not a level and is never an action.
+            // Rewind shares the bar but is never an action.
             HudKind::Rewind => return false,
         };
         let moved = *level != value;
         *level = value;
-        // Turning it up or down is the plainest way to say you want to hear it again.
+        // Changing the volume unmutes.
         let unmuted = kind == HudKind::Volume && std::mem::take(&mut self.state.muted);
         let (shown, now) = (self.hud_value(kind, value), self.now());
         self.hud.show(kind, shown, self.state.muted, now);
@@ -1626,8 +1337,7 @@ impl App {
         true
     }
 
-    /// Where the volume stood before the press about to happen. Only the last two are kept:
-    /// a chord is two presses, and anything older belongs to a gesture that already ended.
+    /// Where the volume stood before this press. Two are kept: a chord is two presses.
     fn remember_volume(&mut self) {
         if self.vol_before.len() == 2 {
             self.vol_before.remove(0);
@@ -1636,9 +1346,8 @@ impl App {
             .push((self.state.volume, self.state.muted, self.now()));
     }
 
-    /// Silence is a state rather than a level, so muting neither moves the number nor is
-    /// moved by the two presses that asked for it. Both keys fire their own adjustment on
-    /// the way to the chord, and from an end those two do not cancel.
+    /// Mute is a state, not a level. Both chord keys fire their own adjustment first, and from an
+    /// end those do not cancel, so they are rolled back here.
     fn mute_toggle(&mut self) {
         let now = self.now();
         if let Some((volume, muted, _)) = self
@@ -1657,8 +1366,7 @@ impl App {
         self.persist();
     }
 
-    /// What the bar reads. Muted draws as an empty bar under the muted glyph, which is what
-    /// zero already looks like and is what it already means.
+    /// What the bar reads. Muted draws as an empty bar under the muted glyph.
     fn hud_value(&self, kind: HudKind, value: u8) -> u8 {
         match kind {
             HudKind::Volume => self.output_volume(),
@@ -1666,11 +1374,11 @@ impl App {
         }
     }
 
-    /// Pushed from outside because only the emulator knows how much history is left. Held
-    /// open until `hide_rewind`, unlike the levels.
+    /// Pushed in, since only the emulator knows how much history is left. Held until
+    /// `hide_rewind`.
     pub fn show_rewind(&mut self, fill: u8) {
         let now = self.now();
-        // Rewind is not a level and cannot be silenced, so it is never the muted glyph.
+        // Rewind cannot be muted, so never the muted glyph.
         self.hud.show(HudKind::Rewind, fill, false, now);
     }
 
@@ -1678,8 +1386,7 @@ impl App {
         self.hud.release_rewind();
     }
 
-    /// Pushed from outside for the same reason the rewind fill is: held and latched are one
-    /// action apiece to the app and two different things on screen.
+    /// Pushed in: held and latched are one action each to the app but look different.
     pub fn set_ff(&mut self, ff: FfState) {
         self.hud.set_ff(ff);
     }
@@ -1692,7 +1399,7 @@ impl App {
         self.state.blue_light
     }
 
-    /// The level the user chose, which a mute does not touch.
+    /// The chosen level, which a mute does not touch.
     pub fn volume(&self) -> u8 {
         self.state.volume
     }
@@ -1701,8 +1408,7 @@ impl App {
         self.state.muted
     }
 
-    /// What the sink is actually to be set to. The only one of the two the audio path may
-    /// read: a muted device at level 70 is silent, not 70.
+    /// What the sink is set to. The only one the audio path may read: muted at 70 is silent.
     pub fn output_volume(&self) -> u8 {
         if self.state.muted {
             0
@@ -1728,25 +1434,22 @@ impl App {
     pub fn update(&mut self, dt: f32) {
         self.clock += dt as f64 * 1000.0;
         self.timers();
-        // A queue poll rather than a syscall, so the frame loop can afford it every frame —
-        // which is the whole reason the slow parts of starting a link are on a thread of
-        // their own.
+        // A queue poll, not a syscall, so it is cheap every frame.
         self.poll_link();
         let now = self.now();
-        // The cart opens once its board is on the GPU, so a slow build is a pause on the shelf
-        // rather than an animation spent before its first frame.
+        // The cart opens once its board is on the GPU, so a slow build pauses on the shelf
+        // rather than eating the animation.
         let ready = self.core_faces_ready();
         if let Some(picker) = &mut self.core_picker {
             if picker.waiting() && (ready || picker.waited(now) >= FACES_WAIT_MS) {
                 picker.start(now);
             }
         }
-        // The lid is back on, so the shelf is the shelf again.
+        // The lid is back on.
         if self.core_picker.is_some_and(|p| p.finished(now)) {
             self.core_picker = None;
         }
-        // A direction still held as the shelf leaves the screen is not held when it comes
-        // back: the row repeats only while it is the thing being looked at.
+        // A direction held as the shelf leaves the screen is not held when it returns.
         if !self.on_shelf() {
             self.shelf_mut().release_hold();
         }
@@ -1766,22 +1469,16 @@ impl App {
             } => {
                 let was = *t;
                 *t += dt;
-                // Started early enough that the contacts in the clip land on the frame
-                // the cart does. A resumed cart never travelled, so it never touched
-                // anything.
+                // Started early so the clip's contact lands on the seating frame. A resumed cart
+                // never travelled.
                 let at = SEATED_AT - Sfx::Insert.lead();
                 touched = !*resumed && was < at && *t >= at;
                 (*t >= INSERT_S && *core_ready).then(|| Phase::Playing {
                     cart: std::mem::take(cart),
                 })
             }
-            // Two movements, in the order the insert made them: the panel goes out, and only
-            // once there is nothing on it does the cart start to travel. A cart sliding out
-            // across a live picture is the insert played back with its halves overlapping.
-            // The clock only starts once the picture is out, and it starts below zero: the
-            // beat before the cart moves is that stretch. The contacts let go as it starts
-            // moving, which is neither when the button was held nor while the screen is
-            // still going down.
+            // The panel goes out before the cart travels. `t` starts below zero for the pause,
+            // and the contacts let go as the cart starts moving.
             Phase::Ejecting { t, .. } => {
                 if self.screen <= 0.0 {
                     let was = *t;
@@ -1792,7 +1489,7 @@ impl App {
             }
             _ => None,
         };
-        // One clip for the whole movement, and the only thing done to it is when it starts.
+        // One clip for the whole movement, only its start is timed.
         if touched {
             self.sfx = Some(match self.phase {
                 Phase::Ejecting { .. } => Sfx::Eject,
@@ -1800,14 +1497,11 @@ impl App {
             });
         }
         if let Some(phase) = next {
-            // Ahead of the screen step, so the frame the cart finishes arriving is already
-            // the first frame of the power on rather than one more frame of nothing.
+            // Before the screen step, so the arrival frame is already the first power-on frame.
             self.phase = phase;
-            // The cart is out. Whatever it was carrying goes with it.
+            // The cart is out; its refusal goes with it.
             self.refused_from = None;
-            // `slot.state` mirrors the slot, so it changes where the phase does: seated on
-            // the way in, empty on the way back to the shelf whether that was an eject or
-            // a refusal.
+            // `slot.state` mirrors the slot: seated on the way in, empty on the way back out.
             let seated = match &self.phase {
                 Phase::Playing { cart } => Some(cart.clone()),
                 _ => None,
@@ -1821,8 +1515,7 @@ impl App {
         self.step_screen(dt);
     }
 
-    /// The game layer's own power, which answers to the phase rather than to an event: an
-    /// insert, a resume and a wake all bring the picture up the same way.
+    /// The game layer's power, driven by the phase: insert, resume and wake all bring it up alike.
     fn step_screen(&mut self, dt: f32) {
         let lit = matches!(self.phase, Phase::Playing { .. } | Phase::Polaroids { .. });
         let step = if lit {
@@ -1833,8 +1526,7 @@ impl App {
         self.screen = (self.screen + step).clamp(0.0, 1.0);
     }
 
-    /// 0.0 dark, 1.0 fully on. The compositor scales and brightens the game layer by it, and
-    /// nothing may draw the game at all while it is zero.
+    /// 0.0 dark, 1.0 fully on. Nothing may draw the game while it is zero.
     pub fn screen_power(&self) -> f32 {
         self.screen
     }
@@ -1844,24 +1536,21 @@ impl App {
     }
 
     /// Whether the draw list carries the game layer. A core that has published nothing would
-    /// otherwise show the last cart's final frame for the length of the insert.
+    /// otherwise show the last cart's final frame.
     pub fn game_visible(&self) -> bool {
         self.game_ready && self.screen > 0.0
     }
 
-    /// Jumps the clock without advancing an animation. The autosave and the doze timeout
-    /// are minutes apart, which is further than a test wants to walk a frame at a time.
+    /// Jumps the clock without advancing animations, for tests spanning minutes.
     pub fn tick_ms(&mut self, now: Millis) {
         self.clock = self.clock.max(now as f64);
         self.timers();
     }
 
-    /// Everything the clock alone drives. The play hold is the one thing here the user did
-    /// ask for; it is only the clock that decides which of the two things it was.
+    /// Everything the clock alone drives.
     fn timers(&mut self) {
         self.play_hold();
-        // The grace period can run out with the switcher open, so the hint answers to the
-        // clock rather than to whatever was on offer on the way in.
+        // The grace period can run out with the switcher open.
         let offer = self.undo_label();
         if let Some(p) = &mut self.polaroids {
             p.set_undo(offer);
@@ -1879,19 +1568,17 @@ impl App {
                 self.on_battery(b);
             }
         }
-        // Only the charge half. The percent it is written beside is at most one slow tick
-        // old, which is the staleness the slow tick was always chosen for.
+        // Only the charge half. The percent beside it is at most one slow tick old.
         if self.now() >= self.charge_at {
             self.charge_at = self.now() + CHARGE_POLL_MS;
             if let (Some(power), Some(b)) = (self.power.as_ref(), self.battery.as_mut()) {
                 b.charge = power.charge();
             }
-            // On the fast tick rather than the slow one: an amber-on-plug-in that lags ten
-            // seconds behind the cable is worse than no LED at all.
+            // On the fast tick: an amber LED lagging the cable by ten seconds is worse than none.
             let state = self.led_state();
             self.set_led(state);
         }
-        // LINKED is only the screen saying the session is up; it has held long enough.
+        // LINKED has been shown long enough.
         if let Some(GameMenu::Linked {
             since,
             opened: false,
@@ -1902,16 +1589,14 @@ impl App {
                 self.game_menu = None;
             }
         }
-        // The plug is out and the screen has been looked at. Straight to `None` rather than
-        // through `close_game_menu`: there is no starter to cancel and no reload to drop, and
-        // that path would ask the radio to cool a second time behind the `down` `end_link` has
-        // already queued — which `a_ends_the_session_and_says_so` reads off the radio log.
+        // Straight to `None`, not `close_game_menu`: that would queue a second radio cool behind
+        // `end_link`'s `down` (checked by `a_ends_the_session_and_says_so`).
         if let Some(GameMenu::Unplug { since, .. }) = self.game_menu {
             if self.now().saturating_sub(since) >= UNPLUG_HOLD_MS {
                 self.game_menu = None;
             }
         }
-        // A lost peer's session ends on its own, once the broken badge has been seen.
+        // A lost peer's session ends once the broken badge has been seen.
         if let Some(at) = self.link.as_ref().and_then(|s| s.lost_at) {
             if self.now().saturating_sub(at) >= LINK_LOST_MS {
                 self.end_link();
@@ -1919,8 +1604,8 @@ impl App {
         }
     }
 
-    /// Modelled on the OG SP: green running, red low, amber charging, green once it is full.
-    /// Charging outranks low, since a flat device on a cable is filling rather than dying.
+    /// Modelled on the OG SP: green running, red low, amber charging, green when full. Charging
+    /// outranks low.
     pub fn led_state(&self) -> LedState {
         let Some(b) = self.battery else {
             return LedState::Running;
@@ -1933,18 +1618,10 @@ impl App {
         }
     }
 
-    /// The one place that ever reaches the platform's own `set_led`, so the edge kept in
-    /// `last_led` cannot be bypassed by a call site that forgot it. Called every second with
-    /// whatever `led_state` just computed, so on any device that never asserts a charge state
-    /// this is the only branch pair — `Low` and `Running` — a write ever leaves this function
-    /// with; a state repeated from the previous second returns before touching the platform.
+    /// The only call to the platform's `set_led`, so the dedup in `last_led` cannot be bypassed.
     fn set_led(&mut self, state: LedState) {
-        // A shutdown darkens the case and nothing lights it again. The fast tick recomputes
-        // `led_state` from the gauge every second and knows nothing about a shutdown in
-        // progress, so a charge tick landing inside the window between the choice and
-        // `poweroff` put the light straight back to green for the five seconds rcK takes.
-        // Guarded here rather than at that call site for the same reason the edge is: this is
-        // the one seam, and a caller cannot forget what it never has to remember.
+        // A shutdown darkens the case for good. Without this a charge tick between the choice
+        // and `poweroff` turns it green again for the five seconds rcK takes.
         if self.shutting_down() && state != LedState::Off {
             return;
         }
@@ -1982,45 +1659,25 @@ impl App {
             return;
         };
         *core_ready = true;
-        // The cart's name is only here during the insert — `seated` answers `None` until the
-        // slot reaches `Playing` — and this is the first moment the core has settled far enough
-        // to have accepted or refused what it was handed.
+        // The cart's name is only here during the insert, and this is when the core has
+        // accepted or refused its resume.
         let cart = cart.clone();
         self.retire_refused_resume(&cart);
     }
 
-    /// Moves a resume the core would not read out of the way, so the next open does not hand
-    /// the same bytes to the same core and collect the same refusal. Without this a state one
-    /// core cannot read is offered forever: silently, on every boot, with no gesture on the
-    /// device that can clear it and no file manager to delete it with.
-    ///
-    /// Done as the cart settles rather than at the next flush, so a player who powers off
-    /// straight away still gets a clean start next time. `on_core_ready` runs on every frame of
-    /// the insert, so this runs several times per cart; the second call finds no `resume.state`
-    /// and does nothing, which is why it needs no latch of its own.
-    ///
-    /// Moved, not deleted: see `StateRing::retire_resume` for why, and for why the name it
-    /// lands under can never be read back as a ring entry.
+    /// Moves a resume the core would not read aside, so it is not refused on every boot with no
+    /// way to clear it on the device. Done as the cart settles, not at the next flush. Runs every
+    /// frame of the insert; later calls find no `resume.state` and do nothing.
     fn retire_refused_resume(&mut self, stem: &str) {
         let Some(snapshot) = &self.snapshot else {
             return;
         };
-        // The overwhelmingly common case, and the reason this check comes first: a core that
-        // took its resume has nothing to move, and answering that costs one atomic load rather
-        // than a stat of the card on every frame of every insert.
+        // The common case, and one atomic load instead of a stat per frame.
         if snapshot.resume_trusted() {
             return;
         }
-        // A refusal is only evidence about the state when the emulator that refused it is the
-        // one the state was filed under. With the dylib missing, `open_core` runs the mock, and
-        // the mock refuses every state it did not write itself — so its refusal says the core
-        // is absent, not that the player's session is unreadable. Filing the state away on that
-        // would take a perfectly good session off someone whose only real problem was a file
-        // they could put back. Nothing is said here about it: `open_core` has already logged
-        // which core was wanted and where it looked, which is the fact worth acting on.
-        //
-        // `resume_trusted` stays false either way, so the mock still never writes over the
-        // state it could not read.
+        // A missing dylib means the mock refused, which says nothing about the state.
+        // `resume_trusted` stays false, so the mock still never overwrites it.
         if !self.named_core {
             return;
         }
@@ -2050,17 +1707,14 @@ impl App {
 
     /// Sends `cart` back out of the slot refused, from `caught` of the way in.
     fn refuse_out(&mut self, cart: String, caught: f32) {
-        // Resumed at the depth it caught rather than at zero, so the refusal reads as one
-        // movement instead of a jump to seated and back out.
+        // Resumed from the depth it reached, so the refusal is one movement.
         let t = (1.0 - caught) * EJECT_S;
         self.phase = Phase::Ejecting { cart, t };
-        // No shake here. The cart is on screen and carries the alert instead, and a screen
-        // that flinched as well would read as two separate failures.
+        // No shake: the cart carries the alert, and both would read as two failures.
         self.refused_from = Some(t);
     }
 
-    /// Any action the app will not carry out. There are no words for it and no state to
-    /// clear: it decays on its own clock, wherever it is being drawn.
+    /// Any action the app will not carry out. It decays on its own clock.
     pub fn refuse(&mut self) {
         self.refusal = Some(Refusal::started(self.now()));
     }
@@ -2069,7 +1723,7 @@ impl App {
         self.refusal.is_some_and(|r| r.active(now))
     }
 
-    /// How far the cart is into the slot: 0.0 standing on the shelf, 1.0 swallowed.
+    /// How far the cart is into the slot: 0.0 on the shelf, 1.0 swallowed.
     pub fn seat(&self) -> f32 {
         match &self.phase {
             Phase::Shelf => 0.0,
@@ -2086,10 +1740,8 @@ impl App {
     }
 
     pub fn draw(&self, out: &mut Vec<Draw>) {
-        // Ahead of every phase, because a shutdown is not a screen the user navigated to.
-        // rcK takes about five seconds on this hardware — it stops the frontend and unloads
-        // the GPU module before the kernel is allowed to halt — and five seconds of black
-        // panel after holding the button is indistinguishable from a device that has hung.
+        // Before every phase. rcK takes about five seconds (it unloads the GPU module), and that
+        // long on a black panel looks like a hang.
         if let Some(index) = self.power_menu {
             self.draw_power_menu(index, out);
             return;
@@ -2102,7 +1754,7 @@ impl App {
                 h: OUT_H as f32,
                 colour: [0.0, 0.0, 0.0, 1.0],
             });
-            // The row the user picked is the row the screen repeats back.
+            // Repeats back the row the user picked.
             let which = if self.restarting {
                 PowerChoice::Restart
             } else {
@@ -2121,8 +1773,7 @@ impl App {
             return;
         }
         match &self.phase {
-            // Nothing else is on screen and nothing goes over it, the HUD included: the
-            // levels are unreachable here and there is no game to say anything about.
+            // Nothing goes over it, the HUD included.
             Phase::SetClock {
                 picker, from_menu, ..
             } => {
@@ -2130,7 +1781,7 @@ impl App {
                     Some((line, hint)) => (Some(line), Some(hint)),
                     None => (None, None),
                 };
-                // The quick menu's own B BACK, when there is a menu to go back to.
+                // The quick menu's B BACK, when there is a menu to go back to.
                 let back = self
                     .quick_menu_faces
                     .as_ref()
@@ -2139,8 +1790,7 @@ impl App {
                 picker.draw(line, hint, back, out);
                 return;
             }
-            // Not returned from: brightness and volume are still answered here, and the bar they
-            // raise goes over the menu the way it goes over the shelf.
+            // Not returned from: the level bars still draw over the menu.
             Phase::QuickMenu { row } => QuickMenu {
                 row: *row,
                 values: QuickRow::ALL.map(|r| self.quick_value(r)),
@@ -2151,15 +1801,12 @@ impl App {
             Phase::Shelf => {
                 draw_backdrop(self.wallpaper, out);
                 match (self.core_picker_shown(), self.selected_stem()) {
-                    // The highlighted cart is the picker's to draw while its lid is off, and the
-                    // rest of the row makes way for it the way it does for a cart going in.
-                    // Until its faces are up the picker has only bare parts, so the cart stands.
+                    // The picker draws the highlighted cart while its lid is off, and the row
+                    // makes way. Until its faces are up the cart stands.
                     (Some(picker), Some(stem)) => {
-                        // Eased on the whole progress rather than on either beat: the row makes
-                        // way across the slide and the lift as one movement.
+                        // Eased on the whole progress, so slide and lift are one movement.
                         let open = ease(picker.openness(self.now()));
-                        // Dimmed by as much of the open as has happened, so the dark arrives
-                        // with the lid coming off and leaves with it going back on.
+                        // Dims in step with the lid coming off and going back on.
                         let dim = 1.0 + (CORE_PICKER_DIM - 1.0) * open;
                         self.shelf()
                             .draw_row(Some(stem), 0.0, CORE_PICKER_RECEDE * open, dim, out);
@@ -2176,15 +1823,12 @@ impl App {
                 );
             }
             Phase::About => {
-                // The same ground the shelf stands on, scrim and all. The label is a dark
-                // object and the scrim is what a dark object needs to read over a
-                // photograph — it is there for the carts for exactly the same reason.
+                // The shelf's backdrop and scrim, which the dark label needs over a photograph.
                 draw_backdrop(self.wallpaper, out);
                 draw_sticker(self.sticker_face, out);
                 return;
             }
-            // The shelf recedes behind the cart on the way in; on the way out the live
-            // game is what darkens, and the compositor has already drawn it.
+            // The shelf recedes behind the cart on the way in.
             Phase::Inserting { cart, resumed, .. } => {
                 // Spec section 3: a resumed cart shows no shelf, not even one frame of it.
                 if !resumed {
@@ -2194,22 +1838,18 @@ impl App {
                 }
                 self.chrome(cart, self.seat(), out);
             }
-            // The insert run backwards, all of it: the veil lifts, the row closes back up
-            // and the cart comes out, every one of them off the same progress running the
-            // other way. Darkening on the way out as well as on the way in was the screen
-            // playing the same movement twice rather than reversing it.
+            // The insert run backwards, off the same progress.
             Phase::Ejecting { cart, .. } => {
                 draw_backdrop(self.wallpaper, out);
                 self.shelf()
                     .draw_row(Some(cart), 0.0, self.seat(), 1.0, out);
                 self.chrome(cart, self.seat(), out);
             }
-            // The slot stays on screen until the picture behind it has finished arriving,
-            // so the game blooms out of a lit lip rather than replacing it.
+            // The slot stays until the picture has finished arriving, so the game blooms out of
+            // a lit lip.
             Phase::Playing { cart } if self.screen < 1.0 => self.chrome(cart, 0.0, out),
             Phase::Playing { .. } => self.push_game(out),
-            // The paused game stays underneath, covered by the screenshot the switcher
-            // draws over the whole screen.
+            // The paused game stays underneath the switcher's full-screen screenshot.
             Phase::Polaroids { .. } => {
                 self.push_game(out);
                 if let Some(p) = &self.polaroids {
@@ -2222,8 +1862,7 @@ impl App {
                     );
                 }
             }
-            // The device answers a shut lid with the backlight; the host has no panel to
-            // darken, so the doze is drawn. Nothing goes over it, the HUD included.
+            // The host has no backlight to cut, so the doze is drawn. Nothing goes over it.
             Phase::Doze { .. } => {
                 out.push(Draw::Rect {
                     x: 0.0,
@@ -2235,54 +1874,35 @@ impl App {
                 return;
             }
         }
-        // After the shelf, never before it: drawn first it would be painted over by the very
-        // row of carts it is a menu for, and START would look like a button that does
-        // nothing. Only the shelf can raise it, so no phase needs excluding here — the
-        // phases that own the whole panel have already returned.
+        // After the shelf, or the row would paint over it.
         if let Some(picker) = self.core_picker_shown() {
             self.draw_core_picker(&picker, out);
         }
-        // Over the game and under the HUD, for the same reason the picker is over the shelf:
-        // it is a menu about the thing still on screen behind it, and the level bars have to
-        // stay visible while it is up. Only a running game can raise it, so no phase needs
-        // excluding here — the ones that own the whole panel have already returned.
+        // Over the game and under the HUD, so the level bars stay visible.
         if let Some(menu) = self.game_menu {
             self.draw_game_menu(menu, out);
         }
-        // Over everything, in every phase. The bar is never what the user is looking at.
+        // Over everything, in every phase.
         self.hud.draw(self.now(), out);
-        // And the shelf's mark on top of that, in the corner the link badge takes — the same
-        // corner, at its own measurement, since `mark_at` is held off the screen's edges and
-        // `badge_at` off the plate's. It answers "which shelf is this", which is a question only
-        // the carousel can be asked: once a cart is seated the shelf is off screen, the cartridge
-        // in the slot is the answer, and the game over it is a louder one. The switcher's band has
-        // no use for it either — the paused game's platform cannot change while it is up, so a
-        // mark there would never move. That is also why it can take the badge's corner: a badge
-        // belongs to a live session and this belongs to the carousel, so the two are never both
-        // on screen.
-        //
     }
 
     pub fn screen_shake(&self) -> f32 {
         self.shake_at(self.now())
     }
 
-    /// Offscreen pixels the whole presented image is displaced by. The screen flinches only
-    /// while the game is playing, which is the one phase whose content fills the frame.
+    /// Pixels the whole image is displaced by. Only while playing, when the game fills the frame.
     pub fn shake_at(&self, now: Millis) -> f32 {
         self.shake_when(matches!(self.phase, Phase::Playing { .. }), now)
     }
 
-    /// Pixels the cart row is displaced by. On the shelf the frame is mostly backdrop, so
-    /// shaking the whole image would just slide the letterbox in at the edges.
+    /// Pixels the cart row is displaced by. On the shelf, shaking the whole image would just
+    /// slide the letterbox.
     pub fn shelf_shake(&self) -> f32 {
-        // The chip is what flinches while the picker is up, and two things shaking at once reads
-        // as two separate refusals.
+        // The chip flinches while the picker is up; two shakes read as two refusals.
         self.shake_when(self.on_shelf() && self.core_picker.is_none(), self.now())
     }
 
-    /// Shake whatever represents the thing that was refused, and only that: two of them at
-    /// once reads as two separate failures.
+    /// Shake only what represents the refused thing: two at once reads as two failures.
     fn shake_when(&self, mine: bool, now: Millis) -> f32 {
         if !mine {
             return 0.0;
@@ -2290,8 +1910,7 @@ impl App {
         self.refusal.map_or(0.0, |r| r.offset(now))
     }
 
-    /// The game layer's place in the list. Where there is no slot on screen it is the whole
-    /// picture; the chrome puts it in the same list, in front of the cart.
+    /// The game layer's place in the list: the whole picture, or in front of the cart in chrome.
     fn push_game(&self, out: &mut Vec<Draw>) {
         if self.game_visible() {
             out.push(Draw::Game);
@@ -2303,10 +1922,8 @@ impl App {
             return;
         };
         let alpha = self.alert_alpha();
-        // Where the row had this cart on the frame the button went down, size included. The
-        // spring is not required to have settled first — nothing makes the player wait for it —
-        // and the shelf stops running the moment the phase changes, so this is the same answer
-        // on every frame of the travel.
+        // Where the row had this cart when the button went down. The shelf stops with the
+        // phase change, so this is constant through the travel.
         let (rest, scale) = self.shelf().selected_at();
         SlotChrome {
             cart,
@@ -2327,8 +1944,7 @@ impl App {
         self.alert_alpha() > 0.0
     }
 
-    /// How lit that symbol is. It holds for most of the exit and is gone before the end of
-    /// it, so the alert leaves with the cart rather than being cut off by the shelf.
+    /// How lit that symbol is. It fades out before the exit ends, so the shelf does not cut it off.
     pub fn alert_alpha(&self) -> f32 {
         let (Some(from), Phase::Ejecting { t, .. }) = (self.refused_from, &self.phase) else {
             return 0.0;
@@ -2353,7 +1969,7 @@ impl App {
         self.power_menu_faces = faces;
     }
 
-    /// Recorded against the highlighted cart, since that is the only cart they are ever built for.
+    /// Recorded against the highlighted cart, the only one they are built for.
     pub fn set_core_board_faces(&mut self, board: TexId, lid: TexId) {
         self.core_board_face = Some(board);
         self.core_lid_face = Some(lid);
@@ -2387,9 +2003,8 @@ impl App {
         self.link_linked_face = Some(face);
     }
 
-    /// One per `LinkStep::ALL`, and one per `LinkFail::SHOWN`, in those orders. Uploaded at
-    /// boot with every other menu face: a link that is failing is the worst moment to be
-    /// asking a font for a sentence.
+    /// One per `LinkStep::ALL` and one per `LinkFail::SHOWN`, in those orders. Uploaded at boot so
+    /// a failing link never waits on the font.
     pub fn set_link_step_faces(&mut self, faces: Vec<(TexId, u32, u32)>) {
         self.link_step_faces = faces;
     }
@@ -2412,12 +2027,8 @@ impl App {
         self.link_sprites.is_some()
     }
 
-    /// The case's own ground, and the rows on it. No plate behind them: the menu is three
-    /// words and a choice, and a box around those was furniture the screen did not need.
-    ///
-    /// The ground is drawn here rather than in `draw_menu_rows` because it is the only thing
-    /// about this menu that is its own: the core picker draws over a shelf it did not paint.
-    /// See `draw_menu_rows` for why the bar behind the row in hand is the colour it is.
+    /// The case's own ground and the rows on it. The ground is drawn here, not in
+    /// `draw_menu_rows`, because the core picker draws over a shelf instead.
     fn draw_power_menu(&self, index: usize, out: &mut Vec<Draw>) {
         out.push(Draw::Rect {
             x: 0.0,
@@ -2434,32 +2045,21 @@ impl App {
         );
     }
 
-    /// The picker, but only once it has started opening: `None` while it is still standing on
-    /// the shelf waiting for this cart's faces, so nothing of it is on screen yet and the row
-    /// has not made way for it.
+    /// The picker once it has started opening. `None` while it waits for this cart's faces.
     fn core_picker_shown(&self) -> Option<CorePicker> {
         self.core_picker.filter(|p| !p.waiting())
     }
 
-    /// The open cart over the shelf that is making way for it: the board growing out of the cart
-    /// that stood there, both sockets on it, the chip in one of them or in the air between, the
-    /// lid slid off it and lifted away with the cart's own face on it, and the legend. Over the
-    /// shelf and under the HUD: brightness and blue light are still answered while it is up.
-    ///
-    /// `ready` is this cart's own board and lid, not merely whatever is on the GPU: a picker
-    /// that started on `FACES_WAIT_MS`'s cap has neither yet, and must never wear a build left
-    /// over from the cart the caret was on before — showing nothing is the only honest choice
-    /// until this cart's own faces land, so the board, the sockets, the chip and the chip's own
-    /// shadow wait for `ready` and the lid falls back to the shelf's plain face for this cart.
+    /// The open cart over the receding shelf: board, sockets, chip, lifted lid and legend. Under
+    /// the HUD, since the levels still answer. Until `ready` (this cart's own board and lid) only
+    /// the lid is drawn, from the shelf's face, never a stale build of another cart.
     fn draw_core_picker(&self, picker: &CorePicker, out: &mut Vec<Draw>) {
         let now = self.now();
         let progress = picker.openness(now);
-        // The shadows and the legend come in with the lift, not with the slide.
+        // The shadows and the legend come in with the lift, not the slide.
         let lift = lift_of(progress);
-        // The cart grows out of the quad the row has it in this frame, which is the middle of
-        // the screen at full size once the spring has settled and somewhere short of that while
-        // it has not. The shelf is still running underneath — the picker is drawn from
-        // `Phase::Shelf` — so this tracks the row rather than being read once at the press.
+        // Grows out of wherever the row has the cart this frame: the shelf is still running
+        // underneath, so the spring may not have settled.
         let (rest, scale) = self.shelf().selected_at();
         let shelf = shelf_cart_at(rest, scale);
         let board = board_from(shelf, progress);
@@ -2467,8 +2067,7 @@ impl App {
         let ready = self.core_faces_ready();
 
         if ready {
-            // Opaque from the first frame, and the sockets and the chip with it: the back half
-            // was always there under the front, and the slide only uncovers it.
+            // Opaque from the first frame: the slide only uncovers what was under the front.
             if let Some(tex) = self.core_board_face {
                 out.push(Draw::Tex {
                     x: board.x,
@@ -2496,9 +2095,8 @@ impl App {
             let u = CHIP_U[0] + (CHIP_U[1] - CHIP_U[0]) * chip.across;
             if chip.lift > 0.0 {
                 if let Some(tex) = self.core_chip_shadow_face {
-                    // Under the body's middle and 90 units down the board, where the mockup's
-                    // oval falls: low enough to read as cast on the board rather than tucked
-                    // under the pins.
+                    // Under the body's middle and down the board where the mockup's oval falls,
+                    // so it reads as cast on the board.
                     let (cx, cy) = on_board(board, u + 19.0, CHIP_V + 29.4);
                     let (w, h) = (SHADOW_W as f32 * zoom, SHADOW_H as f32 * zoom);
                     out.push(Draw::Tex {
@@ -2523,7 +2121,7 @@ impl App {
                     w: CHIP_W as f32 * zoom,
                     h: CHIP_H as f32 * zoom,
                 };
-                // Whole pixels, as the sockets: a seated chip is drawn at its own size too.
+                // Whole pixels, as the sockets.
                 let at = grown(body, TURN_PAD as f32 * zoom);
                 out.push(Draw::Turned {
                     x: at.x.round(),
@@ -2537,10 +2135,8 @@ impl App {
             }
         }
 
-        // The soft oval on the ground under the lid. Without it the lid reads as printed on the
-        // backdrop rather than held up off the board. The chip's shadow, stretched: it grows
-        // with the lid and comes in as the lid rises. Drawn whether or not this cart's faces are
-        // ready: the lid is always something, the fallback included, and it always casts one.
+        // The soft oval under the lid, so it reads as held up rather than printed on. Drawn
+        // whether or not the faces are ready, since some lid is always drawn.
         if let Some(tex) = self.core_chip_shadow_face {
             let (lid, _) = lid_from(shelf, progress);
             let k = lid.w / lid_at(1.0).0.w;
@@ -2556,8 +2152,7 @@ impl App {
         }
 
         if ready {
-            // Always opaque: at the very start and end of the movement the lid is the cart on
-            // the shelf, and a cart there does not fade.
+            // Always opaque: at either end of the movement the lid is the cart on the shelf.
             if let Some(tex) = self.core_lid_face {
                 let (lid, turn) = lid_from(shelf, progress);
                 let at = grown(lid, TURN_PAD as f32 * lid.w / CART_W as f32);
@@ -2575,10 +2170,8 @@ impl App {
             .selected_stem()
             .and_then(|stem| self.shelf().find(stem))
         {
-            // The cap ran out before this cart's own lid arrived. The shelf's own face for the
-            // cart is the only thing left to lift — not `core_lid_face`, which would still be
-            // whatever cart the worker built last — and it is drawn unpadded: unlike a face
-            // built for the picker, the shelf's face carries no transparent border to grow into.
+            // The wait ran out before this cart's lid arrived. Lift the shelf's face instead,
+            // unpadded since it has no transparent border.
             let (lid, turn) = lid_from(shelf, progress);
             out.push(Draw::Turned {
                 x: lid.x,
@@ -2591,9 +2184,8 @@ impl App {
             });
         }
 
-        // Cancel under the open cart's left edge, Swap centred on the panel, Choose under its
-        // right edge, each placed by what shows of it — the key caps and the word — and not by
-        // the transparent strip every hint face carries after its label.
+        // Placed by the visible part of each face (key caps and word), not its trailing
+        // transparent strip.
         if let [cancel, swap, choose] = self.core_legend_faces.as_slice() {
             let right = BOARD_X + BOARD_W as f32;
             let seen = |w: u32| w.saturating_sub(HINT_EDGE) as f32;
@@ -2615,8 +2207,6 @@ impl App {
     }
 
     /// The link screen: a scrim over the paused game, one line of text and its key legend.
-    /// Nothing here is a row to move a bar between any more — `Pick` swaps with Left/Right,
-    /// and every other state is a sentence with no choice in it.
     fn draw_game_menu(&self, menu: GameMenu, out: &mut Vec<Draw>) {
         out.push(Draw::Rect {
             x: 0.0,
@@ -2630,11 +2220,8 @@ impl App {
         }
         let line = match menu {
             GameMenu::Pick(role) => self.link_menu_faces.get(role.index()).copied(),
-            // Which sentence the first step gets depends on the driver: this screen warmed it on
-            // the way in, and a warm one takes the load out of the step, leaving a host bringing
-            // its access point up and a joiner searching for one — both of which are looking for
-            // the other player. Asked of the radio every frame it is drawn, so a warm that lands
-            // while the step is running is picked up rather than waited out.
+            // The first step's sentence depends on whether the driver is warm. Asked every frame,
+            // so a warm landing mid-step is picked up.
             GameMenu::Working { step, .. } => self
                 .link_step_faces
                 .get(step.shown(self.radio.warmed()).index())
@@ -2643,8 +2230,7 @@ impl App {
             GameMenu::Failed { fail, .. } => fail
                 .shown()
                 .and_then(|i| self.link_fail_faces.get(i).copied()),
-            // No line. The banner over the top is what says what happened, and LINKED left up
-            // over a plug being pulled out would be the screen contradicting the art under it.
+            // No line: the banner says what happened, and LINKED would contradict the art.
             GameMenu::Unplug { .. } => None,
         };
         if let Some((tex, w, h)) = line {
@@ -2657,9 +2243,8 @@ impl App {
                 alpha: 1.0,
             });
         }
-        // SELECT is named only where it does something. A game gpSP would link the same way on
-        // either hardware refuses the press, and a legend offering it there is the screen
-        // promising a choice the core will not honour.
+        // SELECT is shown only where it works: a game gpSP links the same way on either hardware
+        // refuses the press.
         let switchable = self.seated().is_some_and(|stem| self.link_switchable(stem));
         let keys: &[LinkLegend] = match menu {
             GameMenu::Pick(_) if switchable => &[
@@ -2670,13 +2255,11 @@ impl App {
             ],
             GameMenu::Pick(_) => &[LinkLegend::Cancel, LinkLegend::Swap, LinkLegend::Link],
             GameMenu::Working { .. } => &[LinkLegend::Cancel],
-            // The flash a link comes up on has no buttons to offer: it is leaving on its own.
-            // The screen the player opened over a live session has the only two that matter.
+            // The flash leaves on its own. The screen opened over a live session offers two keys.
             GameMenu::Linked { opened: true, .. } => &[LinkLegend::Back, LinkLegend::EndLink],
             GameMenu::Linked { .. } => &[],
             GameMenu::Failed { .. } => &[LinkLegend::Ok],
-            // Nothing to offer: it is leaving on its own and takes no presses, exactly like the
-            // flash a link comes up on.
+            // Takes no presses and leaves on its own.
             GameMenu::Unplug { .. } => &[],
         };
         let faces: Vec<(TexId, u32)> = keys
@@ -2700,10 +2283,8 @@ impl App {
         }
     }
 
-    /// The cart named `stem`, and the hardware gpSP picks for it on its own. Read from the
-    /// header on disk, so asked only when something is about to act on the answer — the link
-    /// screen opening, a core loading, a link being picked — and never once a frame. `None`
-    /// for a cart the shelf cannot name.
+    /// The cart named `stem` and the hardware gpSP picks for it. Reads the header on disk, so
+    /// never call it per frame. `None` for an unknown cart.
     fn auto_link(&self, stem: &str) -> Option<(&Cart, LinkKind)> {
         let cart = self.shelf().carts.iter().find(|c| c.stem == stem)?;
         let auto = link_kind(&cart.code, &cart.title, slot_store::header_clean(&cart.rom));
@@ -2738,15 +2319,12 @@ impl App {
         };
     }
 
-    /// Whether the cart going in is starting from the beginning. Read by whoever spawns the
-    /// core, which is the one thing that has to know.
+    /// Whether the cart going in starts from the beginning. Read by whoever spawns the core.
     pub fn starting_clean(&self) -> bool {
         matches!(self.phase, Phase::Inserting { clean: true, .. })
     }
 
-    /// The hold fires under the finger rather than on the release, so it has an end the
-    /// player can feel. A shelf that left the screen with A still down takes the arming with
-    /// it: the press belonged to that screen.
+    /// The hold fires under the finger, not on release. Leaving the shelf with A down disarms it.
     fn play_hold(&mut self) {
         let Some(at) = self.play_held else {
             return;
@@ -2761,36 +2339,25 @@ impl App {
     }
 
     fn eject(&mut self) {
-        // Nowhere to eject to. Refused rather than ignored, so the held MENU says no
-        // instead of reading as a device that stopped listening.
+        // Nowhere to eject to. Refused so the press is answered.
         if self.single_cart() {
             return self.refuse();
         }
-        // Inserting as well as Playing, so a slot with no core behind it can still be
-        // emptied: that is the only way to watch the travel more than once.
+        // Inserting too, so a slot whose core never arrived can be emptied.
         let cart = match &mut self.phase {
             Phase::Playing { cart } | Phase::Inserting { cart, .. } => std::mem::take(cart),
             _ => return,
         };
-        // A session does not survive its cart. Without this a phantom session outlives the
-        // eject: `link_active()` stays true with no core left to carry it, `may_rewind`/
-        // `may_load_state` stay wedged closed for whatever cart goes in next, and
-        // `doze_expired`'s own guard refuses to let the device sleep again — forever, since
-        // nothing left in the app ever flips it back. `Session::act`'s edge bridge (watching
-        // `link_active()` fall across every `apply`) is what carries this to
-        // `EmuHandle::end_link` on the emulator thread, the same way it does for a doze or a
-        // power press.
+        // A session does not survive its cart, or `link_active()` stays true with no core and
+        // blocks rewind, state loads and doze for good.
         self.end_link();
-        // The cart the menu was about is on its way out. Not reachable through the overlay
-        // itself, which swallows the eject; this is here for whatever route into an eject
-        // comes next, the way `begin_power_off` guards its own chokepoint rather than the
-        // one caller that happened to need it.
+        // The overlay swallows eject, but guard here for any future route in.
         self.close_game_menu();
         self.flush_eject(&cart);
-        // The offer names a file in this cart's ring and a state only this cart's core can
-        // read. Carried across the slot it would delete or load the wrong one.
+        // The offer names this cart's ring and core; carried across the slot it would act on the
+        // wrong one.
         self.pending = None;
-        // An eject asked for is not an eject refused, whatever was refused a moment ago.
+        // An eject asked for is not an eject refused.
         self.refusal = None;
         self.refused_from = None;
         self.phase = Phase::Ejecting {
@@ -2799,10 +2366,8 @@ impl App {
         };
     }
 
-    /// Everything durable happens here, before the animation rather than after it: the
-    /// card can be pulled while the cart is still sliding out. A write that failed leaves
-    /// the cart recorded as seated, so the next boot resumes it and the end of the
-    /// animation retries the clear.
+    /// Everything durable happens here, before the animation, since the card can be pulled while
+    /// the cart slides out. A failed write leaves the cart seated, so the next boot resumes it.
     fn flush_eject(&mut self, stem: &str) {
         let (Some(root), Some(snapshot)) = (&self.root, &self.snapshot) else {
             return;
@@ -2813,63 +2378,33 @@ impl App {
         };
         let (state, sav) = trusted_write(snapshot.as_ref(), state, "eject");
         match persist::eject(root, self.core, stem, state.as_deref(), sav.as_deref()) {
-            // Mirroring what `persist::eject` just wrote to the card: the slot is empty.
+            // Mirrors what `persist::eject` just wrote: the slot is empty.
             Ok(()) => self.state.cart = None,
             Err(e) => eprintln!("slot: eject: {e}"),
         }
     }
 
-    /// Flush, then dark, then idle. The cart stays in the slot and `slot.state` is not
-    /// touched: a sleep is not an eject, and the next boot has to resume this session
-    /// whether the lid opens again or the battery runs out first.
+    /// Flush, then dark, then idle. The cart stays seated and `slot.state` is untouched, so the
+    /// next boot resumes whether the lid opens or the battery dies. Every doze path goes through
+    /// here, so the session guard lives only here.
     ///
-    /// The one function every doze actually goes through: both `LidClose` arms (with the
-    /// power menu open, and without) and `PowerTap` by way of `power_press` all return
-    /// `self.doze()` rather than reimplementing it, so a guard here — and only here — closes
-    /// every path in at once. Three copies of the same `if self.link_active()` at each call
-    /// site is exactly the kind of duplication that let a mutation slip through unnoticed
-    /// last time: `on_doze_timeout` carried a redundant copy of `doze_expired`'s own guard,
-    /// and that second copy alone was enough to keep `doze_never_expires_while_a_session_is_live`
-    /// passing after the real guard was mutated away.
-    ///
-    /// A live session ends here rather than surviving the doze — but the doze still happens:
-    /// this used to `return` right after `end_link()`, which ended the session and then left
-    /// the device sitting in `Phase::Playing`, wide awake, behind a lid the player had just
-    /// shut. That is exactly the 400-700 mA outcome the paragraph below argues against,
-    /// reached anyway, with the session dead on top of it — proven by `phase` still reading
-    /// `Playing` ten seconds after a `LidClose` that hardware delivers exactly once per
-    /// physical close, with no second press coming to "retry" into an actual doze.
-    ///
-    /// `Session::sync_speed` maps `Phase::Doze` to `Speed::Paused`, and pausing is one of the
-    /// exact manipulations libretro's netpacket contract names as forbidden while players are
-    /// connected — the same desync hazard as dropping the transport outright, not a lesser
-    /// one. The alternative — holding the session open through a doze that keeps the core
-    /// running *unpaused*, so the panel can go dark for free — is a bigger change than this
-    /// fix (`sync_speed` would have to learn about sessions too) and would not even save the
-    /// battery it sounds like it would: `doze_expired` already refuses to end a session on
-    /// its own idle timer, so a session left open behind a shut lid would sit at 400-700 mA
-    /// with the radio up for as long as the lid stayed shut, never once reaching the sub-45
-    /// mA a real doze exists to reach. Ending the session costs a trade partner who shut the
-    /// lid only to think for a moment — there is no answer here that costs nothing — but it
-    /// is the one already chosen for `PowerPress`, and completing the doze underneath it is
-    /// the only way to actually reach the low-power state this function exists for.
+    /// A live session ends and the doze still completes: pausing breaks libretro's netpacket
+    /// contract, and a session held open behind a shut lid would sit at 400-700 mA instead of a
+    /// doze's sub-45 mA.
     fn doze(&mut self) {
         if self.link_active() {
             self.end_link();
         }
-        // The overlay is drawn over a game that is about to go dark, and a starter left
-        // running behind it would keep a radio up through the doze.
+        // A starter left running would keep the radio up through the doze.
         self.close_game_menu();
-        // A shut lid is walking away, not choosing. Nothing is written and nothing animates:
-        // waking comes back to a plain shelf.
+        // A shut lid is walking away, not choosing: nothing is written.
         self.core_picker = None;
         if matches!(self.phase, Phase::Doze { .. }) {
             return;
         }
         self.flush_resume();
-        // Only a running cart is worth waking back into. A lid closed over an animation
-        // wakes to the shelf, one press from where it was, rather than into a core that
-        // may not have finished loading.
+        // Only a running cart is worth waking into. Anything else wakes to the shelf rather than
+        // a core that may not have finished loading.
         let cart = match &mut self.phase {
             Phase::Playing { cart } | Phase::Polaroids { cart } => Some(std::mem::take(cart)),
             _ => None,
@@ -2877,9 +2412,7 @@ impl App {
         self.polaroids = None;
         self.phase = Phase::Doze { cart };
         self.dozed_at = self.now();
-        // A doze ends at a power off, and a driver still loaded through it is a drain with
-        // nothing to show for it. A live session has already come through `end_link` above,
-        // whose own `down` covers this; asking again is a no-op by then.
+        // A doze ends in power off, so drop the driver. After `end_link` this is a no-op.
         self.radio.ask(RadioJob::Cool);
         if let Some(power) = &mut self.power {
             power.on_close();
@@ -2899,14 +2432,9 @@ impl App {
         }
     }
 
-    /// A dark panel is not a saving: the machine is still running flat out behind it at
-    /// 400-700 mA. So the dark is a grace period rather than a state, and when it runs out
-    /// the device stops for real.
-    ///
-    /// It suspends beautifully — under 45 mA — and that is not on offer, because it cannot
-    /// wake itself back up: the RTC alarm arms, reads back, and never fires. A sleep nothing
-    /// can end is a slow leak with a better name. Powering off costs the user a three second
-    /// boot, and `slot.state` still names the cart, so they come back to the same frame.
+    /// A dark panel still draws 400-700 mA, so the doze is a grace period before a real power
+    /// off. Suspend (under 45 mA) is out: the RTC alarm arms but never fires, so nothing can wake
+    /// it. `slot.state` still names the cart, so boot resumes the same frame.
     pub fn on_doze_timeout(&mut self) {
         if !matches!(self.phase, Phase::Doze { .. }) {
             return;
@@ -2914,15 +2442,9 @@ impl App {
         self.begin_power_off();
     }
 
-    /// The lid's twin, and the only one of the two the device is certain to see. A tap dozes
-    /// and a second one wakes.
-    ///
-    /// The wake itself has already happened, on the press (see `apply`'s `PowerPress` arm), and
-    /// this is where that press stops. Without it the tap that lit the panel would reach its own
-    /// release still meaning "doze", and a tap of POWER on a sleeping device would flash the
-    /// screen and put it straight back out — worse than the bug it was fixing, which at least
-    /// woke on the release. The `Doze` arm below is what still catches a wake this did not do:
-    /// a phase that reached a doze between the press and the release.
+    /// The lid's twin, and the one the device is certain to see. A tap dozes and a second wakes.
+    /// A press that already woke the panel (see `apply`'s `PowerPress` arm) stops here, or its
+    /// release would doze straight away.
     fn power_press(&mut self) {
         if std::mem::take(&mut self.woke_on_press) {
             return;
@@ -2933,37 +2455,23 @@ impl App {
         }
     }
 
-    /// A held button powers off, through the OS rather than the PMIC. The PMIC's own
-    /// six-second hold cuts the rails in hardware with no sync, no unmount and no driver
-    /// teardown; the software path unloads the GPU module first, which is the difference
-    /// between a machine that stops and one that hangs with the rails up draining the
-    /// battery. Six seconds remains the emergency underneath, and needs no help from here.
-    ///
-    /// Not an eject: the cart stays in the slot so the next boot resumes it. The flush is
-    /// a no-op after a doze, which has already written the same file.
-    /// The hold threshold raises the menu and nothing else. Every outcome from here is one
-    /// the user chose rather than one the button committed them to, which is what makes the
-    /// hold safe to discover by accident.
+    /// The hold threshold raises the menu and nothing else, so the hold is safe to discover by
+    /// accident.
     fn open_power_menu(&mut self) {
         if self.power_menu.is_some() {
             return;
         }
-        // Same hazard as the switcher: the menu pauses the core too — `Session::sync_speed`
-        // maps `held()`, which the menu is one of, to `Speed::Paused` — one of the exact
-        // manipulations libretro's netpacket contract forbids while a session is live. Unlike
-        // `PowerPress` this button does not end the session for the player; it just declines,
-        // the same shake every other "nothing doing" action in this file answers with.
+        // The menu pauses the core, which libretro's netpacket contract forbids in a session.
+        // Declined, not ending the session.
         if self.link_active() {
             return self.refuse();
         }
-        // Durable before the menu is even on screen: from here the user may hold on to the
-        // PMIC's own six second cutoff, which takes the rails away whatever we wanted.
+        // Durable first: the user may hold on to the PMIC's six second cutoff.
         self.flush_resume();
         self.power_menu = Some(0);
     }
 
-    /// Up and down move, A commits, B leaves. Nothing times out: a menu that closed itself
-    /// would do it exactly when the user looked away to think.
+    /// Up and down move, A commits, B leaves. No timeout: it would fire when the user looked away.
     fn power_menu_input(&mut self, action: Action) {
         let Some(index) = self.power_menu else {
             return;
@@ -2975,9 +2483,8 @@ impl App {
             Action::GbaDown(Btn::B) => self.power_menu = None,
             Action::GbaDown(Btn::A) => {
                 self.power_menu = None;
-                // Both choices end the game whatever was underneath was drawn over, and only
-                // one of them reaches `begin_power_off`: a restart sets its flag here and
-                // goes straight to the shutdown screen.
+                // Both choices end what was underneath. Restart sets its flag here rather than
+                // going through `begin_power_off`.
                 self.close_game_menu();
                 match PowerChoice::ALL[index] {
                     PowerChoice::Restart => {
@@ -2992,18 +2499,13 @@ impl App {
         }
     }
 
-    /// SELECT on the shelf offers the highlighted cart's core, opening on the one it already
-    /// uses so the menu answers "which is this?" before it asks "which do you want?".
-    ///
-    /// Both the read that positions the highlight and the write that follows need the card.
-    /// Without one there is nothing to configure and nowhere to put an answer, so the button
-    /// stays inert rather than raising a menu whose choice would evaporate.
+    /// START on the shelf opens the highlighted cart's core picker on its current core. Inert
+    /// with no card, since the choice could not be stored.
     fn open_core_picker(&mut self) {
         let Some(root) = self.root.clone() else {
             return;
         };
-        // Nothing to configure with no cart under the highlight, and a picker that wrote to
-        // an empty stem would leave a line for a cart that is not there.
+        // No cart under the highlight, nothing to configure.
         let Some(cart) = self.shelf().carts.get(self.shelf().index) else {
             return;
         };
@@ -3014,9 +2516,8 @@ impl App {
             picker.start(now);
         }
         self.core_picker = Some(picker);
-        // Whatever the shelf had armed before START belonged to the shelf that was showing,
-        // not to the cart now open over it: a held direction would keep repeating underneath
-        // the lid, and a held A would still insert the cart once its 500 ms ran out.
+        // Drop what the shelf had armed: a held direction would repeat under the lid, and a held
+        // A would insert the cart after 500 ms.
         self.shelf_mut().release_hold();
         self.play_held = None;
     }
@@ -3028,9 +2529,8 @@ impl App {
             .is_some_and(|stem| self.selected_stem() == Some(stem))
     }
 
-    /// The picker owns every button while it is up, including the arrows the shelf uses: a
-    /// board that let the row behind it move would act on a different cart than the one whose
-    /// lid is off. The arrows point at the sockets, so they do not wrap.
+    /// The picker owns every button while up, so the row cannot move to another cart. The arrows
+    /// point at the sockets and do not wrap.
     fn core_picker_input(&mut self, action: Action) {
         let press = match action {
             Action::GbaDown(Btn::Left) | Action::ShelfLeft => Press::Left,
@@ -3049,28 +2549,19 @@ impl App {
         }
     }
 
-    /// SELECT+MENU over a running game. Nothing is torn down and no phase changes: the cart
-    /// is still seated behind it and cancelling gives it straight back.
+    /// SELECT+MENU over a running game. No phase change: cancelling gives the game straight back.
     fn open_game_menu(&mut self) {
         if self.game_menu.is_some() {
             return;
         }
-        // The same hazard the power menu's own guard exists for: this overlay pauses the
-        // core underneath it (`Session::held` names it, and `sync_speed` maps that to
-        // `Speed::Paused`), which is one of the exact manipulations libretro's netpacket
-        // contract forbids while players are connected. Declined with the shake every other
-        // "nothing doing" in this file answers with — and a device already in a session has
-        // nothing to pick in here anyway.
+        // The overlay pauses the core, which libretro's netpacket contract forbids in a
+        // session.
         if self.link_active() {
             return self.refuse();
         }
-        // The core's route first, which is the inversion the long note below already asks for.
-        // mGBA links by running both machines in step rather than by speaking a game's protocol,
-        // so it carries every cart and `link_carried` is not its question.
+        // mGBA links in lockstep, so it carries every cart and `link_carried` does not apply.
         if self.core == Core::Mgba {
-            // mGBA emulates the cable and nothing else. A cart that talks to the Wireless
-            // Adapter has no cable to be linked by, so gpSP stays the only core that carries
-            // one and the banner still has something true to say.
+            // mGBA emulates only the cable. A Wireless Adapter cart needs gpSP.
             let wireless = self
                 .seated()
                 .is_some_and(|stem| self.link_mode(stem).0 == LinkKind::Wireless);
@@ -3083,27 +2574,8 @@ impl App {
             self.game_menu = Some(GameMenu::Pick(self.last_role));
             return;
         }
-        // gpSP fakes named protocols rather than emulating the cable, so for a cart it has none
-        // for there is nothing on the far side of the link to reach. Offering it anyway is the
-        // worst of the three answers: the radio comes up, the two devices find each other, the
-        // screen says LINKED, and both games sit there — gpSP accepts the peer and then drops
-        // every packet. Refused before any of that starts, and the banner says why.
-        //
-        // Ahead of the core check, and that order is the whole point: this reads the cart's own
-        // header through `auto_link`, which never looks at the selected core, so the answer is
-        // the same whichever core is loaded. Asking about the core first told the player of an
-        // mGBA cart to switch to gpSP for a game gpSP cannot carry either — advice that costs
-        // them a core swap and a reload to arrive back at this same refusal, which they could
-        // not even reach from here. "Nothing can link this" outranks "something else could".
-        //
-        // The day this inverts: slot's mGBA lockstep link route is being built, and it links by
-        // running both machines in step rather than by speaking a game's protocol, so it carries
-        // every cart — Apotris included. When that route lands, a cart refused here is linkable
-        // on mGBA, and this refusal starts lying in the other direction: it will be saying "no
-        // link support" about the one core that does support it. `link_carried` is gpSP's
-        // question, and by then it is the wrong one to ask first. The order then wants to be the
-        // core's route first — mGBA links it, so open the screen — and this refusal kept only
-        // for the carts whose selected core really has nothing for them.
+        // gpSP fakes named protocols: a cart it has none for would show LINKED and then drop
+        // every packet. Refused before any radio work, and before advising a core switch.
         let carried = self
             .seated()
             .and_then(|stem| self.auto_link(stem))
@@ -3112,32 +2584,24 @@ impl App {
             self.hud.toast(Toast::NoLink, self.now());
             return;
         }
-        // gpSP is the only core with a netpacket interface to link over. The screen stays shut,
-        // and the save-state banner says what would open it, so the press is not simply lost.
-        // Reached only for a cart gpSP really can carry, so switching to it is advice that works.
+        // gpSP is the only other core with a netpacket interface. The banner says so.
         if self.core != Core::Gpsp {
             self.hud.toast(Toast::NeedsGpsp, self.now());
             return;
         }
-        // It opens on what this cart was last switched to, or on what gpSP picks for it.
+        // Opens on the cart's last switched hardware, or gpSP's pick.
         let hardware = self
             .seated()
             .map_or(LinkKind::Cable, |stem| self.link_mode(stem).0);
         self.link_hardware = hardware;
-        // The driver takes about a second to load, and the player is about to spend longer
-        // than that choosing a role. Nothing waits on this: `link host` and `link join` load
-        // it themselves if this has not finished, and both go through the same queue.
+        // The driver takes about a second to load. Nothing waits on it: `link host` and `link
+        // join` load it themselves through the same queue.
         self.radio.ask(RadioJob::Warm);
         self.game_menu = Some(GameMenu::Pick(self.last_role));
     }
 
-    /// SELECT+MENU, which opens the link screen — or, over a live session, the same screen
-    /// showing that session with the key that ends it.
-    ///
-    /// One screen rather than two: it is the one the player used to start the link, it already
-    /// draws the pair as connected, and its legend row carries the two keys this needs. Ending
-    /// is a choice on it rather than the press itself, because ending a session has no way back
-    /// and is not something to do on the way past.
+    /// SELECT+MENU: the link screen, or over a live session the same screen with the key that
+    /// ends it. Ending is a choice there, not the press, since it cannot be undone.
     fn game_menu_shortcut(&mut self) {
         let Some(client_id) = self.link_client_id() else {
             return self.open_game_menu();
@@ -3151,13 +2615,10 @@ impl App {
         });
     }
 
-    /// A on that screen. Immediate and with no second question: the screen that asked is itself
-    /// the confirmation, and the far end handles a partner leaving because that is what a flat
-    /// battery over there looks like from here. The game carries on in the mode it was loaded
-    /// with, which is `end_link`'s own contract, and the banner is what says it happened.
+    /// A on that screen ends the link at once: the screen was the confirmation. The game carries
+    /// on in its loaded mode.
     fn end_link_from_menu(&mut self) {
-        // Read before `end_link` clears it: the plug being pulled out is this device's own, and
-        // which of the two it is decides which plug is drawn.
+        // Read before `end_link` clears it: it decides which plug is drawn.
         let role = self
             .link_client_id()
             .map_or(self.last_role, LinkRow::from_client_id);
@@ -3166,12 +2627,8 @@ impl App {
         self.unplug(role);
     }
 
-    /// The plug coming back out of the port, played from wherever the screen was.
-    ///
-    /// Deliberately after the teardown rather than before it: the session is already over by
-    /// the time this is called, so nothing about the ending waits on the animation finishing.
-    /// The screen is catching up with what has already happened, which is also why it takes no
-    /// presses and leaves on its own — see `timers`.
+    /// The plug coming back out, after the teardown. Takes no presses and leaves on its own (see
+    /// `timers`).
     fn unplug(&mut self, role: LinkRow) {
         self.game_menu = Some(GameMenu::Unplug {
             role,
@@ -3179,13 +2636,12 @@ impl App {
         });
     }
 
-    /// What a test installs to watch the radio without one: `App` asks for jobs and never
-    /// waits on them, so the queue behind them is replaceable.
+    /// Lets a test watch radio jobs. `App` never waits on them, so the queue is replaceable.
     pub fn set_radio_jobs(&mut self, jobs: Box<dyn RadioJobs>) {
         self.radio = jobs;
     }
 
-    /// The menu owns every button on the game's side of the device while it is up.
+    /// The menu owns every game-side button while it is up.
     fn game_menu_input(&mut self, action: Action) {
         let Some(menu) = self.game_menu else {
             return;
@@ -3196,21 +2652,15 @@ impl App {
                     self.last_role = role.other();
                     self.game_menu = Some(GameMenu::Pick(role.other()));
                 }
-                // On the press, which is where the gesture layer now hands SELECT over: it used
-                // to withhold it for the whole chord window, so this row answered a third of a
-                // second after the thumb went down. A chord landing on top of that press fires
-                // as well, so SELECT+Up in here changes the brightness *and* flips the mode.
-                // That is the price of SELECT reaching a game the instant it is pressed, and
-                // this is the one screen in the tree that pays it: the mode is a toggle, so the
-                // same press undoes it.
+                // On the press, so a SELECT chord (e.g. SELECT+Up) also flips the mode. The
+                // mode is a toggle, so pressing again undoes it.
                 Action::GbaDown(Btn::Select) => self.switch_hardware(),
                 Action::GbaDown(Btn::A) => self.pick_link(role),
                 Action::GbaDown(Btn::B) | Action::GameMenu => self.close_game_menu(),
                 _ => {}
             },
-            // B asks the worker to stop; the screen waits for its answer, as it always has. A
-            // link still waiting on its reload has no worker yet, so the ask is kept until the
-            // reload finishes.
+            // B asks the worker to stop and the screen waits for its answer. A link still
+            // waiting on its reload has no worker, so the cancel is kept for the reload.
             GameMenu::Working { .. } => {
                 if action == Action::GbaDown(Btn::B) {
                     if let Some(starting) = &mut self.starting {
@@ -3221,8 +2671,7 @@ impl App {
                     }
                 }
             }
-            // The flash takes no presses: the game is about to come back on its own. The
-            // screen the player opened takes two, and answers nothing else.
+            // The flash takes no presses. The opened screen takes two.
             GameMenu::Linked { opened: true, .. } => match action {
                 Action::GbaDown(Btn::A) => self.end_link_from_menu(),
                 Action::GbaDown(Btn::B) | Action::GameMenu => self.close_game_menu(),
@@ -3237,28 +2686,21 @@ impl App {
                     self.close_game_menu();
                 }
             }
-            // Takes no presses at all. It is a fifth of a second of a plug coming out over a
-            // session that has already ended, with nothing left to confirm or cancel — and a
-            // key that closed it early would only hand the game back a few frames sooner while
-            // making the animation look like something that could be interrupted.
+            // Takes no presses: the session is already over.
             GameMenu::Unplug { .. } => {}
         }
     }
 
-    /// Hands the overlay a worker that is already running, and puts the screen on the first
-    /// step. Split from the pick that spawns one so a caller can supply its own: that is the
-    /// only seam by which this screen can be driven with no network interface anywhere near
-    /// it, and it is the same seam `LinkStarter::spawn_with` exists for one layer down.
+    /// Hands the overlay an already-running worker and shows the first step. Split from the pick
+    /// so tests can supply a starter with no network interface.
     pub fn start_link(&mut self, starter: LinkStarter, client_id: u16) {
         self.start_link_from(starter, client_id, self.now());
     }
 
-    /// `start_link`, with the first step dated from `since` rather than from now. A link that
-    /// waited on a reload has been showing that step since A, and carries on from there instead
-    /// of starting its animation over.
+    /// `start_link`, with the first step dated from `since`, so a link that waited on a reload
+    /// does not restart its animation.
     fn start_link_from(&mut self, starter: LinkStarter, client_id: u16, since: Millis) {
-        // Whatever was already running is asked to stop on its way out. `LinkStarter` has no
-        // `Drop`: dropping one silently leaves its radio up behind the screen.
+        // `LinkStarter` has no `Drop`: a dropped one leaves its radio up, so cancel it.
         if let Some(mut old) = self.starting.replace(LinkStarting { starter, client_id }) {
             old.starter.cancel();
         }
@@ -3269,11 +2711,8 @@ impl App {
         });
     }
 
-    /// SELECT on Pick. The other hardware becomes this cart's choice until slot restarts, and the
-    /// art follows on this frame; the running game is left alone until A. Only a switch gpSP
-    /// would honour, though: a game with no cable protocol of its own loads on `auto` either way
-    /// and links over the adapter regardless, so a plug drawn over it would be a mode the core
-    /// never runs. That press is refused, and the art stays where it is.
+    /// SELECT on Pick. The other hardware becomes this cart's choice until slot restarts; the
+    /// running game is untouched until A. Refused where gpSP would load the same either way.
     fn switch_hardware(&mut self) {
         let Some(stem) = self.seated().map(str::to_string) else {
             return;
@@ -3286,11 +2725,9 @@ impl App {
         self.link_choices.insert(stem, other);
     }
 
-    /// Whether SELECT has anything to switch this cart to: whether the other hardware would load
-    /// it with a `gpsp_serial` it is not already on. It would not for a game with no cable
-    /// protocol of its own, which loads on `auto` either way and links over the adapter
-    /// regardless. Both the press and the legend that advertises it read this, so the screen
-    /// never names a key that can only shake.
+    /// Whether the other hardware would load this cart with a different `gpsp_serial`. Not for a
+    /// game with no cable protocol, which loads on `auto` regardless. Read by the press and the
+    /// legend.
     fn link_switchable(&self, stem: &str) -> bool {
         self.auto_link(stem).is_some_and(|(cart, auto)| {
             serial_option(self.link_hardware.other(), auto, &cart.code, &cart.title)
@@ -3298,20 +2735,16 @@ impl App {
         })
     }
 
-    /// A on Pick. A link in the mode the core was loaded with starts now. A link in another
-    /// cannot yet: gpSP reads its link mode only while a game loads, so the game is loaded again
-    /// first, behind this screen's first step, and the link waits for that to finish. Modes are
-    /// told apart by the `gpsp_serial` they load with, since that is what the core runs.
+    /// A on Pick. A link in the loaded mode starts now. Otherwise the game is reloaded first,
+    /// since gpSP reads link mode only at load. Modes are compared by `gpsp_serial`.
     fn pick_link(&mut self, role: LinkRow) {
         let Some(stem) = self.seated().map(str::to_string) else {
             return;
         };
         // A core nobody reported was loaded on `auto`.
         let loaded = self.link_loaded.unwrap_or("auto");
-        // The in-core cable. mGBA reads `mgba_link` only while a game loads, exactly as gpSP
-        // reads its serial mode, so a core not already in link mode for this port is loaded
-        // again first and the handshake waits for that. There is no mode to switch between
-        // here, so `from` is what is loaded rather than the other of two.
+        // mGBA reads `mgba_link` only at load too, so a core not in link mode for this port is
+        // reloaded first. `from` is simply what is loaded.
         if self.core == Core::Mgba {
             let player = role.client_id() as u8;
             if self.link_player == Some(player) {
@@ -3347,10 +2780,8 @@ impl App {
                 role.client_id(),
             );
         }
-        // A core that refused its resume is running its own default machine, and the flush keeps
-        // that off the player's state. A reload would resume from the refused file again and
-        // lose everything since, so it is refused instead: the position stays, and the mode the
-        // game already runs still links.
+        // A core that refused its resume is on its default machine. A reload would resume the
+        // refused file again and lose everything since, so refuse; the loaded mode still links.
         if self.snapshot.as_ref().is_some_and(|s| !s.resume_trusted()) {
             return self.refuse();
         }
@@ -3359,8 +2790,8 @@ impl App {
             stem,
             role,
             cancelled: false,
-            // SELECT only ever switches between two modes gpSP runs differently, and the one
-            // picked is not the one loaded, so the one loaded is the other.
+            // SELECT toggles between two modes and the picked one is not loaded, so this is the
+            // other.
             from: self.link_hardware.other(),
             from_serial: loaded,
             fallback: false,
@@ -3372,9 +2803,8 @@ impl App {
         });
     }
 
-    /// The seated cart back out of the slot, refused, when there is no game left to hand back:
-    /// the way `on_core_failed` sends back a cart the core would not take on the way in, from
-    /// fully seated. Whatever was drawn over the game goes with it.
+    /// Sends the seated cart back out refused when there is no game left to hand back, like
+    /// `on_core_failed` but from fully seated.
     fn refuse_seated(&mut self) {
         self.close_game_menu();
         // The offer names a state only this cart's core can read, as in `eject`.
@@ -3382,8 +2812,7 @@ impl App {
         let caught = self.seat();
         let cart = match &mut self.phase {
             Phase::Playing { cart } => Some(std::mem::take(cart)),
-            // A dark panel has no cart on it to send back. Opening the lid lands on the shelf
-            // rather than on a seated cart with nothing behind it.
+            // No cart on a dark panel to send back; opening the lid lands on the shelf.
             Phase::Doze { cart } => {
                 *cart = None;
                 None
@@ -3395,27 +2824,21 @@ impl App {
         }
     }
 
-    /// Ends the overlay and anything it had running.
-    ///
-    /// `LinkStarter` has no `Drop`, so a starter dropped mid-wait keeps working: a host
-    /// dropped while waiting leaves its access point up for up to thirty seconds with
-    /// nothing on the other end of it. Every path that ends the overlay comes through here,
-    /// including the three that never touched it — a shut lid, a cart coming out and a power
-    /// off all end the game this was drawn over.
+    /// Ends the overlay and anything it had running. `LinkStarter` has no `Drop`, so a dropped
+    /// host would leave its access point up for up to thirty seconds. Every path that ends the
+    /// overlay (lid, eject, power off) comes through here.
     fn close_game_menu(&mut self) {
         self.game_menu = None;
         if let Some(mut starting) = self.starting.take() {
             starting.starter.cancel();
         }
-        // The screen warmed the driver on the way in. Leaving without a session is what says
-        // nothing is going to use it — but a session that just started closes this screen
-        // too, and cooling under one would take the link down with it.
+        // Cool the driver the screen warmed, unless a session just started: that would take
+        // the link down.
         if !self.link_active() {
             self.radio.ask(RadioJob::Cool);
         }
-        // A switch nobody has collected yet has not touched the game, so it is simply dropped.
-        // One already underway, or on its way back to the mode the game came from, still has to
-        // end in a game or on the shelf; only the link that was waiting on it will not start.
+        // An uncollected switch has not touched the game and is dropped. One underway must still
+        // end in a game or on the shelf; only its link is cancelled.
         let uncollected =
             self.link_reload.is_some() && self.reload.as_ref().is_some_and(|r| !r.fallback);
         if uncollected {
@@ -3434,11 +2857,10 @@ impl App {
         }
     }
 
-    /// One message a frame, which is all the worker ever has for it.
+    /// One message a frame, which is all the worker ever has.
     fn poll_link(&mut self) {
-        // Only while this overlay is the thing on screen. A power menu raised over it pauses
-        // the core, and a session must not begin under one — the worker's message keeps in
-        // its own queue until that menu is gone.
+        // A power menu over it pauses the core, and a session must not begin under one. The
+        // message waits in the queue.
         if self.power_menu.is_some() {
             return;
         }
@@ -3465,7 +2887,7 @@ impl App {
                 self.begin_link(starting.client_id);
                 self.link_transport = Some((starting.client_id, Box::new(link)));
             }
-            // The player asked for this. Not a screen to read: straight back to the game.
+            // The player cancelled: straight back to the game.
             Some(LinkProgress::Failed(LinkFail::Cancelled)) => self.game_menu = None,
             Some(LinkProgress::Failed(fail)) => {
                 let (role, worked) = self.working_role(starting.client_id);
@@ -3479,10 +2901,8 @@ impl App {
         }
     }
 
-    /// The choice, onto the card. Best effort, like every other card write here: a read only
-    /// or absent card is a shelf that still works, not a boot failure. Nothing else in the
-    /// app is told — `self.core` is the seated cart's, set when a core is actually spawned,
-    /// and the shelf has none seated.
+    /// Writes the choice to the card, best effort. `self.core` is untouched: it is the seated
+    /// cart's, and on the shelf none is seated.
     fn write_core(&self, core: Core) {
         let (Some(root), Some(cart)) = (
             self.root.clone(),
@@ -3495,32 +2915,17 @@ impl App {
         }
     }
 
-    /// Every path to shutdown — a held button, an idle doze timing out, and a critical
-    /// battery reading that needs no button at all — funnels through here, so none of them
-    /// leaves the LED reporting Running or Charging through a shutdown the user is not
-    /// watching finish. A real behaviour on a handheld: the case still has a light on it for
-    /// as long as `poweroff` takes to actually cut power.
+    /// Every shutdown route (held button, doze timeout, critical battery) funnels here. It goes
+    /// through the OS rather than the PMIC's six second cut, so the GPU module is unloaded and the
+    /// device does not hang with its rails up. The LED goes dark at once.
     fn begin_power_off(&mut self) {
-        // Idempotent, and that is the whole of why: `doze_expired` is a level rather than an
-        // edge and this leaves the phase on `Doze`, so `timers` calls back here every frame
-        // for as long as the lid is shut. Re-arming `act_at` each time walked the deadline
-        // ahead of the clock forever, and the device sat dark and awake until the lid opened
-        // and took the phase out of `Doze` — at which point it powered off in the user's
-        // hands, on the frame they came back to the session.
+        // Idempotent: `doze_expired` is a level and `timers` calls here every frame while the
+        // lid is shut. Re-arming `act_at` would push the deadline ahead forever.
         if self.powering_off {
             return;
         }
-        // A power-off pauses the core outright (`shutting_down()`, of which this is the
-        // start, is one of the states `Session::sync_speed` maps to `Speed::Paused`) —
-        // libretro's netpacket contract forbids that for as long as a session is live, the
-        // same hazard `doze`'s own guard exists for. `doze` and the power menu's own open
-        // already end a session before either of their own routes reaches here, which is
-        // why this was previously always false in practice by the time any caller arrived —
-        // right up until a critical battery reading turned out to be a fifth route in, with
-        // no button, no menu and no doze anywhere upstream of it to have ended one first.
-        // Guarding the chokepoint itself, rather than that one caller, is what keeps a sixth
-        // route from reopening the same hole: whatever calls `begin_power_off` next inherits
-        // this for free.
+        // A power off pauses the core, which libretro's netpacket contract forbids in a session.
+        // Guarded here so every route, including a critical battery, is covered.
         if self.link_active() {
             self.end_link();
         }
@@ -3530,9 +2935,8 @@ impl App {
         self.set_led(LedState::Off);
     }
 
-    /// The gauge, polled from `timers` and injected by the tests. Only a charge state the
-    /// device positively asserted suppresses the cutoff: unknown and discharging both power
-    /// off at the threshold, which is what the frontend did before it could read one.
+    /// The gauge, polled from `timers` and injected by tests. Only a positively asserted charge
+    /// state suppresses the cutoff; unknown powers off at the threshold.
     pub fn on_battery(&mut self, b: Battery) {
         if b.percent > BATTERY_CRITICAL || self.powering_off {
             return;
@@ -3540,16 +2944,13 @@ impl App {
         if matches!(b.charge, Charge::Charging | Charge::Full) {
             return;
         }
-        // A real power off, not a sleep. This is the one shutdown the user did not ask for,
-        // and suspending a cell this empty only spends what is left of it more slowly.
+        // A real power off, not a sleep: suspending a cell this empty only drains it slower.
         self.flush_resume();
         self.begin_power_off();
     }
 
     fn doze_expired(&self) -> bool {
-        // Suspended for as long as a session is live: a trade partner reading a menu on the
-        // other device must not have the link dropped out from under them by this one's own
-        // idle timer.
+        // Suspended while a session is live, so this device's idle timer does not drop the peer.
         if self.link_active() {
             return false;
         }
@@ -3559,14 +2960,11 @@ impl App {
         self.now().saturating_sub(self.dozed_at) >= power.timeout().as_millis() as Millis
     }
 
-    /// resume.state and the battery save, with the slot left alone. A cart that is not
-    /// playing has no state of its own to write.
-    ///
-    /// Public for the one flush `App` cannot start itself: a reload for a link, which `Session`
-    /// carries out and which has to be on the card before the core it reads is dropped.
+    /// Writes resume.state and the battery save, leaving the slot alone. Public for `Session`'s
+    /// link reload, which must flush before the core is dropped.
     pub fn flush_resume(&mut self) {
-        // The invariant is 60 s since the state was last durable, not 60 s since the last
-        // autosave, so an attempt that had nothing to write still moves the deadline.
+        // The invariant is 60 s since the state was last durable, so even an attempt with
+        // nothing to write moves the deadline.
         self.autosave_at = self.now() + AUTOSAVE_MS;
         let (Some(root), Some(snapshot), Some(cart)) = (&self.root, &self.snapshot, self.seated())
         else {
@@ -3582,8 +2980,7 @@ impl App {
         }
     }
 
-    /// The ring for the cart in the slot. `None` outside the binary, where there is no
-    /// content root, which reads as a cart that has never been saved.
+    /// The ring for the seated cart. `None` with no content root.
     fn ring(&self) -> Option<StateRing> {
         let (Some(root), Some(cart)) = (&self.root, self.seated()) else {
             return None;
@@ -3604,12 +3001,8 @@ impl App {
 
     /// An empty ring shakes rather than opening an empty screen, per spec section 4.
     fn open_polaroids(&mut self) {
-        // Opening the switcher pauses the core — `Session::sync_speed` maps
-        // `Phase::Polaroids` straight to `Speed::Paused` — one of the exact manipulations
-        // libretro's netpacket contract forbids while a session is live, whether or not the
-        // player means to load anything once inside. Checked ahead of even looking for
-        // states to show, the same way `load_newest` already checked ahead of looking for
-        // one to load.
+        // The switcher pauses the core, which libretro's netpacket contract forbids in a
+        // session.
         if self.link_active() {
             return self.refuse();
         }
@@ -3643,22 +3036,16 @@ impl App {
             .as_ref()
             .and_then(|p| p.selected())
             .map(|e| e.state.clone());
-        // `None` means nothing was selected, not a refusal, and still closes exactly as
-        // before. `Some(false)` means `load_file` refused (a live session, most reachably —
-        // see its own doc comment) and already shook the screen for it; closing the switcher
-        // on top of that shake would read as the pick landing and then being dismissed, when
-        // nothing happened at all. Unreachable today, since `open_polaroids` already refuses
-        // to open a switcher a session forbids picking from — but wrong the moment that guard
-        // moves, and cheap to keep correct regardless of where it lives.
+        // `Some(false)`: `load_file` refused and already shook, so closing now would look like
+        // the pick landed.
         let refused = state.map(|state| self.load_file(&state)) == Some(false);
         if !refused {
             self.close_polaroids();
         }
     }
 
-    /// Not undoable, and deliberately so. The undo slot holds one save or one load, and a
-    /// third kind in it would be an undo whose meaning depended on what you did last. A state
-    /// chosen off a screen showing you exactly which one is a decision, not a slip.
+    /// Not undoable. The undo slot holds one save or load, and a pick off a screen showing the
+    /// state is a decision, not a slip.
     fn delete_selected(&mut self) {
         let stamp = self
             .polaroids
@@ -3672,8 +3059,7 @@ impl App {
             eprintln!("slot: delete: {e}");
             return;
         }
-        // An offer left pointing at a file that is gone would remove nothing and then put the
-        // evicted entry back, which is not what undoing that save means any more.
+        // An offer pointing at a deleted file would remove nothing and restore the evicted entry.
         if self.undo_targets(&stamp) {
             self.pending = None;
         }
@@ -3689,8 +3075,7 @@ impl App {
     fn undo_targets(&self, stamp: &str) -> bool {
         match self.pending.as_ref() {
             Some((PendingUndo::Save { stamp: pending, .. }, _)) => pending == stamp,
-            // A load's undo holds the prior state in memory, so no file on the card can
-            // invalidate it.
+            // A load's undo holds the prior state in memory, so no file can invalidate it.
             _ => false,
         }
     }
@@ -3702,18 +3087,10 @@ impl App {
         self.load_file(&newest);
     }
 
-    /// The chokepoint every load-from-disk route funnels through — `load_newest` above and
-    /// `load_selected` alike — so the session guard lives here once rather than at each
-    /// caller. That used to be `load_newest`'s own job, checked ahead of even looking for a
-    /// state to load; `load_selected` never got the same check, which is what let the
-    /// switcher's own A-button pick bypass it entirely. Guarding here instead closes that
-    /// hole for both today's callers and whatever the next one turns out to be.
-    /// Reports whether the load actually happened, so a caller that only means to load —
-    /// `load_newest` — can ignore it, and one that has something else riding on the answer —
-    /// `load_selected`, which must not close the switcher out from under a refusal it just
-    /// drew — can ask rather than repeating the guard above for itself.
+    /// Every load from disk goes through here, so the session guard lives here once. Returns
+    /// whether the load happened, so `load_selected` does not close over a refusal.
     fn load_file(&mut self, state: &Path) -> bool {
-        // A state load would desynchronise the other device with no way back to agreement.
+        // A state load would desync the peer with no way back.
         if !self.may_load_state() {
             self.refuse();
             return false;
@@ -3728,7 +3105,7 @@ impl App {
                 return false;
             }
         };
-        // Taken before the load, which is the last moment there is anything to go back to.
+        // Taken before the load, the last moment there is anything to go back to.
         let prior = snapshot.state();
         snapshot.load(bytes);
         self.hud.toast(Toast::StateLoaded, self.now());
@@ -3738,19 +3115,10 @@ impl App {
         true
     }
 
-    /// `SELECT+R1` and nothing else reaches here. A state with no picture is still worth
-    /// keeping: the switcher draws a blank card rather than losing the save.
+    /// `SELECT+R1` only. A state with no picture still saves; the switcher draws a blank card.
     ///
-    /// Declines outright when the live core refused the resume it was opened with — the same
-    /// condition `trusted_write` withholds from `flush`/`eject` for. This is the one durable
-    /// sink that guard does not reach, because it is not a write-back over an existing file:
-    /// `ring.push` is a deliberate ring buffer, and once it holds `RING_MAX` entries, pushing
-    /// an eleventh evicts the oldest to make room. A core running on its own default machine
-    /// has nothing worth keeping in that slot, so pushing it would not just waste an entry —
-    /// it would delete a real one to make room for a placeholder. Refused the same way every
-    /// other "nothing to do here" action in this file is, via `refuse()`: the player gets the
-    /// same shake `load_newest`/`open_polaroids` already answer with, rather than a save that
-    /// silently did not happen.
+    /// Refused when the core rejected its resume: it is on its default machine, and a push into
+    /// a full ring would evict a real entry to keep a placeholder.
     fn save_state(&mut self) {
         let (Some(ring), Some(snapshot)) = (self.ring(), &self.snapshot) else {
             return;
@@ -3780,8 +3148,7 @@ impl App {
             .is_some_and(|(_, at)| now.saturating_sub(*at) <= UNDO_GRACE_MS)
     }
 
-    /// What the offer says, or `None` when there is nothing on offer. The binary rasterises
-    /// it; the grace period is read off the app's own clock so the two cannot disagree.
+    /// The offer's text, or `None`. The grace period is read off the app's clock so the two agree.
     pub fn undo_label(&self) -> Option<&'static str> {
         if !self.undo_available(self.now()) {
             return None;
@@ -3792,7 +3159,7 @@ impl App {
         }
     }
 
-    /// In `LEGEND` order, and uploaded once: none of the three ever changes what it says.
+    /// In `LEGEND` order, uploaded once.
     pub fn set_legend_faces(&mut self, faces: Vec<TexId>) {
         self.legend_faces = faces;
         self.push_hint_faces();
@@ -3803,8 +3170,7 @@ impl App {
         self.push_hint_faces();
     }
 
-    /// The undo goes last because `hints` puts it last, which is what keeps faces and hints
-    /// on the same index.
+    /// The undo goes last, matching `hints`, so faces and hints share indices.
     fn push_hint_faces(&mut self) {
         let mut faces = self.legend_faces.clone();
         faces.extend(self.undo_face);
@@ -3813,7 +3179,7 @@ impl App {
         }
     }
 
-    /// The HUD glyphs, in `Icon::ALL` order. Uploaded once: they never change.
+    /// The HUD glyphs, in `Icon::ALL` order. Uploaded once.
     pub fn set_icon_faces(&mut self, faces: Vec<TexId>) {
         self.hud.set_icons(faces);
     }
@@ -3823,26 +3189,19 @@ impl App {
         self.hud.set_toasts(faces);
     }
 
-    /// What the HUD is saying, or `None` once it has faded. Only ever set by an action that
-    /// happened: a refusal shakes instead.
+    /// What the HUD is saying, or `None` once faded. Refusals shake instead.
     pub fn toast(&self) -> Option<Toast> {
         self.hud.said(self.now())
     }
 
-    /// One shot, and it hands the game back the way loading does. Undoing an undo would be a
-    /// redo, and the switcher is not a place to sit and shuffle.
+    /// One shot, and it returns to the game as loading does. No redo.
     pub fn undo(&mut self, now: Millis) {
         if !self.undo_available(now) {
             self.pending = None;
             return;
         }
-        // Undoing a load moves the core to a moment the peer never agreed to — the exact
-        // hazard `load_file` guards against, and the one route into it that never passes
-        // through `load_file` at all: the bytes are already in hand from when the load
-        // happened, not read fresh off disk. Refused without consuming the offer, the same
-        // way a refused rewind or state load leaves the player able to try again once the
-        // session that refused it is gone — an undo's own save-file cleanup, `undo_save`
-        // below, touches no core state at all, so only this arm needs the check.
+        // Undoing a load bypasses `load_file`, so the session guard is repeated here. The offer
+        // is kept for after the session. Undoing a save touches no core state.
         if matches!(&self.pending, Some((PendingUndo::Load { .. }, _))) && !self.may_load_state() {
             return self.refuse();
         }
@@ -3876,8 +3235,7 @@ impl App {
         }
     }
 
-    /// Entries in the switcher's order, newest first. The binary reads these to build the
-    /// faces, since only the compositor can mint a `TexId`.
+    /// Entries in the switcher's order, newest first, for the binary to build faces from.
     pub fn polaroid_entries(&self) -> &[StateEntry] {
         match &self.polaroids {
             Some(p) => &p.entries,
@@ -3891,9 +3249,8 @@ impl App {
         }
     }
 
-    /// Which entry is under the eye. The binary watches this to know when the title has to be
-    /// rasterised again. The stamp rather than the index, because a delete leaves the index
-    /// where it was and moves a different entry under it.
+    /// The selected entry's stamp, which the binary watches to re-rasterise the title. Not the
+    /// index: a delete moves a different entry under the same index.
     pub fn polaroid_stamp(&self) -> Option<&str> {
         self.polaroids
             .as_ref()
@@ -3901,8 +3258,7 @@ impl App {
             .map(|e| e.stamp.as_str())
     }
 
-    /// What the top plate says. `now` is a stamp rather than the app's clock: the entries
-    /// are named by their filenames and the title is relative to the wall clock.
+    /// What the top plate says. `now` is a wall-clock stamp, since entries are named by stamp.
     pub fn polaroid_title(&self, now: &str) -> String {
         self.polaroids
             .as_ref()
@@ -3916,14 +3272,9 @@ impl App {
     }
 }
 
-/// The write-back half of the guard `EmuSnapshot` records. `state` is the bytes the live core
-/// actually holds; `snapshot.resume_trusted()`/`save_ram_trusted()` say whether the core that
-/// produced them actually accepted the resume/save-ram it was opened with. A region it
-/// refused is withheld here — turned into `None` rather than passed on to `persist::flush`/
-/// `eject` — because a core running with its own default state has nothing worth writing back
-/// over the file that refusal left alone. `verb` names the caller only for the log line
-/// ("flush" or "eject"), so a withheld region reads the same as everything else either one
-/// already prints.
+/// Withholds whatever the core refused on open (`resume_trusted`, `save_ram_trusted`) from
+/// `persist::flush`/`eject`, so a core on its default state never overwrites the file it
+/// rejected. `verb` is only for the log line.
 fn trusted_write(
     snapshot: &dyn Snapshot,
     state: Vec<u8>,
@@ -3955,18 +3306,15 @@ fn up(level: u8, step: u8, max: u8) -> u8 {
     level.saturating_add(step).min(max)
 }
 
-/// One step along the Fast Forward row, whose values are `FF_SPEEDS` in that order. It does not
-/// wrap, as no menu here does, so a press against either end answers with the value already
-/// showing and `change_setting` writes nothing.
+/// One step along `FF_SPEEDS`. Does not wrap, so a press at either end returns the current value.
 fn ff_next(from: u8, right: bool) -> u8 {
     let at = FF_SPEEDS.iter().position(|&v| v == from).unwrap_or(0);
     let to = if right { at + 1 } else { at.saturating_sub(1) };
     FF_SPEEDS[to.min(FF_SPEEDS.len() - 1)]
 }
 
-/// The clock screen, opened on `utc` with `offset_min` already chosen. The picker shows only the
-/// minute, so the minute it opened on is kept beside it as the seed `confirm_clock` measures the
-/// user's change from.
+/// The clock screen, opened on `utc` with `offset_min` chosen. The seed is the minute the picker
+/// shows, which `confirm_clock` measures the change from.
 fn clock_screen(utc: i64, offset_min: i16, from_menu: bool) -> Phase {
     Phase::SetClock {
         picker: ClockPicker::local(utc, offset_min),
@@ -3975,7 +3323,7 @@ fn clock_screen(utc: i64, offset_min: i16, from_menu: bool) -> Phase {
     }
 }
 
-/// The host's own clock, which is all there is before `set_power` hands over the device's.
+/// The host's clock, used until `set_power` hands over the device's.
 fn system_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -3983,8 +3331,7 @@ fn system_secs() -> i64 {
         .unwrap_or(0)
 }
 
-/// The entry the next push will evict, read out while it is still there. `None` until the
-/// ring is full, which is where most of a cart's life is spent.
+/// The entry the next push will evict, read while it is still there. `None` until the ring fills.
 fn doomed(ring: &StateRing) -> Option<(String, Vec<u8>, Vec<u8>)> {
     let entries = ring.list().ok()?;
     let oldest = entries.get(RING_MAX - 1)?;
@@ -3992,16 +3339,13 @@ fn doomed(ring: &StateRing) -> Option<(String, Vec<u8>, Vec<u8>)> {
     Some((oldest.stamp.clone(), state, thumb))
 }
 
-/// The stamp is the filename, so two saves inside one second would be one save. The second
-/// one moves on by a second, which keeps the ring in order without a finer format that the
-/// polaroid captions would then have to read.
+/// Two saves in one second would share a filename, so the second moves on a second.
 fn free_stamp(ring: &StateRing, now: i64) -> String {
     let taken: Vec<String> = ring
         .list()
         .map(|l| l.into_iter().map(|e| e.stamp).collect())
         .unwrap_or_default();
-    // Local, from the same wall clock the captions are read against. A stamp in utc would
-    // name every state an hour or several from the time the polaroid says it was taken.
+    // Local, from the wall clock the captions are read against.
     let mut secs = now;
     let mut stamp = format_stamp(secs);
     while taken.contains(&stamp) {
@@ -4011,22 +3355,14 @@ fn free_stamp(ring: &StateRing, now: i64) -> String {
     stamp
 }
 
-/// Where a block of `rows` menu rows starts, so it sits in the middle of the panel.
+/// Where a block of `rows` menu rows starts, centred on the panel.
 fn centred_top(rows: usize) -> f32 {
     (OUT_H as f32 - POWER_MENU_PITCH * rows as f32) / 2.0
 }
 
-/// The rows of a menu, at the menu pitch from `top`, with a bar behind the one in hand and
-/// none at all when nothing is. Only the power menu draws rows this way now — the core picker
-/// draws its own cart art instead, and the in-game menu a sentence and a key legend.
-///
-/// The bar is `edge` — the lightest thing in the theme — because it has to read at a glance.
-/// `recess` was tried first and is the right idea and the wrong value: it and `housing` are
-/// adjacent dark greys by design, which is correct for a slot you look into and far too quiet
-/// for a selection.
-///
-/// A rect rather than a second face per row: the labels are rastered once at boot and never
-/// again, and a device about to lose its GPU is not the place to be uploading textures.
+/// Menu rows at the menu pitch from `top`, with a bar behind the selected one. Only the power menu
+/// uses this. The bar is `edge`, the lightest theme colour: `recess` was too close to `housing`.
+/// A rect, not a face per row, so no textures are uploaded near shutdown.
 fn draw_menu_rows(
     faces: &[(TexId, u32, u32)],
     index: Option<usize>,

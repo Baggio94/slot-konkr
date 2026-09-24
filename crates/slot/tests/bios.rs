@@ -51,8 +51,7 @@ fn the_core_is_told_the_bios_folder_not_the_dylib_folder() {
     );
 }
 
-/// The save directory is the other half of the same wiring, and pointing it at the dylib
-/// would scatter `.sav` files next to the core instead of into the content root.
+/// Pointing the save directory at the dylib would put `.sav` files next to the core.
 #[test]
 fn the_core_is_told_the_saves_folder_too() {
     let _g = core_lock();
@@ -68,14 +67,11 @@ fn the_core_is_told_the_saves_folder_too() {
     assert_eq!(core.reported_save_dir(), saves.to_string_lossy());
 }
 
-/// What turns the boot splash on, and what must not. gpSP reads exactly 16 KB into its BIOS
-/// image without checking the length, then rejects the result only on its first byte — so a
-/// file that fails either test is one gpSP would quietly replace with its built-in BIOS,
-/// leaving a cart booting through a BIOS with no logo and no chime to play.
+/// gpSP reads exactly 16 KB of BIOS without a length check and rejects only on the first byte,
+/// silently falling back to its built-in BIOS (no logo, no chime).
 ///
-/// The "real" image here is 16 KB of nothing with the one byte set that every dump starts
-/// with. Nothing copyrighted is needed to prove the frontend asks the right question, and
-/// nothing copyrighted may be checked in.
+/// The "real" image is 16 KB of zeros with the first byte every dump has: nothing copyrighted
+/// may be checked in.
 #[test]
 fn only_a_real_bios_image_turns_the_boot_splash_on() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -111,8 +107,7 @@ fn only_a_real_bios_image_turns_the_boot_splash_on() {
     );
 }
 
-/// The card a cart was inserted from may have no BIOS folder at all — `ensure` makes one, but
-/// a card pulled mid-session or mounted read only need not have it.
+/// A card pulled mid-session or mounted read only may have no BIOS folder.
 #[test]
 fn a_missing_bios_folder_turns_the_boot_splash_off() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -123,14 +118,8 @@ fn a_missing_bios_folder_turns_the_boot_splash_off() {
     );
 }
 
-/// A card that has never held slot. has none of these folders, and every write path assumes
-/// its own is already there. The one test that boots into a bare directory, so it is the one
-/// that can say `App::boot` creates them rather than that something else already had.
-///
-/// Read off `DIRS` rather than listed here. The list this used to carry was a second copy of
-/// that array which had already fallen three entries behind it — `Wallpapers` and the platform
-/// folders under `Games/` were all missing — and a copy that omits an entry cannot fail when
-/// the entry stops being created.
+/// `App::boot` creates every folder on a bare card. Read off `DIRS` so a new entry cannot be
+/// missed.
 #[test]
 fn boot_creates_every_content_folder() {
     let d = tempdir().unwrap();

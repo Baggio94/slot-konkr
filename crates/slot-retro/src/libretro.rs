@@ -41,40 +41,25 @@ struct Host {
     /// A core that is never offered the interface disables rumble outright and says nothing
     /// about it, so this is the only way to see that the offer was taken.
     asked_for_rumble: bool,
-    /// The core's own netpacket vtable, handed over during `retro_load_game`. Its function
-    /// pointers belong to the dylib and stay valid for as long as it is loaded. `None` until
-    /// the core registers one, and legally back to `None` if the core later withdraws it.
+    /// The core's netpacket vtable. Its pointers belong to the dylib and stay valid while it is
+    /// loaded. The core may withdraw it again.
     netpacket: Option<NetpacketCallback>,
-    /// Where the core's serial traffic actually goes. Created eagerly, exactly like `rumble`
-    /// above, so `net()` always hands back something valid whether or not this core ever
-    /// registers netpacket.
+    /// Where the core's serial traffic goes. Always present, whether or not the core registers
+    /// netpacket.
     net: Link,
-    /// The peer's own libretro client id — `1 - client_id` for the two parties this product
-    /// has — set by `begin_link` from the id it was actually given, and read by
-    /// `netpacket_poll_receive`/`drain_link` so every packet handed to the core is tagged
-    /// with who it is really from. Without this both trampolines hardcoded client 0, so the
-    /// host told the core every packet — including the joiner's — came from itself. `None`
-    /// before a session starts and once `halt_link` has read it back out for `disconnected`.
+    /// The peer's client id (`1 - client_id`), used to tag every packet handed to the core with
+    /// its real sender. `None` outside a session.
     net_peer: Option<u16>,
-    /// The core's own audio-buffer-status callback, handed over when its frameskip option is
-    /// set to one of the auto modes. `None` until the core registers one, and legally back to
-    /// `None` when it withdraws it — which both cores do whenever that option is off or set to
-    /// a fixed interval. See `RetroCore::set_frame_skip` on this type.
+    /// The core's audio-buffer-status callback, registered only while its frameskip option is
+    /// in an auto mode.
     audio_status: Option<AudioBufferStatusFn>,
     /// Core options, keyed as libretro names them. Values are kept as CStrings because the
     /// pointer handed back to the core has to stay valid after the callback returns.
     options: std::collections::HashMap<String, std::ffi::CString>,
     /// Set when an option changed since the core last asked, cleared when it does.
     options_dirty: bool,
-    /// What the core said its options are, keyed as libretro names them, each with the values
-    /// it declared for that key in the order it listed them — so the first of them is the
-    /// core's own default.
-    ///
-    /// Kept because without it nothing in this tree can tell a correct option key from a typo.
-    /// `set_option` writes into `options` above and `option` reads back out of the same map, so
-    /// a misspelt key round trips through the frontend perfectly and reaches the core never;
-    /// three wrong assumptions about core options shipped that way before this was recorded.
-    /// This is the core's own answer, and the only thing here that can contradict a guess.
+    /// The options the core declared, each with its values in listed order (the first is the
+    /// default). The only way to tell a real option key from a typo, which `options` accepts.
     declared: std::collections::HashMap<String, Vec<String>>,
 }
 
@@ -124,17 +109,8 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
             if data.is_null() {
                 return false;
             }
-            // Yes, and it has been true for as long as `video_refresh` has returned early on a
-            // null frame: nothing is read, nothing is written, and `video_xrgb8888` hands back
-            // the picture the last real frame left there. That is precisely what duping means.
-            // It is not a claim made on paper either — slot's own fast forward runs on it.
-            // `set_frame_skip` asks the core not to draw the frames between presents, and
-            // gpSP's answer to a skipped frame is `video_cb(NULL, ...)` (`video_run`, its
-            // `libretro.c`), so every fast-forwarded frame on the device already comes through
-            // that early return.
-            //
-            // Answering falsely was not free. A core that asks and is told no draws a frame
-            // this frontend then throws away.
+            // `video_refresh` keeps the last frame on NULL, and fast forward relies on gpSP
+            // sending NULL for skipped frames. Answering no makes the core draw wasted frames.
             *(data as *mut bool) = true;
             true
         }
@@ -169,9 +145,7 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
                 return false;
             }
             let var = &mut *(data as *mut Variable);
-            // Every other arm here guards `data` and stops; this one goes on to deref a
-            // second pointer the core packed inside it, which the null check above never
-            // covers.
+            // A second pointer inside `data`, not covered by the check above.
             if var.key.is_null() {
                 return false;
             }
@@ -204,26 +178,16 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
             .unwrap_or(false)
         }
         SET_VARIABLES => {
-            // A NULL list is legal and means the core has no options at all, which is a fact
-            // worth recording as an empty map rather than as "never asked".
+            // A NULL list is legal and means the core has no options.
             if data.is_null() {
                 return with_host(|h| h.declared.clear()).is_some();
             }
-            // `RETRO_ENVIRONMENT_SET_VARIABLES` hands over an array of `{key, value}` that ends
-            // at the first entry whose `key` is NULL, and each `value` reads
-            // `"Description; first|second|third"` — the description up to the first `;`, then
-            // the values separated by `|`, the first being the core's default.
-            //
-            // This is the v0 shape, and it is what both cores really send: they build their
-            // options with libretro's own `libretro_set_core_options`, which asks
-            // `GET_CORE_OPTIONS_VERSION` first, is answered `false` by the arm this frontend
-            // does not have, and falls back to converting the v2 tables down to this. That is
-            // also why the values arrive as bare `0|1|2|3` for an option whose v2 table gives
-            // each digit a label — the labels do not survive the conversion.
+            // A NULL-key-terminated array of `{key, "Description; first|second|third"}`, the
+            // first value being the default. This is the v0 shape, which cores fall back to
+            // because `GET_CORE_OPTIONS_VERSION` is unanswered, so v2 value labels are lost.
             let mut list = std::collections::HashMap::new();
             let mut p = data as *const Variable;
-            // A core with a list this long has gone wrong; stopping is better than walking off
-            // the end of a terminator that never comes.
+            // Bound the walk in case the terminator never comes.
             for _ in 0..4096 {
                 let var = &*p;
                 if var.key.is_null() {
@@ -271,11 +235,8 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
             true
         }
         SET_AUDIO_BUFFER_STATUS_CALLBACK => {
-            // A NULL pointer is the core withdrawing the callback, which is legal and is
-            // exactly what both cores do when their frameskip option is off or set to a fixed
-            // interval. Answering `true` either way is what tells the core the frontend can
-            // monitor its buffer at all: answering `false` makes both of them log "Frameskip
-            // disabled" and turn the whole feature off.
+            // NULL withdraws the callback. Answer `true` either way: `false` makes both cores
+            // disable frameskip entirely.
             if data.is_null() {
                 return with_host(|h| h.audio_status = None).is_some();
             }
@@ -296,12 +257,7 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
     }
 }
 
-/// Called by the core, on the emulator thread, to hand us a packet to put on the wire. A C
-/// function pointer cannot capture, so — like every other callback here — this reaches the
-/// host through the thread-local rather than a closure.
-///
-/// The core only ever calls this after `cb.start` has handed it this function pointer, which
-/// `begin_link` (behind `RetroCore::start_link`) is what actually does now.
+/// Called by the core, on the emulator thread, with a packet to put on the wire.
 unsafe extern "C" fn netpacket_send(
     _flags: c_int,
     buf: *const c_void,
@@ -315,43 +271,23 @@ unsafe extern "C" fn netpacket_send(
     with_host(|h| h.net.push_outbound(bytes));
 }
 
-/// The core asking us, mid frame, to hand it anything that has arrived. `pump_link` already
-/// does this once a frame; answering here too keeps a core that polls aggressively between
-/// frames from starving.
+/// The core asking, mid frame, for anything that has arrived.
 ///
-/// Same story as `netpacket_send`: live only once `cb.start` has been called with this
-/// pointer, which `begin_link` now does.
-///
-/// gpSP documents `receive` as able to reenter this same thread before it returns —
-/// `rfu.c:879-882`: `receive -> rfu_net_receive -> netpacket_send`, and `netpacket_send`
-/// reaches the host through `with_host` too, deriving a *second* `&mut Host` from the same
-/// raw pointer while this function's own borrow would still be alive if it called `receive`
-/// from inside `with_host`'s closure. Miri confirms that as a Stacked Borrows violation, so
-/// everything needed from the host — the function pointer, the peer's client id, and a
-/// `Link` handle (`Arc`-backed, cheap to clone) — is copied out and the borrow dropped
-/// before `receive` is ever called.
+/// `receive` can reenter `netpacket_send` (gpSP `rfu.c:879-882`), which takes its own
+/// `&mut Host`, so everything needed is copied out and the borrow dropped before calling it
+/// (Miri flags the alternative).
 unsafe extern "C" fn netpacket_poll_receive() {
     let Some((receive, net, client_id)) = with_host(|h| {
         let receive = h.netpacket.as_ref().and_then(|cb| cb.receive)?;
-        // No fallback to `0`: that id is the host's own, and handing a packet to the core
-        // tagged with it is exactly the C2 bug (packets mislabelled as our own) this file
-        // already fixed once, reopened by a different route. `net_peer` is `None` for a
-        // real moment `halt_link` creates — it takes the peer out before `Cmd::EndLink`'s
-        // own `link.set_active(false)` runs, so a core that reenters from its `stop`
-        // callback (the same reentrancy `receive` and `start` are already proven safe
-        // against) can observe `is_active() == true` with no peer recorded. `?` makes that
-        // window a skipped delivery instead of a mislabelled one.
+        // No fallback to 0, which is our own id. `net_peer` can be `None` while still active
+        // during `halt_link`; skip delivery then rather than mislabel the sender.
         let client_id = h.net_peer?;
         Some((receive, h.net.clone(), client_id))
     })
     .flatten() else {
         return;
     };
-    // Asked on the cloned handle rather than back through `with_host`: a plain atomic load
-    // on `Arc`-shared state needs no host borrow at all. A session that has already ended —
-    // `Cmd::EndLink` marks this false before the transport is dropped — must not hand the
-    // core a packet that arrived for a session that is no longer live; see `Link::clear` for
-    // the queue's own half of that guarantee.
+    // An ended session must not deliver stale packets to the core.
     if !net.is_active() {
         return;
     }
@@ -360,18 +296,9 @@ unsafe extern "C" fn netpacket_poll_receive() {
     }
 }
 
-/// The logic behind `RetroCore::start_link` on `LibretroCore`, factored out to a free
-/// function the same way `drain_link` is behind `pump_link` below — so it can be driven
-/// directly against a bare `Host` in tests, with no dylib to open. `client_id` 0 is the
-/// host, 1 the joiner, the only two this product has — so the peer is always the other one.
-///
-/// Marks the link active only once there is actually somewhere for `start` to have gone: a
-/// core that never registered netpacket has no session to begin, and reporting one active
-/// with nobody to carry it would be a lie the interlocks elsewhere would believe.
-///
-/// `start`, like `receive` above, is documented as able to reenter this thread, so it is
-/// called with no `&mut Host` borrow alive — the same fix, the same Miri-confirmed hazard.
-/// `connected` gets the identical treatment for the identical reason.
+/// `RetroCore::start_link`, as a free function so tests can drive it on a bare `Host`.
+/// `client_id` 0 is the host and 1 the joiner. The link is marked active only if the core
+/// registered netpacket. `start` and `connected` can reenter, so no host borrow is held.
 unsafe fn begin_link(client_id: u16) {
     let Some(start) = with_host(|h| h.netpacket.as_ref().and_then(|cb| cb.start)).flatten() else {
         return;
@@ -385,34 +312,16 @@ unsafe fn begin_link(client_id: u16) {
         h.netpacket.as_ref().and_then(|cb| cb.connected)
     })
     .flatten();
-    // gpSP's serial IRQ timing counts connected peers — `serial_irq_cycles = tim[...] *
-    // (netplay_num_clients + 1)` (`serial.c:175`) — and `netplay_num_clients` is what this
-    // call is what feeds. Never calling it left the host computing half the transfer time
-    // RetroArch would. Optional and null-checked like every other netpacket callback:
-    // libretro guarantees only `start`/`receive`. Its `bool` return is peer admission for a
-    // session with more than two participants, which this product does not model — see
-    // `NetpacketCallback`'s own doc comment — so it is read for nothing here; a handshake
-    // that could actually refuse a peer is the larger design question I6 defers.
+    // gpSP's serial IRQ timing scales with the connected peer count (`serial.c:175`).
+    // The admission `bool` is ignored: there are only ever two parties.
     if let Some(connected) = connected {
         connected(peer);
     }
 }
 
-/// The logic behind `RetroCore::stop_link`, mirroring `begin_link` immediately above: a free
-/// function so it too can be driven directly against a bare `Host` in tests, with no dylib.
-///
-/// `stop` is documented OPTIONAL — libretro guarantees only `start` and `receive` — so a
-/// core that never filled it in has nothing to call through, and this is silently a no-op
-/// rather than something every caller has to check for first. Deliberately does not touch
-/// `h.net`'s active flag: that is `Link::set_active`'s job, called by whoever is ending the
-/// session (see `Cmd::EndLink` in `slot`'s `emu.rs`) whether or not the core had a `stop` to
-/// hear it through — a core with no `stop` still needs its session marked over.
-///
-/// Calls `disconnected` first, `start`/`connected`'s counterpart — with the same peer id
-/// `begin_link` derived and the same borrow-dropped-before-the-call treatment, on the
-/// (unproven but cheap-to-apply) chance `stop` can reenter the same way `start` does. `None`
-/// peer means `begin_link` never actually started a session, so there is no `disconnected`
-/// to send — `halt_link` is safe to call whether or not one was ever begun.
+/// `RetroCore::stop_link`, as a free function for tests. Calls `disconnected` then `stop`, both
+/// optional, with no host borrow held. Leaves the link's active flag to the caller
+/// (`Cmd::EndLink`), since a core with no `stop` still needs its session marked over.
 unsafe fn halt_link() {
     let Some((stop, peer, disconnected)) = with_host(|h| {
         let stop = h.netpacket.as_ref().and_then(|cb| cb.stop);
@@ -430,23 +339,12 @@ unsafe fn halt_link() {
     }
 }
 
-/// The logic behind `LibretroCore::pump_link`, factored out to a free function that reaches
-/// the host through the thread-local instead of `&mut self`, so it can be driven directly
-/// against a bare `Host` in tests the same way the `GET_VARIABLE` tests below drive
-/// `environment` — gpSP is the only core that will ever exercise this for real, and driving
-/// it through a bare `Host` keeps these tests off the dylib entirely. (`task core` does
-/// vendor a host gpSP build now, but a test that needs a real core is a test that cannot run
-/// on a machine that has not fetched one.)
-///
-/// Same reentrancy hazard as `netpacket_poll_receive`, same fix: `receive` and `poll` are
-/// plain `Copy` function pointers, cheap to take out of the borrow alongside the cloned
-/// `Link`, so nothing here calls into the core while still holding `&mut Host`. Same
-/// `is_active` guard too, for the same stale-packet reason.
+/// `LibretroCore::pump_link`, as a free function for tests. Same reentrancy and stale-packet
+/// rules as `netpacket_poll_receive`.
 unsafe fn drain_link() {
     let Some((receive, poll, net, client_id)) = with_host(|h| {
         let cb = h.netpacket.as_ref()?;
-        // Same fix as `netpacket_poll_receive`, same reason: `0` is our own id, and a
-        // fallback to it would mislabel the sender instead of simply not delivering.
+        // No fallback to 0, which is our own id.
         let client_id = h.net_peer?;
         Some((cb.receive, cb.poll, h.net.clone(), client_id))
     })
@@ -466,12 +364,8 @@ unsafe fn drain_link() {
     }
 }
 
-/// The logic behind `RetroCore::set_frame_skip` on `LibretroCore`, a free function for the same
-/// reason `begin_link` and `drain_link` are: it reaches the host through the thread-local rather
-/// than `&mut self`, so it can be driven against a bare `Host` in a test with no dylib to open.
-///
-/// The `&mut Host` borrow is dropped before the callback is called, the same discipline every
-/// other call into a core in this file follows.
+/// `RetroCore::set_frame_skip`, as a free function for tests. No host borrow is held across
+/// the callback.
 unsafe fn report_audio_status(skip: bool) {
     let Some(status) = with_host(|h| h.audio_status).flatten() else {
         return;
@@ -549,10 +443,8 @@ unsafe extern "C" fn input_state(port: c_uint, device: c_uint, _index: c_uint, i
     .unwrap_or(0)
 }
 
-/// One live libretro core. Which emulator this is comes from the dylib handed to `open`;
-/// nothing in this type is specific to any of them. A libretro core keeps its machine in
-/// dylib globals, so a second live core would share that state — `open_with` refuses to
-/// open one while another is still live, rather than trusting callers not to try.
+/// One live libretro core, loaded from any dylib. Only one may be open at a time, since a
+/// core keeps its machine in dylib globals.
 pub struct LibretroCore {
     api: Api,
     host: Box<Host>,
@@ -600,27 +492,12 @@ impl LibretroCore {
         self.host.asked_for_rumble
     }
 
-    /// Set a libretro core option. Takes effect the next time the core asks, which for most
-    /// options means the next `retro_load_game`. That "next time" matters for aliasing, not
-    /// just timing: `GET_VARIABLE` hands the core a raw pointer into the previous `CString`
-    /// for this key, and calling `set_option` again for the same key drops that `CString`,
-    /// freeing the memory the core's old pointer still points at. Fine for the libretro
-    /// frontend contract, which only reads the pointer right after asking for it, but not
-    /// safe to hold onto across a `set_option` call.
-    /// Reaches `self.host` directly rather than through `with_host`. `Active::bind` is
-    /// scoped to one call *into* the core, so outside such a call the thread local is null
-    /// and `with_host` would silently do nothing. These are called from the frontend, never
-    /// from a core callback.
+    /// Set a core option, taking effect the next time the core asks (usually the next
+    /// `retro_load_game`). Setting a key again frees the string the core last got for it.
+    /// Uses `self.host` directly: `with_host` is a no-op outside a call into the core.
     pub fn set_option(&mut self, key: &str, value: &str) {
-        // Said out loud, because the frontend's own map cannot say it: `option` below reads back
-        // whatever was put in here, so a key the core never heard of and a key it acts on are
-        // indistinguishable from this side. The core's declaration is the only thing that can
-        // tell them apart, and a line on the log at the moment of the mistake is what turns
-        // "the option did nothing" from an afternoon into a sentence.
-        //
-        // Quiet when the core declared nothing at all: that is a core which never sent
-        // `SET_VARIABLES`, not a core that denied this key, and warning about every option on
-        // one would be noise with no signal in it.
+        // Warn on keys or values the core never declared, since they silently do nothing.
+        // Quiet for a core that declared no options at all.
         if !self.host.declared.is_empty() {
             match self.host.declared.get(key) {
                 None => eprintln!("slot-retro: core declares no option {key:?}, setting it anyway"),
@@ -637,12 +514,8 @@ impl LibretroCore {
         self.host.options_dirty = true;
     }
 
-    /// Every option the frontend has set on this core, key and value, in no particular order.
-    ///
-    /// The counterpart to `declared_options`, and only useful beside it: crossing the two is
-    /// what lets a test ask "is every option slot sets one this core actually has" without
-    /// naming a single key itself — which is the only form of that question a typo cannot
-    /// survive, since a test that spells the key out would spell the typo the same way.
+    /// Every option the frontend has set, in no particular order. For checking against
+    /// `declared_options`.
     pub fn options(&self) -> Vec<(String, String)> {
         self.host
             .options
@@ -651,13 +524,8 @@ impl LibretroCore {
             .collect()
     }
 
-    /// Every option the core declared, each with the values it offered for it in the order it
-    /// listed them. Empty for a core that never sent `SET_VARIABLES`.
-    ///
-    /// This is the core's own word rather than the frontend's, and it is the only thing that
-    /// can contradict a guess about an option key: `option` reads back out of the map
-    /// `set_option` writes into, so a typo is perfectly preserved there and perfectly ignored
-    /// by the core. Tests in `slot` check every key `apply_core_options` sets against this.
+    /// Every option the core declared, with its values in listed order. Empty for a core that
+    /// never sent `SET_VARIABLES`.
     pub fn declared_options(&self) -> &std::collections::HashMap<String, Vec<String>> {
         &self.host.declared
     }
@@ -740,9 +608,7 @@ impl Drop for LibretroCore {
 }
 
 impl RetroCore for LibretroCore {
-    /// The inherent `set_option` above, reachable through the trait so a running core can be
-    /// told. It marks the options dirty, which is what makes the core re-read them on its next
-    /// `retro_run` through `GET_VARIABLE_UPDATE`.
+    /// Marks options dirty, so a running core re-reads them via `GET_VARIABLE_UPDATE`.
     fn set_option(&mut self, key: &str, value: &str) {
         LibretroCore::set_option(self, key, value);
     }
@@ -793,30 +659,14 @@ impl RetroCore for LibretroCore {
         unsafe { (self.api.run)() };
     }
 
-    /// Says whether the next frame draws a picture by answering the question the core's own
-    /// auto frameskip asks: is the frontend's audio buffer about to run dry?
+    /// Skips the next frame's render by reporting an audio underrun to the core's auto
+    /// frameskip, which both cores read before running the frame. Fixed-interval mode is unusable:
+    /// mGBA checks its counter after `runFrame`, so it shows a stale frame.
     ///
-    /// This is a deliberate lie about the audio, and it is the whole mechanism. Both cores read
-    /// the answer at the top of `retro_run`, *before* running the frame, and skip that frame's
-    /// render when it is yes — so the frame reported as skipped is the one actually skipped, and
-    /// the picture left behind is the one last drawn. Their *fixed interval* mode is not usable
-    /// for this: mGBA's libretro port reads its skip counter after `runFrame` rather than
-    /// before, so it reports the frame it just drew as skipped and the frontend shows a picture
-    /// one present old. Driving the auto path sidesteps that off-by-one without patching the
-    /// core, needs no phase alignment, and — unlike an interval, which has to be chosen before
-    /// the present starts — copes with a step count that is only decided as the present runs.
-    ///
-    /// `occupancy` is set as well as `underrun_likely` so either auto mode answers the same way:
-    /// plain *Auto* reads the underrun flag, *Auto (Threshold)* compares occupancy against a
-    /// percentage that defaults to 33 in both cores.
-    ///
-    /// A core that never registered the callback has no auto frameskip to drive — its option is
-    /// off, or it is mGBA in link mode, which returns from `retro_run` before it reads any of
-    /// this — so this is silently a no-op rather than something every caller checks for first.
+    /// Both `occupancy` and `underrun_likely` are set so Auto and Auto (Threshold, default 33%)
+    /// agree. A no-op when the core registered no callback.
     fn set_frame_skip(&mut self, skip: bool) {
-        // Bound like every other call into the core: the callback both cores register only
-        // assigns to their own statics, but it is still their code running on this thread and
-        // is not promised never to reach back through an environment callback.
+        // Core code may reach back through an environment callback.
         let _a = Active::bind(&mut self.host);
         unsafe { report_audio_status(skip) };
     }
@@ -890,30 +740,19 @@ impl RetroCore for LibretroCore {
         self.host.net.clone()
     }
 
-    /// Begins a netpacket session: hands the core its client id and our own send/poll-receive
-    /// trampolines, exactly once, the way libretro's `start` is documented to be called.
-    /// `begin_link` carries the actual logic — see it for why a core that never registered
-    /// netpacket leaves `net` unmarked rather than lying that a session is live.
+    /// Begins a netpacket session. See `begin_link`.
     fn start_link(&mut self, client_id: u16) {
         let _a = Active::bind(&mut self.host);
         unsafe { begin_link(client_id) };
     }
 
-    /// Once per frame: hand the core anything that arrived since last frame, then let it do
-    /// its own polling if it offered one. Binds `Active` the same as `run_frame` does, rather
-    /// than assuming `receive` and `poll` only ever touch the link — either could in
-    /// principle reenter another environment callback that also reaches the host through the
-    /// thread-local.
+    /// Once per frame: deliver arrived packets, then call the core's own `poll` if it has one.
     fn pump_link(&mut self) {
         let _a = Active::bind(&mut self.host);
         unsafe { drain_link() };
     }
 
-    /// Ends a netpacket session: tells the core it is over, if it registered a `stop` to
-    /// hear it through. `halt_link` carries the actual logic — see it for why a core with no
-    /// `stop` is a silent no-op rather than an error. Binds `Active` the same as
-    /// `start_link`/`pump_link`, since `stop` runs on the core's own thread and may itself
-    /// reach back through the thread-local.
+    /// Ends a netpacket session. See `halt_link`.
     fn stop_link(&mut self) {
         let _a = Active::bind(&mut self.host);
         unsafe { halt_link() };
@@ -927,18 +766,11 @@ mod tests {
     use std::collections::HashMap;
     use std::ffi::CStr;
 
-    // `crates/slot-retro/tests/options.rs` calls `LibretroCore::set_option`/`option`, which are
-    // a HashMap round trip and never reach `environment` at all — reverting the whole of the
-    // `GET_VARIABLE`/`GET_VARIABLE_UPDATE` arms below left that test suite green. These
-    // tests call `environment` itself, the one place a core actually crosses the ABI to ask
-    // for an option, so they go red on the same revert. No dylib is needed: `environment` is
-    // a plain function and a `Host` is just a struct, both reachable from inside this crate.
+    // These drive `environment` and the trampolines directly on a bare `Host`, with no dylib.
 
     fn host_with(options: HashMap<String, CString>, options_dirty: bool) -> Box<Host> {
         Box::new(Host {
-            // Allocated exactly as `LibretroCore::open` allocates it, because `video_refresh`
-            // writes through a raw pointer into this buffer and an empty one would let a test
-            // scribble off the end of the allocation instead of failing an assertion.
+            // Full size: `video_refresh` writes through a raw pointer into it.
             video: vec![0; VIDEO_BYTES],
             format: PixelFormat::Xrgb8888,
             audio: Vec::new(),
@@ -957,9 +789,7 @@ mod tests {
         })
     }
 
-    /// One `{key, value}` entry as a core builds it, plus the `CString`s it points into: the
-    /// array holds raw pointers, so the storage behind them has to outlive the call and a test
-    /// that let the strings drop would be reading freed memory rather than a declaration.
+    /// One `{key, value}` entry, plus the `CString`s it points into, which must outlive the call.
     fn declaration(key: &str, value: &str) -> (Variable, CString, CString) {
         let key = CString::new(key).unwrap();
         let value = CString::new(value).unwrap();
@@ -970,8 +800,7 @@ mod tests {
         (var, key, value)
     }
 
-    /// The terminator every `SET_VARIABLES` list ends with, and the only thing that stops the
-    /// walk: a core hands over an array with no length.
+    /// The NULL-key terminator of a `SET_VARIABLES` list.
     fn end_of_list() -> Variable {
         Variable {
             key: ptr::null(),
@@ -979,11 +808,7 @@ mod tests {
         }
     }
 
-    /// The arm that closes the gap this whole facility exists for. `set_option` and `option`
-    /// are a HashMap round trip that never crosses the ABI, so before this the frontend had no
-    /// way at all to tell an option key the core has from one it does not — three wrong
-    /// assumptions about core options shipped through that hole. This is `environment` itself,
-    /// driven with the array shape a real core passes.
+    /// `SET_VARIABLES` records each declared key with its values, stopping at the terminator.
     #[test]
     fn set_variables_records_what_the_core_declared() {
         let mut host = host_with(HashMap::new(), false);
@@ -993,8 +818,6 @@ mod tests {
             "Color Correction; OFF|GBA|GBC|Auto",
         );
         let list = [a, b, end_of_list()];
-        // Scoped, because the binding holds `host` mutably for as long as it lives and the
-        // assertions below read the field it wrote.
         let ok = {
             let _active = Active::bind(&mut host);
             unsafe { environment(SET_VARIABLES, list.as_ptr() as *mut c_void) }
@@ -1024,9 +847,7 @@ mod tests {
         );
     }
 
-    /// A core is allowed to send no list at all. Recording that as an empty map rather than
-    /// leaving whatever was there is what keeps a second core opened in the same process from
-    /// inheriting the first one's declarations — and every test in this crate shares a process.
+    /// A NULL list clears earlier declarations, so a later core does not inherit them.
     #[test]
     fn set_variables_with_no_list_declares_nothing() {
         let mut host = host_with(HashMap::new(), false);
@@ -1077,10 +898,7 @@ mod tests {
         assert!(var.value.is_null());
     }
 
-    /// `set_option` is what marks `options_dirty`, so the core knows to re-ask; this is the
-    /// other half, that `GET_VARIABLE_UPDATE` reports it once and then clears it, matching
-    /// libretro's contract that the flag means "changed since I last asked", not "changed
-    /// ever".
+    /// `GET_VARIABLE_UPDATE` reports the dirty flag once, then clears it.
     #[test]
     fn get_variable_update_reports_and_clears_the_dirty_flag() {
         let mut host = host_with(HashMap::new(), true);
@@ -1103,8 +921,7 @@ mod tests {
         assert!(!dirty_again, "flag must be cleared after being read once");
     }
 
-    /// M1: `GET_VARIABLE` derefs `var.key` past the `data` null check, so a core that hands
-    /// back a `Variable` with a null key must not crash the frontend.
+    /// A `Variable` with a null key is refused, not dereferenced.
     #[test]
     fn get_variable_refuses_a_null_key() {
         let mut host = host_with(HashMap::new(), false);
@@ -1119,10 +936,6 @@ mod tests {
     }
 
     // --- auto frameskip ------------------------------------------------------------------
-    //
-    // Driven through `environment` and `report_audio_status` directly, against a bare `Host`,
-    // for the same reason the `GET_VARIABLE` tests above are: this is the ABI seam a core
-    // crosses to register the callback, and it can be exercised with no dylib at all.
 
     thread_local! {
         /// Every `(active, occupancy, underrun_likely)` the frontend reported, in order.
@@ -1154,9 +967,7 @@ mod tests {
         assert!(host.audio_status.is_some(), "the callback was never stored");
     }
 
-    /// Both cores pass NULL here whenever their frameskip option is off or set to a fixed
-    /// interval, and both read the answer as whether the frontend can monitor its buffer at
-    /// all — so this has to be answered `true`, not treated as a malformed call.
+    /// NULL withdraws the callback and is answered `true`, or the cores disable frameskip.
     #[test]
     fn set_audio_buffer_status_callback_null_withdraws_it() {
         let mut host = host_with(HashMap::new(), false);
@@ -1170,10 +981,7 @@ mod tests {
         assert!(host.audio_status.is_none());
     }
 
-    /// The lever itself: a skipped frame is reported as an imminent underrun and an empty
-    /// buffer, a drawn one as neither. Both fields, so the answer reads the same whether the
-    /// core is on plain `auto` (which reads the flag) or `auto_threshold` (which compares the
-    /// occupancy against a percentage defaulting to 33 in both cores).
+    /// A skip reports an underrun and an empty buffer, a draw reports neither.
     #[test]
     fn set_frame_skip_tells_the_core_to_skip_by_reporting_an_underrun() {
         TEST_AUDIO_STATUS.with(|r| r.borrow_mut().clear());
@@ -1196,8 +1004,7 @@ mod tests {
         });
     }
 
-    /// mGBA in link mode returns from `retro_run` before it reads any of this, and a core
-    /// whose frameskip option is off never registers at all. Neither is an error.
+    /// With no callback registered, `set_frame_skip` does nothing.
     #[test]
     fn set_frame_skip_is_a_noop_when_the_core_registered_no_callback() {
         TEST_AUDIO_STATUS.with(|r| r.borrow_mut().clear());
@@ -1212,24 +1019,16 @@ mod tests {
 
     // --- netpacket -----------------------------------------------------------------------
     //
-    // Same rationale as the `GET_VARIABLE` tests above: this repo has no gpSP dylib to load
-    // on macOS, and gpSP is the only core that speaks netpacket at all. So the ABI seam is
-    // driven directly — a hand-built `NetpacketCallback` standing in for the core, and the
-    // private trampolines and `drain_link` invoked exactly as the core (or `pump_link`)
-    // would invoke them.
+    // A hand-built `NetpacketCallback` stands in for the core.
 
     thread_local! {
         static TEST_RECEIVED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
-        /// The `client_id` each `test_receive` call landed with, in the same order as
-        /// `TEST_RECEIVED` — this is what proves C2: the host must stop tagging every packet
-        /// with its own id and tag it with the peer's instead.
+        /// The `client_id` each `test_receive` call landed with, in `TEST_RECEIVED` order.
         static TEST_RECEIVED_CLIENT_IDS: RefCell<Vec<u16>> = const { RefCell::new(Vec::new()) };
         static TEST_POLLS: Cell<u32> = const { Cell::new(0) };
-        /// What `test_start` was last called with, so `begin_link` can be proven to have
-        /// actually reached the core rather than merely not panicked.
+        /// What `test_start` was last called with.
         static TEST_START_CLIENT: Cell<Option<u16>> = const { Cell::new(None) };
-        /// How many times `test_stop` fired, so `halt_link` can be proven to have actually
-        /// reached the core rather than merely not panicked.
+        /// How many times `test_stop` fired.
         static TEST_STOP_CALLS: Cell<u32> = const { Cell::new(0) };
         /// What `test_connected` was last called with.
         static TEST_CONNECTED_CLIENT: Cell<Option<u16>> = const { Cell::new(None) };
@@ -1237,9 +1036,7 @@ mod tests {
         static TEST_DISCONNECTED_CLIENT: Cell<Option<u16>> = const { Cell::new(None) };
     }
 
-    /// Thread-local recorders persist across tests that land on the same worker thread in
-    /// cargo's test pool, unlike `ACTIVE`, which `Active`'s own `Drop` resets after every
-    /// test. Each test that reads them must reset first.
+    /// The recorders persist across tests on the same worker thread, so reset them first.
     fn reset_test_netpacket_recorders() {
         TEST_RECEIVED.with(|r| r.borrow_mut().clear());
         TEST_RECEIVED_CLIENT_IDS.with(|c| c.borrow_mut().clear());
@@ -1256,21 +1053,15 @@ mod tests {
         TEST_RECEIVED_CLIENT_IDS.with(|c| c.borrow_mut().push(client_id));
     }
 
-    /// I1: reproduces the exact reentrancy gpSP's own source documents (`rfu.c:879-882`) —
-    /// `receive -> rfu_net_receive -> netpacket_send`, all on this same thread before
-    /// `receive` returns. Nothing about this needs a real dylib: Miri can run entirely
-    /// against these hand-built trampolines standing in for what the core does, which is
-    /// what proves the fix without a gpSP binary anywhere in this tree.
+    /// gpSP's documented reentrancy (`rfu.c:879-882`): `receive` calls `netpacket_send` before
+    /// returning. Run under Miri to check the borrow discipline.
     unsafe extern "C" fn test_receive_reentrant(buf: *const c_void, len: usize, client_id: u16) {
         test_receive(buf, len, client_id);
         let reentrant = b"reentrant";
         netpacket_send(0, reentrant.as_ptr() as *const c_void, reentrant.len(), 0);
     }
 
-    /// I1's other shape: `begin_link` has the same hazard across `start(...)`, so this lets
-    /// a test simulate a core that turns around and calls back into the frontend — here,
-    /// `netpacket_poll_receive`, the pointer `start` was just handed — before `start` itself
-    /// returns.
+    /// A `start` that calls back into `netpacket_poll_receive` before returning.
     unsafe extern "C" fn test_start_reentrant(
         client_id: u16,
         _send: NetpacketSend,
@@ -1305,8 +1096,7 @@ mod tests {
         TEST_DISCONNECTED_CLIENT.with(|c| c.set(Some(client_id)));
     }
 
-    /// `start` and `receive` are the two fields libretro guarantees a core fills in; the
-    /// rest are left `None`/null the way a minimal, spec-compliant core is allowed to.
+    /// A minimal core: libretro only guarantees `start` and `receive`.
     fn test_netpacket_callback() -> NetpacketCallback {
         NetpacketCallback {
             start: Some(test_start),
@@ -1319,11 +1109,7 @@ mod tests {
         }
     }
 
-    // Every test below sets up `host.netpacket`/`host.net` *before* binding `Active`, and
-    // reads them back only after that binding has dropped: `Active::bind` holds an exclusive
-    // borrow of `host` for as long as the guard it returns is alive (mirroring the real
-    // lifetime — the core has exclusive access to the host for the duration of one call into
-    // it), so touching `host` directly while a binding is still in scope does not borrow-check.
+    // `Active::bind` borrows `host` exclusively, so tests set up before binding and read after.
 
     #[test]
     fn set_netpacket_interface_stores_the_callback_the_core_hands_over() {
@@ -1401,9 +1187,7 @@ mod tests {
         let mut host = host_with(HashMap::new(), false);
         host.netpacket = Some(test_netpacket_callback());
         host.net.set_active(true);
-        // I4: a peer has to be on record for `netpacket_poll_receive` to deliver anything
-        // at all now — `begin_link` sets both together in production, so this test's own
-        // shortcut of activating the session directly has to set both too.
+        // Delivery needs a peer on record, which `begin_link` sets alongside `set_active`.
         host.net_peer = Some(1);
         host.net.push_inbound(b"first".to_vec());
         host.net.push_inbound(b"second".to_vec());
@@ -1442,15 +1226,13 @@ mod tests {
         );
     }
 
-    /// I2: a packet that arrived after `Cmd::EndLink` marked the session inactive — but
-    /// before the transport carrying it was actually dropped — must not reach a core that no
-    /// longer has a session to receive it into.
+    /// A packet arriving after the session went inactive is not delivered.
     #[test]
     fn netpacket_poll_receive_does_nothing_once_the_session_is_no_longer_active() {
         reset_test_netpacket_recorders();
         let mut host = host_with(HashMap::new(), false);
         host.netpacket = Some(test_netpacket_callback());
-        // Never marked active — this is what a stale packet after `Cmd::EndLink` looks like.
+        // Never marked active: a stale packet after `Cmd::EndLink`.
         host.net.push_inbound(b"stale".to_vec());
         {
             let _active = Active::bind(&mut host);
@@ -1465,21 +1247,14 @@ mod tests {
         );
     }
 
-    /// I4: `is_active()` reading true is not by itself proof a peer was ever recorded —
-    /// `halt_link` takes `net_peer` back out before `Cmd::EndLink`'s own
-    /// `link.set_active(false)` runs, so a core that reenters from its `stop` callback (the
-    /// same shape `receive` and `start` are already proven safe against) can observe exactly
-    /// this combination. The old `unwrap_or(0)` fallback would have delivered this packet
-    /// mislabelled as client `0` — our own id, and the same mislabelling C2 fixed once
-    /// already. Refusing to deliver at all is the point of the fix this proves.
+    /// Active with no peer recorded (reachable during `halt_link`): nothing is delivered,
+    /// rather than delivered as client 0.
     #[test]
     fn netpacket_poll_receive_does_nothing_without_a_recorded_peer() {
         reset_test_netpacket_recorders();
         let mut host = host_with(HashMap::new(), false);
         host.netpacket = Some(test_netpacket_callback());
-        // Active with no `net_peer` — never reachable through `begin_link`, which always
-        // sets both together; only a direct poke at the flag (standing in for the window
-        // above) can put the host in this state at all.
+        // Active with no `net_peer`, standing in for the `halt_link` window.
         host.net.set_active(true);
         host.net.push_inbound(b"orphaned".to_vec());
         {
@@ -1500,8 +1275,7 @@ mod tests {
         );
     }
 
-    /// C2: the host must tag an incoming packet with the peer's client id, not its own —
-    /// `begin_link` is what learns the peer's id from the one it was actually given.
+    /// Incoming packets are tagged with the peer's client id, not our own.
     #[test]
     fn netpacket_poll_receive_tags_packets_with_the_peers_client_id() {
         reset_test_netpacket_recorders();
@@ -1601,8 +1375,7 @@ mod tests {
         );
     }
 
-    /// I2: the same stale-packet guarantee `netpacket_poll_receive` above gets, for the
-    /// path `pump_link` actually drives every present.
+    /// `drain_link` delivers nothing once the session is inactive.
     #[test]
     fn drain_link_does_nothing_once_the_session_is_no_longer_active() {
         reset_test_netpacket_recorders();
@@ -1623,8 +1396,7 @@ mod tests {
         );
     }
 
-    /// I4: `drain_link`'s half of the same fix `netpacket_poll_receive` gets above — see that
-    /// test's own doc comment for the reentrant-`stop` window this stands in for.
+    /// `drain_link` delivers nothing while active with no peer recorded.
     #[test]
     fn drain_link_does_nothing_without_a_recorded_peer() {
         reset_test_netpacket_recorders();
@@ -1657,7 +1429,7 @@ mod tests {
         );
     }
 
-    /// C2: `drain_link`'s half of the same client-id fix `netpacket_poll_receive` gets above.
+    /// `drain_link` tags packets with the peer's client id.
     #[test]
     fn drain_link_tags_packets_with_the_peers_client_id() {
         reset_test_netpacket_recorders();
@@ -1665,9 +1437,7 @@ mod tests {
         host.netpacket = Some(test_netpacket_callback());
         {
             let _active = Active::bind(&mut host);
-            // We are the host, client 0, so the peer is client 1 — deliberately not 0, the
-            // hardcoded value C2 is about: a mutation back to that constant would otherwise
-            // pass this test by coincidence whenever our own id happens to be 1.
+            // We are client 0, so the peer is 1, which a hardcoded 0 cannot pass by accident.
             unsafe { begin_link(0) };
         }
         reset_test_netpacket_recorders();
@@ -1686,12 +1456,8 @@ mod tests {
         });
     }
 
-    /// I1: `receive` reentering through `netpacket_send` — gpSP's own documented shape —
-    /// must not leave a `&mut Host` borrow live across the reentrant call. This assertion is
-    /// the ordinary proof (the reentrant send actually landed, so the call completed rather
-    /// than being skipped); the Miri-confirmed proof is that this test runs clean at all
-    /// under `cargo +nightly miri test -p slot-retro`, which a live borrow across the
-    /// reentrant call reports as a Stacked Borrows violation.
+    /// `receive` reentering through `netpacket_send` completes. Run under
+    /// `cargo +nightly miri test -p slot-retro` to catch a borrow held across it.
     #[test]
     fn drain_link_survives_the_reentrancy_gpsp_documents() {
         reset_test_netpacket_recorders();
@@ -1716,9 +1482,7 @@ mod tests {
         );
     }
 
-    /// `netpacket_poll_receive` is driven the exact same way `pump_link` drives `drain_link`
-    /// — `RetroCore::pump_link` calls it too (see `netpacket_poll_receive`'s own doc comment)
-    /// — so it carries the identical reentrancy hazard and the identical fix.
+    /// The same reentrancy check for `netpacket_poll_receive`.
     #[test]
     fn netpacket_poll_receive_survives_the_reentrancy_gpsp_documents() {
         reset_test_netpacket_recorders();
@@ -1740,10 +1504,7 @@ mod tests {
 
     // --- begin_link (the logic behind `RetroCore::start_link`) ---------------------------
 
-    /// I1: `begin_link` has the same reentrancy hazard across `start(...)` that `drain_link`
-    /// has across `receive` — a core calling back into the frontend before `start` itself
-    /// returns must not find a `&mut Host` borrow still live. Proven the same way: clean
-    /// under Miri, not just under an ordinary run.
+    /// A `start` that calls back into the frontend finds no host borrow live (check under Miri).
     #[test]
     fn begin_link_survives_a_core_that_reenters_from_start() {
         reset_test_netpacket_recorders();
@@ -1782,9 +1543,7 @@ mod tests {
         );
     }
 
-    /// A core that never registered netpacket — mGBA, or gpSP before `retro_load_game` — has
-    /// no `start` to call. Marking the link active anyway would tell the interlocks a session
-    /// is live when nothing is carrying its traffic.
+    /// With no netpacket registered, the link is not marked active.
     #[test]
     fn begin_link_is_a_noop_when_the_core_never_registered_netpacket() {
         reset_test_netpacket_recorders();
@@ -1798,8 +1557,7 @@ mod tests {
         assert!(!host.net.is_active());
     }
 
-    /// I5: gpSP's serial IRQ timing counts connected peers, so a session that never calls
-    /// `connected` leaves it computing half the transfer time RetroArch would.
+    /// `begin_link` calls `connected` with the peer id, which gpSP's serial timing counts.
     #[test]
     fn begin_link_calls_connected_with_the_peers_client_id() {
         reset_test_netpacket_recorders();
@@ -1822,9 +1580,7 @@ mod tests {
         });
     }
 
-    /// `connected` is documented OPTIONAL, like `stop` — a core that never offered one must
-    /// not stop a session from starting, and calling through a null pointer would crash the
-    /// frontend rather than the core that left it unset.
+    /// A missing `connected` (it is optional) does not stop a session starting.
     #[test]
     fn begin_link_is_fine_with_no_connected_callback() {
         reset_test_netpacket_recorders();
@@ -1860,9 +1616,7 @@ mod tests {
         TEST_STOP_CALLS.with(|c| assert_eq!(c.get(), 1, "stop was never called"));
     }
 
-    /// `stop` is documented OPTIONAL, unlike `start` — a spec-compliant core may leave it
-    /// NULL, and calling through a null pointer would crash the frontend rather than the
-    /// core that never offered one.
+    /// A missing `stop` (it is optional) is a no-op.
     #[test]
     fn halt_link_is_a_noop_when_the_core_never_offered_a_stop() {
         reset_test_netpacket_recorders();
@@ -1877,8 +1631,7 @@ mod tests {
         TEST_STOP_CALLS.with(|c| assert_eq!(c.get(), 0));
     }
 
-    /// I5's other half: `disconnected` is `connected`'s counterpart, called with the same
-    /// peer id `begin_link` derived when the session it was told about actually ends.
+    /// `halt_link` calls `disconnected` with the peer id `begin_link` derived.
     #[test]
     fn halt_link_calls_disconnected_with_the_peers_client_id() {
         reset_test_netpacket_recorders();
@@ -1905,8 +1658,7 @@ mod tests {
         });
     }
 
-    /// `halt_link` is documented safe to call whether or not a session was ever begun — a
-    /// core that never started one has no peer to report as having left.
+    /// `halt_link` with no session begun reports no `disconnected`.
     #[test]
     fn halt_link_does_not_call_disconnected_when_no_session_ever_started() {
         reset_test_netpacket_recorders();
@@ -1926,8 +1678,7 @@ mod tests {
 
     // --- input ports ---------------------------------------------------------------------
     //
-    // mGBA's link mode reads player 1's buttons from port 0 and player 2's from port 1, so the
-    // host has to answer both. Driven through `input_state` itself, the function the core calls.
+    // mGBA's link mode reads player 1 from port 0 and player 2 from port 1.
 
     #[test]
     fn input_state_answers_each_port_from_its_own_mask() {
@@ -1961,15 +1712,8 @@ mod tests {
     }
 
     // --- picture placement ---------------------------------------------------------------
-    //
-    // Driven through `video_refresh` itself, the callback a core hands its frame to, because
-    // that is where the picture's true size is known. Everything downstream — the drawn quad
-    // and `thumb::png`, which encodes the whole buffer for every polaroid and save-state
-    // thumbnail — reads the buffer these tests inspect.
 
-    /// A gradient rather than a flat fill: a frame that came back shifted by any amount, or with
-    /// its rows walked in the wrong order, then reads back bytes that belong to some other texel
-    /// instead of matching a fill that looks the same everywhere.
+    /// A gradient, so a shifted or reordered frame reads back wrong bytes.
     fn gradient(w: usize, h: usize) -> Vec<u8> {
         let mut px = vec![0u8; w * h * 4];
         for y in 0..h {
@@ -2002,17 +1746,10 @@ mod tests {
     }
 
     // --- duplicate frames -----------------------------------------------------------------
-    //
-    // A core that dupes hands `video_refresh` a null frame and expects the frontend to go on
-    // showing the last real one. `GET_CAN_DUPE` is answered `true`, and these are what makes
-    // that answer a fact about the code rather than a promise: the answer arm and the frame
-    // path are tested separately, so an arm that started lying would be caught by the pair
-    // disagreeing rather than by a core failing in the field.
 
     #[test]
     fn get_can_dupe_tells_a_core_the_frontend_keeps_the_last_frame() {
-        // The number is half the claim: answering `true` to the wrong command would be a lie
-        // about something else entirely. libretro.h: `RETRO_ENVIRONMENT_GET_CAN_DUPE 3`.
+        // libretro.h: `RETRO_ENVIRONMENT_GET_CAN_DUPE 3`.
         assert_eq!(GET_CAN_DUPE, 3);
 
         let mut host = host_with(HashMap::new(), false);
@@ -2028,8 +1765,7 @@ mod tests {
         );
     }
 
-    /// The same null guard every other arm carries: a core that asks with nowhere to put the
-    /// answer gets a refusal rather than a write through a null pointer.
+    /// A NULL `data` is refused.
     #[test]
     fn get_can_dupe_refuses_a_null_pointer() {
         let mut host = host_with(HashMap::new(), false);
@@ -2038,11 +1774,8 @@ mod tests {
         assert!(!unsafe { environment(GET_CAN_DUPE, ptr::null_mut()) });
     }
 
-    /// A duplicate frame must leave the picture exactly as it was — not blanked, not torn, not
-    /// shifted. The null pointer arrives with the real dimensions and pitch beside it, because
-    /// that is what a live core sends: gpSP's skipped-frame path is `video_cb(NULL,
-    /// GBA_SCREEN_WIDTH, GBA_SCREEN_HEIGHT, GBA_SCREEN_PITCH * 2)`, which is also the path
-    /// slot's own fast forward drives through `set_frame_skip` on every device.
+    /// A NULL frame leaves the picture unchanged. Real dimensions are passed, as gpSP's skipped
+    /// frames do.
     #[test]
     fn a_duplicate_frame_leaves_the_previous_picture_exactly_as_it_was() {
         let mut host = host_with(HashMap::new(), false);

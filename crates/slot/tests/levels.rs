@@ -41,8 +41,7 @@ fn levels_work_on_the_shelf_not_only_in_game() {
     assert_eq!(read_slot_state(d.path()).blue_light, 1);
 }
 
-/// The bar is transient chrome over a live game, per spec section 6. Anything that moved
-/// the phase would have paused it.
+/// The bar is transient chrome over a live game; moving the phase would pause it.
 #[test]
 fn adjusting_a_level_in_game_leaves_the_game_running() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -76,7 +75,6 @@ fn muted_is_silent_but_remembers() {
     assert_eq!(a.hud_icon(), Icon::VolumeMuted);
 }
 
-/// Turning it up is the obvious way to undo a mute, and it should work.
 #[test]
 fn adjusting_the_volume_unmutes() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -87,8 +85,7 @@ fn adjusting_the_volume_unmutes() {
     assert_eq!(a.volume(), 75);
 }
 
-/// The chord is one press away from the level keys, so unmuting has to give back the silence
-/// as well as the number. Without it the second half of the pair would leave it audible.
+/// Unmuting through the chord also restores the level, or the pair would leave it audible.
 #[test]
 fn unmuting_with_the_chord_does_not_mute_again() {
     let d = tmp_root_with_carts(&["Emerald"]);

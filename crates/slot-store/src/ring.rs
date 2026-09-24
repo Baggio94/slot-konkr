@@ -8,8 +8,7 @@ pub const RING_MAX: usize = 10;
 const STATE_EXT: &str = "state";
 const THUMB_EXT: &str = "png";
 const RESUME: &str = "resume";
-/// What a resume the core would not read is renamed to, before the stamp: see
-/// `StateRing::retire_resume`.
+/// Prefix for a resume the core refused. See `StateRing::retire_resume`.
 const REFUSED: &str = "resume-refused";
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -20,20 +19,15 @@ pub struct StateEntry {
     pub thumb: PathBuf,
 }
 
-/// The ten deliberate saves for one cart, plus the invisible `resume.state` alongside
-/// them. Only `SELECT+R1` pushes; eject, lid, power and autosave all write resume, which
-/// is why resume is not an entry.
+/// The ten deliberate saves for one cart, plus the hidden `resume.state` that eject, lid, power
+/// and autosave write. Only `SELECT+R1` pushes.
 pub struct StateRing {
     dir: PathBuf,
 }
 
 impl StateRing {
-    /// States are core private: a serialized machine from one emulator cannot be loaded by
-    /// another, so offering them together would only produce a confusing failure. Battery
-    /// saves under `Saves/` are raw cartridge bytes and stay shared.
-    ///
-    /// `States/GBA/<core>/<stem>/`, which is also the shape a person organising a card by hand
-    /// has to build.
+    /// `States/GBA/<core>/<stem>/`. Per core because one emulator cannot load another's state;
+    /// battery saves under `Saves/` are raw cartridge bytes and stay shared.
     pub fn new(root: &Path, core: Core, stem: &str) -> Self {
         StateRing {
             dir: root
@@ -46,15 +40,14 @@ impl StateRing {
 
     pub fn push(&self, state: &[u8], thumb_png: &[u8], stamp: &str) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.dir)?;
-        // Thumb first. An entry is listed by its state file, so a cut between the two
-        // leaves an unlisted orphan rather than a polaroid with no picture.
+        // Thumb first: entries are listed by state file, so a power cut leaves an unlisted
+        // orphan rather than an entry with no picture.
         atomic_write(&self.path(stamp, THUMB_EXT), thumb_png)?;
         atomic_write(&self.path(stamp, STATE_EXT), state)?;
         self.evict()
     }
 
-    /// Newest first. A cart that has never been saved lists empty rather than failing:
-    /// on the device that directory only exists once something has written to it.
+    /// Newest first. A missing directory (never saved) lists empty.
     pub fn list(&self) -> std::io::Result<Vec<StateEntry>> {
         let dir = match std::fs::read_dir(&self.dir) {
             Ok(d) => d,
@@ -80,14 +73,12 @@ impl StateRing {
                 stamp: stamp.to_string(),
             });
         }
-        // The stamp is fixed width and most significant first, so lexicographic order is
-        // chronological order.
+        // Fixed-width stamps sort chronologically.
         entries.sort_by(|a, b| b.stamp.cmp(&a.stamp));
         Ok(entries)
     }
 
-    /// Both halves of one entry. A thumbnail that never landed reads as empty rather than as
-    /// a failure: the state is the part worth keeping.
+    /// State and thumbnail of one entry. A missing thumbnail reads as empty, not an error.
     pub fn read(&self, stamp: &str) -> std::io::Result<(Vec<u8>, Vec<u8>)> {
         let state = std::fs::read(self.stamped(stamp, STATE_EXT)?)?;
         let thumb = std::fs::read(self.path(stamp, THUMB_EXT)).unwrap_or_default();
@@ -113,25 +104,11 @@ impl StateRing {
         }
     }
 
-    /// Moves `resume.state` out of the way, because the core that was handed it would not read
-    /// it. Answers where it went, or `None` when there was no resume to move — which is what a
-    /// cart that has already been retired looks like on every call after the first.
+    /// Renames a `resume.state` the core refused to `resume-refused-<stamp>.state`, so the next
+    /// boot does not hand it over again. Renamed, not deleted, since the core that wrote it can
+    /// still load it. Returns the new path, or `None` if there was no resume.
     ///
-    /// Renamed rather than deleted. A state one core refuses is still a real session to the
-    /// core that wrote it: put that core back and it is worth having again. So this destroys
-    /// nothing, the same choice `write_sav` makes when a save would shrink. What
-    /// the move buys is that the next open finds no resume at all — without it the same bytes
-    /// are handed to the same core on every boot and refused identically every time, with
-    /// nothing the player can do about it but delete the file from a card reader.
-    ///
-    /// The new name keeps the `.state` extension so it still reads as a save state to whoever
-    /// is looking at the card, and `list` still passes over it: its file stem is not a stamp,
-    /// which is the same test that already keeps `resume.state` itself out of the ring. So it
-    /// can never be offered as an entry, and `evict` — which only ever deletes what `list`
-    /// returns — can never delete it either.
-    ///
-    /// `stamp` is the caller's wall clock, taken as an argument for the same reason `push`
-    /// takes one rather than reading a clock of its own.
+    /// The new stem is not a stamp, so `list` skips it and `evict` can never delete it.
     pub fn retire_resume(&self, stamp: &str) -> std::io::Result<Option<PathBuf>> {
         let from = self.path(RESUME, STATE_EXT);
         if !from.exists() {
@@ -139,20 +116,13 @@ impl StateRing {
         }
         let to = self.free_refused(stamp);
         std::fs::rename(&from, &to)?;
-        // A rename is already atomic, so unlike `atomic_write` there is nothing to write first.
-        // The directory entry still has to reach the card, or a power cut here leaves the state
-        // back under its old name and the next boot hands it to the core again.
+        // Without this a power cut can undo the rename and the core gets the state again.
         sync_dir(&to);
         Ok(Some(to))
     }
 
-    /// A `resume-refused-<stamp>.state` nothing is using yet.
-    ///
-    /// Two retirements of one cart inside the same wall-clock second is not something a player
-    /// can produce — the second one needs a whole session in between to write a new resume for
-    /// a later core to refuse — but the counter costs three lines, and the alternative is
-    /// overwriting a state that is still somebody's, which is the one thing moving rather than
-    /// deleting exists to avoid.
+    /// A `resume-refused-<stamp>.state` nothing is using yet, adding a counter on collision so
+    /// an earlier refused state is never overwritten.
     fn free_refused(&self, stamp: &str) -> PathBuf {
         let base = format!("{REFUSED}-{stamp}");
         let first = self.path(&base, STATE_EXT);
@@ -168,8 +138,7 @@ impl StateRing {
     fn evict(&self) -> std::io::Result<()> {
         for old in self.list()?.into_iter().skip(RING_MAX) {
             std::fs::remove_file(&old.state)?;
-            // A push that was cut short can leave a state with no thumb, and refusing to
-            // evict it would wedge the ring at eleven.
+            // A cut-short push can leave no thumb; failing here would wedge the ring at eleven.
             let _ = std::fs::remove_file(&old.thumb);
         }
         Ok(())
@@ -179,8 +148,7 @@ impl StateRing {
         self.dir.join(format!("{stem}.{ext}"))
     }
 
-    /// The caller names the file, so `resume` and anything else outside the ring is refused
-    /// here rather than being deleted or handed back.
+    /// Refuses `resume` and anything else outside the ring, since the caller names the file.
     fn stamped(&self, stamp: &str, ext: &str) -> std::io::Result<PathBuf> {
         if !is_stamp(stamp) {
             return Err(std::io::Error::new(
@@ -192,9 +160,8 @@ impl StateRing {
     }
 }
 
-/// `resume.state` fails this, and so does anything the user dropped in the directory by
-/// hand. Eviction deletes what `list` returns, so being strict here is what stops the
-/// ring removing a file it did not write.
+/// Strict, because eviction deletes what `list` returns: `resume.state` and hand-placed files
+/// must fail this.
 fn is_stamp(s: &str) -> bool {
     const SHAPE: &[u8] = b"0000-00-00_00-00-00";
     s.len() == SHAPE.len()

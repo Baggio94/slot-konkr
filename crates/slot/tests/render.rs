@@ -24,10 +24,7 @@ fn px(frame: &[u8], x: usize, y: usize) -> [u8; 3] {
     [frame[o], frame[o + 1], frame[o + 2]]
 }
 
-/// The switcher's photo item alone, with the plates left off so the picture can be read at
-/// every corner. Only the compositor can mint a `TexId`, so this is the first place the
-/// wiring is visible at all: a flat sprite here is the switcher looking like a different
-/// machine to the game behind it.
+/// The switcher's photo item alone, plates off, so every corner of the picture can be read.
 fn switcher_photo(p: &Polaroids) -> Vec<Draw> {
     let mut out = Vec::new();
     p.draw(None, Printed::default(), None, Printed::default(), &mut out);
@@ -48,9 +45,8 @@ fn mock_frame(frames: u32) -> Vec<u8> {
     core.video_xrgb8888().to_vec()
 }
 
-/// The core hands over XRGB8888, which is B, G, R in memory. A channel swap anywhere in that
-/// path is invisible against the grey the mask test uses, so check it against a frame whose
-/// three channels genuinely differ.
+/// The core hands over XRGB8888 (B, G, R in memory). Uses a frame whose channels differ, since a
+/// swap is invisible against grey.
 #[test]
 fn a_mock_frame_keeps_its_colours_through_the_game_pass() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -84,9 +80,8 @@ fn a_mock_frame_keeps_its_colours_through_the_game_pass() {
     );
 }
 
-/// The whole picture path in one pass: a core frame is PNG encoded on the save, decoded
-/// back into a screenshot, uploaded and drawn. A swapped channel or a stray rescale anywhere
-/// along it leaves the switcher showing something the game never showed.
+/// The whole picture path: a core frame PNG-encoded on save, decoded, uploaded and drawn, with no
+/// channel swap or rescale along the way.
 #[test]
 fn a_saved_frame_arrives_intact_on_its_screenshot() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -121,9 +116,8 @@ fn a_saved_frame_arrives_intact_on_its_screenshot() {
     }
 }
 
-/// Full screen is 3x, and 3x has to be the same integer scale the game runs at. A linear tap
-/// samples between texels there, which turns every edge in the frame into a two pixel ramp:
-/// the switcher would show a blurred copy of a frame the game drew sharp.
+/// Full screen is 3x, the game's own integer scale, so sampling must be nearest: a linear tap
+/// would blur every edge into a two pixel ramp.
 #[test]
 fn the_switcher_magnifies_its_screenshot_without_resampling_it() {
     let Some((_g, _s, mut c)) = compositor() else {

@@ -58,7 +58,7 @@ pub struct LinkArt {
     pub arrow_right: CartFace,
 }
 
-/// Everything at once. Seconds on the H700 — call it from a worker thread.
+/// Takes seconds on the H700: call it from a worker thread.
 pub fn link_art() -> LinkArt {
     let arcs_right = [arc_face(0), arc_face(1), arc_face(2)];
     let arcs_left = [
@@ -96,8 +96,6 @@ fn arrow_svg(path: &str) -> String {
     )
 }
 
-/// One right-hand signal arc: a quadratic from the top of its face back to the bottom, bulging
-/// out to the right.
 fn arc_face(ring: usize) -> CartFace {
     let (_, _, w, h) = ARCS[ring];
     let bulge = [16.0, 24.0, 34.0][ring];
@@ -137,8 +135,7 @@ enum Align {
 /// One label row: `x`, baseline `y`, the text, its size, ink and alignment.
 type LabelRow = (f32, f32, &'static str, f32, [u8; 3], Align);
 
-/// The traced adapter with the AGB-015 label's rows, this build's facts, set the way the back
-/// label sets its own, and SLOT in the logo.
+/// The traced adapter with its label rows and SLOT in the logo.
 fn adapter_face() -> CartFace {
     let mut face = svg_face(ADAPTER_SVG, ADAPTER_W, ADAPTER_H);
     let at = |x: f32, y: f32| {
@@ -198,7 +195,6 @@ fn adapter_face() -> CartFace {
     face
 }
 
-/// One line of type onto a face, its baseline at `baseline`, positioned by `align` at `x`.
 fn stamp(
     face: &mut CartFace,
     x: f32,

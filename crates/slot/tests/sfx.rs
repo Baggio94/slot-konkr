@@ -5,10 +5,8 @@ use slot::app::{INSERT_S, SEATED_AT};
 use slot::audio::{ring_capacity, Ring, Sfx, GBA_HZ};
 use slot::session::Session;
 
-/// The clip is started early enough that the contacts in it land on the frame the cart does.
-/// That offset is the whole of the sync, so it is checked against the asset itself rather
-/// than trusted: regenerate a clip or retime the animation and this is what says the two have
-/// come apart.
+/// The clip starts early enough that its contacts land on the frame the cart does. Checked
+/// against the asset, so a regenerated clip or retimed animation fails here.
 #[test]
 fn the_contacts_in_the_clip_are_where_the_lead_says() {
     for s in [Sfx::Insert, Sfx::Eject] {
@@ -38,9 +36,7 @@ fn the_insert_starts_inside_the_travel() {
     );
 }
 
-/// Played as recorded: started at the right moment and otherwise left alone. Stretching,
-/// enveloping and joining are all things this deliberately does not do, and this is what says
-/// so — a clip that came back different twice, or panned, has had something done to it.
+/// Played as recorded: not stretched, enveloped, joined or panned.
 #[test]
 fn the_clips_are_the_recording_and_nothing_else() {
     for s in [Sfx::Insert, Sfx::Eject] {
@@ -55,15 +51,13 @@ fn the_clips_are_the_recording_and_nothing_else() {
     }
 }
 
-/// Each direction is its own take. One clip serving both, or the same take cut twice, is a
-/// cart that sounds the same going out as it does going in.
+/// Each direction is its own take.
 #[test]
 fn the_two_directions_are_different_clips() {
     let ins = Sfx::Insert.render(48_000);
     let ej = Sfx::Eject.render(48_000);
     assert_ne!(ins.len(), ej.len());
-    // Their shapes are opposite, which is the point: going in the shell runs the rails and
-    // then the contacts, coming out the contacts go first and the shell follows.
+    // Going in, the shell runs the rails then the contacts; coming out, the contacts go first.
     assert!(
         Sfx::Eject.lead() * 3.0 < Sfx::Insert.lead(),
         "the eject leads with {} ms and the insert with {} ms: one is the wrong take",
@@ -72,8 +66,7 @@ fn the_two_directions_are_different_clips() {
     );
 }
 
-/// A window cut out of a longer recording has no reason to land on zero at either end, and a
-/// clip that starts or stops partway through its noise floor is a click on every insert.
+/// A clip that starts or stops partway through its noise floor clicks on every insert.
 #[test]
 fn neither_clip_starts_or_ends_on_a_step() {
     for (name, s) in [("insert", Sfx::Insert), ("eject", Sfx::Eject)] {
@@ -89,14 +82,12 @@ fn neither_clip_starts_or_ends_on_a_step() {
     }
 }
 
-/// The clip is mixed into whatever the game is already playing, so it lands with the thing on
-/// screen rather than a buffer behind it.
+/// The clip is mixed into whatever the game already queued, so it lands with the picture.
 #[test]
 fn a_clip_is_mixed_into_queued_game_audio_rather_than_played_after_it() {
     let r = Ring::new(ring_capacity(48_000));
     let c = Sfx::Insert.render(48_000);
-    // More queued than the clip is long, or mixing legitimately extends the run and the
-    // question the test is asking cannot be answered.
+    // More queued than the clip is long, or mixing legitimately extends the run.
     r.push(&vec![1_000i16; c.len() * 2]);
     let queued = r.queued_frames();
     r.mix(&c);
@@ -110,11 +101,8 @@ fn a_clip_is_mixed_into_queued_game_audio_rather_than_played_after_it() {
     assert_eq!(out[0], 1_000i16.saturating_add(c[0]));
 }
 
-/// Both clips are longer than the ring is: 240 ms and 315 ms against the 133 ms the ring holds
-/// at every rate it has ever opened at. Mixing wrote what fitted and dropped the rest, so 45%
-/// of every insert and 58% of every eject has never been played — cut at whatever sample 133 ms
-/// landed on rather than at a zero crossing, and taking the whole of the tail `Sfx::tail`
-/// exists to keep the picture off with it.
+/// Both clips (240 ms and 315 ms) are longer than the 133 ms ring, so mixing must not drop
+/// whatever does not fit.
 #[test]
 fn the_whole_of_a_cart_sound_reaches_the_device() {
     for rate in [48_000, GBA_HZ] {
@@ -127,8 +115,8 @@ fn the_whole_of_a_cart_sound_reaches_the_device() {
             let r = Ring::new(ring_capacity(rate));
             r.reopen(rate);
             r.mix(&clip);
-            // Read it back the way the device does: a period at a time, for as long as it
-            // takes. The ring opens on a cushion of silence, so what comes out is the clip.
+            // Read back a period at a time, as the device does. The ring opens on silence, so
+            // what comes out is the clip.
             let mut got: Vec<i16> = Vec::new();
             while got.len() < clip.len() {
                 let mut out = vec![0i16; 512 * 2];
@@ -152,9 +140,7 @@ fn the_whole_of_a_cart_sound_reaches_the_device() {
     }
 }
 
-/// The game keeps playing underneath the part of a clip that had to wait for room, and the two
-/// are added rather than one replacing the other. A clip that only mixed with what was queued
-/// when it arrived would cut a hole in the game for its own second half.
+/// The game keeps playing under the part of a clip that waited for room; the two are added.
 #[test]
 fn the_rest_of_a_clip_is_mixed_into_the_game_it_lands_over() {
     let rate = GBA_HZ;
@@ -181,8 +167,8 @@ fn the_rest_of_a_clip_is_mixed_into_the_game_it_lands_over() {
     );
 }
 
-/// The insert plays while the cart is seating, when no core has started. If the sink still
-/// belongs to the worker there is nothing to play it through.
+/// The insert plays while the cart is seating, before any core has started, so the sink must
+/// not still belong to the worker.
 #[test]
 fn a_clip_plays_with_no_core_running() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -221,16 +207,13 @@ fn each_movement_makes_one_sound() {
     }
 }
 
-/// The insert plays while the cart is still sliding in, and the core is paused for the whole
-/// of that so it does not burn through the bios intro behind the animation. The worker used
-/// to mute the ring for any speed but normal, which gated the sound of the cart going in as
-/// well: with a core it was silent and only `SLOT_NO_CORE=1` ever let it through.
+/// The core is paused during the insert, and a pause must not mute the ring or the insert
+/// sound is silent.
 #[test]
 fn a_paused_core_does_not_silence_the_insert() {
     let r = Ring::new(ring_capacity(48_000));
     r.reopen(48_000);
-    // What the worker does on the way into a pause: leave the gate open. Whatever the core
-    // already handed over runs out on its own, and `fill` pads the rest with silence.
+    // On the way into a pause the worker leaves the gate open; `fill` pads with silence.
     r.set_muted(false);
     r.mix(&Sfx::Insert.render(48_000));
     let mut out = vec![0i16; 4_000];
@@ -241,8 +224,7 @@ fn a_paused_core_does_not_silence_the_insert() {
     );
 }
 
-/// Fast forward is the one speed that does produce audio nobody asked to hear, so that gate
-/// stays. Losing it would put a chipmunk under every held R2.
+/// Fast forward still mutes the ring, or every held R2 plays chipmunk audio.
 #[test]
 fn fast_forward_is_still_gated() {
     let r = Ring::new(ring_capacity(48_000));
@@ -254,9 +236,7 @@ fn fast_forward_is_still_gated() {
     assert!(out.iter().all(|v| *v == 0), "muting no longer silences");
 }
 
-/// The picture waits out the whole sound of the cart landing, and then a beat more. Cutting
-/// in over the shell still settling reads as the game interrupting the cart rather than the
-/// cart starting the game.
+/// The picture waits out the whole sound of the cart landing, and then a beat more.
 #[test]
 fn the_game_waits_for_the_cart_to_finish_landing() {
     let hold = INSERT_S - SEATED_AT;
@@ -275,12 +255,10 @@ fn the_game_waits_for_the_cart_to_finish_landing() {
     );
 }
 
-/// What the loudest sample in the clip comes out as, once it is in the ring the device
-/// drains.
+/// The loudest sample of the clip as it lands in the ring the device drains.
 fn sfx_peak(setup: impl Fn(&mut Session)) -> u16 {
     let d = tmp_root_with_carts(&["Emerald"]);
-    // Past the clock screen, which is where a fresh card starts and where a volume press is
-    // the picker's rather than the level's.
+    // Past the clock screen, where a volume press belongs to the picker.
     slot_store::write_slot_state(
         d.path(),
         &slot_store::SlotState {
@@ -298,9 +276,8 @@ fn sfx_peak(setup: impl Fn(&mut Session)) -> u16 {
     out.iter().map(|v| v.unsigned_abs()).max().unwrap_or(0)
 }
 
-/// The slot's own sounds are mixed straight into the ring rather than produced by the core,
-/// so the level the game is played at never reaches them unless it is applied on the way in.
-/// A cart landing at full volume under a game turned down to nothing is the complaint.
+/// The slot's own sounds bypass the core, so the game volume must be applied as they are
+/// mixed in.
 #[test]
 fn a_cart_sound_is_played_at_the_volume_that_is_set() {
     let loud = sfx_peak(|_| {});

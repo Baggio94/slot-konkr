@@ -1,6 +1,5 @@
-//! ALSA through `dlopen`, exactly as the libretro core is loaded. Linking `libasound` would
-//! put a rootfs dependency on the cross build for a library the device already has, and the
-//! PCM entry points needed here are six.
+//! ALSA through `dlopen`, as the libretro core is loaded, so the cross build needs no rootfs
+//! `libasound` for six PCM entry points.
 
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,20 +16,14 @@ const SND_PCM_FORMAT_S16_LE: c_int = 2;
 const SND_PCM_ACCESS_RW_INTERLEAVED: c_int = 3;
 const CHANNELS: c_uint = 2;
 
-/// What ALSA is asked to buffer. Two of these are about what the ring targets, so the device
-/// and the emulator agree on how far ahead the audio runs.
+/// ALSA's buffer. Two of these are about the ring's target, so device and emulator agree.
 const LATENCY_US: c_uint = 40_000;
 
-/// Frames per write. One video frame at the GBA's rate, so the writer wakes at about the
-/// rate the emulator produces rather than in bursts.
+/// Frames per write: about one video frame at the GBA's rate, so writes match production.
 const PERIOD_FRAMES: usize = 512;
 
-/// Most specific first. `plug:default` leads because both halves are needed and neither is
-/// optional: `default` is where the card's `asound.conf` lives, and on the H700 that file is
-/// what switches the codec's speaker and line out on — open anything else and the PCM streams
-/// perfectly into outputs that are still muted. The `plug:` wrapper is what makes `default`
-/// reachable at all, since it resolves to a raw `hw:` slave that cannot convert the GBA's
-/// 32768 Hz to the 32000 the codec runs at, and a bare `default` fails on the rate alone.
+/// Most specific first. On the H700 only `default` (the card's `asound.conf`) unmutes the
+/// speaker and line out, and it needs `plug:` to convert 32768 Hz to the codec's 32000.
 const DEVICES: [&str; 4] = ["plug:default", "default", "plughw:0,0", "hw:0,0"];
 
 type PcmOpen = unsafe extern "C" fn(*mut *mut c_void, *const c_char, c_int, c_int) -> c_int;
@@ -100,8 +93,7 @@ impl Alsa {
                     &mut pcm,
                     cname.as_ptr(),
                     SND_PCM_STREAM_PLAYBACK,
-                    // Blocking: the write is what paces the worker, and a nonblocking one
-                    // would need a poll loop to do the same job.
+                    // Blocking: the write paces the worker.
                     0,
                 )
             };
@@ -109,8 +101,7 @@ impl Alsa {
                 last = AudioError::Device(format!("{name}: {}", self.message(err)));
                 continue;
             }
-            // Resampling is asked of ALSA rather than of the frontend: the GBA's 32768 Hz is
-            // not a rate every codec offers, and one conversion is better than two.
+            // ALSA resamples: 32768 Hz is not a rate every codec offers.
             let err = unsafe {
                 (self.set_params)(
                     pcm,
@@ -227,8 +218,7 @@ fn play(ring: &Arc<Ring>, sample_rate: u32) -> Result<Playback, AudioError> {
 }
 
 impl Playback {
-    /// A blocking write per period, which is what paces the whole frontend: the emulator
-    /// runs against the ring and the ring drains at exactly the rate the codec plays.
+    /// A blocking write per period paces the whole frontend: the ring drains at the codec's rate.
     fn run(&self, ring: &Ring, stop: &AtomicBool) {
         let mut buf = vec![0i16; PERIOD_FRAMES * CHANNELS as usize];
         while !stop.load(Ordering::Relaxed) {
@@ -244,8 +234,7 @@ impl Playback {
                     )
                 };
                 if frames < 0 {
-                    // An underrun is recoverable and routine on a device that just came back
-                    // from a doze. Anything else ends the stream.
+                    // Underruns are routine after a doze and recoverable; anything else ends it.
                     let err = unsafe { (self.alsa.recover)(self.pcm, frames as c_int, 1) };
                     if err < 0 {
                         eprintln!("slot: audio: {}", self.alsa.message(err));
@@ -262,8 +251,7 @@ impl Playback {
 impl Drop for Playback {
     fn drop(&mut self) {
         unsafe {
-            // Drop rather than drain: what is still queued is audio for a session that has
-            // already ended, and draining would block the close on playing all of it.
+            // Drop, not drain: queued audio belongs to a session that has ended.
             (self.alsa.drop)(self.pcm);
             (self.alsa.close)(self.pcm);
         }

@@ -30,7 +30,7 @@ fn hud_fades_after_1500ms() {
     assert!(!h.visible(2500));
 }
 
-/// A zero timestamp is not an adjustment. Without this every boot opens with a bar on it.
+/// A zero timestamp is not an adjustment, or every boot opens with a bar.
 #[test]
 fn nothing_shows_until_something_is_adjusted() {
     assert!(!Hud::new().visible(0));
@@ -59,7 +59,6 @@ fn the_hud_sits_at_the_top_of_the_screen() {
     );
 }
 
-/// Over a white game frame a white bar on a translucent white track is invisible.
 #[test]
 fn the_hud_draws_a_dark_plate_behind_itself() {
     let mut h = Hud::new();
@@ -83,8 +82,7 @@ fn the_hud_draws_a_dark_plate_behind_itself() {
 
 #[test]
 fn muted_volume_uses_the_muted_icon() {
-    // Turned down to nothing, silenced, and neither: three states and three glyphs. Zero and
-    // muted draw the same empty bar, so the glyph is the only thing carrying the difference.
+    // Zero and muted draw the same empty bar, so only the glyph tells them apart.
     assert_eq!(HudKind::Volume.icon(0, false), Icon::VolumeZero);
     assert_eq!(HudKind::Volume.icon(0, true), Icon::VolumeMuted);
     assert_eq!(HudKind::Volume.icon(40, true), Icon::VolumeMuted);
@@ -115,8 +113,6 @@ fn an_empty_rewind_buffer_still_draws_an_empty_bar() {
     );
 }
 
-/// L2 can be let go while a level bar is still on its own timer. Only the rewind bar leaves
-/// with it.
 #[test]
 fn releasing_rewind_leaves_a_level_bar_alone() {
     let mut h = Hud::new();
@@ -125,8 +121,6 @@ fn releasing_rewind_leaves_a_level_bar_alone() {
     assert!(h.visible(0));
 }
 
-/// One glyph in both states, and a different one in each. Two glyphs for the latch would
-/// widen the badge and shift it the moment it locked.
 #[test]
 fn held_and_latched_fast_forward_are_one_glyph_each_and_differ() {
     let held = ff_badge(FfState::Held).expect("held draws nothing");
@@ -138,7 +132,6 @@ fn held_and_latched_fast_forward_are_one_glyph_each_and_differ() {
     assert_eq!(ff_badge(FfState::Off), None);
 }
 
-/// Same footprint, so latching cannot make the badge jump.
 #[test]
 fn both_fast_forward_glyphs_share_one_box() {
     let held = icon_face(Icon::FastForward, 18.0, [255, 255, 255]);
@@ -150,8 +143,7 @@ fn both_fast_forward_glyphs_share_one_box() {
     );
 }
 
-/// Fast forward is not a level, so the bar's own timer never starts and nothing fades it
-/// out. The badge has to survive that on its own, without dragging a plate up with it.
+/// Fast forward never starts the bar timer, so the badge must persist on its own.
 #[test]
 fn the_badge_outlives_the_bar_timer_without_a_plate() {
     let mut h = Hud::new();
@@ -179,9 +171,8 @@ fn the_badge_leaves_when_fast_forward_stops() {
     assert!(out.is_empty(), "the plate outlived the fast forward");
 }
 
-/// Fast forward can be latched for minutes. A full width plate over the game for all of it
-/// is a worse trade than the halo the icon carries, so the badge stands alone. The pair
-/// matters together: the second half is what stops this passing by drawing no plate ever.
+/// The badge stands alone (latched fast forward can last minutes), but a level bar still
+/// gets its plate, so this cannot pass by never drawing one.
 #[test]
 fn the_ff_badge_draws_no_plate_but_the_bar_still_does() {
     let full = |out: &Vec<Draw>| {

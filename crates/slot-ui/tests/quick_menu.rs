@@ -20,9 +20,7 @@ fn ink_columns(f: &UndoFace) -> (u32, u32) {
     )
 }
 
-/// The menu places every face by its padding, so the type has to sit exactly `MENU_PAD` in from
-/// both sides of its face, tracking and all. Sized without the tracking, a label drifted off the
-/// 32 px edge by however much of it there was, a different amount on every row.
+/// The type sits exactly `MENU_PAD` in from both sides of its face, tracking included.
 #[test]
 fn the_type_sits_exactly_menu_pad_in_from_both_sides_of_its_face() {
     for f in [
@@ -47,8 +45,7 @@ fn the_type_sits_exactly_menu_pad_in_from_both_sides_of_its_face() {
     }
 }
 
-/// Set at the menu's size however long it is. Sized without its tracking, the longest label
-/// ran past its own face and was shrunk to fit it.
+/// Every label is set at the menu's size, tracking included, without being shrunk to fit.
 #[test]
 fn a_long_label_is_set_as_large_as_a_short_one() {
     let tall = |f: &UndoFace| {
@@ -61,9 +58,8 @@ fn a_long_label_is_set_as_large_as_a_short_one() {
     assert!(long + 1 >= short, "{long} rows of ink against {short}");
 }
 
-/// The Fast Forward row offers four fixed ceilings, and `QuickValue::speed` is the one place the
-/// number on the card becomes the value on the row. The card's list and the row's have to be the
-/// same four: a card holding a speed this cannot name would leave the row blank.
+/// `QuickValue::speed` names exactly the card's four ceilings, or a card's speed leaves the row
+/// blank.
 #[test]
 fn the_fast_forward_row_offers_the_four_ceilings_the_card_can_hold() {
     assert_eq!(FF_SPEEDS, [2, 3, 4, 6]);
@@ -76,7 +72,7 @@ fn the_fast_forward_row_offers_the_four_ceilings_the_card_can_hold() {
             Some(QuickValue::Speed6),
         ]
     );
-    // The gaps in the row, and numbers no row ever offered: none of them are values it has.
+    // The gaps in the row, and numbers no row ever offered.
     for other in [1, 5, 7, 9, 16, 28, 255] {
         assert_eq!(
             QuickValue::speed(other),
@@ -86,9 +82,7 @@ fn the_fast_forward_row_offers_the_four_ceilings_the_card_can_hold() {
     }
 }
 
-/// The order the user chose on 2026-09-15, top to bottom, with Colour Correction added on
-/// 2026-09-16 between the Fast Forward pair and Rumble. `QuickRow::ALL`'s own comment is where
-/// that position is argued; this is what holds it.
+/// The row order the user chose. `QuickRow::ALL` explains the position of Colour Correction.
 #[test]
 fn the_rows_run_in_the_order_the_user_chose() {
     let labels = QuickRow::ALL.map(QuickRow::label);
@@ -117,7 +111,7 @@ fn the_values_read_as_the_menu_prints_them() {
     assert_eq!(QuickValue::flag(false), QuickValue::Off);
 }
 
-/// Ruling S1: the month by name, the day, and the time the way the carousel prints it.
+/// The month by name, the day, and the carousel's 24 hour time.
 #[test]
 fn the_date_and_time_read_as_a_month_a_day_and_the_carousels_24_hour_clock() {
     let at = |stamp: &str| date_time_text(parse_stamp(stamp).expect("a stamp"));
@@ -125,9 +119,8 @@ fn the_date_and_time_read_as_a_month_a_day_and_the_carousels_24_hour_clock() {
     assert_eq!(at("2027-01-05_04-07-59"), "JAN 5 04:07");
 }
 
-/// Opened from the menu, the clock starts where it already is: the time on the wall, to the
-/// minute, and the offset already chosen. The seconds it cannot show are not lost on confirming:
-/// the app applies only what was changed, which `tests/clock.rs` in the slot crate holds.
+/// Opened from the menu, the clock starts at the current time to the minute and the chosen
+/// offset.
 #[test]
 fn a_picker_for_a_set_clock_starts_at_the_local_time_and_its_offset() {
     let utc = parse_stamp("2026-09-15_21-35-42").expect("a stamp");

@@ -1,14 +1,12 @@
-//! The evdev wire format and the codes the device's buttons arrive as. No I/O beyond
-//! reading the sysfs tree that says which node is which, so all of it is testable off
-//! device.
+//! The evdev wire format and the device's button codes. No I/O beyond sysfs reads, so it is
+//! testable off device.
 
 use std::path::{Path, PathBuf};
 
 use slot_input::{Btn, RawEvent};
 
-/// `struct input_event`: a 64 bit timeval, then type, code and value. The kernel writes
-/// these in the machine's own endianness; every target slot builds for is little endian, and
-/// pinning that is what lets the decode be tested away from the device.
+/// `struct input_event`: a 64-bit timeval, then type, code and value, in native endianness.
+/// Every slot target is little endian, which the decode assumes.
 pub const EVENT_BYTES: usize = 24;
 
 /// The frame marker the kernel ends every group of edges with.
@@ -21,9 +19,8 @@ pub const EV_ABS: u16 = 0x03;
 pub const ABS_HAT0X: u16 = 0x10;
 pub const ABS_HAT0Y: u16 = 0x11;
 
-/// The d-pad, which is two axes on hat 0 rather than four keys. A zero releases whichever
-/// direction the axis was last at, and only the axis knows which that was, so this is the one
-/// part of the decode that has to remember anything.
+/// The d-pad: two axes on hat 0, not four keys. A zero releases whichever direction the axis
+/// was last at, so this remembers it.
 #[derive(Default)]
 pub struct Hat {
     x: i32,
@@ -31,9 +28,8 @@ pub struct Hat {
 }
 
 impl Hat {
-    /// Up to two events. A thumb rolled around the pivot swings the axis end to end without
-    /// stopping in the middle, and the direction being left has to be released or it stays
-    /// down for as long as the device is on.
+    /// Up to two events: a thumb rolled round the pivot swings the axis end to end without
+    /// passing zero, and the direction left must be released.
     pub fn feed(&mut self, ev: Ev) -> Vec<RawEvent> {
         let (held, ends) = match ev.code {
             ABS_HAT0X => (&mut self.x, [Btn::Left, Btn::Right]),
@@ -83,16 +79,13 @@ pub fn to_raw(ev: Ev) -> Option<RawEvent> {
     match ev.value {
         0 => Some(RawEvent::Up(btn)),
         1 => Some(RawEvent::Down(btn)),
-        // 2 is autorepeat: presses with no release, which would re-arm every hold and double
-        // tap window in the gesture layer.
+        // 2 is autorepeat, which would re-arm the gesture layer's hold and double-tap windows.
         _ => None,
     }
 }
 
-/// Read off the device with `SLOT_TRACE_INPUT`, pressing the buttons in a known order. The
-/// board does not use the kernel's names for its own layout — `0x137` is `BTN_TR` in the
-/// headers and START on the case — so these are transcribed rather than reasoned about. The
-/// directions are absent because they are not keys here at all; see `Hat`.
+/// Transcribed from `SLOT_TRACE_INPUT` on the device: the board ignores the kernel's names
+/// (`0x137` is `BTN_TR` but START on the case). Directions come from `Hat`.
 pub fn code_to_btn(code: u16) -> Option<Btn> {
     Some(match code {
         0x130 => Btn::A,
@@ -109,29 +102,24 @@ pub fn code_to_btn(code: u16) -> Option<Btn> {
         115 => Btn::VolUp,
         114 => Btn::VolDown,
         116 => Btn::Power,
-        // 0x162 arrives immediately behind 0x138 on one press of MENU. Mapping it too would
-        // make every menu press a double tap, which is the gesture the state switcher opens
-        // on, so it is deliberately nothing.
+        // 0x162 follows 0x138 on every MENU press. Mapping it would make each press a double
+        // tap, which opens the state switcher.
         _ => return None,
     })
 }
 
-/// Every key code the frontend has a use for. A node reporting none of them is not this
-/// device's button pad, whatever it is called. The power key earns its place even though it is
-/// the only thing its own node reports: left out, that whole node is passed over and the
-/// button is dead however well it is mapped.
+/// Key codes the frontend uses; a node reporting none is not the pad. Power must be here: it
+/// is alone on its own node, which would otherwise be skipped.
 const WANTED: [u16; 15] = [
     0x130, 0x131, 0x132, 0x133, 0x134, 0x135, 0x136, 0x137, 0x138, 0x13a, 0x13b, 0x162, 115, 114,
     116,
 ];
 
-/// The capability bitmask parse lives with the motor that also needs it, so the awkward part
-/// — that the words are printed most significant first, and an offset only comes out right
-/// counted from the end — has one definition and one set of tests.
+/// Shared with the motor. The words print most significant first, so offsets count from the end.
 pub use slot_power::has_bit;
 
-/// The event nodes worth opening, in name order. Picked by what each one reports it can
-/// send, never by position: `event0` is the power key on one boot and the pad on the next.
+/// Event nodes worth opening, in name order. Chosen by capability, never position: node
+/// numbering changes between boots.
 pub fn pick_devices(dev: &Path, sys: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dev) else {
         return Vec::new();
@@ -161,7 +149,7 @@ fn wanted_node(device: &Path) -> bool {
     lid || WANTED.iter().any(|bit| has_bit(&keys, *bit))
 }
 
-/// What sysfs calls the node, for the one line the frontend prints about what it opened.
+/// What sysfs calls the node, for logging.
 pub fn device_name(sys: &Path, node: &Path) -> String {
     node.file_name()
         .and_then(|n| std::fs::read_to_string(sys.join(n).join("device/name")).ok())

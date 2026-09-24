@@ -8,8 +8,7 @@ use slot_input::{Btn, Millis, RawEvent};
 use slot_store::{write_slot_state, SlotState};
 use slot_ui::Icon;
 
-/// A latch is the one fast forward state that outlives the button, so it is the one the badge
-/// has to be told about separately: a held R2 leaves with the finger, a latched one does not.
+/// A latch outlives the button, so the badge has to be told about it separately.
 #[test]
 fn the_badge_follows_the_latch_rather_than_the_button() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -38,7 +37,7 @@ fn the_badge_follows_the_latch_rather_than_the_button() {
     step(&mut s, &mut now, Some(RawEvent::Up(Btn::R2)));
     assert!(badge(&s).is_none(), "the badge outlived the hold");
 
-    // Well past the double tap window, so the next press is a first tap rather than a second.
+    // Past the double tap window, so the next press is a first tap.
     for _ in 0..20 {
         step(&mut s, &mut now, None);
     }
@@ -53,8 +52,7 @@ fn the_badge_follows_the_latch_rather_than_the_button() {
     assert!(badge(&s).is_none(), "the badge survived the latch it lost");
 }
 
-/// The quick menu's two fast forward settings are read off the card and handed to the emulator
-/// thread, so the cart seated after they were chosen fast forwards with them.
+/// The quick menu's fast forward settings reach the emulator thread for the next seated cart.
 #[test]
 fn the_fast_forward_settings_reach_the_emulator() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -94,8 +92,7 @@ fn step(s: &mut Session, now: &mut Millis, ev: Option<RawEvent>) {
     s.update(1.0 / 60.0);
 }
 
-/// The badge is read as state rather than as quads: the glyph needs an uploaded face and a
-/// headless session has none, so a drawn list would be empty however R2 was pressed.
+/// The badge is read as state: its glyph needs an uploaded face, which a headless session lacks.
 fn badge(s: &Session) -> Option<Icon> {
     s.app().ff_badge()
 }

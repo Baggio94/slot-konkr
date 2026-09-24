@@ -51,8 +51,7 @@ fn deleting_the_last_state_closes_the_switcher() {
     );
 }
 
-/// The switcher holds the ring as it was when it opened, so a delete has to come out of that
-/// snapshot too. Otherwise the dots still count an entry that is gone and loading it fails.
+/// A delete also comes out of the switcher's snapshot, or the dots count an entry that is gone.
 #[test]
 fn the_deleted_state_leaves_the_switcher_with_it() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -75,8 +74,7 @@ fn the_deleted_state_leaves_the_switcher_with_it() {
     );
 }
 
-/// An undo that names a different state is still good. Clearing every offer on any delete
-/// would take the undo away from a save the user never touched.
+/// An undo that names a different state survives the delete.
 #[test]
 fn deleting_someone_elses_state_leaves_the_offer_alone() {
     let d = tmp_root_with_carts(&["Emerald"]);

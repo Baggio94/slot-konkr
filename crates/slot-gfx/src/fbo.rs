@@ -5,11 +5,8 @@ use crate::quad::Quad;
 use crate::shaders::{BLIT_FRAG, BLIT_VERT};
 use crate::surface::{blit_rect, GfxError, Surface, OUT_H, OUT_W};
 
-/// Backdrop behind everything drawn into the offscreen target. Distinct from the black
-/// letterbox so the blit rect is visible even with nothing else on screen.
-/// Black. A grey backdrop was within 6/765 of the default cart shell, which made every
-/// ordinary cart on the shelf invisible against it. Black also lets a coloured shell read as
-/// plastic rather than as a tinted panel.
+/// Backdrop behind everything drawn offscreen. Black, since grey sat within 6/765 of the
+/// default cart shell and hid it.
 pub const BACKDROP: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
 pub struct Compositor {
@@ -75,8 +72,7 @@ impl Compositor {
         self.game.draw(&self.quad);
     }
 
-    /// Sprites in order, with the game pass drawn wherever the list asks for it. The split is
-    /// what lets the picture come up over a seated cart and stay under the HUD.
+    /// Sprites in order, with the game pass drawn wherever the list places `Draw::Game`.
     pub fn draw_list(&mut self, items: &[Draw]) {
         let mut from = 0;
         for (i, item) in items.iter().enumerate() {
@@ -87,7 +83,6 @@ impl Compositor {
                 }
                 Draw::Shot { tex } => {
                     self.sprites.draw(&items[from..i], &self.quad);
-                    // A shot naming a texture nobody made draws nothing, as a sprite does.
                     if let Some(tex) = self.sprites.source(tex) {
                         self.game.draw_still(tex, &self.quad);
                     }
@@ -115,22 +110,18 @@ impl Compositor {
         self.gain = blue_light_gain(step);
     }
 
-    /// 0.0 dark, 1.0 fully on. Scales and brightens the game layer, nothing else: the chrome
-    /// stays where it is while the picture blooms out from behind it.
+    /// 0.0 dark, 1.0 fully on. Affects the game layer only, not the chrome.
     pub fn set_screen_power(&mut self, t: f32) {
         self.game.set_power(t);
     }
 
-    /// Pixels, in offscreen space, applied to the whole presented image. On the blit rather
-    /// than on the draw list, so game, chrome and HUD move together as one picture. Applied
-    /// inside the offscreen target it would shake the chrome against a game that stayed
-    /// still. Edges reveal the letterbox for the duration, which is what a jolt looks like.
+    /// Horizontal offset in offscreen pixels, applied at the blit so the whole picture moves
+    /// as one.
     pub fn set_shake(&mut self, dx: f32) {
         self.shake = dx;
     }
 
-    /// The offscreen target, top row first. glReadPixels hands back the framebuffer in
-    /// memory order, which is bottom up.
+    /// The offscreen target, top row first (glReadPixels returns it bottom up).
     pub fn read_frame(&self) -> Vec<u8> {
         let stride = OUT_W as usize * 4;
         let mut buf = vec![0u8; stride * OUT_H as usize];

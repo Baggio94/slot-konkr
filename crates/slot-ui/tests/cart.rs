@@ -42,8 +42,7 @@ fn pixel(face: &slot_ui::CartFace, x: u32, y: u32) -> [u8; 3] {
     [face.rgba[i], face.rgba[i + 1], face.rgba[i + 2]]
 }
 
-/// The label sits inset in the shell, so a face pixel is only the label's business inside
-/// this rect. Coordinates are relative to the label's own top left.
+/// The label's rect within the face, relative to the label's own top left.
 fn label_pixel(face: &slot_ui::CartFace, x: u32, y: u32) -> [u8; 3] {
     pixel(face, LABEL_X + x, LABEL_Y + y)
 }
@@ -98,8 +97,8 @@ fn a_label_of_the_wrong_aspect_is_cropped_not_squashed() {
     }
 }
 
-/// The second title is the one the landscape label made dangerous: three short words that
-/// each fit the width at the largest size, three lines of which are taller than the label.
+/// The second title's three short words each fit the width at full size, but three lines of
+/// them are taller than the label.
 #[test]
 fn a_long_title_stays_inside_the_label() {
     for stem in [
@@ -145,8 +144,7 @@ fn the_cart_box_matches_the_traced_outline() {
     );
 }
 
-/// The label is wide and low: thin plastic beside it, a broad moulded grip above. A
-/// uniform border reads as a frame, and a narrow label reads as a coaster.
+/// The label is wide and low: thin plastic beside it, a broad grip above.
 #[test]
 fn the_label_is_wide_and_sits_low() {
     let (x0, y0, x1, y1) = label_panel(CART_W, CART_H);
@@ -156,8 +154,7 @@ fn the_label_is_wide_and_sits_low() {
     let bottom = 1.0 - y1 as f32 / h;
     let width = (x1 - x0) as f32 / w;
 
-    // Wide, not an exact number. 0.82 was the value on the day this was written, and pinning
-    // it meant editing the test every time the label was nudged by a percent.
+    // A range, not an exact number, so nudging the label does not break the test.
     assert!(
         width > 0.78,
         "the label is only {:.0}% of the cart wide, that reads as a panel not a label",
@@ -178,10 +175,7 @@ fn the_label_is_wide_and_sits_low() {
     );
 }
 
-/// The feature that makes the outline read as a GBA cart is not corner rounding, it is the
-/// grip ears: the body is narrower than its top. An earlier version of this test asserted
-/// the top corners were rounder than the bottom, which described a rounded rectangle I had
-/// invented rather than the cartridge that was traced.
+/// A GBA cart outline is identified by its grip ears: the body is narrower than its top.
 #[test]
 fn the_body_is_narrower_than_its_grip_ears() {
     let m = silhouette(CART_W, CART_H);
@@ -274,7 +268,7 @@ fn a_name_that_is_all_tags_falls_back_rather_than_going_blank() {
     assert_eq!(clean_label(""), "");
 }
 
-/// The twelve character header title is what this task exists to stop using.
+/// The label uses the filename, not the twelve character header title.
 #[test]
 fn the_header_title_no_longer_reaches_the_label() {
     let d = tmp_root();
@@ -306,8 +300,7 @@ fn a_rom_with_no_header_title_is_labelled_from_its_stem() {
     );
 }
 
-/// The cartridge is centred on the carousel, and clears both the HUD plate above it and the slot
-/// below it.
+/// The cartridge is centred on the carousel, clear of the HUD plate above and the slot below.
 #[test]
 fn the_cartridge_is_centred_on_the_row_and_clears_both_the_plate_and_the_slot() {
     let lip = OUT_H as f32 - MOUTH_H;
@@ -324,9 +317,8 @@ fn the_cartridge_is_centred_on_the_row_and_clears_both_the_plate_and_the_slot() 
     );
 }
 
-/// A side cart is dimmed by sitting a translucent face on this, not by letting the ground
-/// show through it. Only the compositor can mint a `TexId`, so what reaches the screen is not
-/// reachable here; the shape and the colour are.
+/// A side cart is dimmed by a translucent face over this, not by the ground showing through.
+/// Only the shape and colour are testable without a compositor.
 #[test]
 fn the_cart_shadow_is_the_cart_in_black() {
     let s = slot_ui::cart_shadow();

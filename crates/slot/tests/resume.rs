@@ -18,9 +18,7 @@ fn wait_ready(emu: &EmuHandle) {
     }
 }
 
-/// resume.state is written on eject, lid, power and every autosave. Until it is read back
-/// when the core starts, a cart is seated but the game restarts from the intro, which is
-/// the one promise the slot makes.
+/// resume.state is read back when the core starts, before it reports ready.
 #[test]
 fn a_resume_state_is_restored_before_the_core_reports_ready() {
     let emu = EmuHandle::spawn(
@@ -53,12 +51,8 @@ fn read_resume_finds_what_a_flush_wrote() {
     );
 }
 
-/// `flush` used to read `selected_core.ini` itself, which meant its own read of the ini and
-/// `session.rs`'s could disagree — that gap is the whole reason this task exists. `flush`
-/// now takes `core` rather than deriving it, so this pins the half of the contract that
-/// lives in this function: whichever `Core` it is handed is where the resume lands, no ini
-/// involved. `crates/slot/tests/gpsp.rs` covers the other half — that `session.rs` resolves
-/// the ini exactly once and hands that same value to every reader and writer for the cart.
+/// `flush` writes the resume under whichever `Core` it is handed, with no ini read of its own.
+/// `gpsp.rs` covers `session.rs` resolving the ini once for every reader and writer.
 #[test]
 fn flush_routes_by_the_core_it_is_given() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -95,9 +89,7 @@ fn a_retroarch_srm_is_read_when_there_is_no_sav() {
     );
 }
 
-/// `read_sav` returning the right bytes proves nothing on its own. The bug this file was
-/// written for was a function with no caller, so the bytes have to be followed all the way
-/// into the core's save ram through the same call the session makes.
+/// The battery bytes reach the core's save ram through the same call the session makes.
 #[test]
 fn srm_bytes_on_disk_reach_the_cores_save_ram() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -129,14 +121,8 @@ fn a_sav_wins_over_an_srm_when_both_exist() {
     );
 }
 
-/// C1: with a cart set to a core with no dylib present, `open_core_for` falls back to the
-/// mock. `MockCore::load` fixes its own save ram at 8 KB and its own resume at 8 bytes, so a
-/// real 128 KB battery save and a real 256 KB resume are both refused at open — see
-/// `Worker::run` (emu.rs). Before this test's fix, the very next flush wrote the mock's own
-/// 8 KB of zeros and 8 byte counter over both real files, permanently, and
-/// `Action::PowerPress` — which flushes immediately (app.rs) — could trigger it on the very
-/// press a player made to escape the mock's test pattern. This pins that `EmuSnapshot` records
-/// the refusal at the source.
+/// A mock core (no dylib) refuses a real 128 KB save and 256 KB resume at open, since it fixes
+/// its own sizes. `EmuSnapshot` must record the refusal, or the next flush overwrites both files.
 #[test]
 fn a_mismatched_save_ram_and_resume_are_flagged_untrusted_rather_than_silently_swapped_in() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -162,10 +148,7 @@ fn a_mismatched_save_ram_and_resume_are_flagged_untrusted_rather_than_silently_s
     );
 }
 
-/// The end-to-end half of the test above: not just that the refusal is recorded, but that the
-/// flush path it exists for actually leaves the real files on disk untouched. Reproduces the
-/// bug through the exact trigger the branch review called out — a power tap, which
-/// `Action::PowerPress` flushes immediately.
+/// A power tap, which flushes immediately, leaves the real files untouched after a refusal.
 #[test]
 fn a_power_press_does_not_let_a_refusing_mock_overwrite_a_real_save() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -182,10 +165,8 @@ fn a_power_press_does_not_let_a_refusing_mock_overwrite_a_real_save() {
     )
     .unwrap();
 
-    // Read back exactly the way `session.rs::spawn_core` would, and hand it to a core that
-    // will refuse both: the mock, standing in for "no dylib present" or "SLOT_CORE points at
-    // the wrong game" — `open_core_for` cannot tell those apart from a core that opened fine,
-    // and this is deliberately exercising the downstream guard rather than that fallback.
+    // Hand both to a core that will refuse them, exercising the downstream guard rather than
+    // `open_core_for`'s fallback.
     let sav = persist::read_sav(d.path(), "Emerald");
     let resume = persist::read_resume(d.path(), slot_store::Core::Mgba, "Emerald");
     let emu = EmuHandle::spawn(
@@ -212,9 +193,7 @@ fn a_power_press_does_not_let_a_refusing_mock_overwrite_a_real_save() {
     );
 }
 
-/// The eject path's twin of the test above: `flush_eject` (app.rs) is a second, independent
-/// call into `persist`, and the branch review named it explicitly alongside the autosave/
-/// power-press flush as a place the same loss could land.
+/// The same for `flush_eject`, a second independent call into `persist`.
 #[test]
 fn an_eject_does_not_let_a_refusing_mock_overwrite_a_real_save() {
     let d = common::tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -257,13 +236,8 @@ fn an_eject_does_not_let_a_refusing_mock_overwrite_a_real_save() {
     );
 }
 
-/// The manual-save twin of the two tests above, and a different loss shape: `App::save_state`
-/// (`SELECT+R1`) is not a write-back over an existing file, so `trusted_write`'s withholding
-/// does not reach it. It is a push onto a ten-deep ring that evicts the oldest entry once full
-/// (`StateRing::evict`). A refusing mock's own placeholder state landing on a full ring does
-/// not just fail to help the player — `ring.push` deletes their oldest genuine save to make
-/// room for it. This pins that `save_state` consults `resume_trusted` before it ever reaches
-/// `ring.push`, the same way `flush`/`eject` consult it before they reach `persist::flush`.
+/// `SELECT+R1` after a refusal must not push onto the ring: on a full ring the push would evict
+/// the oldest genuine save to make room for the mock's placeholder.
 #[test]
 fn a_refusing_mock_does_not_evict_a_real_ring_entry_on_manual_save() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -282,8 +256,7 @@ fn a_refusing_mock_does_not_evict_a_real_ring_entry_on_manual_save() {
     let oldest = before.last().expect("an oldest entry").stamp.clone();
     assert_eq!(oldest, "2026-01-01_00-00-00", "wrong entry called oldest");
 
-    // A mock standing in for "no dylib present", handed a real resume it does not match —
-    // exactly what `open_core_for`'s fallback and the documented SLOT_CORE trap both produce.
+    // A mock handed a real resume it does not match.
     let emu = EmuHandle::spawn(
         Box::new(MockCore::new()),
         d.path().join("Games/GBA/Emerald.gba"),
@@ -316,11 +289,8 @@ fn a_refusing_mock_does_not_evict_a_real_ring_entry_on_manual_save() {
     );
 }
 
-/// `common::app_playing_with`, plus the one thing that helper has no way to say: whether the
-/// emulator that just opened is the one the cart's states are filed under. `session.rs` says it
-/// on every real insert, through `App::set_named_core`, and `App` will not move a refused state
-/// aside until something does — so a test about retiring one has to say it, and a test about a
-/// missing dylib has to say the opposite.
+/// `common::app_playing_with`, plus whether the opened emulator is the one the cart's states are
+/// filed under (`App::set_named_core`). `App` will not retire a refused state until it is told.
 fn seated_with_named_core(
     root: &Path,
     stem: &str,
@@ -340,10 +310,8 @@ fn seated_with_named_core(
     let mut a = App::boot(root);
     a.set_snapshot(snapshot);
     a.set_named_core(named);
-    // `on_core_ready` is what `session.rs` calls the moment the core settles, which is where a
-    // refusal first becomes knowable. Running past the insert floor afterwards, exactly as
-    // `common::app_playing_with` does, so what this hands back is a cart playing rather than
-    // one mid-animation.
+    // `on_core_ready` is where a refusal first becomes knowable. Then run past the insert floor
+    // so the cart is playing, not mid-animation.
     a.on_core_ready();
     for _ in 0..120 {
         a.update(1.0 / 60.0);
@@ -351,10 +319,8 @@ fn seated_with_named_core(
     a
 }
 
-/// A core opened on the cart's real resume, which it will refuse. Read back through
-/// `persist::read_resume` and handed over exactly the way `session.rs::spawn_core` does, so the
-/// refusal is `Worker::run`'s own — `MockCore::unserialize` takes eight bytes and nothing else,
-/// so a real state is genuinely rejected rather than reported rejected by a stub.
+/// A core opened on the cart's real resume, handed over as `session.rs::spawn_core` does.
+/// `MockCore::unserialize` takes only eight bytes, so the refusal is genuine.
 fn a_core_that_refuses(root: &Path, stem: &str) -> EmuHandle {
     let resume = persist::read_resume(root, slot_store::Core::Mgba, stem);
     assert!(
@@ -394,16 +360,8 @@ fn retired_states(root: &Path, stem: &str) -> Vec<PathBuf> {
     found
 }
 
-/// The bug: slot already noticed a refused resume and already withheld the write that would
-/// have destroyed it, but nothing ever moved the file itself. So the same bytes were read back
-/// and handed to the same core on the next open, and the next, refused identically every time,
-/// with no gesture on the device that could clear it and no file manager to delete it with —
-/// the cart simply never resumed again. A state written by one core and read by another is
-/// refused by design, so this is a place a card really arrives at rather than a hypothetical.
-///
-/// Green means the second open finds nothing to resume from. It deliberately also holds the
-/// other half of the decision: the state is moved, not destroyed, because it is still a real
-/// session to the core that wrote it.
+/// A refused resume is moved aside so the next open does not hand it to the core again. Moved,
+/// not deleted: it is still a real session to the core that wrote it.
 #[test]
 fn a_refused_resume_is_not_offered_to_the_core_a_second_time() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -438,9 +396,8 @@ fn a_refused_resume_is_not_offered_to_the_core_a_second_time() {
         "the retired file is not the bytes that were refused"
     );
 
-    // The one thing the new name must never do: come back as something else the player can be
-    // offered. `list` is what the switcher and `load_newest` read, and `evict` only ever
-    // deletes what `list` returns.
+    // The retired state must never be offered: `list` feeds the switcher and `load_newest`, and
+    // `evict` only deletes what `list` returns.
     let ring = slot_store::StateRing::new(d.path(), slot_store::Core::Mgba, "Emerald");
     assert!(
         ring.list().expect("list").is_empty(),
@@ -448,13 +405,8 @@ fn a_refused_resume_is_not_offered_to_the_core_a_second_time() {
     );
 }
 
-/// The other half of the decision, and the reason it is not simply "one refusal and it goes".
-/// A card whose core dylib is missing runs the mock, and the mock refuses every state it did
-/// not write itself. That refusal is about the emulator, not about the state — the player's
-/// session is fine and their only real problem is a file they can put back — so nothing may be
-/// filed away over it. A second refusal would not tell these apart either: a missing dylib
-/// refuses just as reliably on the next boot as on this one, which is why the guard is who
-/// refused rather than how many times.
+/// A mock (missing dylib) refuses every state it did not write, so its refusal must not retire
+/// the resume: the guard is which core refused, not how many times.
 #[test]
 fn a_stand_in_core_refusing_a_resume_leaves_it_alone() {
     let d = common::tmp_root_with_carts(&["Emerald"]);

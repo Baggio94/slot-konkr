@@ -3,9 +3,7 @@ use slot_store::Cart;
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Finish {
     Solid,
-    /// Clear plastic: the shell colour lightens and desaturates toward the rim, the way light
-    /// catches the edge of a translucent case. The gen 3 Pokemon releases wear it — they were
-    /// shipped in coloured clear shells, and drawing them solid was the table's one wrong note.
+    /// Clear plastic: the colour lightens and desaturates toward the rim.
     Translucent,
 }
 
@@ -24,9 +22,8 @@ const fn shell(colour: [u8; 3], finish: Finish) -> Shell {
     Shell { colour, finish }
 }
 
-/// Keyed on the region free game code prefix, so one row covers every region a title
-/// shipped in. Every code here was read off a real header rather than recalled: a wrong one
-/// paints some other game in the wrong shell, which is worse than defaulting to grey.
+/// Keyed on the region-free game code prefix. Every code was read off a real header: a wrong
+/// one paints another game in the wrong shell, which is worse than the grey default.
 const EXACT: &[(&str, Shell)] = &[
     ("AXV", shell([0xc2, 0x33, 0x2e], Finish::Translucent)), // Pokemon Ruby
     ("AXP", shell([0x2f, 0x5c, 0xc0], Finish::Translucent)), // Pokemon Sapphire
@@ -35,11 +32,9 @@ const EXACT: &[(&str, Shell)] = &[
     ("BPG", shell([0x63, 0xb0, 0x44], Finish::Translucent)), // Pokemon LeafGreen
 ];
 
-/// Keyed on the first letter alone. `M` is the Game Boy Advance Video family, thirty odd
-/// releases that would otherwise be thirty hand transcribed rows.
+/// Keyed on the first letter alone. `M` is the Game Boy Advance Video family.
 const FAMILY: &[(u8, Shell)] = &[(b'M', shell([0xc6, 0xc6, 0xc9], Finish::Solid))];
 
-/// What plastic this cart shipped in, looked up by the game code in its header.
 pub fn shell_for(cart: &Cart) -> Shell {
     gba_shell_for(&cart.code)
 }
@@ -53,10 +48,8 @@ pub fn table_keys() -> Vec<&'static str> {
     EXACT.iter().map(|(k, _)| *k).collect()
 }
 
-/// Probed against a fixture where the exact row, the family letter and the default all
-/// disagree. The shipping table has no code that two rules both claim, so the order cannot
-/// be observed through it, and the order is the whole escape hatch: an explicit row is how
-/// a wrongly coloured family member gets fixed.
+/// Checks lookup order on a fixture, since the shipping table has no code two rules both
+/// claim. The order matters: an exact row is how a wrongly coloured family member gets fixed.
 pub fn lookup_order_is_exact_then_family_then_default() -> bool {
     const A: Shell = shell([1, 1, 1], Finish::Solid);
     const B: Shell = shell([2, 2, 2], Finish::Solid);

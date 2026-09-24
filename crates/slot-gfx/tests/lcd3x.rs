@@ -83,8 +83,7 @@ fn mask_phase_puts_one_rgb_triad_per_source_pixel() {
     }
 }
 
-/// The 8 bit mask texture is what the GPU actually samples, so quantising it must not cost
-/// more than the rounding the f32 table already spends.
+/// The 8 bit mask texture the GPU samples stays within one LSB of the reference.
 #[test]
 fn quantised_mask_texture_stays_within_one_lsb_of_the_reference() {
     let src = pseudorandom_240x160();

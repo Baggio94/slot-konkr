@@ -5,16 +5,13 @@ use crate::battery::{draw_gauge, GAUGE_H};
 use crate::plate::HINT_H;
 use crate::slot_chrome::MOUTH_H;
 
-/// Centred in the case, not measured off the bottom of the screen: the type is printed on
-/// the plastic, so it belongs to the plastic's middle rather than to the panel's edge.
+/// Centred in the case band, not measured off the screen's bottom edge.
 const FOOTER_Y: f32 = OUT_H as f32 - MOUTH_H + (MOUTH_H - HINT_H as f32) / 2.0;
-/// Blank at each end. Matches the gap the row leaves beside the outer carts, so what is
-/// printed on the case lines up with what is above it.
+/// Matches the gap beside the row's outer carts, so the footer lines up with them.
 const FOOTER_MARGIN: f32 = 24.0;
 
-/// A line of type and the width it rasterised to. The width cannot be recovered from a
-/// `TexId`, and only the compositor can mint one, so the space is held from the width alone
-/// while the face is still on its way.
+/// A line of type and its rasterised width. The width is kept separately because a `TexId`
+/// cannot report it and the face may not have arrived yet.
 #[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
 pub struct Printed {
     pub face: Option<TexId>,
@@ -30,9 +27,7 @@ impl Printed {
     }
 }
 
-/// The gauge on the left, the time on the right, both on the case. The wordmark used to have
-/// the left shelf; a device that tells you its charge is worth more than one that tells you
-/// its own name.
+/// The battery gauge on the left, the time on the right, both on the case.
 pub fn draw_footer(
     battery: Option<Battery>,
     percent: Printed,
@@ -45,8 +40,7 @@ pub fn draw_footer(
     printed(OUT_W as f32 - FOOTER_MARGIN - clock.w as f32, clock, out);
 }
 
-/// A line of type at an arbitrary `y`. The placeholder is what holds the space while the
-/// face is still on its way, so a row does not reflow the moment type arrives.
+/// A placeholder holds the space until the face arrives, so the row does not reflow.
 pub(crate) fn draw_printed(x: f32, y: f32, p: Printed, out: &mut Vec<Draw>) {
     if p.w == 0 {
         return;

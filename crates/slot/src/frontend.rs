@@ -1,5 +1,5 @@
-//! Everything the binary does with a compositor except own one. The window is the only
-//! difference between the host and the device, so it is the only thing left above this.
+//! Everything the binary does with a compositor except own one. Host and device differ only in
+//! the window above this.
 
 use std::time::{Duration, Instant};
 
@@ -25,18 +25,11 @@ use crate::link_start::{LinkFail, LinkStep};
 use crate::session::Session;
 use crate::wallpaper;
 
-/// How long a dark panel waits before the machine actually stops. The dark is immediate —
-/// the lid or the button kills the backlight on the edge — but the device is still running
-/// flat out behind it at 400-700 mA, so this is the window in which the user might come
-/// straight back, not a power saving.
-///
-/// Three minutes, and then the device powers off rather than sleeping. It cannot wake itself
-/// from a sleep — the RTC alarm never fires on this board — so a standby would be a leak with
-/// no end, and a power off is the honest version of putting it down.
+/// How long a dark panel waits before powering off. The device still draws 400-700 mA while
+/// dark, and powers off rather than sleeps because the RTC alarm never fires on this board.
 const DOZE_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// Amber. The only warning colour in the tree, and the reason it is not the HUD's ink: a
-/// refusal that looks like a volume glyph is a refusal nobody reads as one.
+/// Amber, the only warning colour, kept apart from the HUD ink so a refusal reads as one.
 const ALERT_INK: [u8; 3] = [0xf0, 0xb4, 0x3c];
 
 pub struct Frontend {
@@ -76,23 +69,19 @@ struct QuickClock {
     shown: String,
 }
 
-/// The about label, and what it was last built for. The gauge is the only thing on it that
-/// moves, so the reading is what decides whether it is rebuilt.
+/// The about label and the battery reading it was built for; the gauge is all that moves.
 #[derive(Default)]
 struct AboutFace {
     tex: Option<TexId>,
-    /// `None` is a board with no gauge, which is a different thing from not having built one
-    /// yet — `tex` says that.
+    /// `None` is a board with no gauge, not an unbuilt label (`tex` says that).
     battery: Option<u8>,
 }
 
-/// The clock screen's two faces and the shelf's one, with what each was last built for. The
-/// picker's line changes under the caret; the shelf clock changes once a minute; the battery
-/// percent changes whenever the reading does.
+/// The clock screen's two faces and the shelf's one, with what each was last built for.
 #[derive(Default)]
 struct Clocks {
     line: Option<TexId>,
-    /// Uploaded once, at boot: it never changes what it says.
+    /// Uploaded once, at boot.
     hint: Option<TexId>,
     shelf: Option<TexId>,
     picked: Option<String>,
@@ -101,8 +90,8 @@ struct Clocks {
     battery_tex: Option<TexId>,
 }
 
-/// What the switcher's textures were built for. The photos and the undo cap are per opening;
-/// the title is per selection.
+/// What the switcher's textures were built for: photos and undo cap per opening, title per
+/// selection.
 #[derive(Default)]
 struct Switcher {
     open: bool,
@@ -138,8 +127,7 @@ impl Frontend {
         }
     }
 
-    /// Everything that never changes: the carts, the HUD glyphs and the key caps. All of it
-    /// needs a live context, so it happens after the compositor and not at boot.
+    /// Everything that never changes. Needs a live context, so it runs after the compositor.
     pub fn upload_faces(&mut self, compositor: &mut Compositor) {
         let faces = self
             .session
@@ -171,15 +159,12 @@ impl Frontend {
             })
             .collect();
         self.session.app_mut().set_link_badge_faces(link_badges);
-        // Its own upload rather than one of the HUD's: it is drawn on a cart, at its own
-        // size, and in a warning colour the level glyphs have no business borrowing.
+        // Its own upload: drawn on a cart at its own size, in the warning colour.
         let alert = icon_face(Icon::Alert, ALERT_PX, ALERT_INK);
         let alert = compositor.create_texture(alert.w, alert.h, &alert.rgba);
         self.session.app_mut().set_alert_face(alert);
-        // Uploaded at boot like everything else: a shutdown is the one moment there is no
-        // time to rasterise anything, and the GPU is about to be taken away. One line per
-        // choice, in `PowerChoice::ALL` order, at the menu's own size so the screen that
-        // follows a choice is set in the same voice as the row that was chosen.
+        // At boot: a shutdown has no time to rasterise and is about to lose the GPU. In
+        // `PowerChoice::ALL` order.
         let lines = PowerChoice::ALL
             .iter()
             .map(|c| {
@@ -199,10 +184,8 @@ impl Frontend {
             })
             .collect();
         self.session.app_mut().set_power_menu_faces(menu);
-        // The quick menu's rows, every value a row can hold in both inks, its two arrows and its
-        // legend. At boot, like the power menu's rows, so moving through the menu or changing a
-        // value never waits on a font. Only Date & Time's value is left to `sync_quick_clock`:
-        // it is the one thing on the menu that changes by itself.
+        // The quick menu's faces at boot, so the menu never waits on a font. Only Date & Time's
+        // value changes by itself; `sync_quick_clock` builds that.
         let mut up = |f: UndoFace| (compositor.create_texture(f.w, f.h, &f.rgba), f.w, f.h);
         let labels = QuickRow::ALL
             .iter()
@@ -223,9 +206,8 @@ impl Frontend {
             carets,
             legend,
         });
-        // The open cart's parts that never change: each socket, the chip seated in each, the
-        // blank chip in flight and its shadow, in `Core::ALL` order. At boot like the power
-        // menu's rows, so the first frame of a lid coming off is not spent in a rasteriser.
+        // The open cart's fixed parts, in `Core::ALL` order, so a lid coming off never waits on
+        // a rasteriser.
         let sockets = slot_store::Core::ALL
             .iter()
             .map(|c| {
@@ -247,8 +229,7 @@ impl Frontend {
         self.session
             .app_mut()
             .set_core_part_faces(sockets, chips, blank, shadow);
-        // Every action the picker takes, the way out first and the choice last, as the
-        // switcher's legend is ordered.
+        // Ordered like the switcher's legend: way out first, choice last.
         let legend = [
             hint_face("B", "Cancel"),
             arrows_hint_face("Swap"),
@@ -258,11 +239,8 @@ impl Frontend {
         .map(|f| (compositor.create_texture(f.w, f.h, &f.rgba), f.w))
         .collect();
         self.session.app_mut().set_core_legend_faces(legend);
-        // The in-game menu: the HOST/JOIN labels, the LINKED line, the step and failure
-        // sentences, and the key legend. All of it at the same size and through the same
-        // rasteriser as the two menus above, because they are the same object — and all of it
-        // at boot, because a link that is failing is the worst moment to be asking a font for
-        // a sentence.
+        // The in-game menu's faces, at boot: a failing link is the worst moment to wait on a
+        // font.
         let roles = menu_faces(compositor, LinkRow::ALL.iter().map(|r| r.text()));
         self.session.app_mut().set_link_menu_faces(roles);
         if let Some(linked) = menu_faces(compositor, ["Linked"].into_iter()).pop() {
@@ -296,25 +274,20 @@ impl Frontend {
         self.session.app_mut().set_toast_faces(toasts);
         let legend = legend_faces(compositor, &LEGEND);
         self.session.app_mut().set_legend_faces(legend);
-        // The clock screen's one instruction, which never changes what it says. Uploaded here
-        // with the other key caps, so moving the caret rasterises only the line above it.
+        // Fixed text, so moving the caret rasterises only the line above it.
         let hint = set_clock_hint_face();
         self.clocks.hint = Some(compositor.create_texture(hint.w, hint.h, &hint.rgba));
         let shadow = cart_shadow();
         let id = compositor.create_texture(shadow.w, shadow.h, &shadow.rgba);
         self.session.app_mut().set_cart_shadow(id);
-        // `draw_gauge` now draws the bolt beside the capsule, on the housing, in its own
-        // reserved slot rather than over the fill. The housing tint was only ever needed to
-        // hide the bolt inside the fill it sat on; out here it sits where every other HUD
-        // glyph does, so it takes the same ink they do.
+        // The bolt sits beside the capsule on the housing, so it takes the HUD's ink.
         let bolt = icon_face(Icon::Charging, BOLT_PX, HUD_INK);
         let bolt_id = compositor.create_texture(bolt.w, bolt.h, &bolt.rgba);
         self.session.app_mut().set_bolt_face(bolt_id);
         self.upload_wallpaper(compositor);
     }
 
-    /// One decode, at boot. A card with no `Wallpapers`, no readable picture in it, or a
-    /// picture the decoder will not take, gets the plain ground it had before.
+    /// One decode, at boot. No usable picture leaves the plain ground.
     fn upload_wallpaper(&mut self, compositor: &mut Compositor) {
         let app = self.session.app();
         let seed = app.wall_secs().unsigned_abs();
@@ -329,18 +302,16 @@ impl Frontend {
         self.session.app_mut().set_wallpaper(id);
     }
 
-    /// One frame into the offscreen target and out to a surface of `window` pixels. The
-    /// caller swaps: only it knows what presenting costs.
+    /// One frame into the offscreen target and out to a `window`-sized surface. The caller swaps.
     pub fn render(&mut self, compositor: &mut Compositor, window: (u32, u32)) {
         self.compose(compositor);
         compositor.end_frame(window);
     }
 
-    /// One frame into the offscreen target and no further: what `render` presents, and what a
-    /// test with no window to present to reads back with `Compositor::read_frame`.
+    /// One frame into the offscreen target only; tests read it back with
+    /// `Compositor::read_frame`.
     pub fn compose(&mut self, compositor: &mut Compositor) {
-        // Set every frame rather than on the edge: the grade is part of the final blit, so
-        // it has to be right whether or not anything just changed it.
+        // Every frame: the grade is part of the final blit.
         compositor.set_blue_light(self.session.app().blue_light());
         compositor.set_shake(self.session.app().screen_shake());
         compositor.set_screen_power(self.session.app().screen_power());
@@ -405,8 +376,8 @@ impl Frontend {
         compositor.draw_list(&self.draws);
     }
 
-    /// Input and time, after the frame is on screen. The gesture windows expire on this
-    /// whether or not anything was pressed, so it is called every frame.
+    /// Input and time, after the frame is on screen. Called every frame since gesture windows
+    /// expire regardless of input.
     pub fn advance(&mut self, input: &mut dyn InputSource) {
         let now = self.now();
         let events = input.poll(now);
@@ -432,17 +403,13 @@ impl Frontend {
         self.session.app_mut().restart();
     }
 
-    /// The state was flushed on the edge that set `powering_off`, so there is nothing left to
-    /// do but go.
+    /// The state was already flushed on the edge that set `powering_off`.
     pub fn poweroff(&mut self) {
         self.session.app_mut().poweroff();
     }
 }
 
-/// A line of menu type per label, in the order they were handed over, each with the size it
-/// was rastered at. Every menu on the device is drawn from a list shaped exactly like this,
-/// so the four the in-game menu needs are built through one function rather than four copies
-/// of the same three lines.
+/// A line of menu type per label, in order, with each face's size.
 fn menu_faces<'a>(
     compositor: &mut Compositor,
     labels: impl Iterator<Item = &'a str>,
@@ -455,8 +422,7 @@ fn menu_faces<'a>(
         .collect()
 }
 
-/// A screen's key caps, in the order the legend names them. None of them ever changes what
-/// it says, so they are uploaded once and outlive every visit to that screen.
+/// A screen's key caps in legend order, uploaded once since they never change.
 fn legend_faces(compositor: &mut Compositor, legend: &[(&str, &str)]) -> Vec<TexId> {
     legend
         .iter()
@@ -474,9 +440,8 @@ struct Faces<'a> {
     undo: &'a mut Option<TexId>,
 }
 
-/// Photos and the undo cap are built once per opening, on the way in, while the game is
-/// already paused. Rebuilt each time rather than cached because the ring changes underneath
-/// them. The title names the selection, so it follows a flick instead.
+/// Photos and undo cap are rebuilt per opening, while paused, since the ring changes between
+/// openings. The title follows the selection.
 fn sync_switcher(app: &mut App, compositor: &mut Compositor, texes: Faces, state: &mut Switcher) {
     if !matches!(app.phase(), Phase::Polaroids { .. }) {
         state.open = false;
@@ -503,9 +468,8 @@ fn sync_switcher(app: &mut App, compositor: &mut Compositor, texes: Faces, state
             .collect();
         app.set_polaroid_faces(ids);
 
-        // An offer can expire while the switcher is up but it cannot change into the other
-        // kind, so the cap only has to be rasterised on the way in. Whether it is drawn at
-        // all is the app's call.
+        // An offer can expire but not change kind while the switcher is up, so rasterise on
+        // the way in only.
         let label = app
             .undo_label()
             .map(|l| upload(compositor, texes.undo, hint_face("X", l)));
@@ -519,16 +483,12 @@ fn sync_switcher(app: &mut App, compositor: &mut Compositor, texes: Faces, state
     }
 }
 
-/// The picker is rasterised on every change under the caret, which is once per press. The
-/// shelf clock follows the wall clock, so it is rebuilt when the minute turns and not on the
-/// fifty nine seconds either side of it.
+/// The picker rebuilds per press; the shelf clock only when the minute turns.
 fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
     let picked = app.picker().map(|p| p.text());
     if picked != clocks.picked {
         clocks.picked = picked;
-        // Only the line. The hint under it never changes what it says and was uploaded with the
-        // other key caps at boot: the screen can be opened at any time from the quick menu, and
-        // every press here is a rasterisation on the H700.
+        // Only the line; the fixed hint was uploaded at boot.
         if let (Some(face), Some(hint)) = (app.picker().map(|p| p.face()), clocks.hint) {
             let line = upload(compositor, &mut clocks.line, face);
             app.set_clock_faces(line, hint);
@@ -557,10 +517,8 @@ fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
     }
 }
 
-/// Date & Time's value, in both inks so the bar can land on it without anything being rastered.
-/// Built only while the quick menu is up, and then only when the minute has turned since it was
-/// last built, as the shelf clock is: a clock nobody is looking at is not worth a rasterisation a
-/// minute on the H700.
+/// Date & Time's value in both inks. Built only while the quick menu is up, and only when the
+/// minute turns: each rasterisation costs on the H700.
 fn sync_quick_clock(app: &mut App, compositor: &mut Compositor, state: &mut QuickClock) {
     if app.quick_menu().is_none() {
         return;
@@ -580,8 +538,7 @@ fn sync_quick_clock(app: &mut App, compositor: &mut Compositor, state: &mut Quic
     state.shown = text;
 }
 
-/// Built only once the screen is up: it is a 660 by 228 rasterisation and most sessions never
-/// open it.
+/// Built only once the screen is up: a 660x228 rasterisation most sessions never need.
 fn sync_about(app: &mut App, compositor: &mut Compositor, state: &mut AboutFace) {
     if !matches!(app.phase(), Phase::About) {
         return;
@@ -601,10 +558,8 @@ fn sync_about(app: &mut App, compositor: &mut Compositor, state: &mut AboutFace)
     app.set_sticker_face(id);
 }
 
-/// The open cart's faces, asked for as soon as the caret lands on a cart and uploaded when the
-/// worker hands them back, so they are normally on the GPU before START. The worker is the only
-/// place they are built: rasterised on the frame loop, a board freezes the shelf for the better
-/// part of half a second on the H700.
+/// The open cart's faces, requested when the caret lands and uploaded when the worker returns
+/// them, so they are normally ready before START. Never built on the frame loop (~0.5 s on H700).
 fn sync_core_picker(
     app: &mut App,
     compositor: &mut Compositor,
@@ -627,7 +582,7 @@ fn sync_core_picker(
     let Some(faces) = builder.take() else {
         return;
     };
-    // A build for a cart the caret has since left is dropped; the one it is on is on its way.
+    // Drop a build for a cart the caret has left.
     if highlighted.as_deref() != Some(faces.stem.as_str()) || *built == highlighted {
         return;
     }
@@ -647,7 +602,7 @@ fn upload(compositor: &mut Compositor, slot: &mut Option<TexId>, face: slot_ui::
     upload_rgba(compositor, slot, face.w, face.h, &face.rgba)
 }
 
-/// Into the slot's own texture if it has one, so the pool stops growing after the first time.
+/// Into the slot's existing texture if any, so the pool stops growing.
 fn upload_rgba(
     compositor: &mut Compositor,
     slot: &mut Option<TexId>,

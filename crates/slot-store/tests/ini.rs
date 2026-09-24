@@ -1,5 +1,4 @@
-//! The `<stem> = <value>` files under `System/`, at the layer that knows nothing about what a
-//! value means, checked here once rather than again through whatever type sits on top of it.
+//! The untyped `<stem> = <value>` layer under `System/`.
 
 use slot_store::ini;
 use tempfile::tempdir;
@@ -22,9 +21,7 @@ fn an_absent_file_is_an_empty_map_rather_than_an_error() {
     assert_eq!(ini::value(d.path(), FILE, "Emerald"), None);
 }
 
-/// Every one of these is a typo somebody will make in a text editor on a card, and not one of
-/// them may cost them the file. The string layer keeps an empty value rather than dropping it:
-/// what an empty value means is the business of whatever type sits on top.
+/// Typos cost only their own line. Empty values are kept for the typed layer to interpret.
 #[test]
 fn malformed_lines_are_skipped_rather_than_fatal() {
     let d = root_with(Some(concat!(
@@ -62,9 +59,7 @@ fn writing_creates_the_file_when_it_is_absent() {
     );
 }
 
-/// The file is meant to be opened in a text editor on a computer. A rebuild from the map would
-/// quietly drop every comment, blank line and unparsed line in it — including the note somebody
-/// wrote to themselves above a cart.
+/// Comments, blank lines and unparsed lines survive a write.
 #[test]
 fn writing_replaces_one_line_and_leaves_the_rest_of_the_file_alone() {
     let d = root_with(Some(concat!(
@@ -102,15 +97,8 @@ fn writing_appends_a_key_the_file_has_never_seen() {
     );
 }
 
-/// Every one of these is a filename somebody can really put in `Games/`, and not one of them
-/// survives a trip through the parser: the spaced ones come back trimmed, the `=` one comes
-/// back cut at the `=`, and the last three come back as comments or a section header.
-///
-/// Writing them anyway was the bug. The line could never be found again, so the preference
-/// never persisted; the write appended rather than replaced, so the card's file grew by a line
-/// on every press; and the `=` one let a cart called `Cheats` claim the line belonging to a
-/// cart called `Cheats = On`. The file is left exactly as it was instead, and the caller — which
-/// already logs a failed write — is told why.
+/// Real filenames that would not read back as themselves (trimmed, cut at `=`, or parsed as a
+/// comment or section) are refused and the file is left untouched.
 const UNSAYABLE: [&str; 7] = [
     " Tetris",
     "Tetris ",
@@ -136,9 +124,6 @@ fn a_key_the_file_cannot_say_is_refused_rather_than_written() {
     }
 }
 
-/// The shape of the harm, pinned on its own because the refusal above is only the mechanism.
-/// Three presses of L and R on a cart with a space in front of its name used to leave three
-/// lines on the card, none of which any read would ever find.
 #[test]
 fn a_refused_key_cannot_grow_the_file_a_line_at_a_time() {
     let d = root_with(None);
@@ -152,15 +137,8 @@ fn a_refused_key_cannot_grow_the_file_a_line_at_a_time() {
     );
 }
 
-/// One cart's write must never reach another cart's line, and the `=` refusal above is what
-/// makes that reachable to state. A cart called `Cheats = On` used to be written down as
-/// `Cheats = On = stretch`, which `read` attributes to a *different* cart, `Cheats` — so the
-/// next time that cart was given a mode it replaced the line, then dropped the leftover as a
-/// duplicate of itself, and one cart's preference deleted another's.
-///
-/// Neither line can be written now, so the collision cannot be manufactured from inside slot.
-/// A person can still type the ambiguous line by hand; what they get is the reading `read` has
-/// always taken of it, which is the one thing a write has to agree with.
+/// `Cheats = On = x` reads as key `Cheats`, so writing it would clobber another cart's line.
+/// A hand-typed ambiguous line gets `read`'s interpretation.
 #[test]
 fn neither_cart_can_write_the_line_the_other_would_claim() {
     let d = root_with(None);
@@ -173,10 +151,7 @@ fn neither_cart_can_write_the_line_the_other_would_claim() {
     );
 }
 
-/// A write disturbs the line `read` attributes to this key and nothing else on the card. The
-/// two used to decide that separately — `read` by one set of rules and `write` by splitting on
-/// `=` with none of them — and two copies of a rule is how two functions meant to agree start
-/// to differ.
+/// A write touches only the line `read` attributes to this key.
 #[test]
 fn a_write_leaves_every_line_that_is_not_this_keys_alone() {
     let d = root_with(Some(concat!(
@@ -202,9 +177,7 @@ fn a_write_leaves_every_line_that_is_not_this_keys_alone() {
     assert!(!text.contains("Emerald = actual"));
 }
 
-/// The line `write` produces and the line `read` understands are decided by one function, so a
-/// key that is accepted is a key that comes back. Checked across the punctuation a rom filename
-/// really carries rather than on one example.
+/// Any key `write` accepts reads back, across punctuation real rom filenames carry.
 #[test]
 fn every_key_a_write_accepts_reads_back_as_itself() {
     for key in [
@@ -224,7 +197,7 @@ fn every_key_a_write_accepts_reads_back_as_itself() {
             Some("stretch"),
             "{key:?} did not come back"
         );
-        // Twice, because the second write is the one that has to find the first one's line.
+        // The second write must find the first one's line.
         ini::write(d.path(), FILE, key, "actual").expect(key);
         assert_eq!(ini::value(d.path(), FILE, key).as_deref(), Some("actual"));
         let text = std::fs::read_to_string(d.path().join(FILE)).unwrap();
@@ -232,12 +205,8 @@ fn every_key_a_write_accepts_reads_back_as_itself() {
     }
 }
 
-/// A file that will not read as text is not an empty file. The two used to be treated the
-/// same, so one press replaced every line on the card with a single entry — and the card is
-/// exactly where a file gets saved in something other than UTF-8: Notepad's ANSI default is
-/// enough, and a European rom set puts an accent in a stem sooner or later.
-///
-/// The bytes below are `Pokémon` in cp1252, which is what an editor with that default writes.
+/// A non-UTF-8 file is an error, not an empty file to overwrite. The bytes are `Pokémon` in
+/// cp1252, Notepad's ANSI default.
 #[test]
 fn a_file_that_will_not_read_as_text_is_left_alone_rather_than_replaced() {
     let d = root_with(None);
@@ -255,8 +224,6 @@ fn a_file_that_will_not_read_as_text_is_left_alone_rather_than_replaced() {
     );
 }
 
-/// The other half of the same distinction: a file that is genuinely absent is still created,
-/// which is what every first write on a fresh card is.
 #[test]
 fn an_absent_file_is_still_created_by_a_write() {
     let d = root_with(None);
@@ -267,8 +234,6 @@ fn an_absent_file_is_still_created_by_a_write() {
     );
 }
 
-/// A key written twice by hand collapses to one line on the next write, so the file goes on
-/// saying one thing per key — the same reading `read` already takes.
 #[test]
 fn writing_collapses_a_duplicate_the_file_already_had() {
     let d = root_with(Some("Emerald = actual\nEmerald = stretch\n"));

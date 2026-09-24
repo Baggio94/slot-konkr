@@ -2,13 +2,10 @@ use std::time::Duration;
 
 use crate::{Battery, Charge, LedState, LidPolicy, Platform};
 
-/// The lid policy and the panel it acts on, which have to be one object because the policy
-/// takes no arguments. `depth` and `timeout` are constructor values: spec section 9 defers
-/// both to hardware bring-up and neither forks the code.
+/// The lid policy and the panel it acts on.
 pub struct Power {
     platform: Box<dyn Platform>,
-    /// What the panel goes back to on open. The platform has no getter, so remembering
-    /// every step that passed through here is the only way to know.
+    /// What the panel goes back to on open. The platform has no getter.
     level: u8,
     closed: bool,
     timeout: Duration,
@@ -24,9 +21,8 @@ impl Power {
         }
     }
 
-    /// A level set while the lid is shut is remembered rather than lit. The keyboard still
-    /// reaches a dozing host, and a panel that comes on inside a closed clamshell is the
-    /// one thing the doze exists to prevent.
+    /// A level set while the lid is shut is remembered, not lit: the keyboard still reaches a
+    /// dozing host.
     pub fn set_backlight(&mut self, step: u8) {
         self.level = step;
         if !self.closed {
@@ -46,14 +42,11 @@ impl Power {
         self.platform.set_led(state)
     }
 
-    /// Not gated on the lid the way the backlight is. Whatever stopped the motor for the
-    /// doze has to be the thing that starts it again, or a cart resumes buzzing on wake.
+    /// Not gated on the lid: whatever stopped the motor for the doze must restart it.
     pub fn set_rumble(&mut self, strength: u16) {
         self.platform.set_rumble(strength);
     }
 
-    /// Straight through: this is a cable coming back, which has nothing to do with the lid,
-    /// the level or anything else this type arbitrates.
     pub fn relink_adb(&mut self) -> bool {
         self.platform.relink_adb()
     }
@@ -77,8 +70,7 @@ impl Power {
 
 impl LidPolicy for Power {
     fn on_close(&mut self) {
-        // A hall sensor bounces, and a second close would otherwise take the dark panel
-        // for the level to restore.
+        // A hall sensor bounces: a second close must not save the dark panel as the level.
         if self.closed {
             return;
         }

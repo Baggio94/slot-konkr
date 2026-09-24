@@ -2,8 +2,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use slot_store::{format_stamp, parse_stamp, stamp_now};
 
-/// The filename is the only record of when a state was saved. A formatter and a parser that
-/// disagree would put the whole ring in the wrong order and mislabel every polaroid.
 #[test]
 fn stamps_round_trip_across_leap_days() {
     for (secs, text) in [
@@ -17,8 +15,7 @@ fn stamps_round_trip_across_leap_days() {
     }
 }
 
-/// The ring sorts its entries as strings and calls that chronological. Zero padding is what
-/// makes that true.
+/// The ring relies on string order being time order, which zero padding provides.
 #[test]
 fn stamps_sort_lexicographically_in_time_order() {
     let secs = [
@@ -50,7 +47,6 @@ fn a_stamp_that_is_not_a_date_does_not_parse() {
     }
 }
 
-/// The stamp is written by one clock and read back by another call to the same one.
 #[test]
 fn stamp_now_is_now() {
     let secs = parse_stamp(&stamp_now()).expect("stamp_now must parse");

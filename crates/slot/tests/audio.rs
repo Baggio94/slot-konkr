@@ -23,8 +23,8 @@ fn queued_frames_tracks_the_device_backlog() {
     assert_eq!(r.queued_frames(), primed + 400);
 }
 
-/// The device pulls its first block before the core has run a frame, so an empty ring at
-/// open is an underrun on every boot. Opening at the DRC target is silence instead.
+/// The device pulls before the core has run a frame, so the ring opens at the DRC target to
+/// avoid an underrun on every boot.
 #[test]
 fn opening_primes_the_ring_to_the_drc_target() {
     let mut s = StubSink::new();
@@ -39,8 +39,8 @@ fn opening_primes_the_ring_to_the_drc_target() {
     );
 }
 
-/// The producer is the emulator, the consumer is the device. Neither is allowed to lose a
-/// sample when they are running at the same average rate, however uneven the arrivals.
+/// Producer and consumer at the same average rate must not lose a sample, however uneven the
+/// arrivals.
 #[test]
 fn a_steady_producer_and_consumer_neither_drop_nor_starve() {
     let r = Ring::new(ring_capacity(48_000));
@@ -87,8 +87,7 @@ fn the_ring_holds_enough_to_ride_out_a_late_frame() {
     );
 }
 
-/// The fallback still has to exist, or a paused core deadlocks waiting for a drain that
-/// never comes.
+/// Otherwise a paused core deadlocks waiting for a drain that never comes.
 #[test]
 fn a_muted_or_paused_core_does_not_block_on_audio() {
     let r = std::sync::Arc::new(Ring::new(64));
@@ -99,8 +98,7 @@ fn a_muted_or_paused_core_does_not_block_on_audio() {
     assert!(h.is_finished(), "a muted sink blocked the emulator thread");
 }
 
-/// A device that stops draining must cost the audio and not the game: the emulator waits
-/// once, gives up, and keeps running.
+/// The emulator waits once, gives up and keeps running: the audio pays, not the game.
 #[test]
 fn a_device_that_stopped_draining_does_not_freeze_the_emulator() {
     let r = Ring::new(8);
@@ -170,9 +168,7 @@ fn muting_silences_the_device_but_still_drains_the_ring() {
     assert_eq!(r.queued_frames(), 2);
 }
 
-/// The core is held still for the whole of the insert, so nothing is feeding the ring and the
-/// device reads silence out of it. That is the arrangement working. Counted as starvation it
-/// printed "41984 samples starved" after every single cart.
+/// A held core feeds nothing during the insert, so the device reading silence is not a starve.
 #[test]
 fn a_held_core_does_not_report_the_device_as_starved() {
     let r = Ring::new(ring_capacity(48_000));
@@ -192,18 +188,13 @@ fn a_held_core_does_not_report_the_device_as_starved() {
         "a held core was reported as a starve"
     );
 
-    // And a running one still is: this is the counter that catches a device the emulator
-    // cannot keep up with.
     r.set_idle(false);
     r.fill(&mut out);
     assert!(r.underruns() > before, "a real starve is no longer counted");
 }
 
-/// A ring that ran dry rebuilds its cushion before playing again. Handing over whatever
-/// fragments the producer has managed so far gives the device audio, silence, audio, silence
-/// for as long as the ramp lasts, and that alternation is the scratch heard when a game
-/// starts: the cart is loading while the opening cushion drains, and the core's first samples
-/// arrive in pieces too small to fill a period.
+/// A ring that ran dry rebuilds its cushion before playing again. Handing over fragments
+/// alternates audio and silence, which is heard as a scratch at game start.
 #[test]
 fn a_ring_that_ran_dry_rebuilds_its_cushion_before_playing_again() {
     let r = Ring::new(ring_capacity(48_000));
@@ -235,8 +226,7 @@ fn a_ring_that_ran_dry_rebuilds_its_cushion_before_playing_again() {
     );
 }
 
-/// A cart sound has no producer behind it to build a cushion with. Holding one back would
-/// silence the shelf, where there is no core at all.
+/// A cart sound has no producer to build a cushion, so holding one back would silence the shelf.
 #[test]
 fn a_cart_sound_is_not_held_back_by_the_cushion() {
     let r = Ring::new(ring_capacity(48_000));
@@ -250,12 +240,8 @@ fn a_cart_sound_is_not_held_back_by_the_cushion() {
     );
 }
 
-/// The other half of `a_held_core_does_not_report_the_device_as_starved`, and the same
-/// mistake: a rewinding core feeds the ring nothing either. Reverse audio is noise, so the
-/// worker throws the core's samples away for as long as the trigger is held, and the device
-/// drains into silence exactly as it does behind a pause. Counted as starvation it reported
-/// about 65000 samples a second of a fault nobody had, and every session anyone rewound in
-/// printed one on its way out.
+/// The worker discards reverse audio while rewinding, so the device draining into silence is
+/// not a starve.
 #[test]
 fn a_rewinding_core_does_not_report_the_device_as_starved() {
     let mut sink = StubSink::new();
@@ -274,8 +260,7 @@ fn a_rewinding_core_does_not_report_the_device_as_starved() {
         assert!(Instant::now() < deadline, "the core never settled");
         std::thread::sleep(Duration::from_millis(5));
     }
-    // Run it forward first, draining the way a device with room to spare does, so there is a
-    // trail to walk back through and nothing is left queued from before the trigger.
+    // Run forward first so there is a trail to walk back through and nothing left queued.
     for _ in 0..40 {
         sink.device_drain();
         std::thread::sleep(Duration::from_millis(2));
@@ -297,11 +282,9 @@ fn a_rewinding_core_does_not_report_the_device_as_starved() {
     );
 }
 
-/// `reopen` counts its cushion in samples, so it has to land on a whole stereo frame. At the
-/// device's own 32768 Hz `ring_capacity` is 4369 — odd — and an odd cushion leaves every sample
-/// pushed after it one slot out of place, which the device plays as left and right swapped for
-/// the rest of the session. A host opens at 48000, where the capacity is even, so this has to
-/// name the device's rate or it passes without testing anything.
+/// `reopen` counts its cushion in samples, so it must land on a whole stereo frame. At the
+/// device's 32768 Hz `ring_capacity` is 4369, odd, which swaps left and right for the session.
+/// A host opens at 48000 (even), so this must name the device rate to test anything.
 #[test]
 fn the_cushion_at_an_odd_capacity_still_ends_on_a_frame() {
     assert_eq!(
@@ -312,8 +295,7 @@ fn the_cushion_at_an_odd_capacity_still_ends_on_a_frame() {
     let r = Ring::new(ring_capacity(GBA_HZ));
     r.reopen(GBA_HZ);
 
-    // Drain the cushion the way the device does, then push a block whose two channels can be
-    // told apart and read it straight back.
+    // Drain the cushion, then push a block with distinguishable channels and read it back.
     let mut cushion = vec![1i16; r.queued_frames() * 2];
     r.fill(&mut cushion);
     assert!(

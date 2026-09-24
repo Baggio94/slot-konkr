@@ -18,20 +18,8 @@ pub enum QuickRow {
 }
 
 impl QuickRow {
-    /// Colour Correction sits third, and the two rows either side of it are why.
-    ///
-    /// It cannot go first: `App::open_quick_menu` puts the bar on `ALL[0]` every time, so the
-    /// top row is the one an arrow lands on the instant the menu opens, and moving that from
-    /// Fast Forward to a setting that changes what every game looks like is a change nobody
-    /// asked for. It cannot go below Date & Time either: those two are the rows A opens, the
-    /// legend reads OPEN rather than CHANGE on them, and keeping them together is what makes
-    /// that legend flip exactly once as the bar travels down.
-    ///
-    /// That leaves above or below Rumble, and above is the better of the two. Fast Forward and
-    /// its Sound are a pair — the second reads as a qualifier of the first — so nothing may come
-    /// between them, and what follows the pair is the settings that stand alone. Of those,
-    /// colour correction is in effect every second a game is on screen while rumble only matters
-    /// when a cart asks for the motor, so the unconditional one comes first.
+    /// The bar opens on `ALL[0]`, so Fast Forward stays first. Date & Time and About stay together
+    /// so the OPEN/CHANGE legend flips once. Fast Forward and its Sound are a pair.
     pub const ALL: [QuickRow; 6] = [
         QuickRow::FastForward,
         QuickRow::FastForwardSound,
@@ -41,7 +29,7 @@ impl QuickRow {
         QuickRow::About,
     ];
 
-    /// Position in `ALL`, which is the order the labels are uploaded in and drawn in.
+    /// Position in `ALL`, the order labels are uploaded and drawn in.
     pub fn index(self) -> usize {
         self as usize
     }
@@ -62,7 +50,7 @@ impl QuickRow {
         matches!(self, QuickRow::DateTime | QuickRow::About)
     }
 
-    /// The row above, stopping at the top: the bar does not wrap, as no menu here does.
+    /// The row above, stopping at the top: no menu here wraps.
     pub fn up(self) -> QuickRow {
         QuickRow::ALL[self.index().saturating_sub(1)]
     }
@@ -72,8 +60,7 @@ impl QuickRow {
     }
 }
 
-/// Every value a row the arrows change can show. There are few enough that each is rastered
-/// once at boot, in both inks, and never again.
+/// Every value a changeable row can show, each rastered once at boot in both inks.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum QuickValue {
     Speed2,
@@ -110,10 +97,8 @@ impl QuickValue {
         }
     }
 
-    /// A fast forward ceiling the menu offers, and `None` for any other. Each number is how many
-    /// game frames a refresh may run, and the four of them are `FF_SPEEDS`: the card's list and
-    /// the row's have to stay the same four, or a card would hold a speed with no face to show
-    /// it. `tests/quick_menu.rs` is what holds them together.
+    /// A fast forward ceiling the menu offers, `None` for any other. Must match `FF_SPEEDS`, or a
+    /// card could hold a speed with no face; `tests/quick_menu.rs` holds them together.
     pub fn speed(frames: u8) -> Option<QuickValue> {
         match frames {
             2 => Some(QuickValue::Speed2),
@@ -133,30 +118,25 @@ impl QuickValue {
     }
 }
 
-/// A size up from the power menu's rows: 30 px type on 52 px rows, which the full width has
-/// room for.
+/// A size up from the power menu's rows: 30 px type on 52 px rows.
 pub const QUICK_PITCH: f32 = 52.0;
-/// The first row's top, with all of them centred on the panel: derived from `QuickRow::ALL`, so
-/// a row added or removed moves the whole menu rather than hanging one off the bottom.
+/// The first row's top, with all rows centred on the panel.
 pub const QUICK_TOP: f32 = (OUT_H as f32 - QUICK_PITCH * QuickRow::ALL.len() as f32) / 2.0;
 /// Labels start this far in from the left, and values end this far in from the right.
 pub const QUICK_EDGE: f32 = 32.0;
 /// How much shorter the bar is than its row, top and bottom, as the power menu's is.
 const BAR_INSET: f32 = 4.0;
-/// Where a line of menu type sits in its row: its baseline lands 36 px below the row's top,
-/// which puts the capitals in the middle of the bar, as the mockup has them.
+/// Puts the baseline 36 px below the row's top, capitals centred in the bar, as the mockup has.
 const TYPE_DROP: f32 = 4.0;
 /// Between each arrow and the value it stands beside, about a space of the type.
 const CARET_GAP: f32 = 14.0;
 /// A little under the capitals they stand beside, so the arrows read as marks, not letters.
 const CARET_PX: f32 = 24.0;
-/// The legend's key caps are centred 41 px off the bottom of the panel, where the mockup has
-/// them.
+/// The legend's key caps are centred 41 px off the bottom of the panel, as in the mockup.
 const LEGEND_Y: f32 = 427.0;
 /// The value on every row but the one in hand.
 const DIM_INK: [u8; 3] = [0x9a, 0x9a, 0xa4];
 
-/// A row's label, in the menu's type and ink.
 pub fn quick_label_face(row: QuickRow) -> UndoFace {
     quick_text_face(row.label(), MENU_INK)
 }
@@ -166,12 +146,8 @@ pub fn quick_value_face(text: &str, lit: bool) -> UndoFace {
     quick_text_face(text, if lit { MENU_INK } else { DIM_INK })
 }
 
-/// A line of the menu's type, sized to the type as it is actually set, tracking and all, so it
-/// sits exactly `MENU_PAD` in from both sides of its face and lands where it is placed.
-///
-/// Not `menu_face`, which sizes by the width without tracking. Its centred words never show
-/// it, but here that put every label a different distance off the 32 px edge, and shrank the
-/// longest one to fit a face too narrow for it.
+/// A line of the menu's type, sized with tracking so it sits exactly `MENU_PAD` in from both
+/// sides. Not `menu_face`, which ignores tracking and so misplaced labels off the 32 px edge.
 fn quick_text_face(label: &str, colour: [u8; 3]) -> UndoFace {
     let Some(font) = text::label_font() else {
         return UndoFace {
@@ -180,8 +156,7 @@ fn quick_text_face(label: &str, colour: [u8; 3]) -> UndoFace {
             h: 0,
         };
     };
-    // Laid out at the menu's size and no smaller, as wide as the panel: nothing on the menu comes
-    // near that, so nothing is ever shrunk or broken.
+    // At the menu's size, as wide as the panel, so nothing is ever shrunk or broken.
     let layout = text::fit(font, label, OUT_W as f32, 1, MENU_PX, MENU_PX);
     let set = layout
         .lines
@@ -194,9 +169,8 @@ fn quick_text_face(label: &str, colour: [u8; 3]) -> UndoFace {
     UndoFace { rgba, w, h: MENU_H }
 }
 
-/// One of the arrows either side of the value in hand. From the symbols font, as the legend's
-/// arrow caps are: `label.ttf` has no arrows. The face is a line of menu type tall, with the
-/// arrow centred on the capitals so it sits on the value's line rather than the face's middle.
+/// One of the arrows beside the value in hand, from the symbols font (`label.ttf` has no
+/// arrows). Centred on the capitals so it sits on the value's line.
 pub fn quick_caret_face(right: bool) -> UndoFace {
     let glyph = if right { '\u{f0da}' } else { '\u{f0d9}' };
     let (Some(symbols), Some(label)) = (crate::icon::symbols_font(), text::label_font()) else {
@@ -208,8 +182,7 @@ pub fn quick_caret_face(right: bool) -> UndoFace {
     };
     let (m, cov) = symbols.rasterize(glyph, CARET_PX);
     let (w, h) = (m.width as u32, MENU_H);
-    // Where `menu_face` puts the capitals: the baseline `draw_centred` lays down, less half a
-    // capital's height.
+    // Where `menu_face` puts the capitals: the baseline less half a capital's height.
     let centre = match label.horizontal_line_metrics(MENU_PX) {
         Some(v) => {
             (h as f32 - v.new_line_size) / 2.0 + v.ascent
@@ -242,8 +215,7 @@ pub fn quick_legend_faces() -> [UndoFace; 3] {
     ]
 }
 
-/// Everything the binary uploads for the menu at boot, each face with the size it was rastered
-/// at.
+/// Everything the binary uploads for the menu at boot, each face with its raster size.
 pub struct QuickMenuFaces {
     /// One per `QuickRow::ALL`, in that order.
     pub labels: Vec<(TexId, u32, u32)>,
@@ -267,7 +239,6 @@ pub struct QuickMenu<'a> {
 }
 
 impl QuickMenu<'_> {
-    /// The case's own ground, the bar, the rows on it, and the legend at the bottom.
     pub fn draw(&self, out: &mut Vec<Draw>) {
         out.push(Draw::Rect {
             x: 0.0,
@@ -276,8 +247,7 @@ impl QuickMenu<'_> {
             h: OUT_H as f32,
             colour: opening(),
         });
-        // Edge to edge rather than the width of the words, as the power menu's is: the rows run
-        // the full width, and a bar the size of each label would jump about as it moved.
+        // Full width like the power menu's: a bar sized to each label would jump as it moved.
         out.push(Draw::Rect {
             x: 0.0,
             y: row_top(self.row) + BAR_INSET,
@@ -308,8 +278,7 @@ impl QuickMenu<'_> {
                 push(out, tex, right + pad - w as f32, y, w, h);
                 continue;
             }
-            // The value in hand is the one the arrows change, so they stand either side of it
-            // and the right one takes the edge the value would otherwise end on.
+            // Arrows either side of the value in hand; the right one takes the value's edge.
             let [(left_tex, lw, lh), (right_tex, rw, rh)] = faces.carets;
             let rx = right - rw as f32;
             push(out, right_tex, rx, y, rw, rh);
@@ -317,7 +286,6 @@ impl QuickMenu<'_> {
             push(out, tex, vx, y, w, h);
             push(out, left_tex, vx + pad - CARET_GAP - lw as f32, y, lw, lh);
         }
-        // B BACK always, and beside it whatever the row in hand answers to.
         let [back, change, open] = faces.legend;
         let other = if self.row.opens() { open } else { change };
         for (tex, w, x) in centred_hints(&[back, other], LEGEND_GAP) {
@@ -330,7 +298,7 @@ fn row_top(row: QuickRow) -> f32 {
     QUICK_TOP + QUICK_PITCH * row.index() as f32
 }
 
-/// A face at its own size, on whole pixels, which is the only place it is sharp.
+/// A face at its own size, on whole pixels, the only place it is sharp.
 fn push(out: &mut Vec<Draw>, tex: TexId, x: f32, y: f32, w: u32, h: u32) {
     out.push(Draw::Tex {
         x: x.round(),

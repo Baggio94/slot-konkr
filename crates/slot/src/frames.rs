@@ -2,14 +2,13 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-/// Video handoff from the emulator thread to the renderer. Buffers are moved, never copied,
-/// and the lock is only ever held for a pointer swap, so neither side waits on the other.
-/// Three buffers are enough: one being written, one published, one being read.
+/// Video handoff from the emulator thread to the renderer. Buffers are moved, not copied, and
+/// the lock is held only for a pointer swap. Three buffers: written, published, read.
 pub struct Frames {
     inner: Mutex<Inner>,
     size: usize,
-    /// Every successful `latest`. `latest` consumes, so anything that calls it outside the
-    /// render path silently steals a frame the renderer would have drawn.
+    /// Count of successful `latest` calls. `latest` consumes, so calling it outside the render
+    /// path steals a frame.
     taken: AtomicU64,
 }
 
@@ -43,8 +42,7 @@ impl Frames {
         }
     }
 
-    /// A frame the renderer never picked up is overwritten rather than queued. Presenting a
-    /// stale frame late is worse than never presenting it.
+    /// An unread frame is overwritten, not queued: a stale frame late is worse than none.
     pub fn publish(&self, buf: Vec<u8>) {
         let mut i = self.lock();
         if let Some(dropped) = i.ready.replace(buf) {
@@ -61,7 +59,7 @@ impl Frames {
         })
     }
 
-    /// Non consuming. The only safe way to ask whether a frame is waiting.
+    /// Non-consuming. The only safe way to ask whether a frame is waiting.
     pub fn is_ready(&self) -> bool {
         self.lock().ready.is_some()
     }
@@ -78,8 +76,7 @@ impl Frames {
         self.lock().spare.push(buf);
     }
 
-    /// A poisoned lock means one side panicked mid swap. The worst case is a lost frame,
-    /// which is better than the renderer giving up for the rest of the session.
+    /// Ignores poisoning: a lost frame beats the renderer giving up for the session.
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }

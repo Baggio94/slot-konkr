@@ -3,16 +3,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{Battery, Charge, LedState, Motor, Platform};
 
-/// The host stands in for every part of the device the power path touches, so the whole of
-/// it runs from the keyboard with no hardware present.
+/// Host stand-in for the device's power hardware, driven from the keyboard.
 pub struct SimPlatform {
     root: PathBuf,
-    /// Posted by the simulated hall sensor or power button, taken by the next `sleep`.
-    /// What `set_clock` moved the clock by. The device writes the hardware clock; a
-    /// frontend that reset the developer's machine to 2003 would be a bug with a bug report.
+    /// What `set_clock` moved the clock by. The host's own clock is never written.
     offset: i64,
     motor: Motor,
-    /// No gadget to rebind here, so counting the asks is the whole of it.
     relinks: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -34,8 +30,7 @@ impl SimPlatform {
         self.relinks.clone()
     }
 
-    /// Outlives the move into `Power`, which is what makes the rumble path readable with no
-    /// hardware to feel.
+    /// Outlives the move into `Power`, so tests can read what reached the motor.
     pub fn motor(&self) -> Motor {
         self.motor.clone()
     }
@@ -48,17 +43,10 @@ impl Default for SimPlatform {
 }
 
 impl Platform for SimPlatform {
-    /// macOS has no panel the frontend may drive. Brightness reaches the HUD and stops.
     fn set_backlight(&mut self, _step: u8) {}
 
-    /// Full, and on the cable. Never the laptop's own gauge: that is not this device's, and
-    /// reporting it would let the host trip a battery-critical flush that means nothing.
-    ///
-    /// Fixed rather than absent so the gauge is on screen for captures, and fixed at *this*
-    /// reading because it is the only one that arms nothing. `BATTERY_CRITICAL` is 5 and
-    /// `BATTERY_LOW` is 20, and both are additionally gated on a charge state that is not
-    /// `Charging`, so 100 and `Charging` clears the cutoff twice over. Only the host reads
-    /// this; `DevicePlatform` still reads the real gauge out of sysfs on the RG SP.
+    /// Full and charging: shows the gauge in captures without arming any low-battery path.
+    /// Never the laptop's own gauge.
     fn battery(&self) -> Option<Battery> {
         Some(Battery {
             percent: 100,
@@ -70,11 +58,8 @@ impl Platform for SimPlatform {
         Charge::Charging
     }
 
-    /// A laptop has no LED to drive.
     fn set_led(&mut self, _state: LedState) {}
 
-    /// Suspends nothing. The event loop is what feeds the simulated hall sensor, so
-    /// blocking here would shut out the very event that ends the wait.
     fn restart(&mut self) -> ! {
         std::process::exit(0)
     }
@@ -101,7 +86,6 @@ impl Platform for SimPlatform {
         true
     }
 
-    /// No motor to drive, so recording the value is the whole of it.
     fn set_rumble(&mut self, strength: u16) {
         self.motor.set(strength);
     }

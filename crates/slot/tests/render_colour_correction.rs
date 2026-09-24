@@ -1,20 +1,9 @@
-//! The quick menu's Colour Correction against the real core: the same cart, the same number of
-//! emulated frames, once with the row off and once with it on, and the two pictures compared.
-//!
-//! The one question a row like this has to answer is whether anyone can see it. A draw list
-//! cannot answer that and neither can an option read back out of the frontend's own map — the
-//! core would accept `GBX` just as quietly as `GBA` and simply never tint anything. So this
-//! runs the machine and looks at the pixels it drew.
-//!
-//! Deliberately deterministic: both runs load the same ROM, press nothing, and run exactly the
-//! same number of frames, so every pixel that differs between them differs because of the
-//! option and not because one run got further into an animation than the other. That is what
-//! lets the difference be measured rather than merely eyeballed.
+//! Colour Correction against the real core: the same cart run the same number of frames with
+//! the row off and on, and the pixels compared. Only the pixels show the core actually tinted.
 //!
 //! `SCRATCH_PNG_DIR=/tmp cargo test -p slot --test render_colour_correction -- --nocapture`
 //!
-//! Skipped on a machine with no mGBA dylib and no card to take a cart off, the same way every
-//! other test here that needs a real core is.
+//! Skipped without an mGBA dylib and a card to take a cart off.
 
 mod common;
 
@@ -24,9 +13,8 @@ use common::{core_lock, repo_root, vendored_core};
 use slot_retro::{ButtonMask, GBA_H, GBA_W};
 use slot_store::Core;
 
-/// How many frames the cart is run before its picture is read. A picture read too early is black,
-/// which no correction can tint; Metroid Fusion is on its intro's starfield well before this.
-/// Both runs use the same number, which is what keeps the pair the same instant of the same game.
+/// Frames run before the picture is read. Earlier frames are black; Metroid Fusion is on its
+/// intro's starfield well before this.
 const FRAMES: usize = 240;
 
 /// The core's framebuffer is little endian XRGB8888, which on the wire is B, G, R, unused.
@@ -52,9 +40,7 @@ fn write_png(name: &str, w: u32, h: u32, rgba: &[u8]) {
     println!("wrote {path}");
 }
 
-/// The two pictures blown up side by side with a rule between them, which is the only way to
-/// judge a tint: a colour cast is invisible on its own and obvious beside the same frame
-/// without it.
+/// The two pictures blown up side by side, since a colour cast only shows beside the original.
 fn side_by_side(left: &[u8], right: &[u8], n: usize) -> (u32, u32, Vec<u8>) {
     let (w, h) = (GBA_W as usize, GBA_H as usize);
     let gap = 8;
@@ -92,8 +78,7 @@ fn mean_rgb(rgba: &[u8]) -> [f64; 3] {
     sum.map(|s| s / n)
 }
 
-/// How much colour the picture has: the mean, over every pixel, of how far its channels spread
-/// apart. Grey is zero and a saturated hue is high.
+/// How much colour the picture has: mean per-pixel channel spread. Grey is zero.
 fn mean_saturation(rgba: &[u8]) -> f64 {
     let n = (rgba.len() / 4) as f64;
     let sum: f64 = rgba
@@ -106,9 +91,7 @@ fn mean_saturation(rgba: &[u8]) -> f64 {
     sum / n
 }
 
-/// How far apart two pictures are, as a share of the pixels that are not identical. A tint
-/// touches almost everything that is not already black; an animation one run got further into
-/// touches only what moved.
+/// Share of pixels that differ. A tint touches almost everything not already black.
 fn share_changed(a: &[u8], b: &[u8]) -> f64 {
     let n = a.len() / 4;
     let diff = a
@@ -119,8 +102,7 @@ fn share_changed(a: &[u8], b: &[u8]) -> f64 {
     diff as f64 / n as f64
 }
 
-/// One run of the machine: a core opened through slot's own `open_core_for`, so the option is
-/// applied by the same function production uses and not by the test reaching past it.
+/// One run through slot's own `open_core_for`, so the option is applied as production does.
 fn picture(root: &Path, dylib: &Path, rom: &Path, colour: bool, frames: usize) -> Vec<u8> {
     let mut core = slot::core::open_core_for(
         root,
@@ -136,9 +118,8 @@ fn picture(root: &Path, dylib: &Path, rom: &Path, colour: bool, frames: usize) -
     to_rgba(core.video_xrgb8888())
 }
 
-/// A cart of the user's own, copied out of the ignored `/sdcard` into the root the test runs
-/// from. Read only: nothing here writes to the card. `None` on a clone that has no card, which
-/// is a skip rather than a failure — a stand-in rom paints nothing worth tinting.
+/// A cart of the user's own, copied out of the ignored `/sdcard`. `None` without a card: a
+/// stand-in rom paints nothing worth tinting.
 fn card_cart(root: &Path, from: &str, to: &str) -> Option<PathBuf> {
     let rom = std::fs::read(repo_root().join(from)).ok()?;
     let at = root.join(to);
@@ -146,19 +127,10 @@ fn card_cart(root: &Path, from: &str, to: &str) -> Option<PathBuf> {
     Some(at)
 }
 
-/// The card's own setting, carried all the way to the picture by the real `Session`.
-///
-/// The test below opens the core through `open_core_for` directly, which proves the option
-/// works but says nothing about whether anything ever hands it the user's answer:
-/// `session.rs`'s `open_core(&self.root, core, serial, self.app.colour_correction())` is the
-/// one production line that does, and pinning that literal to `false` would leave every test
-/// above passing and the row doing nothing. This is what fails in that case.
-///
-/// Read out of the session's own published frames rather than off a composited panel, and
-/// compared on saturation rather than pixel for pixel: two sessions run on wall clock do not
-/// land on the same emulated frame, and the frames either side of one differ by far less than
-/// a correction does — the measured drop here is about a third of the picture's colour, while
-/// a frame of the same intro drifting is a fraction of a percent.
+/// The card's setting carried to the picture by the real `Session`, which catches
+/// `session.rs` not passing `colour_correction()` to `open_core`. Compared on saturation, not
+/// pixel for pixel: wall-clock sessions do not land on the same frame, and drift is a fraction
+/// of a percent against the correction's roughly one third.
 #[test]
 fn the_cards_setting_reaches_the_core_through_the_session() {
     use slot::app::Phase;
@@ -184,8 +156,7 @@ fn the_cards_setting_reaches_the_core_through_the_session() {
             eprintln!("no GBA cart on this machine's card, skipping");
             return;
         };
-        // The content root's own `System/` is the first place `candidates` looks, which is how
-        // a test plants a core somewhere the real search will find it.
+        // The root's own `System/` is the first place `candidates` looks.
         std::fs::copy(&dylib, d.path().join("System/mgba_libretro.dylib")).expect("plant a core");
         let state = SlotState {
             clock_set: true,
@@ -199,8 +170,7 @@ fn the_cards_setting_reaches_the_core_through_the_session() {
         s.feed([RawEvent::Up(Btn::A)], 32);
         let deadline = Instant::now() + Duration::from_secs(20);
         let mut now = 32;
-        // The same published frame count for both runs, which is as close to the same instant
-        // as a session driven on real time gets.
+        // The same published frame count for both runs.
         while !matches!(s.app().phase(), Phase::Playing { .. }) || s.frames_published() < 240 {
             assert!(
                 Instant::now() < deadline,
@@ -212,8 +182,7 @@ fn the_cards_setting_reaches_the_core_through_the_session() {
             s.update(1.0 / 60.0);
             std::thread::sleep(Duration::from_millis(1));
         }
-        // A published frame is only handed out once, so this loops until one is waiting rather
-        // than assuming the last `update` left one there.
+        // A published frame is only handed out once, so loop until one is waiting.
         let picture = loop {
             assert!(Instant::now() < deadline, "no frame was ever published");
             if let Some(f) = s.frame() {
@@ -236,8 +205,7 @@ fn the_cards_setting_reaches_the_core_through_the_session() {
             mean_saturation(&picture)
         );
         sat.push(mean_saturation(&picture));
-        // Dropped before the next boot: libretro keeps one machine per process, and the handle's
-        // own `Drop` is what joins the worker that owns it.
+        // Dropped before the next boot: one machine per process, and `Drop` joins the worker.
         drop(s);
     }
     let [off, on] = sat[..] else {
@@ -250,8 +218,7 @@ fn the_cards_setting_reaches_the_core_through_the_session() {
     );
 }
 
-/// The row, on a GBA cart run for real: the same instant of the same game, once with it off and
-/// once with it on.
+/// The row on a GBA cart run for real: the same instant of the same game, off and on.
 #[test]
 fn colour_correction_changes_the_picture() {
     let Some(dylib) = vendored_core() else {
@@ -270,14 +237,11 @@ fn colour_correction_changes_the_picture() {
             eprintln!("no {name} cart on this machine's card, skipping it");
             continue;
         };
-        // One core at a time: libretro keeps its machine in dylib globals, so the first has to
-        // be dropped before the second opens.
+        // One core at a time: the first must be dropped before the second opens.
         let frames = FRAMES;
         let off = picture(d.path(), &dylib, &rom, false, frames);
         let on = picture(d.path(), &dylib, &rom, true, frames);
-        // A picture that is still black has nothing to tint, so a test reading one would prove
-        // the option does nothing rather than that it does. Said out loud because that is a
-        // failure of the fixture, not of the row.
+        // A black picture has nothing to tint: a fixture failure, not the row's.
         assert!(
             mean_rgb(&off).iter().sum::<f64>() > 12.0,
             "{name}: still black after {frames} frames, so there is no picture to correct"
@@ -296,16 +260,12 @@ fn colour_correction_changes_the_picture() {
             share_changed(&off, &on) * 100.0
         );
 
-        // The same cart run the same number of frames with nothing pressed, so the two are the
-        // same instant of the same game and the only thing between them is the option.
         assert_ne!(
             off, on,
             "{name}: the picture is byte for byte identical with correction on and off, so \
              either the option never reached the core or it does nothing worth a row"
         );
-        // A tint is a change to almost everything, not to a corner of the screen. Half the
-        // picture is a low bar for a colour cast and far above anything a stray pixel could
-        // reach, which is what keeps this from passing on a difference nobody could see.
+        // A tint changes almost everything. Half the picture is far above any stray pixels.
         let changed = share_changed(&off, &on);
         assert!(
             changed > 0.5,

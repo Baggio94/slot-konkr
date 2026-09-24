@@ -5,31 +5,26 @@ use crate::icon::icon_box;
 use crate::toast::toast_rect;
 use crate::{Badge, Icon, Toast};
 
-/// Milliseconds on the same monotonic clock the gesture machines run on. Spelled again
-/// here because `slot-ui` cannot see `slot-input` and must not learn to.
+/// Milliseconds on the gesture machines' monotonic clock. Redeclared because `slot-ui` must not
+/// depend on `slot-input`.
 pub type Millis = u64;
 
 pub const HUD_MS: Millis = 1500;
-/// The tail of that window, spent ramping out. A hard cut at 1500 ms reads as a glitch.
+/// The tail of that window, spent fading out. A hard cut reads as a glitch.
 const FADE_MS: Millis = 250;
 
-/// The bar has no backing of its own, so over a bright frame a white fill on a translucent
-/// white track vanishes. The plate is what it is read against. Shared with the refusal and
-/// with the switcher's two plates, so everything that ever sits on top of a picture reads as
-/// one system.
+/// The backing that keeps the bar legible over a bright frame. Shared with the refusal and the
+/// switcher's plates.
 pub const PLATE_H: f32 = 40.0;
 pub(crate) const PLATE: [f32; 4] = [0.0, 0.0, 0.0, 0.72];
 
 pub const HUD_ICON_PX: f32 = 24.0;
-/// One ink for the glyph and the fill, so the row reads as one control.
 pub const HUD_INK: [u8; 3] = [0xf5, 0xf2, 0xef];
 const ICON_GAP: f32 = 10.0;
 
-/// The badge sits in the corner the bar never reaches, so the two never have to negotiate.
 const BADGE_MARGIN: f32 = 12.0;
 
-/// Where something of this size goes when it goes in that corner: hard against the right
-/// margin, centred in the plate's own height.
+/// Top right, against the margin and centred in the plate's height, where the bar never reaches.
 pub fn badge_at(w: f32, h: f32) -> (f32, f32) {
     (OUT_W as f32 - BADGE_MARGIN - w, (PLATE_H - h) / 2.0)
 }
@@ -51,13 +46,12 @@ pub enum HudKind {
     Brightness,
     BlueLight,
     Volume,
-    /// Not a level: the value is how much rewind history is left, as a percentage.
+    /// Not a level: the value is the percentage of rewind history left.
     Rewind,
 }
 
 impl HudKind {
-    /// Silence is a state, not a low level: a bar at zero looks the same as a bar that has
-    /// not been dragged down yet, so the glyph is what has to say it.
+    /// A bar at zero cannot show silence, so the glyph has to.
     pub fn icon(self, value: u8, muted: bool) -> Icon {
         match self {
             HudKind::Brightness => Icon::Brightness,
@@ -79,8 +73,7 @@ impl HudKind {
     }
 }
 
-/// Fast forward is a mode rather than a moment, so the badge is state the HUD is told and
-/// holds, not something it starts a clock on.
+/// A held state the HUD is told, not a timed flash.
 #[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
 pub enum FfState {
     #[default]
@@ -89,8 +82,7 @@ pub enum FfState {
     Latched,
 }
 
-/// One glyph, never two. The outline and solid variants are the same shape at the same
-/// width, so a latch neither widens the badge nor moves it.
+/// The outline and solid variants share a width, so latching neither widens nor moves the badge.
 pub fn ff_badge(state: FfState) -> Option<Icon> {
     match state {
         FfState::Off => None,
@@ -115,7 +107,6 @@ pub enum LinkBadge {
 }
 
 impl LinkBadge {
-    /// The order the faces are uploaded in.
     pub const FACES: [LinkBadge; 4] = [
         LinkBadge::Hosting,
         LinkBadge::Joined,
@@ -144,24 +135,18 @@ impl LinkBadge {
     }
 }
 
-/// One bar for all three levels, drawn identically whichever it is: the user knows what
-/// they just pressed, and three styles would read as three different controls.
+/// One bar drawn identically for all three levels.
 #[derive(Default)]
 pub struct Hud {
     pub kind: HudKind,
     pub value: u8,
-    /// `None` until the first adjustment. A zero here would put a bar on screen for the
-    /// first 1.5 s of every boot.
+    /// `None` until the first adjustment; zero would show a bar for the first 1.5 s of boot.
     pub shown_at: Option<Millis>,
-    /// The rewind bar answers to the button, not to the clock, so while this is set the fade
-    /// never starts.
+    /// While set the fade never starts: the rewind bar follows the button, not the clock.
     held: bool,
-    /// Silenced rather than turned down. The bar is empty either way, so this is the only
-    /// thing that can tell the two apart on screen.
     muted: bool,
     ff: FfState,
-    /// The last thing the HUD said, and when. On its own clock rather than the bar's: the
-    /// two are triggered by different actions and either can outlive the other.
+    /// The last toast and when, on its own clock: either it or the bar can outlive the other.
     said: Option<(Toast, Millis)>,
     /// One face per icon, in `Icon::ALL` order. Empty until the binary uploads them, since
     /// only the compositor can mint a `TexId`.
@@ -195,8 +180,7 @@ impl Hud {
         self.toast_alpha(now) > 0.0
     }
 
-    /// What the HUD is saying, if anything. The app reads this rather than tracking the
-    /// grace period twice.
+    /// The toast showing, if any, so the app need not track the grace period itself.
     pub fn said(&self, now: Millis) -> Option<Toast> {
         self.toast_visible(now)
             .then(|| self.said.map(|(t, _)| t))
@@ -211,7 +195,7 @@ impl Hud {
         self.held = kind == HudKind::Rewind;
     }
 
-    /// L2 let go. A level bar shown during the rewind is on its own timer and stays.
+    /// L2 released. A level bar shown during the rewind keeps its own timer.
     pub fn release_rewind(&mut self) {
         if self.kind == HudKind::Rewind {
             self.shown_at = None;
@@ -224,15 +208,12 @@ impl Hud {
         self.kind.icon(self.value, self.muted)
     }
 
-    /// The fast-forward glyph, which is not the same question as what the badge is actually
-    /// showing: `draw` lets a live link outrank it, and without an uploaded face it draws
-    /// nothing at all either way.
+    /// The fast-forward glyph, not what the badge shows: `draw` lets a live link outrank it.
     pub fn badge(&self) -> Option<Icon> {
         ff_badge(self.ff)
     }
 
-    /// Pushed from outside because the badge answers to the gesture machine's latch, which
-    /// nothing on this side of the app can see.
+    /// Pushed in because the badge follows the gesture machine's latch, invisible from here.
     pub fn set_ff(&mut self, ff: FfState) {
         self.ff = ff;
     }
@@ -257,9 +238,8 @@ impl Hud {
     pub fn draw(&self, now: Millis, out: &mut Vec<Draw>) {
         let alpha = self.alpha(now);
         let toast = self.toast_alpha(now);
-        // The plate belongs to whatever is being read against it, bar or toast. The badge
-        // never gets one: fast forward can be latched for minutes, and a full width plate
-        // over the game for all of it is a worse trade than the halo it carries.
+        // The badge never gets a plate: fast forward can be latched for minutes, and a full
+        // width plate over the game that long is worse than the badge's halo.
         if alpha > 0.0 || toast > 0.0 {
             out.push(Draw::Rect {
                 x: 0.0,
@@ -269,15 +249,13 @@ impl Hud {
                 colour: faded(PLATE, alpha.max(toast)),
             });
         }
-        // They share the band, so only one at a time. A toast is a specific thing that just
-        // happened and outranks a level the user can see the effect of anyway.
+        // They share the band, so only one at a time; a toast outranks a level bar.
         if toast > 0.0 {
             self.draw_toast(now, out);
         } else if alpha > 0.0 {
             self.draw_bar(alpha, out);
         }
-        // A link outranks fast forward: a session refuses fast forward anyway, so in
-        // practice both are never set at once.
+        // A link outranks fast forward, though a session refuses fast forward anyway.
         let link = self
             .link
             .face_index()
@@ -331,8 +309,7 @@ impl Hud {
         });
     }
 
-    /// No placeholder. A toast is type, and absent type is absent rather than a bar sitting
-    /// where two words should be.
+    /// No placeholder: a toast without its face draws nothing.
     fn draw_toast(&self, now: Millis, out: &mut Vec<Draw>) {
         let alpha = self.toast_alpha(now);
         if alpha <= 0.0 {
@@ -386,8 +363,7 @@ impl Hud {
     }
 }
 
-/// One curve for everything the HUD shows, so the bar and the toast leave together when they
-/// arrived together.
+/// One curve for everything, so a bar and toast that arrived together leave together.
 fn fade(shown: Millis, now: Millis) -> f32 {
     let age = now.saturating_sub(shown);
     if age >= HUD_MS {

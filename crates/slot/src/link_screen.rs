@@ -36,12 +36,7 @@ const FAILED_ALPHA: f32 = 0.45;
 const DROP_MS: Millis = 200;
 const SEAT_MS: Millis = 160;
 const LIFT_MS: Millis = 250;
-/// The plug coming back out when a link ends. The seating motion reversed rather than any new
-/// art or any new curve: the same two positions, the same ease, travelled the other way.
-///
-/// A little longer than `SEAT_MS` and a little shorter than `LIFT_MS`. Seating is a click and
-/// wants to be quick; this is the deliberate motion of pulling something out, and the teardown
-/// behind it is already off doing a second's worth of work, so there is real time to fill.
+/// The plug coming out when a link ends: the seating motion reversed.
 const UNPLUG_MS: Millis = 260;
 const PICK_BASE: f32 = 336.0;
 const ARC_MS: f32 = 1200.0;
@@ -99,8 +94,7 @@ pub fn plug_tip(menu: GameMenu, now: Millis) -> f32 {
             FAILED_TIP,
             eased(now, since, LIFT_MS),
         ),
-        // Out of the port, back to where it was picked up. `Linked` is the only state this can
-        // be reached from, so it always starts seated.
+        // Only reachable from `Linked`, so it always starts seated.
         GameMenu::Unplug { since, .. } => lerp(SEATED_TIP, PICK_TIP, eased(now, since, UNPLUG_MS)),
     }
 }
@@ -151,8 +145,7 @@ pub fn arc_alphas(menu: GameMenu, now: Millis) -> [f32; 3] {
             let fade = 1.0 - eased(now, since, LIFT_MS);
             [from[0] * fade, from[1] * fade, from[2] * fade]
         }
-        // A seated adapter holds its arcs at full, so they die back from there as it lifts —
-        // the traffic stopping with the link rather than after it.
+        // Arcs die back from full as the adapter lifts.
         GameMenu::Unplug { since, .. } => {
             let fade = 1.0 - eased(now, since, UNPLUG_MS);
             [fade; 3]

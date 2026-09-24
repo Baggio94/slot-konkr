@@ -21,22 +21,13 @@ fn atomic_write_leaves_no_partial_file_and_no_temp_behind() {
     assert!(strays.is_empty(), "temp files left behind: {strays:?}");
 }
 
-/// A name the card accepts must be a name this can write. The temp file is longer than the
-/// name it stands in for — a dot, the process id, a sequence and `.tmp` — so a cart named up to
-/// the filesystem's limit used to be listed, inserted and played while every write of its
-/// battery save failed with `File name too long`, silently, every session. The state ring was
-/// untouched, because only the directory there carries the stem, so such a cart resumed
-/// perfectly and never once saved.
-///
-/// Walked up to the limit rather than tested at it, because the exact length that first failed
-/// is the filesystem's business and the property is that none of them does.
+/// Any name the filesystem accepts can be written, although the temp name is longer.
 #[test]
 fn a_name_the_card_accepts_is_a_name_that_can_be_written() {
     let d = tempdir().unwrap();
     for len in [8usize, 100, 200, 239, 240, 245, 250, 251] {
         let p = d.path().join(format!("{}.sav", "a".repeat(len)));
-        // The control: a plain write proves the filesystem really takes this name, so a
-        // failure below is this function's and not the limit moving under the test.
+        // Control: skip names the filesystem itself refuses.
         if std::fs::write(&p, b"control").is_err() {
             continue;
         }
@@ -46,13 +37,8 @@ fn a_name_the_card_accepts_is_a_name_that_can_be_written() {
     }
 }
 
-/// A multi-byte name is cut on a character boundary or not at all. Slicing one in half is a
-/// panic, and the name reaching here is whatever the card spells — a Japanese rom title is three
-/// bytes a character, so a legal name is a long one in bytes.
-///
-/// Three paddings, because where the cut falls depends on how many digits this process's own id
-/// has. Shifting the run of three-byte characters by one and then two bytes puts the cut inside
-/// one of them for at least one of the three, whatever that id turns out to be.
+/// A long multi-byte name is cut on a character boundary. Three paddings put the cut inside a
+/// three-byte character at least once, whatever the pid's digit count.
 #[test]
 fn a_long_multibyte_name_is_written_rather_than_panicking() {
     let d = tempdir().unwrap();
@@ -130,8 +116,6 @@ fn a_first_boot_is_neither_dark_nor_silent() {
     assert!(s.volume > 0, "boots muted");
 }
 
-/// The offset is what turns the card's UTC into the time on the shelf, so it has to outlive
-/// the session that chose it.
 #[test]
 fn slot_state_round_trips_a_negative_utc_offset() {
     let d = tmp_root();
@@ -149,8 +133,7 @@ fn slot_state_round_trips_a_negative_utc_offset() {
     assert_eq!(read_slot_state(d.path()).utc_offset_min, -450);
 }
 
-/// A later build writes lines this one has never heard of. Throwing the whole file away over
-/// one of them would reset the levels and ask for the clock again on every trip back.
+/// Unknown lines from a later build are skipped, not a reason to discard the file.
 #[test]
 fn a_line_the_reader_does_not_know_is_skipped() {
     let d = tmp_root();
@@ -179,15 +162,6 @@ fn a_line_the_reader_does_not_know_is_skipped() {
     );
 }
 
-/// What a card that has never been asked gets: the motor on, fast forward at the default,
-/// silent, and the picture the core's own colours. The speed is the one constant here that has
-/// moved — it was four, inherited from when gpSP ran its interpreter and could not serve more,
-/// and is now six, chosen on the device.
-///
-/// Colour correction off is not an aesthetic preference being enshrined: it is what every card
-/// already renders as, because both cores default their own option off and slot never set it.
-/// A default of on would change the look of every existing library on the strength of an
-/// update nobody asked for.
 #[test]
 fn a_first_boot_rumbles_and_fast_forwards_silently_at_the_default() {
     let s = SlotState::default();
@@ -197,8 +171,7 @@ fn a_first_boot_rumbles_and_fast_forwards_silently_at_the_default() {
     assert!(!s.colour_correction, "boots with the picture tinted");
 }
 
-/// Every card written before the quick menu has none of its lines. The values that are there
-/// have to survive the upgrade, and the missing ones read as what slot already did.
+/// A card with no quick menu lines keeps its values and gets defaults for the rest.
 #[test]
 fn a_card_from_before_the_settings_keeps_all_its_values() {
     let d = tmp_root();
@@ -249,8 +222,6 @@ fn the_quick_menu_settings_round_trip_as_their_own_lines() {
     }
 }
 
-/// Every speed the row offers travels in `ff_speed` itself, so each of the four has to survive a
-/// round trip through the card and be written as the plain number it is.
 #[test]
 fn every_speed_the_row_offers_round_trips_as_its_own_number() {
     for speed in FF_SPEEDS {
@@ -268,18 +239,8 @@ fn every_speed_the_row_offers_round_trips_as_its_own_number() {
     }
 }
 
-/// What an older build does with the speed it never had, pinned rather than assumed. Every slot
-/// that shipped before this one reads this line as "a number from 2 to 4, anything else is not
-/// mine", so a card written here at 6 falls back to that build's own default on it — acceptable,
-/// and the reason 6 must stay outside 2..=4 rather than, say, the row growing a 5 that an older
-/// build would read as a speed the user never chose.
-///
-/// The default is deliberately *not* that any more. It was 4x, held inside 2..=4 so the common
-/// card read identically everywhere; it is now 6x, chosen on the device, and a fresh card reads
-/// as 4x on a build that predates this row — the same fallback the two new speeds already take.
-/// The property kept here is the one that still earns its place: every speed on the row either
-/// reads as itself on an older build or falls back to that build's own default, and none of
-/// them reads as a *different* speed the player never chose.
+/// Older builds accept only 2..=4. Every speed above 4 must fall outside that range, so an older
+/// build reads it as its own default rather than as a speed nobody chose.
 #[test]
 fn an_older_build_reads_the_new_speed_as_its_own_default() {
     for speed in FF_SPEEDS.iter().filter(|&&n| n > 4) {
@@ -295,8 +256,7 @@ fn an_older_build_reads_the_new_speed_as_its_own_default() {
     );
 }
 
-/// A setting nobody could have chosen goes back to its default on its own. It is not a reason
-/// to disbelieve the brightness, the volume or the clock beside it.
+/// An out-of-range quick menu setting falls back alone, without discarding the rest.
 #[test]
 fn an_out_of_range_setting_falls_back_to_its_default() {
     let d = tmp_root();
@@ -306,17 +266,14 @@ fn an_out_of_range_setting_falls_back_to_its_default() {
         "rumble=\nff_speed=1\nff_sound=on\n",
         "rumble=-1\nff_speed=0\nff_sound=-1\n",
         "ff_speed=x\n",
-        // Colour correction's own line, unreadable the same three ways. `Auto` is what the row
-        // hands mGBA, and is exactly the sort of thing a hand-edited card might end up holding
-        // here — it is not one of this line's two values and reads as the default.
+        // `Auto` is what the row hands mGBA, but is not a value this line takes.
         "colour_correction=2\n",
         "colour_correction=\n",
         "colour_correction=Auto\n",
-        // Inside the row's ends but not on it: the row steps 4 to 6.
+        // Inside the row's ends but not on it.
         "ff_speed=5\n",
         "ff_speed=7\n",
-        // 8, which a card written on the night the row briefly had five ceilings still holds,
-        // and 255, which one written in the adaptive era does. Both fall back the same way.
+        // Values older cards may still hold.
         "ff_speed=8\n",
         "ff_speed=255\n",
     ] {
@@ -335,9 +292,7 @@ fn an_out_of_range_setting_falls_back_to_its_default() {
     }
 }
 
-/// The builds that ran Game Boy carts too wrote which folder the seated cart came from. A card
-/// left with a Game Boy cart in the slot must come up on the shelf, not resume a GBA cart that
-/// shares its stem; one that says `gba`, in any case, or nothing, is the cart it names.
+/// A legacy `cart_platform` other than `gba` (any case) or empty seats nothing.
 #[test]
 fn a_card_left_holding_a_game_boy_cart_comes_up_empty() {
     let d = tmp_root();
@@ -361,7 +316,6 @@ fn a_card_left_holding_a_game_boy_cart_comes_up_empty() {
     }
 }
 
-/// Nothing this build writes names a platform: there is only the one.
 #[test]
 fn the_state_file_no_longer_names_a_platform() {
     let d = tmp_root();
@@ -376,8 +330,6 @@ fn the_state_file_no_longer_names_a_platform() {
     assert_eq!(read_slot_state(d.path()), s);
 }
 
-/// Half hour zones are real and whole hour steps would put several countries permanently
-/// thirty minutes out.
 #[test]
 fn an_offset_outside_the_range_of_real_zones_reads_as_default() {
     let d = tmp_root();

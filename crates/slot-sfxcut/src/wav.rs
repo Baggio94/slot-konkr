@@ -1,5 +1,5 @@
-//! Just enough RIFF to read what a phone and `afconvert` produce. Anything it will not open
-//! it says so about, rather than guessing and cutting silence.
+//! Just enough RIFF to read what a phone and `afconvert` produce. Anything else is an error,
+//! not a guess.
 
 use std::path::Path;
 
@@ -33,9 +33,7 @@ impl From<std::io::Error> for WavError {
     }
 }
 
-/// Mono f32 in -1.0 to 1.0 at 48 kHz, whatever the file was. Stereo is summed rather than
-/// one channel taken, because a phone lying next to the device does not put the cart in
-/// either channel in particular.
+/// Mono f32 in -1.0 to 1.0 at 48 kHz, whatever the file was. Stereo is summed.
 pub fn read_wav(path: &Path) -> Result<Vec<f32>, WavError> {
     let b = std::fs::read(path)?;
     if b.len() < 12 || &b[0..4] != b"RIFF" || &b[8..12] != b"WAVE" {
@@ -63,7 +61,7 @@ pub fn read_wav(path: &Path) -> Result<Vec<f32>, WavError> {
             b"data" => data = Some(&b[body..end]),
             _ => {}
         }
-        // Chunks are word aligned, and a stray odd size otherwise walks the parser off.
+        // Chunks are word aligned.
         i = body + size + (size & 1);
     }
 
@@ -108,8 +106,7 @@ pub fn read_wav(path: &Path) -> Result<Vec<f32>, WavError> {
     Ok(resampled(mono, rate))
 }
 
-/// Linear, to the 48 kHz everything downstream assumes. A phone records at 44.1 or 48 and
-/// either is fine; this is here so the tool never silently retimes a take.
+/// Linear resample to the 48 kHz everything downstream assumes, so a take is never retimed.
 fn resampled(src: Vec<f32>, rate: u32) -> Vec<f32> {
     if rate == HZ as u32 || src.is_empty() {
         return src;

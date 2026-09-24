@@ -2,8 +2,7 @@ use std::path::{Path, PathBuf};
 
 use slot_retro::{ButtonMask, LibretroCore, RetroCore, Rumble};
 
-/// `RETRO_RUMBLE_STRONG` and `RETRO_RUMBLE_WEAK`, spelled out here because the test stands
-/// in for the core and the core only ever passes the raw numbers.
+/// `RETRO_RUMBLE_STRONG` and `RETRO_RUMBLE_WEAK`, as the raw numbers a core passes.
 const STRONG: u32 = 0;
 const WEAK: u32 = 1;
 
@@ -15,8 +14,7 @@ fn test_core() -> Option<LibretroCore> {
     Some(LibretroCore::open(&p).expect("vendored core is present but would not open"))
 }
 
-/// A header and nothing else. The core sniffs the fixed byte at 0xb2 and the branch at the
-/// entry point; what the cart then executes does not matter to the rumble interface.
+/// A header only: the core sniffs the fixed byte at 0xb2 and the entry point branch.
 fn test_rom() -> PathBuf {
     let mut rom = vec![0u8; 0x8000];
     rom[0..4].copy_from_slice(&0xea00002eu32.to_le_bytes());
@@ -31,9 +29,7 @@ fn test_rom() -> PathBuf {
     path
 }
 
-/// Without the interface the core never rumbles, and the failure is silent: no error, just
-/// a motor that never moves. mGBA asks for it on the first frame rather than at init, so
-/// there has to be a cart running before the question has been put.
+/// The core must be offered the rumble interface. mGBA asks on the first frame, not at init.
 #[test]
 fn the_core_is_offered_a_rumble_interface() {
     let Some(mut c) = test_core() else { return };
@@ -62,8 +58,7 @@ fn the_motor_takes_the_louder_of_the_two_effects() {
     assert_eq!(r.strength(), 0);
 }
 
-/// There is one pad and it is soldered in. A core asking for a second one is asking for
-/// hardware that is not there, and answering with this device's motor would be a lie.
+/// Only port 0 has a motor.
 #[test]
 fn a_second_port_is_refused_and_moves_nothing() {
     let r = Rumble::default();
@@ -71,8 +66,7 @@ fn a_second_port_is_refused_and_moves_nothing() {
     assert_eq!(r.strength(), 0);
 }
 
-/// libretro may grow a third effect. Taking one this device cannot tell apart from rumble
-/// would run the motor for something that is not rumble.
+/// An unknown effect is refused.
 #[test]
 fn an_unknown_effect_is_refused() {
     let r = Rumble::default();

@@ -1,8 +1,7 @@
 use slot_retro::LibretroCore;
 use std::sync::{Mutex, MutexGuard};
 
-/// A libretro core keeps its machine in dylib globals, so two live cores is not a thing.
-/// These tests share one, in one process, exactly as the other core tests here do.
+/// A libretro core keeps its machine in dylib globals, so tests must not run two at once.
 static CORE_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock() -> MutexGuard<'static, ()> {
@@ -39,8 +38,7 @@ fn a_set_option_reads_back() {
     core.set_option("gpsp_serial", "rfu");
     assert_eq!(core.option("gpsp_serial"), Some("rfu".to_string()));
 
-    // Changing it must be visible, because a link session may reload a game to switch
-    // serial mode and the core has to see the new value rather than the first one.
+    // A link session may reload a game to switch serial mode, so the change must stick.
     core.set_option("gpsp_serial", "mul_poke");
     assert_eq!(core.option("gpsp_serial"), Some("mul_poke".to_string()));
 }

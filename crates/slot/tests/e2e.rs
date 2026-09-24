@@ -8,8 +8,7 @@ use slot::session::Session;
 use slot_input::{Btn, Millis, RawEvent};
 use slot_store::{read_slot_state, Core, StateRing};
 
-/// One simulated present. The gesture clock and the animation clock are the same clock in
-/// the binary, so they advance together here too.
+/// One simulated present. The gesture and animation clocks are one clock in the binary.
 const FRAME_MS: Millis = 16;
 const DT: f32 = 1.0 / 60.0;
 
@@ -74,7 +73,7 @@ impl Pass {
         self.session.frame().map(|f| f.to_vec())
     }
 
-    /// The single most direct evidence that a game is running: the picture keeps changing.
+    /// The picture keeps changing: the most direct evidence a game is running.
     fn expect_running(&mut self) {
         self.until("a first frame", |s| s.frame().is_some());
         let held = self.frame();
@@ -88,16 +87,13 @@ impl Pass {
     }
 }
 
-/// The pass the plan asks for, in order, against whichever core is vendored: boot to the
-/// shelf, flick, insert, play, adjust the three levels, save a state, fast forward, rewind,
-/// open the switcher, load, eject, insert again, sleep, and reboot onto the seated cart.
+/// The full pass against the vendored core: boot, flick, insert, play, levels, save, fast
+/// forward, rewind, switcher, load, eject, reinsert, sleep, reboot onto the seated cart.
 ///
-/// It is one test rather than a dozen because a libretro core lives in dylib globals, so two
-/// sessions must never be alive at the same moment.
+/// One test because a libretro core lives in dylib globals: two sessions must never coexist.
 #[test]
 fn the_whole_pass_from_boot_to_resume() {
-    // The search that finds the vendored core runs from the workspace root, and a test does
-    // not. Naming it is what keeps this pass against mGBA rather than against the mock.
+    // The core search runs from the workspace root and a test does not; naming it avoids the mock.
     if let Some(dylib) = common::vendored_core() {
         std::env::set_var("SLOT_CORE", dylib);
     }
@@ -105,7 +101,7 @@ fn the_whole_pass_from_boot_to_resume() {
     let root = d.path();
     let mut p = Pass::boot(root);
 
-    // A card that has never held slot. is asked for the clock, once, before anything else.
+    // A fresh card asks for the clock once, before anything else.
     assert!(matches!(p.session.app().phase(), Phase::SetClock { .. }));
     p.tap(Btn::A);
 
@@ -113,7 +109,7 @@ fn the_whole_pass_from_boot_to_resume() {
     assert!(matches!(p.session.app().phase(), Phase::Shelf));
     assert!(!p.session.has_core());
 
-    // Flick to the second cart and put it in. Which cart arrives is how the flick is read.
+    // Flick to the second cart and insert it. Which cart arrives shows how the flick was read.
     p.tap(Btn::Right);
     p.tap(Btn::A);
     assert!(matches!(p.session.app().phase(), Phase::Inserting { .. }));
@@ -124,7 +120,7 @@ fn the_whole_pass_from_boot_to_resume() {
     assert_eq!(read_slot_state(root).cart.as_deref(), Some("Emerald"));
     p.expect_running();
 
-    // The three levels, none of which stops the game, all of which reach the card.
+    // The three levels: none stops the game, all reach the card.
     p.chord(Btn::Up); // brightness
     p.chord(Btn::Right); // blue light
     p.tap(Btn::VolUp);
@@ -148,7 +144,7 @@ fn the_whole_pass_from_boot_to_resume() {
         "the polaroid has no picture"
     );
 
-    // Fast forward and rewind, held and released. Neither may leave the game wedged.
+    // Fast forward and rewind, held and released. Neither may wedge the game.
     p.event(RawEvent::Down(Btn::R2));
     p.expect_running();
     p.event(RawEvent::Up(Btn::R2));
@@ -170,7 +166,7 @@ fn the_whole_pass_from_boot_to_resume() {
     assert_eq!(p.playing(), Some("Emerald"));
     p.expect_running(); // the switcher paused it, so this is also the unpause
 
-    // MENU held for two seconds. The state is on the card before the cart is out.
+    // MENU held two seconds. The state is on the card before the cart is out.
     p.event(RawEvent::Down(Btn::Menu));
     p.until("the eject", |s| {
         !matches!(s.app().phase(), Phase::Playing { .. })
@@ -185,7 +181,7 @@ fn the_whole_pass_from_boot_to_resume() {
     p.until("the shelf", |s| matches!(s.app().phase(), Phase::Shelf));
     assert!(!p.session.has_core(), "the core outlived the cart");
 
-    // Straight back in, which is also the second core this process has opened.
+    // Straight back in: the second core this process opens.
     p.tap(Btn::A);
     p.until("the cart to seat again", |s| {
         matches!(s.app().phase(), Phase::Playing { .. })

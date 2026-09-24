@@ -1,17 +1,11 @@
 use std::path::Path;
 
-/// `System/theme.txt`: one `name #rrggbb` per line. A line whose first character is `#` is a
-/// comment; there are no trailing comments, because `#` is also how a colour is written and a
-/// mark that means two things is a mark that gets one of them wrong.
-///
-/// There is no settings screen, so this file is the whole of it. Anything unreadable,
-/// misspelt or malformed leaves that colour at its default and the rest of the file still
-/// applies: a card edited on a desktop must never be able to produce a device that will not
-/// boot.
+/// `System/theme.txt`: one `name #rrggbb` per line. A leading `#` is a comment; there are no
+/// trailing comments because `#` also starts a colour. A bad line leaves that colour at its
+/// default and never stops the device booting.
 pub const THEME_FILE: &str = "theme.txt";
 
-/// The case around the slot, in the order they stack from the outside in. Only the bar for
-/// now; the names are what a theme file addresses, so they are part of the format.
+/// Colours of the case around the slot, outside in. Field names are the theme file's keys.
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub struct Theme {
     /// The outer plastic.
@@ -55,8 +49,7 @@ impl Theme {
             let (Some(name), Some(value)) = (parts.next(), parts.next()) else {
                 continue;
             };
-            // A third word means the line was meant as something else. Guessing at it is how
-            // a typo silently becomes a colour nobody chose.
+            // A third word means a malformed line; skip rather than guess.
             if parts.next().is_some() {
                 continue;
             }
@@ -75,8 +68,7 @@ impl Theme {
     }
 }
 
-/// `rrggbb`, with or without the leading hash. Both are written in the wild and neither is
-/// worth refusing a card over.
+/// `rrggbb`, with or without the leading hash.
 fn hex(value: &str) -> Option<[u8; 3]> {
     let digits = value.strip_prefix('#').unwrap_or(value);
     if digits.len() != 6 || !digits.chars().all(|c| c.is_ascii_hexdigit()) {

@@ -26,8 +26,7 @@ fn the_clock_is_asked_for_once_and_only_once() {
     );
 }
 
-/// It outranks a seated cart. Resuming into a game whose rtc is wrong is the failure this
-/// screen exists to prevent.
+/// It outranks a seated cart: resuming into a game with a wrong rtc is what it prevents.
 #[test]
 fn the_clock_comes_before_a_seated_cart() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -52,8 +51,7 @@ fn confirming_writes_the_picked_time_to_the_platform() {
     assert_ne!(clock.get(), 0, "the platform clock was never set");
 }
 
-/// A device whose rtc is already right is confirmed, not typed in. Anything else would make
-/// the screen data entry every time a battery is changed.
+/// A device whose rtc is already right is confirmed, not typed in.
 #[test]
 fn the_picker_starts_from_the_clock_the_platform_already_has() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -92,8 +90,7 @@ fn february_29_is_reachable_in_a_leap_year_and_not_otherwise() {
     assert_eq!(c.day(), 1, "2027 has no 29th of February");
 }
 
-/// The day is picked before the month as often as after it, and a 31st carried into
-/// February would confirm a date that does not exist.
+/// The day may be picked before the month, and a 31st carried into February is not a date.
 #[test]
 fn a_day_the_new_month_does_not_have_is_pulled_back() {
     let mut c = ClockPicker::from_ymd(2026, 1, 31);
@@ -102,9 +99,8 @@ fn a_day_the_new_month_does_not_have_is_pulled_back() {
     assert_eq!((c.month(), c.day()), (2, 28));
 }
 
-/// The card keeps UTC because the base system's clock and its ntp both assume it. What the
-/// screen asks for is the time on the wall in front of you, so the offset is what the picker
-/// takes back off before it hands over an epoch.
+/// The card keeps UTC because the base system's clock and ntp assume it. The picker shows wall
+/// time and takes the offset back off before handing over an epoch.
 #[test]
 fn the_picker_hands_back_utc_rather_than_what_was_typed() {
     let mut c = ClockPicker::from_ymd(2026, 8, 12);
@@ -114,7 +110,7 @@ fn the_picker_hands_back_utc_rather_than_what_was_typed() {
     }
     let typed = c.secs();
     c.field(Field::Offset);
-    // Ten half hour steps down is UTC-5, which is what most of the eastern seaboard runs on.
+    // Ten half hour steps down is UTC-5.
     for _ in 0..10 {
         c.down();
     }
@@ -151,8 +147,7 @@ fn the_offset_stops_at_the_ends_of_the_real_range() {
     assert_eq!(c.offset_min(), -720, "walked past UTC-12");
 }
 
-/// The binary re-rasterises the line when this changes, so an offset the text does not
-/// mention is one the screen never shows moving.
+/// The binary re-rasterises the line when this changes, so the text must mention the offset.
 #[test]
 fn the_offset_is_part_of_the_line_of_type() {
     let mut c = ClockPicker::from_ymd(2026, 8, 12);
@@ -163,8 +158,7 @@ fn the_offset_is_part_of_the_line_of_type() {
     assert!(c.text().contains("-00:30"), "{}", c.text());
 }
 
-/// The offset is chosen on the clock screen and read by everything that prints a time, so it
-/// has to reach the card rather than living for the one session that picked it.
+/// The offset is read by everything that prints a time, so it has to persist to the card.
 #[test]
 fn confirming_persists_the_offset_and_sets_the_platform_to_utc() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -184,9 +178,8 @@ fn confirming_persists_the_offset_and_sets_the_platform_to_utc() {
     );
 }
 
-/// Everything user facing reads the wall clock: the shelf, the polaroid captions and the
-/// stamps the states are named by. One of them showing utc and another local would be worse
-/// than both showing utc.
+/// Everything user facing reads the wall clock: the shelf, polaroid captions and state stamps.
+/// Mixing utc and local would be worse than all utc.
 #[test]
 fn the_wall_clock_is_local_rather_than_the_utc_the_card_keeps() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -204,9 +197,8 @@ fn the_wall_clock_is_local_rather_than_the_utc_the_card_keeps() {
 }
 
 /// An RTC that lost power sets its fault flag, the kernel refuses every read, and the system
-/// clock comes up at the epoch. The one screen that can put it right is gated on a flag that
-/// is already set by then, so without this the clock is wrong for good and there is no way
-/// back to it.
+/// clock comes up at the epoch. Without this the clock screen's gate is already set and the
+/// clock stays wrong.
 #[test]
 fn a_clock_that_never_got_set_is_asked_for_again() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -226,8 +218,7 @@ fn a_clock_that_never_got_set_is_asked_for_again() {
     );
 }
 
-/// Only when it is obviously wrong. A clock that reads like a real date is the user's, and
-/// asking again every boot would make a one-time screen into a settings prompt.
+/// Only when obviously wrong: a plausible date is the user's, and asking every boot would nag.
 #[test]
 fn a_clock_that_looks_like_a_real_date_is_not_asked_for_again() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -258,8 +249,8 @@ enum Way {
     QuickMenu,
 }
 
-/// The clock screen, reached `way`, over a platform clock reading `AT`. From the menu the card
-/// already has an offset, so the picker shows local time rather than UTC.
+/// The clock screen, reached `way`, at `AT`. From the menu the card already has an offset, so
+/// the picker shows local time.
 fn clock_screen(way: Way) -> (TempDir, App, Clock) {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
     if let Way::QuickMenu = way {
@@ -289,10 +280,8 @@ fn clock_screen(way: Way) -> (TempDir, App, Clock) {
     (d, a, clock)
 }
 
-/// Confirming what the screen already says changes nothing. The picker shows the minute and
-/// stands still while it is up, so setting the clock to what it says turned it back by the
-/// seconds past that minute and by however long the screen was open, on the clock every
-/// cartridge RTC reads.
+/// Confirming what the screen says changes nothing. The picker shows the minute and stands
+/// still, so a naive confirm would turn the clock back by the seconds and the time it was open.
 #[test]
 fn confirming_the_clock_untouched_leaves_it_where_it_is() {
     for way in [Way::FirstBoot, Way::QuickMenu] {
@@ -328,8 +317,7 @@ fn changing_the_minute_moves_the_clock_by_exactly_that_minute() {
     }
 }
 
-/// The offset changes what the fields mean rather than what they say, so moving it alone moves
-/// UTC by the same amount the other way: half an hour west is half an hour later in UTC.
+/// Moving the offset alone moves UTC the other way: half an hour west is half an hour later.
 #[test]
 fn changing_only_the_offset_moves_utc_by_exactly_that_change() {
     for way in [Way::FirstBoot, Way::QuickMenu] {

@@ -1,8 +1,7 @@
 use slot_input::{Action, Btn};
 use slot_retro::ButtonMask;
 
-/// The buttons the gesture layer let through to the game, held as a libretro mask. It is
-/// level state, not edges, because that is what the core is polled for every frame.
+/// The buttons passed through to the game, held as a level-state libretro mask.
 #[derive(Default)]
 pub struct Pad {
     mask: u16,
@@ -29,8 +28,7 @@ impl Pad {
         ButtonMask(self.mask)
     }
 
-    /// Buttons pressed for the switcher are not the game's. Without this the game resumes
-    /// holding whatever was down when the switcher took the input.
+    /// Without this the game resumes holding whatever was down when the switcher took input.
     pub fn clear(&mut self) {
         self.mask = 0;
     }

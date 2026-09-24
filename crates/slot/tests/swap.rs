@@ -38,9 +38,8 @@ impl Pass {
     }
 }
 
-/// The compositor keeps whatever was last uploaded to the game texture. Gating the game
-/// layer on "a core exists" draws the previous cart's final frame for the length of the
-/// insert, because the handle is built well before its worker publishes anything.
+/// The compositor keeps the last game texture, so gating the game layer on "a core exists" shows
+/// the previous cart's final frame through the insert.
 #[test]
 fn the_game_layer_stays_hidden_until_the_new_core_has_published() {
     let d = common::tmp_root_with_real_carts(&["Emerald", "Fusion"]);
@@ -57,14 +56,12 @@ fn the_game_layer_stays_hidden_until_the_new_core_has_published() {
         "the game layer must not draw on the frame the core was spawned"
     );
     p.until("the first frame", |s| s.game_visible());
-    // A core publishes its first frame partway through the insert, and MENU held before the
-    // cart has seated is not an eject. Waiting for the phase keeps what follows about the
-    // game layer rather than about how fast the core happened to start.
+    // MENU held before the cart has seated is not an eject, so wait for the phase.
     p.until("the cart to seat", |s| {
         matches!(s.app().phase(), Phase::Playing { .. })
     });
 
-    // Eject, then seat the other cart. This is the swap that showed the stale frame.
+    // Eject, then seat the other cart.
     p.session
         .feed([RawEvent::Down(Btn::Menu)], p.now + FRAME_MS);
     p.until("the eject", |s| !s.has_core());
@@ -84,13 +81,10 @@ fn the_game_layer_stays_hidden_until_the_new_core_has_published() {
     p.until("the second core", |s| s.game_visible());
 }
 
-/// `Frames::latest` consumes. Anything that calls it to ask a question, rather than to
-/// draw, throws away a frame the renderer would have shown, and always the newest one. The
-/// result is a picture that lags while audio stays perfect, because audio is a separate
-/// path.
+/// `Frames::latest` consumes, so anything but the renderer calling it steals the newest frame
+/// and the picture lags while audio stays perfect.
 ///
-/// Paused deliberately: a running core republishes within a frame or two and hides the
-/// theft, which is exactly why the first version of this test passed against the bug.
+/// Paused, because a running core republishes within a frame and hides the theft.
 #[test]
 fn nothing_but_the_renderer_takes_a_frame() {
     let d = common::tmp_root_with_real_carts(&["Emerald"]);
@@ -102,8 +96,7 @@ fn nothing_but_the_renderer_takes_a_frame() {
     p.tap(Btn::A);
     p.until("the first frame", |s| s.game_visible());
 
-    // Closing the lid dozes, which pauses the core. Nothing is published from here on, so a
-    // frame that goes missing cannot be quietly replaced.
+    // Closing the lid dozes and pauses the core, so a missing frame cannot be replaced.
     // Down only. A tap would close the lid and reopen it in the same breath.
     p.now += FRAME_MS;
     p.session.feed([RawEvent::Down(Btn::Lid)], p.now);
@@ -129,9 +122,8 @@ fn nothing_but_the_renderer_takes_a_frame() {
     );
 }
 
-/// Loading a core and running one are different things. The insert animation is there to
-/// hide the load, but a core running behind the cart plays the GBA bios intro where nobody
-/// can see it, so the reveal catches only its tail.
+/// A core must not run behind the insert animation, or the GBA bios intro plays unseen and the
+/// reveal catches only its tail.
 #[test]
 fn the_core_does_not_run_while_the_cart_is_going_in() {
     let d = common::tmp_root_with_real_carts(&["Emerald"]);
@@ -142,7 +134,7 @@ fn the_core_does_not_run_while_the_cart_is_going_in() {
     p.tap(Btn::A);
     p.until("the core to load", |s| s.has_core());
 
-    // Give it well over a frame's worth of wall clock while the cart is still travelling.
+    // Well over a frame's worth of wall clock while the cart is still travelling.
     let mut ran = 0;
     for _ in 0..40 {
         if !matches!(p.session.app().phase(), Phase::Inserting { .. }) {
@@ -151,9 +143,8 @@ fn the_core_does_not_run_while_the_cart_is_going_in() {
         let before = p.session.frames_published();
         p.step();
         std::thread::sleep(Duration::from_millis(4));
-        // The step itself can end the insert, and a core running after that is running
-        // exactly when it should. Only frames produced while the cart is still travelling
-        // at both ends of the step count against it.
+        // The step itself can end the insert. Only frames produced while the cart travels at both
+        // ends of the step count.
         let still_inserting = matches!(p.session.app().phase(), Phase::Inserting { .. });
         if still_inserting && p.session.frames_published() > before {
             ran += 1;

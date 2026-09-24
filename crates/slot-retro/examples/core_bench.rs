@@ -1,17 +1,8 @@
-//! Headless core benchmark: how long a libretro core takes per frame on the machine it runs on.
+//! Headless core benchmark: per-frame cost of a libretro core through `LibretroCore`, as slot's
+//! emulator thread pays it. For comparing builds on the SP; it never ships.
 //!
-//! It drives the core through slot-retro's own `LibretroCore`, so the time is what slot's
-//! emulator thread pays for a core step, including the RGB565 to XRGB8888 conversion in
-//! `video_refresh` and the audio hand-off, and none of what it doesn't (no window, GPU or audio
-//! device). It exists to compare builds of a core, or of slot-retro, on the SP. It never ships.
-//!
-//! Each repeat restores the same starting point (the `--state` file, or the moment after
-//! loading and `--warmup` frames), runs `--warmup` untimed frames, then times `--frames` core
-//! frames grouped into presents of `--steps`, the way fast forward groups them. `--frameskip`
-//! sets each core's fixed-interval frameskip to `steps - 1`, so one frame in each present
-//! renders, which is how fast forward runs. Quote the median; the spread says how far to trust
-//! it. The hash of the last frame should match across repeats and across builds of one core:
-//! a build that changes it has changed the emulation, not just its speed.
+//! Frames are grouped into presents of `--steps` like fast forward. Quote the median. The last
+//! frame's hash must match across builds of one core, or the emulation changed.
 //!
 //! Build it for the SP with `task bench:device`, then:
 //!

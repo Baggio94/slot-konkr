@@ -24,8 +24,7 @@ fn write_rom_with_code(d: &TempDir, name: &str, title: &str, code: &str) {
 fn an_unknown_game_gets_the_default_grey() {
     assert_eq!(gba_shell_for("ZZZZ").colour, DEFAULT_SHELL.colour);
     assert_eq!(gba_shell_for("").colour, DEFAULT_SHELL.colour);
-    // A real, ordinary cart: Metroid Fusion, verified as AMTE. Most of the library lands
-    // here and it must not be a special case.
+    // Metroid Fusion, verified as AMTE: an ordinary cart gets the default.
     assert_eq!(gba_shell_for("AMTE").colour, DEFAULT_SHELL.colour);
 }
 
@@ -41,8 +40,7 @@ fn leafgreen_is_green_whatever_region_it_came_from() {
     }
 }
 
-/// Verified from a real header: Shrek GBA Video is MSKE. The family letter is what saves
-/// this from being thirty hand transcribed rows.
+/// Verified from a real header: Shrek GBA Video is MSKE.
 #[test]
 fn gba_video_carts_are_light_grey() {
     let v = gba_shell_for("MSKE");
@@ -55,23 +53,19 @@ fn gba_video_carts_are_light_grey() {
         "video shells are light grey, got {:?}",
         v.colour
     );
-    // The whole family, not just the one title that was on hand.
     assert_eq!(gba_shell_for("MPOE").colour, v.colour);
 }
 
-/// An explicit row has to beat the family letter, or the escape hatch does not work.
+/// An explicit row has to beat the family letter.
 #[test]
 fn an_exact_entry_outranks_the_family_letter() {
     assert_eq!(gba_shell_for("MSKE").colour, gba_shell_for("MSKJ").colour);
-    // Adding an exact "MSK" row must be able to override; the lookup order is what is
-    // under test, so assert it directly rather than through the table.
+    // The shipping table has no conflicting row, so check the order directly.
     assert!(lookup_order_is_exact_then_family_then_default());
 }
 
-/// The Pokemon rows are the clear ones and everything else is solid. Gen 3 shipped in coloured
-/// translucent shells; the table drew them solid until it was noticed, which is the kind of
-/// detail the shelf exists to get right. The Game Boy Advance Video family stays solid, so this
-/// also pins that the finish is per row rather than per colour.
+/// Only the Pokemon rows are translucent; the GBA Video family stays solid, so finish is per
+/// row, not per colour.
 #[test]
 fn the_pokemon_shells_are_clear_and_the_rest_are_solid() {
     for code in table_keys() {
@@ -112,7 +106,6 @@ fn the_pokemon_shells_are_all_distinct() {
     }
 }
 
-/// A three character key is short enough to collide by accident. It must not.
 #[test]
 fn no_two_table_entries_share_a_prefix() {
     let mut keys: Vec<&str> = table_keys();

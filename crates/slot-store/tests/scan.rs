@@ -47,8 +47,7 @@ fn scan_ignores_non_gba_files() {
 fn an_appledouble_sidecar_is_not_shelved_as_a_cart() {
     let d = tmp_root();
     write_rom(&d, "GBA/Metroid Fusion.gba", "METROID");
-    // Copying a rom onto a FAT card from macOS leaves this beside it, carrying the same
-    // extension and the same stem, so only the leading dot tells the two apart.
+    // macOS leaves this beside a rom copied onto FAT, with the same extension.
     write_rom(&d, "GBA/._Metroid Fusion.gba", "METROID");
     let carts = scan(d.path()).unwrap();
     assert_eq!(carts.len(), 1, "an AppleDouble sidecar reached the shelf");
@@ -77,9 +76,7 @@ fn a_root_with_no_games_directory_scans_as_empty() {
     assert!(scan(d.path()).unwrap().is_empty());
 }
 
-/// slot runs Game Boy Advance carts and nothing else. A card from the builds that ran Game Boy
-/// carts too keeps its `GB/` and `GBC/` folders untouched, and nothing in them reaches the shelf;
-/// nor does a Game Boy rom filed under `GBA/`.
+/// Legacy `GB/` and `GBC/` folders, and Game Boy roms filed under `GBA/`, stay off the shelf.
 #[test]
 fn only_gba_roms_under_gba_are_carts() {
     let d = tmp_root();
@@ -97,13 +94,11 @@ fn only_gba_roms_under_gba_are_carts() {
     assert_eq!(stems, ["Metroid Fusion"]);
 }
 
-/// `App::boot` does `scan(root).unwrap_or_default()`, so an `Err` out of `scan` is not a message
-/// anywhere. A `GBA` folder that will not open is an empty shelf, said once on stderr.
+/// A `GBA` folder that will not open is an empty shelf, not an error.
 #[test]
 fn an_unreadable_games_folder_is_an_empty_shelf() {
     let d = tmp_root();
-    // A corrupted card: a plain file standing where the folder belongs, so `read_dir` answers
-    // ENOTDIR rather than "nothing here".
+    // A file where the folder belongs, so `read_dir` fails with ENOTDIR, not NotFound.
     std::fs::remove_dir(d.path().join("Games/GBA")).unwrap();
     std::fs::write(d.path().join("Games/GBA"), b"not a directory").unwrap();
 

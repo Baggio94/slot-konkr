@@ -18,8 +18,7 @@ fn spawn_with(sav: Option<Vec<u8>>) -> EmuHandle {
     spawn_into(StubSink::new(), sav)
 }
 
-/// The worker now waits for the device to make room, so a sink nothing drains would hold it
-/// up. This is the device: it always has room, which keeps these tests about the emulator.
+/// Stands in for the device, which always has room: the worker waits on a sink nothing drains.
 fn drain(sink: StubSink) {
     std::thread::spawn(move || loop {
         sink.device_drain();
@@ -37,9 +36,7 @@ fn spawn_into(mut sink: StubSink, sav: Option<Vec<u8>>) -> EmuHandle {
         sav,
         None,
     );
-    // A worker starts paused now, because one spawned during an insert must not run the
-    // first frames of the bios boot where nobody can see them. A test that wants a running
-    // core asks for one.
+    // A worker starts paused, so boot frames never run behind the cart during an insert.
     emu.set_speed(Speed::Normal);
     assert!(
         wait_for(|| emu.state() != CoreState::Loading),
@@ -111,8 +108,7 @@ fn a_requested_load_rewinds_the_core() {
     assert_eq!(frame_count(&emu), at_save);
 }
 
-/// Holding L2 walks the core back through the snapshots it took while playing, and letting
-/// go plays on from where it landed rather than from where the rewind started.
+/// Letting go of a rewind plays on from where it landed, not from where it started.
 #[test]
 fn rewinding_walks_the_core_backwards_and_then_plays_on() {
     let emu = spawn();
@@ -135,8 +131,7 @@ fn rewinding_walks_the_core_backwards_and_then_plays_on() {
     );
 }
 
-/// Fast forward drops the core's audio, so what is left in the ring is stale by up to four
-/// frames. Muting is what stops the device playing it out.
+/// Fast forward leaves up to four frames of stale audio in the ring, so it mutes.
 #[test]
 fn fast_forward_mutes_and_normal_speed_unmutes() {
     let sink = StubSink::new();
@@ -153,8 +148,7 @@ fn fast_forward_mutes_and_normal_speed_unmutes() {
     );
 }
 
-/// The device outlives the cart, so a worker that stopped while it was muted would take
-/// every sound after it down with it: the next cart's, and the slot's own.
+/// The device outlives the cart, so a worker stopped while muted must not leave it muted.
 #[test]
 fn a_worker_that_stops_while_muted_leaves_the_sink_audible() {
     let sink = StubSink::new();
@@ -165,9 +159,7 @@ fn a_worker_that_stops_while_muted_leaves_the_sink_audible() {
     assert!(!sink.muted(), "the sink stayed muted after the cart left");
 }
 
-/// `FAST_STEPS` core frames per present until told otherwise, which is the speed a card that
-/// never chose one gets. Read from the constant rather than repeated here: a step count that
-/// moves and a test that does not would leave the test passing on the old number.
+/// `FAST_STEPS` core frames per present is the default speed.
 #[test]
 fn fast_forward_runs_fast_steps_core_frames_per_present() {
     let emu = spawn();
@@ -187,9 +179,7 @@ fn fast_forward_runs_fast_steps_core_frames_per_present() {
     );
 }
 
-/// Frames the core has run and presents the worker has published, read with the core held so
-/// neither can move between the two reads. Seeing the pause observed is what guarantees every
-/// present before it has already been counted.
+/// Core frames run and presents published, read with the core held so neither moves between.
 fn held_counts(emu: &EmuHandle) -> (u64, u64) {
     emu.set_speed(Speed::Paused);
     assert!(
@@ -199,21 +189,13 @@ fn held_counts(emu: &EmuHandle) -> (u64, u64) {
     (frame_count(emu), emu.published_count())
 }
 
-/// The quick menu's speed is the most core frames each present may run. Counted against presents
-/// rather than against time, so a loaded machine running the suite moves neither side of it. A
-/// mock frame costs almost nothing, so every present here can afford its whole ceiling and the
-/// ceiling is what binds — `a_present_runs_what_it_can_afford_rather_than_the_whole_ceiling`
-/// below is the other half, where the budget binds first. Never more than `FAST_STEPS_MAX`,
-/// whatever is asked: that is the top of the row.
+/// The quick menu's speed caps core frames per present, never above `FAST_STEPS_MAX`.
+/// Counted against presents, not time, so a loaded machine cannot skew it.
 #[test]
 fn fast_forward_runs_the_chosen_number_of_core_frames_per_present() {
     let emu = spawn();
-    // Normal play first, because that is the state anyone presses the trigger from. The worker's
-    // per-frame estimate starts at a whole present on purpose — an estimate that began too low
-    // would let the very first fast present run to the ceiling before anything had been measured
-    // — and every present at normal speed is a measurement that walks it down to what a frame
-    // here really costs. A test that jumped straight from spawn into a fast stretch would be
-    // measuring that climb rather than the ceiling.
+    // Normal play first: the per-frame estimate starts at a whole present and needs normal
+    // presents to walk it down, or this would measure that climb rather than the ceiling.
     std::thread::sleep(Duration::from_millis(300));
     for (asked, runs) in [
         (2, 2),
@@ -236,9 +218,7 @@ fn fast_forward_runs_the_chosen_number_of_core_frames_per_present() {
             ran <= want,
             "{ran} frames over {shown} presents ran past the ceiling of {runs}, asking for {asked}"
         );
-        // Under it is only ever the budget cutting a present short, which on a core this cheap
-        // means the suite descheduled the worker rather than the ceiling failing to bind. Allow
-        // a present or two of that without letting a genuine collapse to a lower speed pass.
+        // Under it is the suite descheduling the worker. Allow a present or two of that.
         assert!(
             ran * 5 >= want * 4,
             "{ran} frames over {shown} presents is well short of the ceiling of {runs}, asking \
@@ -247,9 +227,8 @@ fn fast_forward_runs_the_chosen_number_of_core_frames_per_present() {
     }
 }
 
-/// A `MockCore` a test can slow down and listen to: it spends `cost` of wall clock on every
-/// frame, and records what it was told about drawing before each one. One probe rather than two
-/// cores, because the tests below need one property each and the delegation is identical.
+/// A `MockCore` that spends `cost` of wall clock per frame and records what it was told about
+/// drawing before each one.
 struct Probe {
     inner: MockCore,
     cost: Duration,
@@ -321,16 +300,9 @@ fn spawn_probe(cost: Duration) -> (EmuHandle, Arc<Mutex<Vec<bool>>>) {
     (emu, log)
 }
 
-/// The picture on screen has to be the frame the core last ran, at every speed. Checked against
-/// the frame itself rather than against a claim about the draw: `MockCore` paints a pattern that
-/// is a pure function of its frame counter and leaves the buffer alone on a frame it was told to
-/// skip, exactly as both real cores leave theirs — so a reference core wound to the same count
-/// gives the exact bytes that frame should be. A present that published before its last frame,
-/// or that skipped the frame it went on to show, lands on a different pattern.
-///
-/// This is the regression mGBA's fixed-interval frameskip walks into: it reports the frame it
-/// just drew as skipped, so the picture handed over is one present old. Nothing here depends on
-/// which core is loaded, because what is being pinned is slot's own order of operations.
+/// The picture on screen is the frame the core last ran, at every speed. `MockCore` paints a
+/// pattern from its frame counter and leaves the buffer alone on a skipped frame, as real cores
+/// do, so a reference core wound to the same count gives the exact expected bytes.
 #[test]
 fn every_speed_publishes_the_frame_the_core_last_ran() {
     let emu = spawn();
@@ -354,18 +326,15 @@ fn every_speed_publishes_the_frame_the_core_last_ran() {
     }
 }
 
-/// Only the frame that is shown may cost a render. Every frame of a present but its last is
-/// told to skip, which is the one change the spike measured that moves the speed cap at all —
-/// so the pattern the core is actually told is worth pinning, not just the picture that comes
-/// out of it.
+/// Every frame of a present but its last is told to skip: the only change measured to move the
+/// speed cap.
 #[test]
 fn a_fast_present_draws_only_its_last_frame() {
     let ceiling = 3;
     let (emu, log) = spawn_probe(Duration::ZERO);
     emu.set_fast_steps(ceiling);
     emu.set_speed(Speed::Fast);
-    // Let the speed settle before the stretch that is read back, so the log holds whole fast
-    // presents rather than the normal-speed one the worker was part way through.
+    // Let the speed settle so the log holds whole fast presents.
     std::thread::sleep(Duration::from_millis(60));
     log.lock().expect("the skip log").clear();
     std::thread::sleep(Duration::from_millis(150));
@@ -395,20 +364,15 @@ fn a_fast_present_draws_only_its_last_frame() {
     );
 }
 
-/// Every value on the row is a ceiling rather than a multiplier: a present runs as many core
-/// frames as it can afford and stops. A core that costs 5 ms a frame cannot fit six of them
-/// into one present, so asking for the top of the row has to come back with a handful — a game
-/// too heavy for the speed asked gives the speed back a frame at a time instead of overrunning
-/// the present and dropping off 60 Hz. This is what lets one number sit at the top of the row
-/// for both cores.
+/// The speed is a ceiling: a present runs as many core frames as it can afford, so a heavy
+/// game slows instead of dropping off 60 Hz.
 #[test]
 fn a_present_runs_what_it_can_afford_rather_than_the_whole_ceiling() {
     let (emu, _log) = spawn_probe(Duration::from_millis(5));
     emu.set_fast_steps(FAST_STEPS_MAX);
     let (frames, presents) = held_counts(&emu);
     emu.set_speed(Speed::Fast);
-    // Long enough for the running per-frame estimate to walk down from its pessimistic seed
-    // and settle on what this core really costs.
+    // Long enough for the per-frame estimate to settle from its pessimistic seed.
     std::thread::sleep(Duration::from_millis(400));
     let (frames_after, presents_after) = held_counts(&emu);
 
@@ -427,8 +391,7 @@ fn a_present_runs_what_it_can_afford_rather_than_the_whole_ceiling() {
     );
 }
 
-/// A device that counts what it took, in frames. It drains everything it is handed, as `drain`
-/// does, so the worker never waits on it.
+/// A device that counts the frames it took, draining everything so the worker never waits.
 fn counting(sink: StubSink) -> Arc<AtomicUsize> {
     let heard = Arc::new(AtomicUsize::new(0));
     let tally = heard.clone();
@@ -458,8 +421,8 @@ fn spawn_heard() -> (EmuHandle, StubSink, Arc<AtomicUsize>) {
     (emu, sink, heard)
 }
 
-/// What the device heard over a stretch of fast forward, in frames per present. The core is
-/// held and the ring let run dry either side, so nothing queued outside the stretch counts.
+/// Frames heard per present over fast forward. The core is held and the ring run dry either
+/// side, so nothing queued outside the stretch counts.
 fn heard_per_present(emu: &EmuHandle, sink: &StubSink, heard: &AtomicUsize) -> f64 {
     let settle = || {
         let (_, presents) = held_counts(emu);
@@ -478,8 +441,7 @@ fn heard_per_present(emu: &EmuHandle, sink: &StubSink, heard: &AtomicUsize) -> f
     (after - before) as f64 / (presents_after - presents) as f64
 }
 
-/// With its sound off, fast forward is what it always was: its audio never reaches the device,
-/// and the ring is muted over whatever was already queued.
+/// With its sound off, fast forward audio never reaches the device and the ring is muted.
 #[test]
 fn fast_forward_is_silent_while_its_sound_is_off() {
     let (emu, sink, heard) = spawn_heard();
@@ -490,9 +452,8 @@ fn fast_forward_is_silent_while_its_sound_is_off() {
     assert_eq!(per, 0.0, "{per:.0} frames a present reached the device");
 }
 
-/// With its sound on, fast forward is heard, squeezed into real time by the resampler: a
-/// present's worth of audio comes out of every present's several frames of game, so it plays
-/// faster and higher and the device takes what it takes at normal speed, not several times it.
+/// With its sound on, fast forward is resampled into real time: the device takes normal-speed
+/// amounts, not several times it.
 #[test]
 fn fast_forward_sound_plays_sped_up_in_real_time() {
     let (emu, sink, heard) = spawn_heard();
@@ -511,8 +472,7 @@ fn fast_forward_sound_plays_sped_up_in_real_time() {
     }
 }
 
-/// The battery save has to reach the core after the rom is loaded, since before that
-/// there is no save ram to copy it into, and come back out unchanged.
+/// The battery save must reach the core after the rom loads (no save ram before), unchanged.
 #[test]
 fn battery_save_ram_reaches_the_core_and_comes_back() {
     let mut sav = vec![0u8; 8 * 1024];
@@ -525,9 +485,7 @@ fn battery_save_ram_reaches_the_core_and_comes_back() {
     assert_eq!(got, sav);
 }
 
-/// The card is a picture of the game, not of the panel. The LCD mask is applied when the
-/// switcher draws the shot, so what the worker captures has to be the core's own frame: a
-/// mask baked in here would be wrong the moment the mask changes.
+/// The captured shot is the core's own frame: the LCD mask is applied when the switcher draws.
 #[test]
 fn a_captured_thumbnail_is_the_unfiltered_core_frame() {
     let emu = spawn();
@@ -571,10 +529,7 @@ fn the_renderer_is_handed_whole_gba_frames() {
     }
 }
 
-/// Fast forward has to leave a trail behind it. Snapshotting only at normal speed put a
-/// hole in the history: the newest state was whatever was recorded before the trigger, so
-/// the first pop of a rewind collapsed the entire fast forwarded stretch in one step
-/// rather than walking back through it.
+/// Fast forward snapshots too, so a rewind walks back through it instead of skipping it all.
 #[test]
 fn fast_forward_still_records_rewind_history() {
     let emu = spawn();
@@ -590,8 +545,7 @@ fn fast_forward_still_records_rewind_history() {
         "fast forward did not advance the core: {before_ff} then {after_ff}"
     );
 
-    // A brief rewind is a handful of pops. It should walk back a little way into the
-    // stretch that was run at speed, not fall off the far side of it.
+    // A brief rewind should walk a little way into the fast stretch, not past it.
     emu.set_rewinding(true);
     std::thread::sleep(Duration::from_millis(60));
     emu.set_rewinding(false);
@@ -606,17 +560,11 @@ fn fast_forward_still_records_rewind_history() {
 
 // --- the link pump --------------------------------------------------------------------
 //
-// `MockCore` never registers netpacket (it does not exercise the FFI, `slot-retro`'s own
-// tests already cover that seam exhaustively), so `RetroCore::pump_link`'s default is a
-// no-op here — meaning any packet the worker moves in either direction has to be the
-// worker's own loop doing it, not the core. That is exactly the wiring this task adds: the
-// worker draining a transport into `push_inbound`, and draining `take_outbound` back onto
-// it, every present, regardless of what the core does with either queue.
+// `MockCore` never registers netpacket, so `pump_link` is a no-op here and any packet moved is
+// the worker's own loop doing it.
 
-/// Two `LinkChannel`s wired to each other over a channel pair, standing in for a peer:
-/// whatever one side sends, the other's `try_recv` eventually returns. `LoopbackLink` cannot
-/// do this — it echoes a send back to the same handle — and a real socket is more than this
-/// test needs to prove the worker's own loop moves bytes in both directions.
+/// Two `LinkChannel`s wired to each other, standing in for a peer. `LoopbackLink` cannot do
+/// this: it echoes a send back to the same handle.
 struct PairedLink {
     tx: mpsc::Sender<Vec<u8>>,
     rx: mpsc::Receiver<Vec<u8>>,
@@ -654,8 +602,7 @@ fn wait_for_packet(mut poll: impl FnMut() -> Option<Vec<u8>>) -> Option<Vec<u8>>
     }
 }
 
-/// Inbound: whatever the transport hands back reaches the core's `Link` — `push_inbound` —
-/// every present, with no session-specific behaviour from `MockCore` involved at all.
+/// Inbound: whatever the transport returns reaches `push_inbound` every present.
 #[test]
 fn a_transport_packet_reaches_the_cores_inbound_queue() {
     let emu = spawn();
@@ -671,18 +618,14 @@ fn a_transport_packet_reaches_the_cores_inbound_queue() {
     assert_eq!(got.as_deref(), Some(&b"from the peer"[..]));
 }
 
-/// Outbound: whatever lands in `Link`'s outbound queue — here pushed directly, standing in
-/// for what the trampoline would do for a real netpacket core — reaches the transport.
+/// Outbound: whatever lands in `Link`'s outbound queue reaches the transport.
 #[test]
 fn the_cores_outbound_queue_reaches_the_transport() {
     let emu = spawn();
     let (mut here, there) = paired_links();
     emu.begin_link(1, Box::new(there));
-    // Waited on rather than assumed, the same way the inbound half above does it. A packet
-    // pushed before the session is actually live is a packet from before the session:
-    // `Cmd::BeginLink` empties both queues on its way in (see
-    // `beginning_a_link_clears_what_the_last_session_left_behind`), so pushing into the race
-    // would be testing the clear rather than the pump.
+    // `Cmd::BeginLink` empties both queues, so a packet pushed before it is live would be
+    // cleared rather than pumped.
     assert!(wait_for(|| emu.net().is_active()), "begin_link never took");
 
     emu.net().push_outbound(b"from the core".to_vec());
@@ -690,9 +633,8 @@ fn the_cores_outbound_queue_reaches_the_transport() {
     assert_eq!(got.as_deref(), Some(&b"from the core"[..]));
 }
 
-/// `end_link` drops the transport (which is what actually closes a real wire — see
-/// `TcpLink`'s `Drop`) and marks the session no longer active, so nothing pumped after it
-/// still reaches a peer that has moved on.
+/// `end_link` drops the transport and marks the session inactive, so nothing reaches the peer
+/// after it.
 #[test]
 fn end_link_marks_the_session_inactive() {
     let emu = spawn();
@@ -707,16 +649,8 @@ fn end_link_marks_the_session_inactive() {
     );
 }
 
-/// Wraps `MockCore` and counts calls into the `RetroCore` link methods the worker is
-/// responsible for invoking on its own schedule — `start_link`, `pump_link` and `stop_link`.
-/// `MockCore` itself overrides none of the three (see its own doc comment on `net()`'s
-/// default: a fresh, unrelated `Link` on every call, which is also why this spy does not try
-/// to override `net()` either — nothing here needs the core's own link state, only proof the
-/// worker actually called through). Without a spy like this, none of the worker's own calls
-/// into the core are visible from `slot`'s tests at all — the mutation run that found this
-/// (I7) deleted `pump_link()` from the worker loop, `start_link(client_id)` from
-/// `Cmd::BeginLink`, and made `Cmd::EndLink` keep the transport instead of dropping it, and
-/// all 652 tests stayed green because nothing was watching any of the three.
+/// Counts the worker's calls to `start_link`, `pump_link` and `stop_link`, which are otherwise
+/// invisible: `MockCore` overrides none of them.
 struct SpyLinkCore {
     inner: MockCore,
     start_calls: Arc<Mutex<Vec<u16>>>,
@@ -787,9 +721,7 @@ fn spawn_with_core(core: Box<dyn RetroCore>) -> EmuHandle {
     emu
 }
 
-/// The libretro counterpart to `start_link`: `Cmd::EndLink` must reach the core's own
-/// `stop_link`, not just drop the transport and flip `Link`'s active flag — a core left
-/// believing a session is live keeps producing packets nobody is left to carry.
+/// `Cmd::EndLink` must reach the core's `stop_link`, or the core keeps producing packets.
 #[test]
 fn ending_a_link_tells_the_cores_own_stop_link() {
     let core = SpyLinkCore::default();
@@ -806,9 +738,7 @@ fn ending_a_link_tells_the_cores_own_stop_link() {
     );
 }
 
-/// I7 mutation 2: `Cmd::BeginLink` must call the core's own `start_link`, with the
-/// `client_id` it was actually given — `MockCore` never overrides `start_link`, so nothing
-/// short of a spy shows whether the worker forgot to call through at all.
+/// `Cmd::BeginLink` must call the core's `start_link` with the `client_id` it was given.
 #[test]
 fn beginning_a_link_calls_the_cores_own_start_link() {
     let core = SpyLinkCore::default();
@@ -824,10 +754,7 @@ fn beginning_a_link_calls_the_cores_own_start_link() {
     assert_eq!(start_calls.lock().unwrap().as_slice(), &[1]);
 }
 
-/// I7 mutation 1: the worker must call `core.pump_link()` every present, regardless of
-/// speed or phase or whether a session is even live — see the comment above the call site in
-/// `emu.rs` for why. A spawn with no `begin_link` at all is the strictest version of that
-/// claim: it has to keep happening with nothing wired up yet.
+/// The worker calls `core.pump_link()` every present, even with no session wired up.
 #[test]
 fn the_worker_pumps_the_core_every_present() {
     let core = SpyLinkCore::default();
@@ -841,11 +768,7 @@ fn the_worker_pumps_the_core_every_present() {
     drop(emu);
 }
 
-/// I7 mutation 3: `Cmd::EndLink` must actually drop the transport, not merely mark the
-/// session inactive — `is_active()` going false is necessary but not sufficient, since a
-/// mutation that keeps the transport alive while still flipping the flag would pass every
-/// other test here. A `Drop` flag is what proves the transport itself is gone, the same way
-/// the module doc for `TcpLink` explains a socket drop matters for a real one.
+/// `Cmd::EndLink` must drop the transport, not merely flip the active flag.
 #[test]
 fn end_link_drops_the_transport_not_just_marks_it_inactive() {
     struct DropSignal {
@@ -883,10 +806,7 @@ fn end_link_drops_the_transport_not_just_marks_it_inactive() {
     );
 }
 
-/// I2: a packet that arrived just before the session ended must not survive to be handed to
-/// the next one. Proven directly against `Link`, since `MockCore::pump_link` is a no-op and
-/// cannot itself drain this for a probe to observe — `slot-retro`'s own tests cover the
-/// `drain_link`/`netpacket_poll_receive` half of this at the ABI seam.
+/// A packet that arrived just before a session ended must not reach the next one.
 #[test]
 fn ending_a_link_clears_stale_packets_for_the_next_session() {
     let emu = spawn();
@@ -898,10 +818,8 @@ fn ending_a_link_clears_stale_packets_for_the_next_session() {
         .push_inbound(b"stale from the old session".to_vec());
 
     emu.end_link();
-    // No settle needed: `Cmd::EndLink` clears both queues before flipping `is_active`, and
-    // `Link::set_active`'s `Release` store is paired with `is_active`'s own `Acquire` load —
-    // so observing the flag fall here is itself the guarantee the clear already happened,
-    // not merely a likely one a fixed sleep would only approximate.
+    // `Cmd::EndLink` clears the queues before flipping `is_active` (Release/Acquire), so
+    // seeing the flag fall guarantees the clear happened.
     assert!(wait_for(|| !emu.net().is_active()), "end_link never took");
 
     assert!(
@@ -965,13 +883,8 @@ fn ending_or_beginning_a_link_clears_the_lost_flag() {
     assert!(!emu.link_lost(), "a new session started already lost");
 }
 
-/// The order that makes the whole thing work: the goodbye goes out *before* the transport is
-/// dropped. Dropping first shuts the socket down, and a word queued behind that never reaches
-/// the wire at all — leaving the far end to infer the ending from a FIN, which is precisely
-/// the slow, ambiguous behaviour this replaces.
-///
-/// `Cmd::EndLink` is the single seam every ending passes through — the menu's A, a power press,
-/// a shut lid, an eject, a critical battery — so proving it here proves it for all of them.
+/// The goodbye goes out before the transport is dropped; dropping first loses it and leaves
+/// the peer to infer the ending from a FIN. Every ending passes through `Cmd::EndLink`.
 #[test]
 fn ending_a_link_says_goodbye_before_it_drops_the_transport() {
     struct Bye {
@@ -1014,9 +927,8 @@ fn ending_a_link_says_goodbye_before_it_drops_the_transport() {
     );
 }
 
-/// A transport that can tell a deliberate ending from a dead socket is believed, and the flag
-/// is cleared by a session beginning or ending exactly as `link_lost` is — so a new session
-/// never starts already believing its peer has left.
+/// A deliberate ending from the peer is believed, and the flag clears when a session begins or
+/// ends, like `link_lost`.
 #[test]
 fn a_transport_whose_peer_ended_is_reported_as_ended_not_merely_lost() {
     struct EndedLink {
@@ -1057,19 +969,8 @@ fn a_transport_whose_peer_ended_is_reported_as_ended_not_merely_lost() {
 }
 
 /// A packet the core produced between two sessions must not open the next one.
-///
-/// `netpacket_send` (slot-retro's `libretro.rs`) pushes whatever the core hands it onto the
-/// outbound queue without asking whether a session is running, and `RetroCore::stop_link` is a
-/// no-op for a core that registered no `stop` — libretro documents that callback as OPTIONAL —
-/// so a core that goes on believing a session is live goes on producing traffic for it. The
-/// ending's own `Link::clear` empties the queues on the way out; without the matching clear on
-/// the way in, anything produced *after* that lands here and is handed to the next peer as its
-/// first traffic, which is the same failure the ending's clear exists to prevent, on the other
-/// side of the same seam.
-///
-/// Pushed directly rather than through a core, for the same reason
-/// `ending_a_link_clears_stale_packets_for_the_next_session` does: `MockCore` has no session of
-/// its own to keep believing in.
+/// `netpacket_send` queues regardless of session and `stop` is optional in libretro, so
+/// `Cmd::BeginLink` must clear the queues too.
 #[test]
 fn beginning_a_link_clears_what_the_last_session_left_behind() {
     let emu = spawn();
@@ -1080,9 +981,7 @@ fn beginning_a_link_clears_what_the_last_session_left_behind() {
     emu.end_link();
     assert!(wait_for(|| !emu.net().is_active()), "end_link never took");
 
-    // The core still talking to a session that has already ended. Ordered before the command
-    // below and applied on the same thread in the order it was sent, so this is genuinely
-    // waiting in the queue when the next session begins rather than racing it there.
+    // Sent before the command below on the same thread, so it is queued when the session begins.
     emu.net()
         .push_outbound(b"the core did not hear the session end".to_vec());
     emu.net().push_inbound(b"and neither did this".to_vec());
@@ -1108,18 +1007,9 @@ fn beginning_a_link_clears_what_the_last_session_left_behind() {
     );
 }
 
-/// An ending asked for in the same present the cart leaves the slot in still reaches the wire.
-///
-/// `stop` is only read at the top of the worker's loop, so a command sent while a present is
-/// running sits in the channel until the next pass — and if the handle is dropped in between,
-/// that pass never comes and the receiver goes with it. `Cmd::EndLink` is the single seam every
-/// ending passes through and its whole job is to say goodbye before the wire goes: lost here,
-/// the peer learns of a deliberate ending from a FIN and the other player is told they were
-/// abandoned instead.
-///
-/// Forced rather than raced. The core holds the worker inside one `run_frame` for long enough
-/// that the ending and the drop provably land in the same present, which is the interleaving
-/// this is about — timing it against a mock frame that costs nothing would be a coin toss.
+/// An ending asked for in the same present the cart leaves in still reaches the wire.
+/// `stop` is only read at the top of the loop, so a dropped handle must not lose queued
+/// commands. The core holds the worker in one 400 ms `run_frame` to force the interleaving.
 #[test]
 fn an_ending_asked_for_in_the_last_present_still_reaches_the_peer() {
     struct Bye {
@@ -1149,9 +1039,7 @@ fn an_ending_asked_for_in_the_last_present_still_reaches_the_peer() {
             order: order.clone(),
         }),
     );
-    // Observed at most a couple of milliseconds after the command was applied, which is the
-    // top of a present whose frame then holds the worker for the next 400 ms — so everything
-    // below lands inside that one present.
+    // Observed at the top of a present whose frame holds the worker for the next 400 ms.
     assert!(wait_for(|| emu.net().is_active()), "begin_link never took");
 
     emu.end_link();
@@ -1164,9 +1052,7 @@ fn an_ending_asked_for_in_the_last_present_still_reaches_the_peer() {
     );
 }
 
-/// The same seam, for the other command a caller cannot go without. A flush that asks for the
-/// player's state in the present the cart leaves in gets a closed channel and writes nothing,
-/// which is their position lost — so the worker answers what is still queued before it goes.
+/// A flush queued in the present the cart leaves in is still answered, or the position is lost.
 #[test]
 fn a_state_asked_for_in_the_last_present_is_still_answered() {
     let (emu, _log) = spawn_probe(Duration::from_millis(400));

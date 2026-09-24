@@ -23,6 +23,5 @@ pub use stamp::{
 pub use theme::{Theme, THEME_FILE};
 
 /// The folder under `Games/`, `Labels/`, `Saves/` and `States/` that a cart's files live in.
-/// slot runs Game Boy Advance carts and nothing else, so there is one, but the card keeps the
-/// level: every card in use already has it, and so does the cart studio that writes `Labels/`.
+/// Only GBA exists, but existing cards and the cart studio already use the level.
 pub const CART_DIR: &str = "GBA";

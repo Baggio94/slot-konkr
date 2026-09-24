@@ -4,8 +4,7 @@ use crate::quad::Quad;
 use crate::shaders::{GAME_FRAG, RECT_VERT};
 use crate::surface::{GfxError, OUT_H, OUT_W};
 
-/// The only scale that exists. 240x160 to 720x480, nearest, which is what collapses LCD3x
-/// to a 3x3 mask tiled once per source pixel.
+/// 240x160 to 720x480, nearest. Exactly 3x is what collapses LCD3x to a tiled 3x3 mask.
 pub const SCALE: u32 = 3;
 pub const SRC_W: u32 = OUT_W / SCALE;
 pub const SRC_H: u32 = OUT_H / SCALE;
@@ -16,7 +15,7 @@ pub struct GamePass {
     mask: gl::types::GLuint,
     u_rect: gl::types::GLint,
     u_bright: gl::types::GLint,
-    /// A compositor with nobody driving it is a screen that is on.
+    /// Defaults to fully on.
     power: f32,
 }
 
@@ -34,8 +33,7 @@ impl GamePass {
         );
         let (u_rect, u_bright);
         unsafe {
-            // The other two are fixed for the life of the program: the mask always tiles once
-            // per source pixel and the target is always the offscreen frame.
+            // Source and target sizes are fixed for the life of the program.
             gl::UseProgram(prog);
             gl::Uniform1i(crate::gl::uniform_location(prog, "u_game"), 0);
             gl::Uniform1i(crate::gl::uniform_location(prog, "u_mask"), 1);
@@ -91,9 +89,7 @@ impl GamePass {
         self.draw_source(self.game, quad);
     }
 
-    /// The same pass over a still. A saved shot is a picture of this panel at exactly the
-    /// scale the mask is built for, so it is filtered at draw time rather than blitted flat
-    /// beside a game that is filtered.
+    /// The same pass over a still, so a saved shot wears the same mask as the live game.
     pub fn draw_still(&self, tex: gl::types::GLuint, quad: &Quad) {
         self.draw_source(tex, quad);
     }

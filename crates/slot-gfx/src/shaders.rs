@@ -9,9 +9,8 @@ const VERT_PREAMBLE: &str = "#version 330 core\n#define attribute in\n#define va
 const FRAG_PREAMBLE: &str = "#version 330 core\n#define varying in\n\
                              #define texture2D texture\nout vec4 FRAG_COLOR;\n";
 
-/// ES 1.00 is the language these are written in, so the device adds nothing but the name of
-/// the output. A `#version` line is omitted rather than set: 100 is the default, and the
-/// drivers that reject `#version 100` outnumber the ones that require it.
+/// No `#version` line: 100 is the default, and more drivers reject `#version 100` than
+/// require it.
 const VERT_PREAMBLE_ES: &str = "";
 const FRAG_PREAMBLE_ES: &str = "#define FRAG_COLOR gl_FragColor\n";
 
@@ -23,9 +22,8 @@ pub fn program(vert: &str, frag: &str) -> Result<gl::types::GLuint, GfxError> {
     crate::gl::program(&format!("{vp}{vert}"), &format!("{fp}{frag}"))
 }
 
-/// Unit quad to a rect in target pixels, origin top left. The y flip lives here, so every
-/// pass drawing into the offscreen target thinks in screen coordinates and only the blit
-/// deals with the framebuffer being stored bottom up.
+/// Unit quad to a rect in target pixels, origin top left. The y flip lives here, so only
+/// the blit deals with the framebuffer being stored bottom up.
 pub const RECT_VERT: &str = r#"
 attribute vec2 a_pos;
 uniform vec4 u_rect;
@@ -38,12 +36,8 @@ void main() {
 }
 "#;
 
-/// `RECT_VERT` for sprites, turned about the rect's centre by `u_turn`, which holds the cosine
-/// and sine of the angle. The corner is placed exactly as `RECT_VERT` places it, plus the
-/// difference between the corner turned and unturned; the sprite loop passes exactly (1, 0)
-/// for anything that is not turned, which makes that difference exactly zero. A shader of its
-/// own rather than a change to `RECT_VERT`, because the game pass links that one too and would
-/// read an unset `u_turn` as (0, 0).
+/// `RECT_VERT` turned about the rect's centre by `u_turn` (cos, sin). Separate because the
+/// game pass links `RECT_VERT` and would read an unset `u_turn` as (0, 0).
 pub const SPRITE_VERT: &str = r#"
 attribute vec2 a_pos;
 uniform vec4 u_rect;
@@ -61,8 +55,7 @@ void main() {
 }
 "#;
 
-/// `u_src` is the source size in pixels, which is also the number of times the 3x3 mask
-/// tiles across the target: one RGB triad per source pixel, exactly.
+/// `u_src` is the source size, which is also how many times the 3x3 mask tiles across.
 pub const GAME_FRAG: &str = r#"
 precision mediump float;
 uniform sampler2D u_game;

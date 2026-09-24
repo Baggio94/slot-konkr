@@ -2,10 +2,7 @@
 
 use slot_store::{initial, sort_key};
 
-/// Digits before letters, and case ignored. Plain byte order put every lowercase letter above
-/// every uppercase one, so `apple` filed after `Zebra` and a row's order depended on how its
-/// files happened to be capitalised. APOTRIS sits above APPLE on the third letter, which is the
-/// point: case is ignored rather than the comparison being done on first letters alone.
+/// Digits before letters, case ignored across the whole title, not just the first letter.
 #[test]
 fn titles_file_digits_first_then_a_to_z_whatever_their_case() {
     let mut names = vec![
@@ -32,8 +29,6 @@ fn titles_file_digits_first_then_a_to_z_whatever_their_case() {
     );
 }
 
-/// Anything led by neither a digit nor a letter files after both, rather than silently first the
-/// way punctuation does in byte order.
 #[test]
 fn a_title_led_by_punctuation_files_last() {
     let mut names = vec!["[BIOS] Test", "Apotris", "1943"];
@@ -41,9 +36,7 @@ fn a_title_led_by_punctuation_files_last() {
     assert_eq!(names, vec!["1943", "Apotris", "[BIOS] Test"]);
 }
 
-/// Every digit-led title shares one stop, and so does everything led by neither. A row has few
-/// enough of either that giving each its own stop would be a stop that moves by one, which is
-/// what the shoulders already do.
+/// Separate stops per digit would just step by one cart, which the shoulders already do.
 #[test]
 fn digits_and_punctuation_share_one_stop() {
     assert_eq!(initial("1943"), '#');
@@ -82,7 +75,6 @@ const ROW: [&str; 7] = [
     "Zzz",
 ];
 
-/// Down lands on the first cart of the next letter, not the next cart.
 #[test]
 fn down_crosses_to_the_next_letter() {
     let mut s = shelf_of(&ROW);
@@ -95,8 +87,7 @@ fn down_crosses_to_the_next_letter() {
     assert_eq!(s.carts[s.index].stem, "Zelda");
 }
 
-/// Up from halfway through a letter goes to the start of that letter rather than stepping back
-/// into the one before. Pressed again from there it does reach the previous letter.
+/// Pressed again from the start, Up reaches the previous letter.
 #[test]
 fn up_lands_on_the_start_of_the_letter_before_leaving_it() {
     let mut s = shelf_of(&ROW);
@@ -107,8 +98,6 @@ fn up_lands_on_the_start_of_the_letter_before_leaving_it() {
     assert_eq!(s.carts[s.index].stem, "Apotris");
 }
 
-/// The row is a ring: the last letter's Down reaches the first, and the first letter's Up reaches
-/// the last.
 #[test]
 fn the_letters_wrap_at_both_ends() {
     let mut s = shelf_of(&ROW);
@@ -127,8 +116,7 @@ fn the_letters_wrap_at_both_ends() {
     );
 }
 
-/// And it travels the way the press asked rather than the short way round, or the row would be
-/// seen going one way while the player pressed the other.
+/// Not the short way round, or the row would move against the press.
 #[test]
 fn a_wrap_travels_the_way_the_press_asked() {
     let mut s = shelf_of(&ROW);
@@ -149,7 +137,6 @@ fn a_wrap_travels_the_way_the_press_asked() {
     );
 }
 
-/// A row with one letter in it has nowhere to go, and must not spin.
 #[test]
 fn a_row_of_one_letter_stays_put() {
     let mut s = shelf_of(&["Metroid", "Mario Kart"]);

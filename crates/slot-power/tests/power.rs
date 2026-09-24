@@ -24,7 +24,6 @@ impl Platform for Panel {
         Charge::Unknown
     }
 
-    /// No LED. The lid tests are about the panel.
     fn set_led(&mut self, _state: LedState) {}
 
     fn restart(&mut self) -> ! {
@@ -47,8 +46,6 @@ impl Platform for Panel {
         self.clock = secs;
     }
 
-    /// No motor. The lid tests are about the panel, and `SimPlatform` is what records a
-    /// rumble.
     fn set_rumble(&mut self, _strength: u16) {}
 }
 
@@ -86,8 +83,7 @@ fn closing_twice_does_not_swallow_the_level() {
     assert_eq!(step.load(Ordering::Relaxed), 4);
 }
 
-/// The keyboard still reaches a dozing host. Brightness pressed with the lid shut belongs
-/// to the next wake, not to a panel that is meant to be dark.
+/// Brightness set with the lid shut is applied on the next wake, not while dark.
 #[test]
 fn a_level_set_while_shut_waits_for_the_open() {
     let (mut p, step) = lit();

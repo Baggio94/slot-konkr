@@ -1,29 +1,16 @@
 //! The emulated cable's frame clock: whose buttons go into which frame, and when a frame may run.
 //!
-//! The netpacket route in `emu.rs` lets the core emit packets and posts them as they appear. The
-//! in-core lockstep route cannot: `run_frame_linked` needs *both* players' buttons before it can
-//! step either console, and a frame that steps on a guess cannot be taken back.
-//!
-//! So input is delayed. A mask sampled now is stamped for a frame `DELAY` ahead and sent at once,
-//! which buys the wire that many frames to deliver it. Both ends seed the first `DELAY` frames as
-//! idle by convention rather than sending them, so neither waits on the other to start.
-//!
-//! Transport-free on purpose: `Cable` never touches a socket, so the whole protocol is testable
-//! without one.
+//! In-core lockstep needs both players' buttons before `run_frame_linked` can step, and a frame
+//! run on a guess cannot be undone. So a mask sampled now is stamped `DELAY` frames ahead and sent
+//! at once; both ends seed the first `DELAY` frames as idle. No sockets here, so it is testable.
 
 use std::collections::BTreeMap;
 
 use slot_retro::ButtonMask;
 
-/// Frames between sampling a mask and running it.
-///
-/// Three, not two, and the reason is phase rather than latency. Two devices holding 60 fps are
-/// tightly coupled, and their presents do not start at the same moment: an offset of a few ms
-/// means each spends that long every frame waiting for the other. Measured on hardware at two,
-/// the wait was about 6 ms of a 16.7 ms present, which left too little room for jitter and showed
-/// as bursts of 10 to 14 stalls in a 5 s window with the audio chopping through them.
-///
-/// Three buys 50 ms of slack against about 2 ms of wire. The cost is one frame of input lag.
+/// Frames between sampling a mask and running it. Two devices' presents are phase-offset, so each
+/// waits on the other: at two, measured waits of ~6 ms per 16.7 ms frame caused stall bursts and
+/// choppy audio. Three gives 50 ms of slack against ~2 ms of wire, for one frame of input lag.
 pub const DELAY: u64 = 3;
 
 /// One player's buttons for one frame: kind, frame index, mask, little endian.
@@ -32,12 +19,12 @@ const PACKET: usize = 11;
 const KIND_MASK: u8 = 0;
 const KIND_STATE: u8 = 1;
 const KIND_STATE_END: u8 = 2;
-/// The joiner saying it is running the host's machine. Until this arrives the host has no way to
-/// tell a joiner that is still restoring a megabyte from one that has walked away.
+/// The joiner saying it is running the host's machine. Until then the host cannot tell a joiner
+/// still restoring state from one that has left.
 const KIND_READY: u8 = 3;
 
-/// The transport frames with a `u16` length, so nothing larger than this can cross in one piece
-/// and a linked pair's state is far larger. Under 65535 with the kind byte in front.
+/// The transport frames with a `u16` length, so state crosses in chunks under 65535 with the
+/// kind byte.
 const CHUNK: usize = 60_000;
 
 pub fn encode(frame: u64, mask: ButtonMask) -> [u8; PACKET] {
@@ -57,12 +44,11 @@ pub fn decode(buf: &[u8]) -> Option<(u64, ButtonMask)> {
     Some((frame, ButtonMask(mask)))
 }
 
-/// A serialized pair, cut into pieces the wire can carry. The last is `KIND_STATE_END`, so the
-/// far end knows the state is whole without being told a length up front.
 pub fn ready_packet() -> [u8; 1] {
     [KIND_READY]
 }
 
+/// A serialized pair in wire-sized pieces. The last is `KIND_STATE_END`, so no length is sent.
 pub fn state_packets(state: &[u8]) -> Vec<Vec<u8>> {
     let mut out: Vec<Vec<u8>> = state
         .chunks(CHUNK)
@@ -75,14 +61,14 @@ pub fn state_packets(state: &[u8]) -> Vec<Vec<u8>> {
         .collect();
     match out.last_mut() {
         Some(last) => last[0] = KIND_STATE_END,
-        // An empty state still has to end, or the far end waits for ever.
+        // An empty state still has to end, or the far end waits forever.
         None => out.push(vec![KIND_STATE_END]),
     }
     out
 }
 
 pub struct Cable {
-    /// 0 or 1, which is libretro's client id and also which port this device drives.
+    /// 0 or 1: libretro's client id and the port this device drives.
     player: u8,
     /// The frame `step` will run next.
     frame: u64,
@@ -90,17 +76,15 @@ pub struct Cable {
     remote: BTreeMap<u64, ButtonMask>,
     /// Frames asked for and not run because the peer's mask had not arrived.
     stalled: u32,
-    /// Whether this device's machine is the one the session agreed to start from. The host is
-    /// primed from the moment it serializes; the joiner only once it has restored what arrived.
-    /// Without this the two devices simulate *different* machines from identical inputs, which
-    /// looks like a link that connected and then showed each player a different game.
+    /// Whether this device runs the agreed starting machine: the host at once, the joiner once
+    /// it has restored the host's state. Otherwise the two simulate different machines.
     primed: bool,
     /// The state arriving from the host, reassembled. Empty once taken.
     incoming: Vec<u8>,
     /// The reassembled state is whole and waiting to be restored.
     complete: bool,
-    /// The far end is running the agreed machine. A session is not under way until both ends are,
-    /// and until it is, a stalled frame means "still getting ready" rather than "gone".
+    /// The far end is running the agreed machine. Until then a stall means "getting ready",
+    /// not "gone".
     peer_ready: bool,
 }
 
@@ -114,11 +98,11 @@ impl Cable {
             local: seed.clone(),
             remote: seed,
             stalled: 0,
-            // The host's own machine is the one that gets copied, so it needs no priming.
+            // The host's machine is the one copied, so it needs no priming.
             primed: player == 0,
             incoming: Vec::new(),
             complete: false,
-            // The joiner's peer is the host, whose machine is the one being copied.
+            // The joiner's peer is the host.
             peer_ready: player != 0,
         }
     }
@@ -127,15 +111,14 @@ impl Cable {
         self.primed
     }
 
-    /// Whether a stalled frame means the peer is late rather than merely still getting ready.
-    /// A joiner restoring a megabyte of state stalls every present by design, and counting that
-    /// as a peer that vanished ends the session a second into every join.
+    /// Whether a stall means the peer is late. A restoring joiner stalls by design, and
+    /// counting that as a lost peer would end every join.
     pub fn armed(&self) -> bool {
         self.primed && self.peer_ready
     }
 
-    /// The host's machine, once it is whole. Restoring it is the caller's job, because only the
-    /// worker holds the core; `primed` is what it calls afterwards.
+    /// The host's machine, once whole. The caller restores it (only the worker holds the core)
+    /// and then calls `prime`.
     pub fn take_state(&mut self) -> Option<Vec<u8>> {
         if !self.complete {
             return None;
@@ -162,22 +145,16 @@ impl Cable {
         self.stalled
     }
 
-    /// This device's buttons for the frame `DELAY` ahead of the one about to run.
-    ///
-    /// Decided once and never revised. Asking twice for the same frame, which is what a stalled
-    /// present does, returns the mask already decided rather than replacing it. Two reasons, and
-    /// the second is the serious one: stamping a new frame per present would add a frame of input
-    /// delay for every stall, without bound and worst on whichever device stalls more; and
-    /// revising a mask the peer may already have run that frame with would desync the pair
-    /// outright.
+    /// This device's buttons for the frame `DELAY` ahead. Decided once: a stalled present asking
+    /// again gets the same mask. Revising it could desync the pair if the peer already ran it,
+    /// and restamping per present would add unbounded input delay.
     pub fn sample(&mut self, mask: ButtonMask) -> [u8; PACKET] {
         let frame = self.frame + DELAY;
         let mask = *self.local.entry(frame).or_insert(mask);
         encode(frame, mask)
     }
 
-    /// A packet off the wire. Unparseable or already-known frames are dropped rather than raised:
-    /// a duplicate is not an error and a short read is not worth ending a session over.
+    /// A packet off the wire. Unparseable or stale frames are dropped, not errors.
     pub fn accept(&mut self, buf: &[u8]) -> bool {
         match buf.first() {
             Some(&KIND_READY) => {
@@ -205,9 +182,8 @@ impl Cable {
         true
     }
 
-    /// The two masks for the frame about to run, in port order, or `None` while the peer's has
-    /// not arrived. Port order rather than local-first: the core drives port 0 with the first,
-    /// so handing them over the wrong way round swaps the two consoles.
+    /// The two masks for the frame about to run, in port order (swapping them swaps the
+    /// consoles), or `None` until the peer's arrives.
     pub fn ready(&self) -> Option<(ButtonMask, ButtonMask)> {
         if !self.primed {
             return None;
@@ -220,7 +196,7 @@ impl Cable {
         }
     }
 
-    /// Consumes the frame `ready` answered for, dropping what neither side needs again.
+    /// Consumes the frame `ready` answered for.
     pub fn advance(&mut self) {
         self.local.remove(&self.frame);
         self.remote.remove(&self.frame);
@@ -228,13 +204,12 @@ impl Cable {
         self.stalled = 0;
     }
 
-    /// The frame could not run: the peer is late. Counted so a caller can tell a hiccup from a
-    /// peer that has stopped talking altogether.
+    /// The peer is late. Counted to tell a hiccup from a peer that stopped talking.
     pub fn stall(&mut self) {
         self.stalled = self.stalled.saturating_add(1);
     }
 }
 
-/// Stalled presents before a peer is called lost rather than slow. About a second at 60 Hz, which
-/// is long enough to ride out a WiFi hiccup and short enough to notice a device that walked away.
+/// Stalled presents before a peer is lost: about a second at 60 Hz, enough to ride out a WiFi
+/// hiccup.
 pub const QUIET_FRAMES: u32 = 60;

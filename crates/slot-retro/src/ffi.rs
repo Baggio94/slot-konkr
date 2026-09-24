@@ -8,9 +8,8 @@ use crate::core::CoreError;
 
 pub const API_VERSION: c_uint = 1;
 
-/// `RETRO_ENVIRONMENT_GET_CAN_DUPE`. libretro.h: "Boolean value whether or not frontend
-/// supports frame duping, passing NULL to video frame callback." A core that is told no has to
-/// render a picture for every frame it runs, whether or not anything will ever look at it. See the `GET_CAN_DUPE` arm in `libretro.rs` for why the honest answer here is yes.
+/// `RETRO_ENVIRONMENT_GET_CAN_DUPE`: whether the frontend accepts a NULL video frame. A core
+/// told no renders every frame it runs.
 pub const GET_CAN_DUPE: c_uint = 3;
 pub const GET_SYSTEM_DIRECTORY: c_uint = 9;
 pub const SET_PIXEL_FORMAT: c_uint = 10;
@@ -20,12 +19,8 @@ pub const GET_VARIABLE_UPDATE: c_uint = 17;
 pub const GET_RUMBLE_INTERFACE: c_uint = 23;
 pub const GET_LOG_INTERFACE: c_uint = 27;
 pub const GET_SAVE_DIRECTORY: c_uint = 31;
-/// `RETRO_ENVIRONMENT_SET_AUDIO_BUFFER_STATUS_CALLBACK`. A core whose frameskip option is set
-/// to one of its *auto* modes registers a callback through this and then asks, once per frame,
-/// whether the frontend's audio buffer is about to run dry. Both cores decide whether to draw
-/// the frame they are about to run from the answer, before running it — which is what makes
-/// this the one lever that can say "emulate this frame but do not draw it" per frame rather
-/// than on a fixed cadence. See `LibretroCore::set_frame_skip`.
+/// `RETRO_ENVIRONMENT_SET_AUDIO_BUFFER_STATUS_CALLBACK`. In an *auto* frameskip mode the core
+/// asks this each frame before deciding whether to draw, so it is the per-frame skip lever.
 pub const SET_AUDIO_BUFFER_STATUS_CALLBACK: c_uint = 62;
 pub const SET_NETPACKET_INTERFACE: c_uint = 78;
 
@@ -96,23 +91,18 @@ pub struct RumbleInterface {
     pub set_rumble_state: SetRumbleStateFn,
 }
 
-/// The core's own end of `SET_AUDIO_BUFFER_STATUS_CALLBACK`: the frontend calls this to report
-/// how its audio buffer is doing. `occupancy` is a percentage, and `underrun_likely` is the
-/// field both cores' plain *auto* frameskip reads.
+/// Frontend reports its audio buffer through this. `occupancy` is a percentage;
+/// `underrun_likely` is what the cores' plain *auto* frameskip reads.
 pub type AudioBufferStatusFn =
     unsafe extern "C" fn(active: bool, occupancy: c_uint, underrun_likely: bool);
 
-/// What a core hands over through `SET_AUDIO_BUFFER_STATUS_CALLBACK`. libretro declares the
-/// field as a plain function pointer rather than an optional one; it is read as an `Option`
-/// here so a core that passes a struct with a null in it cannot be called through. A function
-/// pointer is null-pointer-optimised, so this is the same one word either way.
+/// Read as an `Option` so a core that passes null cannot be called through; same layout.
 #[repr(C)]
 pub struct AudioBufferStatusCallback {
     pub callback: Option<AudioBufferStatusFn>,
 }
 
-// The core hands these two to `start` so the frontend can push and pull packets on its own
-// schedule; the frontend never calls them itself outside of that.
+// The frontend hands these two to the core's `start`.
 pub type NetpacketSend =
     unsafe extern "C" fn(flags: c_int, buf: *const c_void, len: usize, client_id: u16);
 pub type NetpacketPollReceive = unsafe extern "C" fn();
@@ -125,19 +115,8 @@ pub type NetpacketPoll = unsafe extern "C" fn();
 pub type NetpacketConnected = unsafe extern "C" fn(client_id: u16) -> bool;
 pub type NetpacketDisconnected = unsafe extern "C" fn(client_id: u16);
 
-/// `start` and `receive` are the only fields libretro guarantees a core will fill in.
-/// Everything from `stop` onward is documented optional and arrives NULL from some cores, so
-/// each is an `Option` and every call site has to check before dereferencing it.
-///
-/// `start`, `stop`, `connected`, `disconnected` and `protocol_version` are read as a group —
-/// stored whole by the `SET_NETPACKET_INTERFACE` environment arm. `start` is called through
-/// once a session actually begins (`RetroCore::start_link`, behind `begin_link`), and `stop`
-/// once one ends (`RetroCore::stop_link`, behind `halt_link`) — the two are now a matched
-/// pair. `connected` and `disconnected` are called through the same way, right beside `start`
-/// and `stop` respectively (`begin_link`/`halt_link` again): `connected` answers gpSP's own
-/// serial IRQ timing, which counts connected peers, and `disconnected` tells the core the one
-/// peer this product ever has has left. Neither means anything richer than that — there is
-/// still only "there is a peer or there is not" — but both are on the wire now, not stubs.
+/// Only `start` and `receive` are guaranteed by libretro. Everything from `stop` on is
+/// optional and arrives NULL from some cores, so check before calling.
 #[repr(C)]
 pub struct NetpacketCallback {
     pub start: Option<NetpacketStart>,
@@ -149,12 +128,8 @@ pub struct NetpacketCallback {
     pub protocol_version: *const c_char,
 }
 
-// Every field here is either a C function pointer (already `Send`) or `protocol_version`, a
-// pointer at a string literal owned by the dylib itself — fixed for the life of the load,
-// never written by this crate, and no more thread-bound than the function pointers beside
-// it. `Host` moves to the emulator's own thread with the rest of `LibretroCore`, and this
-// struct has to move with it: without this, the raw pointer would make the whole of `Host`
-// `!Send` and `LibretroCore` would fail `RetroCore: Send`.
+// SAFETY: besides function pointers, `protocol_version` points at a string literal in the
+// dylib, fixed for the life of the load and never written, so moving threads is sound.
 unsafe impl Send for NetpacketCallback {}
 
 pub type EnvironmentFn = unsafe extern "C" fn(c_uint, *mut c_void) -> bool;

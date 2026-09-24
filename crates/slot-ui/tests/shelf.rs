@@ -42,9 +42,7 @@ fn settle(s: &mut Shelf) {
     }
 }
 
-/// Which cart each quad in the row belongs to. No faces are uploaded, so every cart draws
-/// as a rect in its own label colour, and that colour is the only identity on offer. The
-/// colour comes from the cleaned stem, not the header title.
+/// Which cart each quad in the row belongs to, by label colour (no faces are uploaded).
 fn drawn_cart_indices(out: &[Draw]) -> Vec<usize> {
     let keys: Vec<[u8; 3]> = (0..16)
         .map(|i| label_colour(&format!("Game {i}")))
@@ -128,18 +126,7 @@ fn the_neighbour_of_the_last_cart_is_the_first() {
     assert_eq!(s.cart_at_offset(1), Some(1));
 }
 
-/// A row of three or more, *standing still*, has one image of each cart on screen. Only a ring
-/// of two repeats when it is settled, and it does so because there is no third cart to put in the
-/// third slot: a longer row has one and must use it, or the shelf is showing a cart twice while
-/// another is not on screen at all.
-///
-/// Standing still is the whole of the claim and the reason the row below is never pressed. The
-/// ring fills every slot at every length, and while a row is moving the screen is wider than
-/// three pitches — so a ring of three or of four does put one cart at both edges at once, each
-/// half out of frame, which is what a ring shorter than the window looks like drawn honestly. The
-/// alternative was withholding that image, and withholding it left the cart leaving the frame
-/// undrawn: see `render_row_edges.rs`. From five carts up the ring is wider than the screen and
-/// nothing is ever repeated, moving or not.
+/// A settled row of three or more shows each cart once. Only a ring of two repeats at rest.
 #[test]
 fn no_cart_is_drawn_twice_in_a_settled_row_of_three_or_more() {
     for n in [3usize, 4, 7] {
@@ -154,11 +141,7 @@ fn no_cart_is_drawn_twice_in_a_settled_row_of_three_or_more() {
     }
 }
 
-/// A shelf with one cart on it stands that cart dead centre and draws nothing else — it does
-/// *not* repeat the way a shelf of two does. Repeating would put three identical faces across a
-/// row that can never move, because there is no second cart for a press to select, and three
-/// copies of one cart holding still read as a drawing fault rather than as a ring. A slot left
-/// empty beside it would be no better, so the row is the one cart and nothing else.
+/// One cart stands dead centre alone, without repeating like a row of two.
 #[test]
 fn one_cart_stands_alone_in_the_middle() {
     let s = shelf_with(1);
@@ -173,10 +156,7 @@ fn one_cart_stands_alone_in_the_middle() {
     );
 }
 
-/// Two carts fill all three slots, which means the cart that is not selected stands on both
-/// sides of the one that is. The user asked for this on the hardware, against both of the
-/// layouts that came before it — a hole beside the pair, then the pair centred together — so it
-/// is the shape of the row, not an accident of the wrap.
+/// Two carts fill all three slots, the unselected one on both sides. The user asked for this.
 #[test]
 fn two_carts_repeat_around_the_ring() {
     let mut s = shelf_with(2);
@@ -210,22 +190,11 @@ fn two_carts_repeat_around_the_ring() {
     );
 }
 
-/// The whole reason the repeat was refused when it was first proposed: a ring of two wraps on
-/// every press, and the same cart is both the selection and a neighbour. What the eye has to
-/// read is a row sliding one pitch, so no cart may change which offset it stands at between the
-/// frame before a press and the frame after it — a cart that blinks out at one edge and back in
-/// at the other is the row teleporting rather than turning.
-///
-/// Every length, not only two. A press moves the selection before the spring has moved the row,
-/// so the frame after it has to draw the same carts in the same places the frame before it did —
-/// which is a claim about the *row*, and the row of two was merely where it was noticed. It was
-/// false at three carts and at four: the cart in the left slot, fully on screen, was not in the
-/// list at all on the frame after the press. Held at ten too, which was always right, so this
-/// cannot start passing because every length got equally wrong.
+/// At every length, no cart changes offset across a press: the row slides a pitch rather than
+/// a cart blinking out at one edge and in at the other.
 #[test]
 fn a_press_slides_the_row_rather_than_redrawing_it() {
-    // Each drawn cart as (which cart, where it is in pitches from the middle), rounded, so the
-    // two sides of a press can be compared as sets of positions.
+    // Each drawn cart as (index, pitches from the middle), rounded, to compare as sets.
     let occupied = |s: &Shelf| {
         let mut out = Vec::new();
         s.draw_row(None, 0.0, 0.0, 1.0, &mut out);
@@ -259,17 +228,7 @@ fn a_press_slides_the_row_rather_than_redrawing_it() {
     }
 }
 
-/// Which way the row goes is what says which button was pressed — on a ring of two it is the
-/// only thing on screen that does, since both neighbours are the same cart. The row is a ring, so
-/// the selection has an image every `n` slots, and the spring used to head for whichever image
-/// stood nearest where the row already was. The row is behind its own target whenever it is
-/// moving, though, and a press asks for an image one slot further on again, so past a lag of
-/// `n / 2 - 1` pitches the image *behind* the row was the nearer one and the row set off the
-/// wrong way. That is no pitches at all on a ring of two and half a pitch on a ring of three,
-/// both of which a second press inside five frames clears.
-///
-/// Every length is checked from the cart a press wraps off the end of, because a wrap is where
-/// the two answers differ: anywhere else in the row there is only one image to choose.
+/// The row moves the way the button was pressed, even on a wrap with the spring still lagging.
 #[test]
 fn a_row_travels_the_way_it_was_pressed() {
     for n in [2usize, 3, 4, 5, 10] {
@@ -296,8 +255,7 @@ fn a_row_travels_the_way_it_was_pressed() {
                     "{n} carts, tap {tap} {name}: the row is travelling the other way"
                 );
                 aim = sent;
-                // Part way there, so the next press lands with the spring still moving, which is
-                // where measuring from the row's own place picked the image behind it.
+                // Part way there, so the next press lands with the spring still moving.
                 for _ in 0..4 {
                     s.update(1.0 / 60.0);
                 }
@@ -311,14 +269,8 @@ fn a_row_travels_the_way_it_was_pressed() {
     }
 }
 
-/// A direction held down, which is the shape the fault was actually reported in: the repeat lands
-/// a press every 110 ms, so the row is still travelling when the next one arrives, every time.
-/// On three carts that was enough for the old target to flip to the image a lap behind, and the
-/// row then ran backwards for eight frames out of every twenty eight — a stutter, under a button
-/// held steadily one way, at the ends of the shelf where every press is a wrap.
-///
-/// Driven the way `App::update` drives it, `tick` then `update` once a frame, for two seconds:
-/// the repeat delay and then fifteen repeats, which is five laps of a three cart row.
+/// A held direction never runs the row backwards. Driven like `App::update`, `tick` then
+/// `update` each frame, for five laps of a three cart row.
 #[test]
 fn a_held_scroll_never_travels_against_the_button() {
     for n in [2usize, 3, 4, 5, 10] {
@@ -340,7 +292,7 @@ fn a_held_scroll_never_travels_against_the_button() {
                 );
                 was = s.scroll;
             }
-            // And it got somewhere: fifteen repeats plus the press itself, one pitch each.
+            // Fifteen repeats plus the press itself, one pitch each.
             let gone = (s.scroll - (if way > 0.0 { n - 1 } else { 0 }) as f32) * way;
             assert!(
                 gone > 14.0,
@@ -350,29 +302,11 @@ fn a_held_scroll_never_travels_against_the_button() {
     }
 }
 
-/// Where the selected cart stands, which is what a cart going into the slot and a cart the
-/// picker opens both start from. Every length of row centres its selection, so a settled row
-/// answers with the middle of the screen at full size — asked here rather than assumed, because
-/// the handover is a jump the moment the two disagree.
-///
-/// And asked on the frames that are not settled, which is where it was wrong. `rest_x`, which
-/// this replaces, answered "dead centre, 240 wide" whatever the spring was doing, and the app
-/// reads it on the frame A or START goes down — which nothing makes the player delay until the
-/// row has stopped. Two frames after a shoulder press the selection is most of a pitch off
-/// centre and shrunk to near `SIDE_SCALE`, so the cart handed to the slot jumped 266 px sideways
-/// and grew a third of its own width on that one frame, with the cart it was passing still
-/// sliding behind it.
-///
-/// The reading is taken as the difference between the row drawn whole and the row drawn with
-/// the selection held back — which is exactly the swap the handover performs — so what is
-/// compared is the quad the chrome has to replace and not a quad picked out by being the widest.
-/// Mid-travel the selection is not the widest: at half a pitch out it is the same size as the
-/// neighbour it is passing.
+/// `selected_at` matches the quad the row actually draws for the selection, settled and on every
+/// frame of travel, measured as the row with and without the selection hidden.
 #[test]
 fn the_shelf_says_where_its_selected_cart_stands() {
     for n in [1usize, 2, 3, 5] {
-        // Settled, then every frame of a press's travel, so the claim covers the frames the row
-        // is moving rather than only the one it has stopped on.
         for frames in [0usize, 1, 2, 3, 5, 8, 13, 400] {
             let mut s = shelf_with(n);
             settle(&mut s);
@@ -390,9 +324,7 @@ fn the_shelf_says_where_its_selected_cart_stands() {
                 .map(xw)
                 .filter(|q| !without.iter().map(xw).any(|k| k == *q))
                 .collect();
-            // One image, except on a ring of two while it is travelling: there the selection
-            // really is at both edges at once, and the chrome replacing both with one is the
-            // row of two's own business rather than this claim's.
+            // One image, except on a ring of two while travelling, where it is at both edges.
             if n != 2 || frames == 400 {
                 assert_eq!(
                     dropped.len(),
@@ -414,8 +346,7 @@ fn the_shelf_says_where_its_selected_cart_stands() {
     }
 }
 
-/// Three or more is the row as it has always been: the selection dead centre with a neighbour
-/// peeking in either side.
+/// Three or more: the selection dead centre with a neighbour peeking in either side.
 #[test]
 fn a_row_of_three_or_more_is_centred_on_its_selection() {
     for n in [3usize, 4, 7] {
@@ -501,17 +432,14 @@ fn holding_a_direction_repeats_after_a_delay() {
     assert_eq!(s.index, 3, "it kept repeating after release");
 }
 
-/// A held direction speeds up the longer it is held, which is what makes a long library
-/// crossable without making a short hop overshoot. The rates are 110, 85, 65 then 50 ms, and the
-/// last one is a floor rather than a step on the way to zero.
+/// A held direction speeds up: 110, 85, 65 then 50 ms, and 50 is a floor.
 #[test]
 fn a_held_direction_winds_down_to_a_floor() {
     let mut s = shelf_with(40);
     s.hold_right(0);
     assert_eq!(s.index, 1, "the first press did not move");
 
-    // The delay, then each rate in turn. Every tick is one millisecond before the repeat is due
-    // and then exactly on it, so a rate that had quietly changed would show up as a missed step.
+    // Each tick is 1 ms before the repeat is due and then exactly on it.
     let mut at = 400;
     for (rate, want) in [(110, 2), (85, 3), (65, 4), (50, 5)] {
         s.tick(at - 1);
@@ -521,7 +449,7 @@ fn a_held_direction_winds_down_to_a_floor() {
         at += rate;
     }
 
-    // Held on, the floor holds: four more repeats at 50 ms and not one sooner.
+    // Held on, the floor holds: four more repeats at 50 ms.
     for want in 6..=9 {
         s.tick(at - 1);
         assert_eq!(s.index, want - 1, "the floor gave way before {want}");
@@ -531,8 +459,7 @@ fn a_held_direction_winds_down_to_a_floor() {
     }
 }
 
-/// Acceleration belongs to one hold, not to the shelf. A row of separate presses is someone
-/// choosing rather than travelling, and it is paced exactly as it was before any of this.
+/// Acceleration belongs to one hold: separate presses are not accelerated.
 #[test]
 fn a_new_press_starts_the_repeat_over_at_the_slow_rate() {
     let mut s = shelf_with(40);
@@ -544,7 +471,7 @@ fn a_new_press_starts_the_repeat_over_at_the_slow_rate() {
     }
     assert_eq!(s.index, 4, "the hold did not wind down as expected");
 
-    // Let go and press again: the delay is the long one again and so is the first repeat.
+    // Let go and press again: the long delay and the first rate again.
     s.release_right();
     s.hold_right(at);
     assert_eq!(s.index, 5, "the fresh press did not move");
@@ -566,11 +493,8 @@ fn the_other_direction_letting_go_does_not_stop_the_repeat() {
     assert_eq!(s.index, 2, "releasing left stopped a held right");
 }
 
-/// The gauge takes the shelf the wordmark had, at the same margin, so what is printed on the
-/// case still lines up with the row above it. Charging, with a bolt supplied: the bolt's own
-/// slot is reserved ahead of the capsule, so it is only while charging that anything actually
-/// reaches all the way to the margin — discharging leaves that slot empty and the capsule
-/// inset from it, which is the whole point of reserving it unconditionally.
+/// The gauge sits where the wordmark was. Only while charging does anything reach the margin:
+/// the bolt's slot is reserved ahead of the capsule.
 #[test]
 fn the_gauge_sits_where_the_wordmark_did() {
     let mut out = Vec::new();
@@ -594,11 +518,7 @@ fn the_gauge_sits_where_the_wordmark_did() {
     assert_eq!(leftmost, 24.0, "the case margin is the case margin");
 }
 
-/// `draw_gauge`'s own suite proves the capsule holds still in isolation; `the_gauge_sits_where_
-/// the_wordmark_did` above only ever calls `draw_footer` while charging, so nothing here was
-/// exercising the discharging path through the call the app actually makes. This is that path,
-/// at both charge states, at the same percent: everything but the bolt itself has to come back
-/// identical.
+/// Everything but the bolt is identical whether charging or not.
 #[test]
 fn the_footer_does_not_move_the_gauge_when_the_charge_state_changes() {
     let mut idle = Vec::new();
@@ -631,7 +551,6 @@ fn the_footer_does_not_move_the_gauge_when_the_charge_state_changes() {
     }
 }
 
-/// The clock is the one thing on this band that did not change.
 #[test]
 fn the_clock_stays_at_the_right_margin() {
     let mut out = Vec::new();
@@ -652,7 +571,7 @@ fn the_clock_stays_at_the_right_margin() {
     assert_eq!(rightmost, OUT_W as f32 - 24.0);
 }
 
-/// A device with no gauge shows a band with a clock on it, not a band with a hole in it.
+/// No gauge: a band with a clock, not a hole.
 #[test]
 fn a_band_with_no_gauge_still_draws_its_clock() {
     let mut out = Vec::new();
@@ -666,9 +585,7 @@ fn a_band_with_no_gauge_still_draws_its_clock() {
     assert_eq!(out.len(), 1);
 }
 
-/// The carts are what was refused. Nothing else on the screen was: the slot is part of the
-/// device and the legend is printed on it, and a screen that shook wholesale would read as a
-/// rendering fault rather than as a cart being rejected.
+/// Refusal shakes only the carts, not the slot or the legend.
 #[test]
 fn a_refusal_moves_the_carts_and_leaves_the_device_where_it_is() {
     let s = shelf_with(3);
@@ -676,8 +593,7 @@ fn a_refusal_moves_the_carts_and_leaves_the_device_where_it_is() {
     s.draw(0.0, &mut still);
     s.draw(9.0, &mut shaken);
     assert_eq!(still.len(), shaken.len(), "the shake changed the row");
-    // The row draws first, so its quads are the leading ones. Sizes cannot tell the two
-    // apart: the carts either side of the selection are drawn scaled down.
+    // The row draws first. Sizes cannot tell them apart since side carts are scaled down.
     let mut row = Vec::new();
     s.draw_row(None, 0.0, 0.0, 1.0, &mut row);
     let carts = row.len();
@@ -708,8 +624,7 @@ fn carts_past_the_edges_of_the_row_are_not_drawn() {
     assert!(n <= 5, "{n} carts drawn into a 720 px row");
 }
 
-/// All three carts have to be wholly on screen. At the old pitch the outer two were clipped
-/// 24px off each edge, so the row read as two and a bit rather than three.
+/// All three carts are wholly on screen.
 #[test]
 fn all_three_carts_fit_on_screen() {
     let s = shelf_with(5);
@@ -731,8 +646,7 @@ fn all_three_carts_fit_on_screen() {
     }
 }
 
-/// The edge margin and the gap beside the centre cart should match, or the row looks
-/// crowded on one axis and loose on the other.
+/// The edge margin matches the gap beside the centre cart.
 #[test]
 fn the_row_is_evenly_spaced() {
     let s = shelf_with(5);
@@ -748,8 +662,7 @@ fn the_row_is_evenly_spaced() {
     );
 }
 
-/// Carts only. The legend shares the draw list and its plates are short, so height is what
-/// separates them.
+/// Carts only. Legend plates are short, so height separates them.
 fn cart_spans(out: &[Draw]) -> Vec<(f32, f32)> {
     out.iter()
         .filter_map(|d| match *d {
@@ -762,9 +675,7 @@ fn cart_spans(out: &[Draw]) -> Vec<(f32, f32)> {
         .collect()
 }
 
-/// The row makes way for the cart going into the slot: the others part outwards and are gone
-/// by the time it is seated. Fading them where they stand reads as the screen dimming rather
-/// than as the shelf clearing.
+/// The row parts outwards for the cart going into the slot, gone by the time it is seated.
 #[test]
 fn the_row_parts_for_the_cart_going_in() {
     let s = shelf_with(5);
@@ -794,8 +705,7 @@ fn the_row_parts_for_the_cart_going_in() {
     );
 }
 
-/// Dimming darkens a side cart's face and leaves the black under it as the recede has it, so a
-/// dimmed cart reads as a cart in shadow rather than a ghost over the wallpaper.
+/// Dimming darkens a side cart's face but leaves the black under it as the recede has it.
 #[test]
 fn dim_darkens_a_side_carts_face_and_not_the_black_under_it() {
     let mut s = shelf_with(3);

@@ -78,8 +78,8 @@ fn undo_is_not_offered_when_nothing_is_undoable() {
     assert!(!a.undo_available(0));
 }
 
-/// Which of the two it is has to reach the affordance, or the screen offers to undo a save
-/// while it is holding a load.
+/// Which of the two it is reaches the affordance, or it could offer to undo a save while
+/// holding a load.
 #[test]
 fn the_label_names_what_will_be_undone() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -90,9 +90,7 @@ fn the_label_names_what_will_be_undone() {
     assert_eq!(a.undo_label(), Some("undo load"));
 }
 
-/// The affordance is the switcher's and nowhere else's, so the button that works it is only
-/// the switcher's too. X never reaches the core, but it is still not the shelf's or the
-/// game's to spend.
+/// X works the undo only in the switcher. It never reaches the core either way.
 #[test]
 fn x_undoes_from_the_switcher_and_never_from_the_game() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -107,8 +105,7 @@ fn x_undoes_from_the_switcher_and_never_from_the_game() {
     assert!(r.list().unwrap().is_empty(), "X did not undo the save");
 }
 
-/// An undo is a one shot. A second press would otherwise put the save back, which is a redo,
-/// and a redo is a knob.
+/// An undo is a one shot. A second press would be a redo.
 #[test]
 fn undoing_twice_does_not_put_the_save_back() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -121,8 +118,8 @@ fn undoing_twice_does_not_put_the_save_back() {
     assert!(!a.undo_available(3_000));
 }
 
-/// The undo names a file under one cart's ring and a state only that cart's core can read.
-/// Carried across an eject it would either delete the wrong save or feed the wrong machine.
+/// The undo names one cart's file and state. Carried across an eject it could delete the wrong
+/// save or feed the wrong machine.
 #[test]
 fn ejecting_the_cart_takes_its_undo_with_it() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -132,15 +129,13 @@ fn ejecting_the_cart_takes_its_undo_with_it() {
     assert!(!a.undo_available(1_200));
 }
 
-/// The offer is drawn on the switcher and nowhere else, and it goes when the grace period
-/// does rather than sitting there being pressed to no effect.
+/// The offer is drawn only on the switcher, and goes when the grace period does.
 #[test]
 fn the_plate_is_drawn_only_over_the_switcher_and_only_while_the_offer_stands() {
     let d = tmp_root_with_carts(&["Emerald"]);
     let mut a = app_playing_in(d.path(), "Emerald");
     a.apply_at(Action::SaveState, 1_000);
-    // A save says so on screen for 1.5 s, which is not the offer. Wait it out: the offer
-    // has thirty seconds and must still be standing, and must still draw nothing.
+    // The save toast lasts 1.5 s; the offer lasts thirty seconds and must still draw nothing here.
     a.tick_ms(4_000);
     let mut playing = Vec::new();
     a.draw(&mut playing);
@@ -150,8 +145,7 @@ fn the_plate_is_drawn_only_over_the_switcher_and_only_while_the_offer_stands() {
     );
     assert!(playing.is_empty(), "the offer reached the game");
 
-    // Open the switcher with the toast already faded, so the only difference between the
-    // two draws below is the offer itself.
+    // Open the switcher with the toast already faded, so the offer is the only difference.
     a.apply_at(Action::Polaroids, 4_000);
     let mut open = Vec::new();
     a.draw(&mut open);

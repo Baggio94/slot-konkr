@@ -6,8 +6,7 @@ fn the_panel_size_is_read_from_the_framebuffer_rather_than_assumed() {
     assert_eq!(panel_size("720,1280"), Some((720, 1280)));
 }
 
-/// A zero sized window surface is an EGL error at best and a black panel at worst, so
-/// anything the framebuffer will not answer for has to read as no answer.
+/// A zero or unparseable size reads as no answer.
 #[test]
 fn a_framebuffer_that_reports_nothing_usable_has_no_size() {
     assert_eq!(panel_size(""), None);
@@ -16,9 +15,7 @@ fn a_framebuffer_that_reports_nothing_usable_has_no_size() {
     assert_eq!(panel_size("wide,tall"), None);
 }
 
-/// EGL answers a plain refusal by returning false with EGL_SUCCESS still queued. Printing
-/// the code then says "error 0x3000", which is the success constant, and bring-up over SSH
-/// goes looking for a fault that never happened.
+/// A refusal with EGL_SUCCESS queued is not reported as error 0x3000.
 #[test]
 fn a_refusal_egl_never_flagged_does_not_print_as_an_error_code() {
     let quiet = egl_error("eglChooseConfig", 0x3000).to_string();
@@ -29,9 +26,7 @@ fn a_refusal_egl_never_flagged_does_not_print_as_an_error_code() {
     assert!(flagged.contains("0x3001"), "{flagged}");
 }
 
-/// `/sys/class/graphics/fb0/modes`, printed as `<name>:<w>x<h><p|i>-<hz>`. This is the panel;
-/// `virtual_size` is the scrollback the driver allocated, which on a double buffered device
-/// is two screens tall and describes no panel that exists.
+/// The panel size parses out of `fb0/modes` lines.
 #[test]
 fn the_visible_mode_is_read_rather_than_the_virtual_framebuffer() {
     assert_eq!(panel_mode("U:720x480p-59\n"), Some((720, 480)));

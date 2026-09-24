@@ -1,10 +1,6 @@
-//! Cuts the two cartridge noises out of a recording of the real thing. Not part of the
-//! device build: it writes `crates/slot/assets/*.pcm`, which are committed, and the frontend
-//! reads those.
-//!
-//! The recording is the take; nothing here invents sound. All this does is find the sharp
-//! events in it, cut a fixed window around the one you pick, and line that window up so the
-//! transient lands exactly where the cartridge animation expects it.
+//! Cuts the two cartridge noises out of a real recording into the committed
+//! `crates/slot/assets/*.pcm`. Not part of the device build. It finds the transients, cuts a
+//! fixed window around the chosen one, and aligns it to the cartridge animation.
 
 mod wav;
 
@@ -12,18 +8,16 @@ pub use wav::{read_wav, WavError};
 
 pub const HZ: f32 = 48_000.0;
 
-/// Exactly what the frontend expects. `Sfx::tail` derives from the file length, so these
-/// changing changes the animation.
+/// Clip lengths the frontend expects. `Sfx::tail` derives from them, so changing these
+/// changes the animation.
 pub const INSERT_LEN: usize = 11_520;
 pub const EJECT_LEN: usize = 15_120;
 
-/// How far into each clip the contacts are, mirroring `Sfx::lead`. The caller starts the
-/// clip this long before the cart reaches them, so the transient has to land here.
+/// Where the transient must land in each clip, mirroring `Sfx::lead`.
 pub const INSERT_LEAD: f32 = 0.097;
 pub const EJECT_LEAD: f32 = 0.021;
 
-/// Peak levels the frontend has always played at, so a new take does not change how loud the
-/// thing is next to the game audio.
+/// Peak levels matching the frontend's existing loudness against game audio.
 pub const INSERT_PEAK: f32 = 11_397.0;
 pub const EJECT_PEAK: f32 = 12_000.0;
 
@@ -49,12 +43,8 @@ impl Take {
     }
 }
 
-/// Every sharp event in the recording, loudest first is not the order: these come out in
-/// time order, because the eject you want is usually the one after the insert you want.
-///
-/// A transient is a jump in short window energy well above what the preceding tenth of a
-/// second was doing. That finds cart noises and also finds coughs, so the caller listens to
-/// what it picked rather than trusting the list.
+/// Every sharp event in the recording, in time order. It also finds coughs, so listen to the
+/// pick rather than trusting the list.
 pub fn takes(pcm: &[f32]) -> Vec<Take> {
     let rms: Vec<f32> = (0..pcm.len().saturating_sub(WIN))
         .step_by(HOP)
@@ -74,8 +64,7 @@ pub fn takes(pcm: &[f32]) -> Vec<Take> {
         if 20.0 * (now / quiet).log10() < JUMP_DB {
             continue;
         }
-        // One cart makes several hops loud. Keep the first, and let 80 ms pass before
-        // anything counts as a separate event.
+        // One cart makes several hops loud: keep the first per 80 ms.
         if hits
             .last()
             .is_some_and(|&p| (k - p) * HOP < (0.080 * HZ) as usize)
@@ -93,10 +82,8 @@ pub fn takes(pcm: &[f32]) -> Vec<Take> {
 
     let onsets: Vec<usize> = hits.iter().map(|&k| onset(pcm, k * HOP)).collect();
 
-    // One cart going in is not one transient. It is the rails, then the contacts, then the
-    // stop, then the shell settling, and the detector sees all of them. Group anything
-    // within 400 ms into a single take and anchor it on the loudest, because the loudest is
-    // the contact and the contact is what `lead` is measured to.
+    // One insert is several transients (rails, contacts, stop). Group them and anchor on the
+    // loudest, the contact, which is what `lead` is measured to.
     let mut grouped: Vec<(usize, usize)> = Vec::new(); // (anchor, last onset in the group)
     for &sample in &onsets {
         match grouped.last_mut() {
@@ -147,10 +134,8 @@ const JUMP_DB: f32 = 12.0;
 const FLOOR: f32 = 0.004; // about -48 dBFS, below which it is room tone
 const GROUP: f32 = 0.400; // transients closer than this are one cart action
 
-/// The hop grid is 5 ms, which is coarse next to a 21 ms lead, and the window that trips the
-/// detector starts up to one window *before* the sound does. So once a hop has flagged an
-/// event, find the sample the rise actually starts on: the first one nearby that crosses a
-/// third of the local peak. Being 5 ms out here is 5 ms of sound against picture.
+/// The sample the rise starts on: the first near a flagged hop crossing a third of the local
+/// peak. The 5 ms hop grid is too coarse against a 21 ms lead.
 fn onset(pcm: &[f32], hop_start: usize) -> usize {
     let lo = hop_start.saturating_sub(WIN);
     let hi = (hop_start + 3 * WIN).min(pcm.len());
@@ -190,16 +175,9 @@ impl std::fmt::Display for CutError {
     }
 }
 
-/// Cut `len` samples that put the transient at `at` exactly `lead` in, then normalise to
-/// `peak` and ease both ends. The alignment is the whole point: the frontend starts the clip
-/// `lead` before the cart reaches the contacts, so this is what keeps sound and picture
-/// together.
-///
-/// `lift_db` raises everything before the transient, easing back to unity over the last
-/// 15 ms so there is no step at the join. A hand pushing a cart is much quieter than the
-/// cart hitting its stop, and a phone a hand's width away records that gap faithfully;
-/// closing some of it is the difference between hearing the rails and hearing only a clunk.
-/// It changes the balance of the take, not its content. Zero leaves the take alone.
+/// Cut `len` samples putting the transient at `at` exactly `lead` in, normalise to `peak` and
+/// fade both ends. `lift_db` raises the quiet lead-in (the rails) before the transient; zero
+/// leaves it alone.
 pub fn cut(
     pcm: &[f32],
     at: f32,
@@ -227,8 +205,8 @@ pub fn cut(
     Ok(finish(&mut buf, peak))
 }
 
-/// Raise everything before the transient by `db`, easing back to unity over the 15 ms in
-/// front of it. Applied before the peak is set, so the transient still decides the gain.
+/// Raise everything before the transient by `db`, easing to unity over the last 15 ms.
+/// Applied before normalising, so the transient still decides the gain.
 fn lift(buf: &mut [f32], lead: f32, db: f32) {
     if db == 0.0 {
         return;
@@ -237,18 +215,13 @@ fn lift(buf: &mut [f32], lead: f32, db: f32) {
     let at = (lead * HZ) as usize;
     let ramp = (0.015 * HZ) as usize;
     for (i, s) in buf.iter_mut().enumerate().take(at) {
-        // Full lift until the ramp, then back to unity by the time the transient arrives.
         let u = ((at - i) as f32 / ramp as f32).min(1.0);
         *s *= 1.0 + (gain - 1.0) * raised_cosine(u);
     }
 }
 
-/// Ease the two ends to nothing, scale so the loudest sample lands exactly on `peak`, then
-/// to signed 16 bit.
-///
-/// The fades are not cosmetic. A cut lands wherever the recording happened to be, and a clip
-/// that starts or stops partway through room tone is a click on every insert, which is what
-/// `neither_clip_starts_or_ends_on_a_step` over in the frontend exists to catch.
+/// Fade both ends, scale the loudest sample to `peak`, and convert to i16. The fades stop a
+/// cut through room tone clicking.
 fn finish(buf: &mut [f32], peak: f32) -> Vec<i16> {
     const IN: usize = 96; // 2 ms
     const OUT: usize = 900; // 19 ms
@@ -272,8 +245,7 @@ fn raised_cosine(u: f32) -> f32 {
     0.5 * (1.0 - (std::f32::consts::PI * u).cos())
 }
 
-/// Mono signed 16 bit little endian, which is what `include_bytes!` on the other side
-/// expects to find.
+/// Mono signed 16 bit little endian, as the frontend's `include_bytes!` expects.
 pub fn to_le_bytes(pcm: &[i16]) -> Vec<u8> {
     pcm.iter().flat_map(|s| s.to_le_bytes()).collect()
 }

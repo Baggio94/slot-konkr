@@ -27,15 +27,13 @@ fn near(a: [u8; 3], b: [u8; 3]) -> bool {
 
 const EMERALD: &str = "Pokemon - Emerald Version (USA, Europe)";
 
-/// The chip is tall and narrow, so the name goes on it a few words at a time. The dump's tags
-/// are facts about the file, not the game, and the chip does not carry them.
+/// The chip carries the name a few words a line, without the dump's tags.
 #[test]
 fn the_marking_is_the_title_stacked() {
     assert_eq!(rom_marking(EMERALD), ["POKEMON", "EMERALD", "VERSION"]);
 }
 
-/// Three lines is all the chip has. A fourth would run off the bottom, so the rest joins the
-/// third and the fitter shrinks it.
+/// At most three lines: the rest joins the third and the fitter shrinks it.
 #[test]
 fn a_long_title_folds_its_tail_into_the_third_line() {
     assert_eq!(
@@ -93,7 +91,7 @@ fn the_cell_carries_no_print() {
     assert_eq!(dark, 0, "the cell still has {dark} dark pixels of print");
 }
 
-/// Rasterised at the size it is shown at, since that is the only size a face is sharp at.
+/// Rasterised at the size it is shown at.
 #[test]
 fn the_board_is_the_size_it_is_shown_at() {
     let face = board_face(&cart(EMERALD, "BPEE"));
@@ -101,8 +99,7 @@ fn the_board_is_the_size_it_is_shown_at() {
     assert_eq!((BOARD_W, BOARD_H), (372, 209));
 }
 
-/// The back of the cart is the same plastic as its front on the shelf. The wall at board unit
-/// (9, 45) is clear of the clips, the floor and every shadow.
+/// The back is the same plastic as the front. Board unit (9, 45) is clear of clips and shadow.
 #[test]
 fn the_back_shell_is_the_carts_own_plastic() {
     let emerald = board_face(&cart(EMERALD, "BPEE"));
@@ -119,8 +116,8 @@ fn the_back_shell_is_the_carts_own_plastic() {
     );
 }
 
-/// A board that failed to parse comes back transparent and every other test here would pass on
-/// nothing. Board unit (200, 70) is bare solder mask.
+/// A board that failed to parse is transparent, so the others would pass on nothing. Board unit
+/// (200, 70) is bare solder mask.
 #[test]
 fn the_board_itself_is_drawn() {
     let face = board_face(&cart(EMERALD, "BPEE"));
@@ -135,8 +132,7 @@ fn alpha(face: &CartFace, x: u32, y: u32) -> u8 {
     face.rgba[((y * face.w + x) * 4 + 3) as usize]
 }
 
-/// The open cart grows out of the cart on the shelf, so its first frame has to be that cart
-/// exactly, and its last the place the mockup put it.
+/// The open cart's first frame is the shelf cart exactly, and its last the mockup's place.
 #[test]
 fn the_open_cart_starts_as_the_shelf_cart_and_lands_where_the_mockup_has_it() {
     assert_eq!(
@@ -231,7 +227,7 @@ fn board_units_land_on_the_panel_at_one_and_a_half_times() {
     assert_eq!(on_board(board, 240.0, 135.0), (546.0, 359.0));
 }
 
-/// An empty socket names the core it is for, quietly: the chip's own name is the loud one.
+/// An empty socket names its core, quieter than the chip's name.
 #[test]
 fn a_socket_names_its_core_at_half_strength() {
     for core in Core::ALL {
@@ -249,11 +245,8 @@ fn a_socket_names_its_core_at_half_strength() {
     }
 }
 
-/// The outline's left edge is the socket SVG's closing stroke, sitting right at `x = 0` for
-/// the straight run of it: a partly covered pixel there is the outline ink, `#eef5e6`, at some
-/// fraction of full alpha. Premultiplied, the compositor's own blend then multiplies that
-/// fraction in a second time and darkens it; straight alpha keeps the ink's own brightness at
-/// any coverage.
+/// Partly covered pixels on the outline's left edge (`x = 0`) keep the ink `#eef5e6` at full
+/// brightness: premultiplied alpha would be darkened a second time by the compositor.
 #[test]
 fn a_partly_covered_socket_edge_pixel_keeps_the_outline_inks_brightness() {
     let face = socket_face(Core::Mgba);
@@ -294,8 +287,7 @@ fn the_chip_is_padded_clear_on_every_side() {
     }
 }
 
-/// Seated, the chip is the loudest word on the board; in flight it says nothing, so the two
-/// sockets' names are the only ones on screen.
+/// The seated chip shows its name; in flight it shows none, leaving only the sockets' names.
 #[test]
 fn a_seated_chip_wears_its_name_and_a_flying_one_is_blank() {
     let light = |face: &CartFace| {
@@ -336,11 +328,8 @@ fn the_shadow_is_darkest_in_the_middle_and_gone_at_the_corners() {
     assert_eq!(alpha(&s, 0, 0), 0);
 }
 
-/// The seated chip's name sits on the chip's own opaque black body, not on nothing, so its
-/// edges have to blend toward the body colour instead of snapping straight to full ink. Diffed
-/// against the blank chip, which carries the same body art, so only the name's own pixels are
-/// in play — not the legs, the pin-1 dot or the body's rounded corners, which are antialiased
-/// on both chips already.
+/// The seated name's edges blend toward the black body rather than snapping to full ink.
+/// Diffed against the blank chip so only the name's pixels count.
 #[test]
 fn the_seated_chips_name_is_antialiased_against_the_body() {
     let red = |face: &CartFace, x: u32, y: u32| face.rgba[((y * face.w + x) * 4) as usize];

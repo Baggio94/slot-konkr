@@ -2,8 +2,7 @@ use slot_retro::{ButtonMask, LibretroCore, RetroCore, GBA_H, GBA_W};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-/// libretro cores keep their state in dylib globals, so two live cores over one dylib is
-/// not a supported configuration and the tests must not overlap.
+/// libretro cores keep their state in dylib globals, so the tests must not overlap.
 static CORE_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock() -> std::sync::MutexGuard<'static, ()> {
@@ -22,8 +21,7 @@ fn test_core() -> Option<LibretroCore> {
     Some(LibretroCore::open(&p).expect("vendored core is present but would not open"))
 }
 
-/// The one real `gba_bios.bin` in the tree. Without it mGBA falls back to its own HLE bios,
-/// which has no boot animation to play whatever the core is told about skipping it.
+/// Loads with the real `gba_bios.bin`. mGBA's HLE fallback has no boot animation.
 fn core_with_bios() -> Option<LibretroCore> {
     let p = dylib();
     let bios = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../sdcard/BIOS");
@@ -36,10 +34,9 @@ fn core_with_bios() -> Option<LibretroCore> {
     )
 }
 
-/// Sets mode 3 and writes a frame counter into the first pixel once per vblank, so
-/// consecutive frames differ and a savestate has both registers and VRAM worth restoring.
-/// The counter is vblank paced rather than free running because a free running one is
-/// sensitive to single cycle drift across a savestate.
+/// Sets mode 3 and writes a frame counter into the first pixel once per vblank, so frames
+/// differ. Vblank paced because a free running counter is sensitive to cycle drift across a
+/// savestate.
 fn test_rom() -> PathBuf {
     const CODE: [u32; 15] = [
         0xe3a00404, // mov  r0, #0x04000000
@@ -75,12 +72,8 @@ fn test_rom() -> PathBuf {
     p
 }
 
-/// The same rom carrying a cart header logo the bios will accept. Everything above the
-/// header is what `test_rom` builds; the logo is 156 bytes of Nintendo's, so it is lifted
-/// off a cart on the card rather than checked in, and there is nothing to run without one.
-///
-/// A bios that does not recognise the logo skips itself and boots the cart anyway, which is
-/// what every other test in this file relies on.
+/// `test_rom` with a logo the bios accepts. The logo is Nintendo's, so it is copied from a cart
+/// on the card rather than checked in. Without it the bios skips itself and boots the cart.
 fn logo_rom() -> Option<PathBuf> {
     let games = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../sdcard/Games");
     let logo = std::fs::read_dir(games).ok()?.find_map(|e| {
@@ -146,11 +139,8 @@ fn audio_arrives_at_roughly_the_reported_sample_rate() {
     );
 }
 
-/// A clean start has to show the Nintendo logo and the chime, so mGBA must not be left on
-/// its own default for `mgba_skip_bios`.
-///
-/// The rom fills the screen with black the moment it runs and the boot animation is a white
-/// one, so half a second in the screen itself says which of the two is up.
+/// A clean start shows the bios boot animation. The rom draws black and the animation is
+/// white, so the screen half a second in says which is up.
 #[test]
 fn the_bios_intro_plays_when_a_bios_is_present() {
     let _g = lock();

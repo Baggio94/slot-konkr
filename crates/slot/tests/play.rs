@@ -1,7 +1,7 @@
 //! A on the shelf. A tap resumes where the cart left off, a hold starts it clean.
 //!
 //! Two carts throughout: one cart on the card is a dedicated device and boots past the
-//! shelf entirely, so there is no press to make.
+//! shelf entirely.
 
 mod common;
 
@@ -54,8 +54,7 @@ fn a_clean_start_leaves_the_state_on_disk() {
     );
 }
 
-/// The hold has to land while the finger is down, or it feels like nothing happened until
-/// the release.
+/// The hold fires while the finger is down, not on release.
 #[test]
 fn the_clean_start_fires_on_the_threshold_not_the_release() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -71,8 +70,7 @@ fn the_clean_start_fires_on_the_threshold_not_the_release() {
     );
 }
 
-/// The hold already fired, so the finger coming off is not a second press. Without this the
-/// release inserts again and the clean start is undone by the resume behind it.
+/// The release after a fired hold is not a second press, or it would insert again and resume.
 #[test]
 fn the_release_after_a_hold_is_not_another_press() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -83,9 +81,8 @@ fn the_release_after_a_hold_is_not_another_press() {
     assert!(a.starting_clean(), "the release resumed the cart after all");
 }
 
-/// The counter the mock core runs on, read back off the card after an autosave. It starts at
-/// whatever state the core was handed, so a cart that resumed is a long way ahead of one that
-/// started from nothing.
+/// The mock core's frame counter, read off the card after an autosave. A resumed cart is far
+/// ahead of a clean one.
 fn counter_after(root: &Path, hold: bool) -> u64 {
     common::clocked(root);
     let mut s = Session::boot(root.to_path_buf());
@@ -99,15 +96,13 @@ fn counter_after(root: &Path, hold: bool) -> u64 {
         s.update(1.0 / 60.0);
         std::thread::sleep(Duration::from_millis(1));
     }
-    // Past the autosave deadline, which is the cheapest way to get the core's own state
-    // written back out through the path the binary uses.
+    // Past the autosave deadline, the cheapest way to get the core's state written out.
     s.app_mut().tick_ms(60_000);
     let state = persist::read_resume(root, Core::Mgba, "Emerald").expect("nothing was flushed");
     u64::from_le_bytes(state.try_into().expect("the mock's state is 8 bytes"))
 }
 
-/// The flag has to reach the core, not only the phase. A `starting_clean` nothing reads is
-/// a hold that still resumes.
+/// The flag reaches the core, not only the phase.
 #[test]
 fn a_hold_hands_the_core_no_state_and_a_tap_hands_it_the_resume() {
     let tapped = tmp_root_with_carts(&["Emerald", "Fusion"]);

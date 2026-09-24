@@ -1,32 +1,18 @@
 #!/bin/sh
-# Builds mGBA's libretro core from libretro/mgba at a pinned commit, with every patch beside
-# this script applied, for whatever machine runs it. taskfile.yml's core:mgba:host runs it on
-# the Mac; core:device runs it inside the arm64 bullseye box, so the .so links against the same
-# glibc as slot. Both use the flags libretro's own CI builds the buildbot core with, the SP's
-# with link-time optimisation on top (device_cflags below), and the source is a checkout of the
-# commit rather than a tarball, so git vouches for what was built.
+# Builds mGBA's libretro core from libretro/mgba at a pinned commit with every patch beside this
+# script applied, using libretro CI's flags.
 #
 #   build.sh stamp COMMIT               print what a build of COMMIT would record
 #   build.sh build COMMIT WORKDIR OUT   build into WORKDIR, then write OUT and OUT.meta
 #
-# The .meta file is how the taskfile tells a stale core from a current one: it is compared
-# against `stamp`, so a changed pin, patch or flag rebuilds, and a core fetched from the buildbot
-# (which has no .meta) can never pass for this one.
-#
-# The core reports the version mGBA's build works out from the checkout, which is shallow and
-# patched: 0.11-1-<commit>-dirty. The build re-derives it from git at compile time and takes no
-# override, and "-dirty" is accurate. Nothing in slot reads it.
+# The taskfile compares OUT.meta against `stamp`, so a changed pin, patch or flag rebuilds.
 set -eu
 
 here="$(cd "$(dirname "$0")" && pwd)"
 
-# Link-time optimisation, for the SP's core only: Linux on aarch64, the bullseye box core:device
-# runs in. The Mac's core keeps exactly the flags above. Measured on the SP it takes 3 to 5% off
-# every frame, on both games and at both step counts. -mcpu=cortex-a53 beside it gave most of
-# that back and is deliberately absent. Nothing that can change a computed value goes here (no
-# -ffast-math): link mode needs two SPs' machines to stay bit identical, and this changes how
-# the core is compiled rather than what it computes — the frame hashes are unmoved. `stamp`
-# prints it on every host, because the taskfile checks the SP's .meta from the Mac.
+# LTO for the device core only: 3 to 5% off every frame on the SP. -mcpu=cortex-a53 cancelled the
+# gain. Never add anything that changes computed values (no -ffast-math): linked SPs must stay bit
+# identical. `stamp` prints it on every host because the Mac checks the device .meta.
 device_cflags="-flto=auto"
 
 usage() {
@@ -55,11 +41,8 @@ build() {
 
 	if ! command -v cmake >/dev/null 2>&1; then
 		if command -v apt-get >/dev/null 2>&1; then
-			# Bullseye is past its security support, so its Release files are no longer
-			# re-signed and apt refuses them as expired. bullseye-security also still lists
-			# packages it no longer serves (cmake's libarchive13 3.4.3-2+deb11u5 is a 404),
-			# so that suite is dropped and everything comes from the main archive. Nothing
-			# here needs a security update.
+			# Bullseye is out of security support: its Release files are expired and
+			# bullseye-security 404s some packages, so use the main archive only.
 			sed -i '/bullseye-security/d' /etc/apt/sources.list
 			apt-get -o Acquire::Check-Valid-Until=false update -qq
 			apt-get install -y -qq --no-install-recommends cmake >/dev/null
@@ -69,9 +52,8 @@ build() {
 		fi
 	fi
 
-	# Pristine at COMMIT on every run, so a patch is never applied on top of itself and a moved
-	# pin never builds over the previous checkout. The checkout's own .git is made first, so a
-	# missing one cannot send git up into slot's repository instead.
+	# Pristine checkout every run so patches never stack. Its own .git is created first so git
+	# cannot fall through to slot's repository.
 	mkdir -p "$src"
 	[ -d "$src/.git" ] || git init -q "$src"
 	git -C "$src" cat-file -e "$commit^{commit}" 2>/dev/null ||
@@ -82,8 +64,7 @@ build() {
 		git -C "$src" apply "$p"
 	done
 
-	# Passed even when empty, so a build tree reused from another run can't keep its flags. They
-	# land ahead of the Release -O3 and the libretro target's own -O3, and name no -O level.
+	# Passed even when empty so a reused build tree cannot keep stale flags.
 	cflags=""
 	if [ "$(uname -s)-$(uname -m)" = "Linux-aarch64" ]; then
 		cflags="$device_cflags"

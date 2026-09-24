@@ -8,9 +8,7 @@ fn fields() -> StickerFields<'static> {
     }
 }
 
-/// The headline rows read as a real device's plate. Only the gauge moves; the model number
-/// and the input rating are the article's own shape, and the build's version has its own row
-/// at the foot where the origin line goes.
+/// The headline rows read as a real device's plate; only the gauge moves.
 #[test]
 fn the_headline_rows_read_as_a_device_plate() {
     let all = sticker_lines(&fields()).join("\n");
@@ -18,14 +16,11 @@ fn the_headline_rows_read_as_a_device_plate() {
     assert!(all.contains("5V"), "{all}");
     assert!(all.contains("1.5A"), "{all}");
     assert!(all.contains("87"), "the gauge reading is missing: {all}");
-    // The build is named by its serial rather than a version row, the way a real plate names
-    // a unit. The barcode beside it encodes the same hash.
+    // The build is named by its serial, which the barcode beside it encodes.
     assert!(all.contains("0473885"), "the serial went missing: {all}");
 }
 
-/// The rating row carries the real direct current symbol. No font in this crate has it, so
-/// the renderer draws it — and the text keeps the correct codepoint rather than an equals
-/// sign standing in for one.
+/// The rating row keeps the real direct current codepoint; the renderer draws the glyph.
 #[test]
 fn the_input_row_carries_the_real_dc_symbol() {
     let all = sticker_lines(&fields()).join("\n");
@@ -33,7 +28,7 @@ fn the_input_row_carries_the_real_dc_symbol() {
     assert_eq!(slot_ui::DC, '\u{2393}');
 }
 
-/// A device with no gauge is one that does not have one, not one reading zero percent.
+/// No gauge is shown as absent, not as zero percent.
 #[test]
 fn a_missing_gauge_is_not_drawn_as_empty() {
     let mut f = fields();
@@ -49,28 +44,25 @@ fn a_missing_gauge_is_not_drawn_as_empty() {
     );
 }
 
-/// The compliance block is the credits. Every one of these is something the README already
-/// owes, and a label that quietly dropped one would be worse than no label at all.
+/// The compliance block carries every credit the README owes.
 #[test]
 fn the_compliance_block_is_the_credits() {
     let all = sticker_lines(&fields()).join("\n").to_uppercase();
-    // What README.md credits, minus the parts a label has no room for. The cartridge sounds
-    // are a recording of the author's own console, so nobody is owed for them.
+    // README.md's credits, minus what the label has no room for. The cartridge sounds are the
+    // author's own recording.
     for owed in ["MGBA", "GPSP", "OPEN SANS", "NERD", "LCD3X", "CLAUDE"] {
         assert!(all.contains(owed), "the credits do not mention {owed}");
     }
 }
 
-/// The serial reads back what the barcode encodes, or the two halves of the same fact
-/// disagree on the one screen showing both.
+/// The serial reads back what the barcode encodes.
 #[test]
 fn the_serial_row_matches_the_encoded_hash() {
     let all = sticker_lines(&fields()).join("\n");
     assert!(all.contains("0473885"), "{all}");
 }
 
-/// Upper case throughout, like the label it is copying. `fit` uppercases when it lays out, so
-/// a lower case line here would render in caps anyway and measure wrong for its own width.
+/// Upper case throughout: `fit` uppercases when laying out, so lower case would measure wrong.
 #[test]
 fn every_line_is_already_upper_case() {
     for line in sticker_lines(&fields()) {
@@ -78,13 +70,8 @@ fn every_line_is_already_upper_case() {
     }
 }
 
-/// `Canvas::blit` composites the wordmark's own SVG raster onto the label. `render_svg` hands
-/// back straight alpha, so the blend scales the source by its own alpha rather than trusting it
-/// to already carry that scale; a blend shaped for premultiplied pixels would instead clip
-/// every partly covered edge pixel toward the full ink colour, collapsing the wordmark's top
-/// edge from a ramp to a single hard step. This scans the columns where that top edge sits (in
-/// the sticker's own coordinate space) and asks for at least one column whose edge pixel is
-/// neither the ground nor the ink outright: proof the edge is still antialiased.
+/// `render_svg` returns straight alpha, so `Canvas::blit` must scale by it. A premultiplied
+/// blend would turn the wordmark's antialiased top edge into a hard step.
 #[test]
 fn the_wordmarks_top_edge_is_antialiased_not_a_hard_step() {
     use slot_ui::sticker_face;

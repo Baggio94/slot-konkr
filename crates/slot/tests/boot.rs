@@ -65,7 +65,6 @@ fn boot_leaves_the_shelf_sitting_on_the_resumed_cart() {
     assert_eq!(cart, "Emerald");
 }
 
-/// Without this the resume on the next boot has nothing to read.
 #[test]
 fn a_seated_cart_is_recorded_so_the_next_boot_can_resume_it() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -84,8 +83,7 @@ fn a_seated_cart_is_recorded_so_the_next_boot_can_resume_it() {
     assert_eq!(read_slot_state(d.path()).cart, Some("Emerald".into()));
 }
 
-/// A cart taken off the card while it was the seated one, which is a USB cable and a delete, is an
-/// empty slot on the next boot, and the next write says so.
+/// A seated cart deleted from the card is an empty slot on the next boot.
 #[test]
 fn a_cart_that_is_gone_takes_its_shelf_out_of_the_slot_with_it() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -99,7 +97,7 @@ fn a_cart_that_is_gone_takes_its_shelf_out_of_the_slot_with_it() {
     )
     .unwrap();
     let mut a = App::boot(d.path());
-    // Any setting at all, because every one of them writes the whole file back.
+    // Any setting, because every one writes the whole file back.
     a.apply(Action::MuteToggle);
     let s = read_slot_state(d.path());
     assert_eq!(s.cart, None);
@@ -119,7 +117,7 @@ fn a_cart_that_fails_to_load_leaves_the_slot_empty() {
     assert_eq!(read_slot_state(d.path()).cart, None);
 }
 
-/// The levels are the rest of the file. Recording a cart must not reset them.
+/// Recording a cart must not reset the levels stored in the same file.
 #[test]
 fn seating_a_cart_preserves_the_levels_already_in_the_file() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -147,13 +145,8 @@ fn seating_a_cart_preserves_the_levels_already_in_the_file() {
     assert_eq!((s.brightness, s.blue_light, s.volume), (2, 7, 35));
 }
 
-/// Spec section 3: a cart already in the slot shows no shelf, "not even one frame of it".
-/// Task 16 only asserted the phase, so a resume that slid the cart in past a receding shelf
-/// passed it. What the user sees is the game selector flashing up on every boot.
-///
-/// Counted against a chosen insert rather than against a fixed number: with no compositor
-/// there are no uploaded faces, so carts and chrome are both plain rects and an absolute
-/// count would mean nothing.
+/// A cart already in the slot shows no shelf, not even for one frame. Counted against a chosen
+/// insert because without a compositor carts and chrome are both plain rects.
 #[test]
 fn a_resume_draws_no_shelf_but_a_chosen_insert_does() {
     let seated = || {
@@ -211,13 +204,7 @@ fn draw_count(a: &App) -> usize {
     out.len()
 }
 
-/// A card nobody has organised yet. slot reads the platform folders and nothing else, so an
-/// entirely loose card is an empty shelf — the same thing an unmounted card has always been —
-/// and, crucially, boot leaves every one of those files exactly where the player put them.
-///
-/// Boot used to sweep them into place. It does not, and this is what stands in the place of the
-/// tests that asserted it did: the promise is no longer "your files will be moved for you", it is
-/// "nothing of yours will be moved at all".
+/// A loose card is an empty shelf, and boot leaves every file exactly where the player put it.
 #[test]
 fn a_loose_card_shows_an_empty_shelf_and_nothing_on_it_is_moved() {
     let d = tempfile::tempdir().unwrap();
@@ -264,9 +251,7 @@ fn a_loose_card_shows_an_empty_shelf_and_nothing_on_it_is_moved() {
     );
 }
 
-/// The folders that say where a hand-organised card files things are created on a card that has
-/// never held slot., not merely on one that already has them. They are the only guidance there
-/// is now that nothing is swept, so an empty card has to come up carrying all of them.
+/// A bare card gets every platform folder, since they are the only guide to organising it.
 #[test]
 fn boot_creates_the_folders_a_person_has_to_file_into() {
     let d = tempfile::tempdir().unwrap();
@@ -281,7 +266,7 @@ fn boot_creates_the_folders_a_person_has_to_file_into() {
     }
 }
 
-/// And it is already home rather than travelling there.
+/// It starts seated rather than sliding in.
 #[test]
 fn a_resumed_cart_starts_seated() {
     let d = common::tmp_root_with_carts(&["Emerald", "Fusion"]);

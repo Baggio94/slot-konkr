@@ -7,9 +7,7 @@ fn distance(a: [u8; 3], b: [f32; 4]) -> u32 {
         .sum()
 }
 
-/// The first backdrop was #33353d and the default shell #35353a: a total channel difference
-/// of 6 out of 765, so every ordinary cart on the shelf was invisible. Nothing in either
-/// crate's own tests could catch that, because neither one is wrong on its own.
+/// Shells and backdrop live in different crates, so only this test sees them together.
 #[test]
 fn every_shell_is_visible_against_the_backdrop() {
     let codes = ["", "AMTE", "AXVE", "AXPE", "BPEE", "BPRE", "BPGE", "MSKE"];
@@ -25,9 +23,7 @@ fn every_shell_is_visible_against_the_backdrop() {
     assert!(distance(DEFAULT_SHELL.colour, BACKDROP) > 60);
 }
 
-/// The same failure one layer along: a near black mouth on a pure black backdrop is not an
-/// opening, it is nothing. A slot only reads as a hole because of what it is cut into, so
-/// each band has to clear the one behind it as well as the backdrop.
+/// Each band must clear the one behind it as well as the backdrop, or the slot is not a hole.
 #[test]
 fn every_chrome_band_is_visible_against_its_neighbour() {
     let d = |a: [f32; 4], b: [f32; 4]| -> f32 {

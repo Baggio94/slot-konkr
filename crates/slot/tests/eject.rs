@@ -57,8 +57,7 @@ fn eject_clears_the_slot_only_after_the_state_is_durable() {
     );
 }
 
-/// The clear is last for a reason. A resume that did not land has to leave the cart
-/// seated, so the next boot resumes the session rather than losing it to a full card.
+/// The clear is last: a resume that did not land has to leave the cart seated.
 #[test]
 fn a_resume_that_cannot_be_written_leaves_the_cart_in_the_slot() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -69,15 +68,14 @@ fn a_resume_that_cannot_be_written_leaves_the_cart_in_the_slot() {
     assert_eq!(read_slot_state(d.path()).cart, Some("Emerald".into()));
 }
 
-/// The core hands back the whole save ram every eject and almost none of them touched a
-/// byte of it.
+/// Save ram unchanged since the last write is not rewritten.
 #[test]
 fn an_unchanged_battery_save_is_not_rewritten() {
     let d = tmp_root_with_carts(&["Emerald"]);
     std::fs::create_dir_all(d.path().join("Saves/GBA")).unwrap();
     std::fs::write(d.path().join("Saves/GBA/Emerald.sav"), b"savdata").unwrap();
-    // The directory `write_sav` actually writes into, not its parent: locking `Saves/` alone
-    // would leave the already-created `Saves/GBA/` writable underneath it.
+    // Lock the directory `write_sav` writes into; locking `Saves/` alone would leave
+    // `Saves/GBA/` writable.
     let saves = d.path().join("Saves/GBA");
     set_mode(&saves, 0o555);
     let unchanged = eject(
@@ -102,13 +100,8 @@ fn an_unchanged_battery_save_is_not_rewritten() {
     );
 }
 
-/// I5: `load_save_ram` can accept bytes it should have refused — a libretro core copies
-/// `len.min(data.len())` into its save-ram region and returns `Ok` regardless of whether the
-/// two lengths actually matched. If a cart's two cores disagree on `RETRO_MEMORY_SAVE_RAM`'s
-/// size, switching cores would otherwise truncate the player's save on the very next write,
-/// silently: the core accepted what it was given, so nothing upstream of `write_sav` has any
-/// reason to doubt it. This is the backstop `write_sav` itself carries: a shorter save than
-/// what is already on the card is refused and logged rather than trusted.
+/// A libretro core accepts a save-ram load of the wrong length and returns `Ok`, so a core
+/// switch could truncate a save. `write_sav` refuses a save shorter than the one on the card.
 #[test]
 fn write_sav_refuses_to_shrink_an_existing_save() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -128,8 +121,7 @@ fn write_sav_refuses_to_shrink_an_existing_save() {
         "the larger, real save was overwritten by a shorter one"
     );
 
-    // A growth, by contrast, is exactly what a legitimate re-save looks like and must go
-    // through — the guard is specifically for shrinking, not for change.
+    // A growth is a legitimate re-save and must go through.
     let bigger = vec![0x22u8; 8192];
     let wrote = slot::persist::write_sav(d.path(), "Emerald", &bigger).unwrap();
     assert!(wrote, "a longer save must not be refused");
@@ -139,13 +131,8 @@ fn write_sav_refuses_to_shrink_an_existing_save() {
     );
 }
 
-/// The `.srm`-only twin of the test above. `read_sav` accepts `Saves/<stem>.srm` as well as
-/// `.sav` — RetroArch's name for the same battery bytes — but the shrink guard used to stat
-/// `.sav` alone. A card carrying nothing but an `.srm` therefore had no guard at all: a core
-/// with a smaller save-ram region would write a small `.sav` straight past it, and that `.sav`
-/// then shadows the larger `.srm` on every read after (`.sav` wins when both exist), which
-/// makes the loss permanent on the very first write. `write_sav` now compares against whatever
-/// `read_sav` would actually return, `.srm` included.
+/// The shrink guard also compares against an `.srm`-only card. Otherwise a smaller `.sav`
+/// would shadow the `.srm` on every later read.
 #[test]
 fn write_sav_refuses_to_shrink_an_existing_srm() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -170,7 +157,7 @@ fn write_sav_refuses_to_shrink_an_existing_srm() {
         "the real save carried on the srm must survive"
     );
 
-    // The healthy path must still work against an srm baseline: a legitimate growth writes.
+    // A legitimate growth still writes against an srm baseline.
     let bigger = vec![0x22u8; 200_000];
     let wrote = slot::persist::write_sav(d.path(), "Emerald", &bigger).unwrap();
     assert!(
@@ -223,8 +210,7 @@ fn ejecting_a_playing_cart_flushes_before_the_animation_starts() {
     assert_eq!(read_slot_state(d.path()).cart, None);
 }
 
-/// A cart that never loaded has no state of its own, and a resume written here would be
-/// whatever the snapshot last had to hand.
+/// A cart that never loaded writes no resume.
 #[test]
 fn a_refused_cart_writes_no_resume() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -242,9 +228,8 @@ fn a_refused_cart_writes_no_resume() {
     assert_eq!(read_slot_state(d.path()).cart, None);
 }
 
-/// A cart whose core never arrived is still in the slot and still has to come out. Without
-/// this the only way out of a stalled insert is a reboot, and `SLOT_NO_CORE=1`, which holds
-/// the slot on screen so the travel can be watched, would be a one way trip.
+/// A cart whose core never arrived can still be ejected, or a stalled insert (or
+/// `SLOT_NO_CORE=1`) could only be left by rebooting.
 #[test]
 fn a_cart_can_be_ejected_before_its_core_is_ready() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -258,8 +243,7 @@ fn a_cart_can_be_ejected_before_its_core_is_ready() {
     );
 }
 
-/// The insert run backwards. The row closes back up behind the cart as it comes out; before
-/// this the shelf appeared all at once the instant the travel ended.
+/// The insert run backwards: the row closes back up behind the cart as it comes out.
 #[test]
 fn the_row_closes_back_up_as_the_cart_comes_out() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion", "Metroid"]);
@@ -289,19 +273,15 @@ fn the_row_closes_back_up_as_the_cart_comes_out() {
     );
 }
 
-/// The eject is the insert played backwards: every part of the screen at the same rate, in
-/// the opposite direction. It used to be driven off two clocks of different lengths, so the
-/// row closed a third faster than it opened, and the veil darkened on the way out as well as
-/// on the way in rather than lifting.
+/// The eject is the insert played backwards: every part at the same rate, opposite direction.
 #[test]
 fn the_eject_is_the_insert_run_backwards() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion", "Metroid"]);
     let mut a = boot(d.path());
     let dt = 1.0 / 60.0;
 
-    // What each frame of the travel moves the cart by, which is the thing that has to
-    // mirror. Positions cannot be compared directly: the two runs are sampled either side of
-    // a frame boundary and sit one step apart for their whole length.
+    // Compare per-frame movement, not positions: the two runs are sampled either side of a
+    // frame boundary and sit one step apart throughout.
     let steps = |a: &mut slot::app::App, done: fn(f32) -> bool| {
         let mut out = Vec::new();
         let mut last = a.seat();
@@ -348,8 +328,7 @@ fn the_eject_is_the_insert_run_backwards() {
     }
 }
 
-/// Both directions are drawn from `seat` alone, so nothing on the screen can run on a clock
-/// of its own and quietly stop mirroring: the veil, the row and the cart all move together.
+/// Both directions are drawn from `seat` alone, so the veil, row and cart cannot drift apart.
 #[test]
 fn the_veil_lifts_on_the_way_out_instead_of_falling_again() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion", "Metroid"]);
@@ -390,9 +369,7 @@ fn the_veil_lifts_on_the_way_out_instead_of_falling_again() {
     );
 }
 
-/// The game is over the moment the button is held. A core left running behind a dark screen
-/// is a game still being heard after the player ended it, and the cart used to start coming
-/// out over the top of it.
+/// Holding eject pauses the core immediately, before the cart starts coming out.
 #[test]
 fn the_core_stops_before_the_cart_moves() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -405,29 +382,13 @@ fn the_core_stops_before_the_cart_moves() {
     assert!(s.has_core(), "no core to stop");
 
     s.app_mut().apply(Action::Eject);
-    // One update to carry the new phase through `sync_speed`, which is the only place
-    // anything tells the worker to pause.
+    // `sync_speed` is the only place that tells the worker to pause.
     s.update(1.0 / 60.0);
 
-    // Wait for the worker to say it read `Paused`, not for the frame count to sit still.
-    // Stillness is ambiguous from the outside: a descheduled worker holds at whatever count it
-    // last reached for exactly as long as the scheduler ignores it, then wakes and publishes
-    // anyway, and no number of quiet updates tells the two apart.
-    //
-    // Nor may this wait keep calling `update`: that steps the eject's own travel, and a `dt`
-    // of a sixtieth of a second per call covers the whole animation in far less real time than
-    // the worker's own ~16.6ms pace needs to take even one more turn — driving the wait this
-    // way would spend the travel before the worker was ever scheduled to answer, the same gap
-    // that made the frame count an unreliable witness in the first place. Spending wall-clock
-    // time instead, with `seat` held still, actually gives the worker the turn being waited on.
-    //
-    // `observed_speed` is not an inference from the outside. The worker stores it right where
-    // it reads `speed`, with `Release`, so a reader who sees `Paused` here has a proof, not a
-    // guess: if the worker read Paused on some iteration, that iteration ran zero steps and
-    // published nothing; nothing sets the speed back during an eject, so no later iteration can
-    // have published either; and `Release` paired with this load's `Acquire` means any publish
-    // from an earlier iteration is ordered before the store this loop just observed. A count
-    // that has not moved yet only suggests the core stopped. This confirms it.
+    // Wait on `observed_speed`, not a still frame count: a descheduled worker also holds still.
+    // Wait in wall-clock time without calling `update`, which would spend the travel before
+    // the worker gets a turn. The worker stores `Paused` with `Release`, so seeing it proves
+    // no later frame was published.
     let deadline = Instant::now() + Duration::from_secs(2);
     while s.observed_speed() != Some(Speed::Paused) {
         assert!(
