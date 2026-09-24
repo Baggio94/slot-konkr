@@ -1,9 +1,7 @@
-//! Bringing the private link network up and down, by shelling out to `ags-net link`.
+//! Bringing the private link network up and down, by running the card's `System/slotlink.sh`.
 //!
 //! Not on `Platform`: `App` owns its `Power` outright and a link session needs this from a
-//! worker thread. `warm` and `cool` load and unload the driver (off at boot for standby battery)
-//! while the player is still choosing; an older BaseOS lacks them, so their status is not relied
-//! on.
+//! worker thread. `warm` readies the driver while the player is still choosing.
 
 #[cfg(feature = "device")]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,6 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Sender};
 #[cfg(feature = "device")]
 use std::sync::OnceLock;
+#[cfg(any(feature = "device", test))]
+use std::{path::Path, process::Command};
 
 use crate::link_net::Cancel;
 
@@ -22,7 +22,7 @@ pub enum LinkRole {
 }
 
 impl LinkRole {
-    /// The subcommand `ags-net link` expects.
+    /// The `link` verb for this role.
     pub fn arg(self) -> &'static str {
         match self {
             LinkRole::Host => "host",
@@ -34,11 +34,11 @@ impl LinkRole {
 /// Why the network did not come up. Each variant gets its own sentence on screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RadioFail {
-    /// `ags-net link join` exited 3: no host answered during its search.
+    /// `link join` exited 3: no host answered during its search.
     NoHost,
     /// The player backed out and the child was killed.
     Cancelled,
-    /// Anything else, including no `ags-net` at all.
+    /// Anything else, including no link script at all.
     Radio(String),
 }
 
@@ -47,7 +47,7 @@ pub enum RadioFail {
 pub enum RadioJob {
     /// Load the driver and wait for its interfaces, without associating or hosting.
     Warm,
-    /// Unload it, unless `ags-net` finds something still wants it.
+    /// Let it go. BaseOS keeps the driver loaded, so the card script ignores this.
     Cool,
     /// End a session: drop the access point or the association, and cool on the way out.
     Down,
@@ -115,28 +115,37 @@ fn queue() -> &'static Sender<RadioJob> {
     })
 }
 
-/// A subcommand nothing waits on, and whether it succeeded. An old BaseOS exits 2 (usage), which
-/// is harmless: `ags-net link host` loads the driver itself.
+/// `link <verb>` against the card's script, through `sh` because exFAT carries no exec bit. A card
+/// without the script fails the link with sh's error rather than doing anything else.
+#[cfg(any(feature = "device", test))]
+fn link_command(root: &Path, verb: &str) -> Command {
+    let mut cmd = Command::new("/bin/sh");
+    cmd.arg(root.join("System/slotlink.sh"))
+        .arg("link")
+        .arg(verb);
+    cmd
+}
+
+/// The card slot runs from, as `device_app` resolves it.
+#[cfg(feature = "device")]
+fn link(verb: &str) -> Command {
+    let root = std::env::var_os("SLOT_ROOT").unwrap_or_else(|| "/mnt/sdcard".into());
+    link_command(Path::new(&root), verb)
+}
+
+/// A verb nothing waits on, and whether it succeeded.
 #[cfg(feature = "device")]
 fn run(sub: &str) -> bool {
-    std::process::Command::new("ags-net")
-        .arg("link")
-        .arg(sub)
-        .status()
-        .is_ok_and(|status| status.success())
+    link(sub).status().is_ok_and(|status| status.success())
 }
 
 /// Blocking: about 2 s to host, up to 30 s for a joiner's search. Run off the UI thread; a
 /// cancel kills the child process.
 #[cfg(feature = "device")]
 pub fn up(role: LinkRole, cancel: &Cancel) -> Result<(), RadioFail> {
-    let mut child = std::process::Command::new("ags-net")
-        .arg("link")
-        .arg(role.arg())
+    let mut child = link(role.arg())
         .spawn()
-        .map_err(|e| {
-            RadioFail::Radio(format!("ags-net link {} would not start: {e}", role.arg()))
-        })?;
+        .map_err(|e| RadioFail::Radio(format!("link {} would not start: {e}", role.arg())))?;
     loop {
         if cancel.is_cancelled() {
             let _ = child.kill();
@@ -149,17 +158,12 @@ pub fn up(role: LinkRole, cancel: &Cancel) -> Result<(), RadioFail> {
             Ok(Some(status)) if status.code() == Some(3) => return Err(RadioFail::NoHost),
             Ok(Some(status)) => {
                 return Err(RadioFail::Radio(format!(
-                    "ags-net link {} failed: {status}",
+                    "link {} failed: {status}",
                     role.arg()
                 )))
             }
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
-            Err(e) => {
-                return Err(RadioFail::Radio(format!(
-                    "ags-net link {}: {e}",
-                    role.arg()
-                )))
-            }
+            Err(e) => return Err(RadioFail::Radio(format!("link {}: {e}", role.arg()))),
         }
     }
 }
@@ -167,10 +171,7 @@ pub fn up(role: LinkRole, cancel: &Cancel) -> Result<(), RadioFail> {
 /// Infallible on purpose: it runs on every failure path, and a fallible teardown gets skipped.
 #[cfg(feature = "device")]
 pub fn down() {
-    let _ = std::process::Command::new("ags-net")
-        .arg("link")
-        .arg("down")
-        .status();
+    let _ = link("down").status();
 }
 
 /// No radio off device. Succeeds, since two copies of slot over loopback can drive the screen.
@@ -211,6 +212,24 @@ mod tests {
         jobs.ask(RadioJob::Warm);
         jobs.ask(RadioJob::Cool);
         jobs.ask(RadioJob::Down);
+    }
+
+    fn argv(cmd: &Command) -> Vec<String> {
+        std::iter::once(cmd.get_program())
+            .chain(cmd.get_args())
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// The card's script, through `sh`, from the card.
+    #[test]
+    fn a_link_runs_the_cards_script_through_sh() {
+        let d = tempfile::tempdir().unwrap();
+        let script = d.path().join("System/slotlink.sh");
+        assert_eq!(
+            argv(&link_command(d.path(), "host")),
+            ["/bin/sh", script.to_str().unwrap(), "link", "host"]
+        );
     }
 
     /// A host build reports the driver warm, so no wait is captioned.

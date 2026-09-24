@@ -1,6 +1,6 @@
 //! The in-game menu and the link it starts.
 //!
-//! Nothing here touches `ags-net` or a network interface: every starter is built through
+//! Nothing here touches `slotlink.sh` or a network interface: every starter is built through
 //! `LinkStarter::spawn_with` with its slow parts injected. The one real `TcpLink` is over
 //! loopback, because `LinkProgress::Ready` carries a transport.
 
@@ -353,7 +353,7 @@ fn b_during_the_radio_step_does_not_hand_the_game_back_early() {
     let (release, held) = channel::<()>();
     app.start_link(
         LinkStarter::spawn_with(
-            // Stands in for an `ags-net link` that has not answered yet.
+            // Stands in for an `slotlink.sh link` that has not answered yet.
             Box::new(move |_, _| {
                 held.recv().expect("released");
                 Ok(())

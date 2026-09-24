@@ -74,7 +74,7 @@ fn a_radio_that_will_not_come_up_stops_before_the_socket() {
         !tried_socket.load(Ordering::SeqCst),
         "opened a socket on a network that never came up"
     );
-    // `ags-net link host` can configure the interface and still exit non-zero, so the
+    // `slotlink.sh link host` can configure the interface and still exit non-zero, so the
     // teardown runs on this path too.
     assert_eq!(
         downs.load(Ordering::SeqCst),
@@ -273,7 +273,7 @@ fn a_link_that_comes_up_after_the_player_left_puts_the_radio_back() {
     let _ = peer.join();
 }
 
-/// `ags-net link join` exits 3 when no host answered. That is the other player's absence,
+/// `slotlink.sh link join` exits 3 when no host answered. That is the other player's absence,
 /// not a radio fault, and must not be shown as one.
 #[test]
 fn a_join_that_found_no_host_says_nobody_arrived() {

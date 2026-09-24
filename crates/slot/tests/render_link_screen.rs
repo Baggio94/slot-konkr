@@ -602,7 +602,7 @@ fn the_legend_shows_select_mode_only_where_the_hardware_can_be_switched() {
 // --- the sentence the first step shows ------------------------------------------------------
 //
 // Opening the link screen asks for a warm, which takes about 1.1 s out of the step that runs
-// `ags-net link host|join`. Once the driver is loaded the step says it is looking for the other
+// `slotlink.sh link host|join`. Once the driver is loaded the step says it is looking for the other
 // player. Read off the glass, since an index into the wrong face list draws the wrong line.
 
 /// A radio whose warm finishes when the test says so. It can accept a `Warm` and still report a
@@ -652,7 +652,7 @@ fn first_step_pixels(warm: bool, name: &str) -> (Vec<u8>, Vec<RadioJob>) {
     app.set_link_step_faces(faces.iter().map(|(t, f)| (*t, f.w, f.h)).collect());
     app.apply(Action::GameMenu);
     assert!(app.game_menu_open(), "the link screen never opened");
-    // A worker held on its first step, standing in for an `ags-net link` that has not answered.
+    // A worker held on its first step, standing in for an `slotlink.sh link` that has not answered.
     let (release, held) = channel::<()>();
     app.start_link(
         LinkStarter::spawn_with(

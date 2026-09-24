@@ -196,7 +196,7 @@ impl LinkStarter {
                         LinkFail::Radio
                     }
                 };
-                // `ags-net link` can configure an interface and still exit non-zero.
+                // `slotlink.sh link` can configure an interface and still exit non-zero.
                 radio_down();
                 let _ = tx.send(LinkProgress::Failed(fail));
                 return;
