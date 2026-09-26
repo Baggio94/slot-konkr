@@ -5,7 +5,7 @@
 //! `SCRATCH_DIR=/tmp/wrap cargo test -p slot-ui --test render_shelf_wrap -- --nocapture`
 
 use slot_gfx::{Draw, OUT_H, OUT_W};
-use slot_store::Cart;
+use slot_store::{Cart, Platform};
 use slot_ui::Shelf;
 
 const SHRINK: usize = 3;
@@ -19,6 +19,7 @@ fn shelf_with(n: usize) -> Shelf {
     Shelf::new(
         (0..n)
             .map(|i| Cart {
+                platform: Platform::Gba,
                 stem: format!("Game {i}"),
                 rom: format!("Games/GBA/Game {i}.gba").into(),
                 label: None,

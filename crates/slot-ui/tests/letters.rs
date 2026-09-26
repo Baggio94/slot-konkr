@@ -47,7 +47,7 @@ fn digits_and_punctuation_share_one_stop() {
     assert_eq!(initial("  Metroid"), 'M', "leading space hid the letter");
 }
 
-use slot_store::Cart;
+use slot_store::{Cart, Platform};
 use slot_ui::Shelf;
 
 fn shelf_of(names: &[&str]) -> Shelf {
@@ -55,6 +55,7 @@ fn shelf_of(names: &[&str]) -> Shelf {
         names
             .iter()
             .map(|n| Cart {
+                platform: Platform::Gba,
                 stem: (*n).to_string(),
                 rom: format!("Games/GBA/{n}.gba").into(),
                 label: None,

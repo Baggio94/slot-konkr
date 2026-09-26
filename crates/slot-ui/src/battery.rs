@@ -33,8 +33,20 @@ const INK: [f32; 4] = [
     1.0,
 ];
 
-/// The capsule, its fill and the number. `x`, `y` is the whole cluster's top left: the bolt's
-/// slot is always reserved, so nothing moves when a cable goes in.
+/// The capsule, its fill, and the number beside it. `x` and `y` are the top left of the whole
+/// cluster, not the capsule: the bolt's slot is reserved first, unconditionally, so the
+/// capsule and the number sit in the same place whether or not a cable is in. The bolt itself
+/// only ever draws inside that reserved slot, never over the fill.
+/// How wide a gauge draws, so a caller can right-align one. Derived from the same parts
+/// `draw_gauge` lays out rather than measured after the fact, so the two cannot drift.
+pub fn gauge_width(percent: Printed) -> f32 {
+    let bar = BOLT_W + BOLT_GAP + GAUGE_W + NUB_W;
+    match percent.w > 0 {
+        true => bar + GAP + percent.w as f32,
+        false => bar,
+    }
+}
+
 pub fn draw_gauge(
     x: f32,
     y: f32,

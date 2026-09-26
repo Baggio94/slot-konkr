@@ -1,8 +1,20 @@
 //! `<key> = <value>` files under `System/`, the untyped layer for per-cart preferences.
 //!
-//! People hand-edit these, so a malformed line is skipped rather than raised (a typo costs one
-//! entry its default, never the shelf), and a write replaces one line in place so comments,
-//! blank lines and unparsed lines survive.
+//! Keyed on the rom stem, because that is already the key for `Labels/`, `Saves/` and
+//! `States/`; a card stays consistent with itself. Nothing here requires that, though — the
+//! key is whatever string the caller hands over.
+//!
+//! Two rules, and both exist because a person edits these files in a text editor on a card:
+//!
+//! - Every malformed line is skipped rather than raised. The cost of a typo must be that one
+//!   entry falls back to its default, never that the shelf fails to load.
+//! - A write replaces one line in place and never rebuilds the file from the map, so every
+//!   comment, blank line and unparsed line survives — including the note somebody wrote to
+//!   themselves above a cart.
+//!
+//! `selected_core.ini` had all of this to itself and `video_mode.ini` is the second file to
+//! want it. The two were within a value type of being the same eighty lines, and two
+//! hand-copied parsers is how two files meant to behave identically start to differ.
 
 use std::collections::HashMap;
 use std::path::Path;

@@ -1,8 +1,8 @@
 # slot.
 
-A bespoke, GBA-centric frontend for the Anbernic RG SP.
+A bespoke, Game Boy-centric frontend for the Anbernic RG SP.
 
-Has support for GBA titles only.
+Has support for GBA, GBC, and GB titles only.
 
 A full user guide can be found at [slot.kowalski.io](https://slot.kowalski.io).
 

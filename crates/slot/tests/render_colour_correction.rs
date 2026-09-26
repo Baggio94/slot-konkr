@@ -1,5 +1,15 @@
-//! Colour Correction against the real core: the same cart run the same number of frames with
-//! the row off and on, and the pixels compared. Only the pixels show the core actually tinted.
+//! The quick menu's Colour Correction against the real core: the same cart, the same number of
+//! emulated frames, once with the row off and once with it on, and the two pictures compared.
+//!
+//! The one question a row like this has to answer is whether anyone can see it. A draw list
+//! cannot answer that and neither can an option read back out of the frontend's own map — the
+//! core would accept `Autp` just as quietly as `Auto` and simply never tint anything. So this
+//! runs the machine and looks at the pixels it drew.
+//!
+//! Deliberately deterministic: both runs load the same ROM, press nothing, and run exactly the
+//! same number of frames, so every pixel that differs between them differs because of the
+//! option and not because one run got further into an animation than the other. That is what
+//! lets the difference be measured rather than merely eyeballed.
 //!
 //! `SCRATCH_PNG_DIR=/tmp cargo test -p slot --test render_colour_correction -- --nocapture`
 //!
@@ -13,9 +23,19 @@ use common::{core_lock, repo_root, vendored_core};
 use slot_retro::{ButtonMask, GBA_H, GBA_W};
 use slot_store::Core;
 
-/// Frames run before the picture is read. Earlier frames are black; Metroid Fusion is on its
-/// intro's starfield well before this.
-const FRAMES: usize = 240;
+/// How many frames each cart is run before its picture is read. Per cart rather than shared,
+/// because how long a cart spends on black before it draws anything is the cart's own business
+/// — and a picture read too early is black, which no correction can tint. Both runs of a cart
+/// use its own number, which is what keeps the pair the same instant of the same game.
+fn frames_for(name: &str) -> usize {
+    match name {
+        // Metroid Fusion is on its intro's starfield well before this.
+        "gba" => 240,
+        // Pokémon Crystal holds black through its boot and the Game Freak logo's lead-in; at
+        // 240 frames the picture is still empty, which is how this number was arrived at.
+        _ => 900,
+    }
+}
 
 /// The core's framebuffer is little endian XRGB8888, which on the wire is B, G, R, unused.
 fn to_rgba(xrgb: &[u8]) -> Vec<u8> {
@@ -218,9 +238,11 @@ fn the_cards_setting_reaches_the_core_through_the_session() {
     );
 }
 
-/// The row on a GBA cart run for real: the same instant of the same game, off and on.
+/// Both consoles, because `Auto` is the whole reason the row says On rather than naming a
+/// correction: mGBA is asked to pick the right tint per cart, and a value that only moved the
+/// GBA picture would leave every Game Boy Color cart looking exactly as it did.
 #[test]
-fn colour_correction_changes_the_picture() {
+fn colour_correction_changes_the_picture_on_both_consoles() {
     let Some(dylib) = vendored_core() else {
         eprintln!("no mgba dylib, skipping");
         return;
@@ -228,17 +250,25 @@ fn colour_correction_changes_the_picture() {
     let _g = core_lock();
     let d = common::tmp_root_with_carts(&[]);
 
-    for (name, from, to) in [(
-        "gba",
-        "sdcard/Games/GBA/Metroid Fusion.gba",
-        "Games/GBA/Metroid Fusion.gba",
-    )] {
+    for (name, from, to) in [
+        (
+            "gba",
+            "sdcard/Games/GBA/Metroid Fusion.gba",
+            "Games/GBA/Metroid Fusion.gba",
+        ),
+        (
+            "gbc",
+            "sdcard/Games/GBC/Pokemon - Crystal Version (USA).gbc",
+            "Games/GBC/Pokemon - Crystal Version (USA).gbc",
+        ),
+    ] {
         let Some(rom) = card_cart(d.path(), from, to) else {
             eprintln!("no {name} cart on this machine's card, skipping it");
             continue;
         };
-        // One core at a time: the first must be dropped before the second opens.
-        let frames = FRAMES;
+        // One core at a time: libretro keeps its machine in dylib globals, so the first has to
+        // be dropped before the second opens.
+        let frames = frames_for(name);
         let off = picture(d.path(), &dylib, &rom, false, frames);
         let on = picture(d.path(), &dylib, &rom, true, frames);
         // A black picture has nothing to tint: a fixture failure, not the row's.
@@ -272,7 +302,11 @@ fn colour_correction_changes_the_picture() {
             "{name}: only {:.1}% of the picture changed, which is not a tint",
             changed * 100.0
         );
-        // And it took colour out, which is the whole of what the row promises.
+        // And it took colour out, which is the one thing the two corrections have in common.
+        // Brightness is not: the GBA's correction darkens the picture (mean 148 to 76 on this
+        // frame) while the GBC's lifts it (133 to 173), so a test that asserted "darker" would
+        // be right about one console and wrong about the other. What both do is wash the
+        // picture out, which is the whole of what the row promises.
         assert!(
             sat_on < sat_off,
             "{name}: correction did not wash the picture out: saturation {sat_off:.1} to \

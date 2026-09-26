@@ -115,8 +115,14 @@ impl Compositor {
         self.game.set_power(t);
     }
 
-    /// Horizontal offset in offscreen pixels, applied at the blit so the whole picture moves
-    /// as one.
+    pub fn set_game_source_rect(&mut self, rect: [f32; 4]) {
+        self.game.set_source_rect(rect);
+    }
+
+    /// Pixels, in offscreen space, applied to the whole presented image. On the blit rather
+    /// than on the draw list, so game, chrome and HUD move together as one picture. Applied
+    /// inside the offscreen target it would shake the chrome against a game that stayed
+    /// still. Edges reveal the letterbox for the duration, which is what a jolt looks like.
     pub fn set_shake(&mut self, dx: f32) {
         self.shake = dx;
     }

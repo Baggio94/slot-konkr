@@ -1,7 +1,12 @@
 use crate::{Btn, Millis, RawEvent};
 
-/// How long a held SELECT may still arm a chord with a second key. 120 ms was too short to
-/// land the second key.
+/// How long a *held* SELECT may still arm a chord with a second key. Generous on purpose:
+/// 120 ms was not enough to land the second key of a chord.
+///
+/// This no longer withholds anything. It used to be how long SELECT waited before conceding it
+/// was a plain press, which meant a held SELECT arrived at the game 600 ms late whether or not
+/// a chord ever followed — the whole of a hold-piece gesture on a Game Boy cart. The press goes
+/// straight through now (see `select_down`), so this is the arming window and nothing else.
 pub const SELECT_CHORD_MS: Millis = 600;
 
 /// The least time SELECT stays down on the pad, measured from the press. The core reads the
@@ -241,10 +246,25 @@ impl Gestures {
         }
     }
 
-    /// The press goes straight to the game and the chord arms off the same hold, so a chord
-    /// also sends the game a SELECT press; retracting it would be a release nobody made.
-    /// A press inside a pending `ReleaseDue` (switch bounce) hands that release back first, or
-    /// the core is left holding SELECT.
+    /// The press goes straight to the game, and the chord arms off the same hold behind it.
+    ///
+    /// SELECT used to be withheld for the whole of `SELECT_CHORD_MS` so that a chord could
+    /// swallow it whole, which meant a *held* SELECT reached the game 600 ms late whether or
+    /// not a chord ever followed. For a Game Boy game that holds a piece with SELECT that is
+    /// the entire gesture, and it is why turning chords off for Game Boy carts would not have
+    /// helped: the latency was never the chord's, it was the waiting to find out.
+    ///
+    /// What it costs is that a chord now hands the game a SELECT press it did not mean to send.
+    /// There is no way around that while the two share the button — the press is already out by
+    /// the time the second key says what it was for, and taking it back would be a release the
+    /// player never made, which is the exact shape of failure this area has been bitten by three
+    /// times. The second key is still the chord's alone, on both of its edges.
+    ///
+    /// Plus whatever the press before it still owed: `select_up` can leave a release held back
+    /// for `SELECT_TAP_MS`, and a press arriving inside that window overwrote the state owing
+    /// it. That is a switch bouncing rather than anything a player does — 50 ms is three frames
+    /// — but the release it lost left the core holding SELECT with no up ever coming, so the
+    /// interrupting press hands it back itself, ahead of its own.
     fn select_down(&mut self, now: Millis) -> Vec<Action> {
         let mut out = Vec::new();
         if matches!(self.select, Select::ReleaseDue(_)) {

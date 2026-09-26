@@ -5,7 +5,15 @@ use crate::icon::{haloed, HALO_PX};
 use crate::text;
 use crate::CartFace;
 
-/// Everything the HUD says in words, each answering something the user just did.
+/// Everything the HUD ever says in words. Each answers something the user just did: two confirm
+/// it, two answer the link shortcut where it cannot be carried out — on a core that cannot link
+/// at all, and on a cart whose link gpSP cannot carry — either of which would otherwise do
+/// nothing and say nothing, and the last two are a link session ending, from whichever end ended
+/// it.
+///
+/// Three more used to name the shelf the shoulders had just moved to. They are gone: the shelf
+/// is now said by the platform's mark in the top plate's corner, which is always there rather
+/// than fading after a moment — see `slot_ui::mark`.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Toast {
     StateSaved,

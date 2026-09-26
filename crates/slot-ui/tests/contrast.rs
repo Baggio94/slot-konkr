@@ -1,5 +1,8 @@
 use slot_gfx::BACKDROP;
-use slot_ui::{edge, gba_shell_for, housing, opening, DEFAULT_SHELL};
+use slot_ui::{
+    edge, gba_shell_for, housing, opening, DEFAULT_SHELL, DMG_SHELL, DUAL_MODE_SHELL,
+    GB_CLEAR_SHELL,
+};
 
 fn distance(a: [u8; 3], b: [f32; 4]) -> u32 {
     (0..3)
@@ -21,6 +24,20 @@ fn every_shell_is_visible_against_the_backdrop() {
         );
     }
     assert!(distance(DEFAULT_SHELL.colour, BACKDROP) > 60);
+    // The Game Boy paks are not in the code table — a pak has no game code — so they have to be
+    // named here or the shelf they appear on is the one nothing checks.
+    for (what, s) in [
+        ("the grey pak", DMG_SHELL),
+        ("the black pak", DUAL_MODE_SHELL),
+        ("the clear pak", GB_CLEAR_SHELL),
+    ] {
+        let d = distance(s.colour, BACKDROP);
+        assert!(
+            d > 60,
+            "{what} {:?} is only {d}/765 from the backdrop, it will not be seen",
+            s.colour
+        );
+    }
 }
 
 /// Each band must clear the one behind it as well as the backdrop, or the slot is not a hole.

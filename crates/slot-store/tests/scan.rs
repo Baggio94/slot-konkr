@@ -1,7 +1,7 @@
 mod common;
 
 use common::tmp_root;
-use slot_store::scan;
+use slot_store::{scan, Platform};
 use tempfile::TempDir;
 
 /// `rel` is a path relative to `Games/`, e.g. `"GBA/Pokemon Emerald.gba"`.
@@ -76,33 +76,71 @@ fn a_root_with_no_games_directory_scans_as_empty() {
     assert!(scan(d.path()).unwrap().is_empty());
 }
 
-/// Legacy `GB/` and `GBC/` folders, and Game Boy roms filed under `GBA/`, stay off the shelf.
+/// Location decides the platform. Nothing is read out of the ROM to work it out.
 #[test]
-fn only_gba_roms_under_gba_are_carts() {
+fn a_cart_takes_the_platform_of_the_folder_it_is_in() {
     let d = tmp_root();
     write_rom(&d, "GBA/Metroid Fusion.gba", "METROID");
-    for dir in ["Games/GB", "Games/GBC"] {
-        std::fs::create_dir_all(d.path().join(dir)).unwrap();
-    }
     std::fs::write(d.path().join("Games/GB/Tetris.gb"), vec![0u8; 0x150]).unwrap();
     std::fs::write(d.path().join("Games/GBC/Chromatic.gbc"), vec![0u8; 0x150]).unwrap();
-    std::fs::write(d.path().join("Games/GBA/Stray.gb"), vec![0u8; 0x150]).unwrap();
 
     let carts = scan(d.path()).unwrap();
 
-    let stems: Vec<_> = carts.iter().map(|c| c.stem.as_str()).collect();
-    assert_eq!(stems, ["Metroid Fusion"]);
+    let by_stem = |s: &str| carts.iter().find(|c| c.stem == s).unwrap().platform;
+    assert_eq!(by_stem("Metroid Fusion"), Platform::Gba);
+    assert_eq!(by_stem("Tetris"), Platform::Gb);
+    assert_eq!(by_stem("Chromatic"), Platform::Gbc);
 }
 
-/// A `GBA` folder that will not open is an empty shelf, not an error.
+/// A `.gba` filed under `GB/` is not a Game Boy cart. The folder says where a cart's files go;
+/// it cannot make a GBA ROM into a Game Boy game, and running it as one would be a broken
+/// screen. It simply does not appear, and slot says nothing.
 #[test]
-fn an_unreadable_games_folder_is_an_empty_shelf() {
+fn a_gba_rom_in_the_game_boy_folder_does_not_appear() {
     let d = tmp_root();
-    // A file where the folder belongs, so `read_dir` fails with ENOTDIR, not NotFound.
-    std::fs::remove_dir(d.path().join("Games/GBA")).unwrap();
-    std::fs::write(d.path().join("Games/GBA"), b"not a directory").unwrap();
+    std::fs::write(d.path().join("Games/GB/Wrong.gba"), vec![0u8; 0x150]).unwrap();
+    assert!(scan(d.path()).unwrap().is_empty());
+}
 
-    assert!(scan(d.path())
-        .expect("an unreadable folder is not an error")
-        .is_empty());
+/// `App::boot` does `scan(root).unwrap_or_default()`, so an `Err` out of `scan` is not a message
+/// anywhere — it is every cart on the card gone from the shelf. One platform folder that will
+/// not open must cost the player that folder and nothing else, the same isolation the two boot
+/// sweeps already argue for at length.
+#[test]
+fn an_unreadable_platform_folder_does_not_take_the_rest_of_the_library_with_it() {
+    let d = tmp_root();
+    write_rom(&d, "GBA/Metroid Fusion.gba", "METROID");
+    std::fs::write(d.path().join("Games/GB/Tetris.gb"), vec![0u8; 0x150]).unwrap();
+    // A corrupted card: a plain file standing where the Colour folder belongs, so `read_dir`
+    // answers ENOTDIR rather than "nothing here".
+    std::fs::remove_dir(d.path().join("Games/GBC")).unwrap();
+    std::fs::write(d.path().join("Games/GBC"), b"not a directory").unwrap();
+
+    let carts = scan(d.path()).expect("one bad folder must not fail the whole scan");
+
+    assert_eq!(carts.len(), 2, "the readable shelves were lost too");
+    assert!(carts.iter().any(|c| c.stem == "Metroid Fusion"));
+    assert!(carts.iter().any(|c| c.stem == "Tetris"));
+}
+
+/// Two carts of the same name on different platforms are two carts, and their labels are two
+/// files. This is the collision the whole layout exists to close.
+#[test]
+fn the_same_stem_on_two_platforms_is_two_carts_with_two_labels() {
+    let d = tmp_root();
+    write_rom(&d, "GBA/Tetris.gba", "TETRIS");
+    std::fs::write(d.path().join("Games/GB/Tetris.gb"), vec![0u8; 0x150]).unwrap();
+    std::fs::create_dir_all(d.path().join("Labels/GB")).unwrap();
+    std::fs::write(d.path().join("Labels/GB/Tetris.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+
+    let carts = scan(d.path()).unwrap();
+
+    assert_eq!(carts.len(), 2);
+    let gb = carts.iter().find(|c| c.platform == Platform::Gb).unwrap();
+    let gba = carts.iter().find(|c| c.platform == Platform::Gba).unwrap();
+    assert!(gb.label.is_some(), "the Game Boy label was not found");
+    assert!(
+        gba.label.is_none(),
+        "the GBA cart borrowed the Game Boy label"
+    );
 }

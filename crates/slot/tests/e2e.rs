@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use slot::app::Phase;
 use slot::session::Session;
 use slot_input::{Btn, Millis, RawEvent};
-use slot_store::{read_slot_state, Core, StateRing};
+use slot_store::{read_slot_state, Core, Platform, StateRing};
 
 /// One simulated present. The gesture and animation clocks are one clock in the binary.
 const FRAME_MS: Millis = 16;
@@ -83,7 +83,7 @@ impl Pass {
     }
 
     fn ring(&self, stem: &str) -> StateRing {
-        StateRing::new(&self.root, Core::Mgba, stem)
+        StateRing::new(&self.root, Platform::Gba, Core::Mgba, stem)
     }
 }
 
