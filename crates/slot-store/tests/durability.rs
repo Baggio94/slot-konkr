@@ -185,9 +185,7 @@ fn a_card_from_before_the_settings_keeps_all_its_values() {
         read_slot_state(d.path()),
         SlotState {
             cart: Some("Emerald".into()),
-            // Nothing on that card said which platform, and nothing may invent one: this is the
-            // shape of card the "GBA wins" fallback exists for, and it reaches it by the line
-            // being absent rather than by the line saying `gba`.
+            // An absent line must not be read as `gba`.
             cart_platform: None,
             brightness: 3,
             blue_light: 1,
@@ -297,10 +295,7 @@ fn an_out_of_range_setting_falls_back_to_its_default() {
     }
 }
 
-/// Each of the three shelves survives a round trip through the card, spelled as its own folder
-/// name in lower case. Written as well as read, because the whole point of the line is that the
-/// next boot can tell `Tetris.gb` from `Tetris.gba`, and a platform that only round trips
-/// through the struct would leave both boots looking identical.
+/// Each platform round trips through the card, spelled as its folder name in lower case.
 #[test]
 fn every_platform_round_trips_as_its_own_line() {
     for platform in Platform::ALL {
@@ -323,9 +318,7 @@ fn every_platform_round_trips_as_its_own_line() {
     }
 }
 
-/// An empty slot says nothing about a platform, and the line has to be there saying nothing
-/// rather than absent: a card whose `cart_platform` survived an eject would name a shelf beside
-/// a `cart` line that names no cart, and the pair would describe a session that never happened.
+/// An empty slot writes an empty `cart_platform` line, so a stale platform cannot survive eject.
 #[test]
 fn an_empty_slot_writes_an_empty_platform() {
     let d = tmp_root();
@@ -342,13 +335,7 @@ fn an_empty_slot_writes_an_empty_platform() {
     assert_eq!(read_slot_state(d.path()).cart_platform, None);
 }
 
-/// The line is forgiven the way `rumble`, `ff_speed` and `ff_sound` are, and for the same
-/// reason: it arrived after cards were already in use. A value this build cannot read costs its
-/// own answer — the card falls back to resolving the stem across the shelves, which is what slot
-/// did before the line existed — and takes nothing else on the card with it.
-///
-/// `gba` in capitals is in the list deliberately: the file is plain text on a card anyone can
-/// open in an editor, and `GBA` is the same folder as `gba`.
+/// An unreadable `cart_platform` reads as `None` without discarding the rest; case is ignored.
 #[test]
 fn an_unreadable_platform_reads_as_a_card_that_never_said() {
     let d = tmp_root();

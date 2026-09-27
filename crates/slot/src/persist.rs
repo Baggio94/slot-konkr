@@ -24,19 +24,8 @@ pub trait Snapshot {
 }
 
 /// What lid close, power and autosave write. The slot is untouched, so the cart is still in it
-/// on the next boot.
-///
-/// Takes `platform` and `core` rather than resolving them here, for the same reason
-/// `read_resume` does below: the caller already has to know which platform and core are live to
-/// have anything worth flushing, and asking this function to work them out too would be a
-/// second, independent derivation for the same cart. `App` is that caller — it resolves both
-/// once, at insert, stores them, and hands the stored values here on every later write, which is
-/// what keeps this from ever disagreeing with the cart actually seated.
-///
-/// `state` is `Option` for the same reason `sav` already was: the caller — `App::flush_resume`
-/// and `App::flush_eject` — passes `None` for whichever region the live core refused at open,
-/// via `Snapshot::resume_trusted`/`save_ram_trusted`. This function trusts whatever it is
-/// handed; it is the one place that decides what gets skipped.
+/// on the next boot. `platform` and `core` come from `App`'s one resolution at insert, so every
+/// write agrees with the cart seated. A `None` region was refused by the core and is skipped.
 pub fn flush(
     root: &Path,
     platform: Platform,
@@ -67,31 +56,14 @@ pub fn eject(
     flush(root, platform, core, stem, state, sav)?;
     let mut slot = read_slot_state(root);
     slot.cart = None;
-    // The two are one fact — which cartridge is in the slot — so they are cleared together.
-    // A platform left behind on an empty slot would be read next boot beside a `cart` line
-    // that says nothing, and the pair would no longer describe anything that ever happened.
+    // One fact, so cleared together: a leftover platform would describe no cart.
     slot.cart_platform = None;
     write_slot_state(root, &slot)
 }
 
-/// Skips an unchanged save (up to 128 KB of card writes).
-///
-/// Also refuses to shrink an existing save. `load_save_ram` can accept bytes it should have
-/// refused: a libretro core that exposes a save-ram region copies `len.min(data.len())` bytes
-/// into it and returns `Ok` regardless, so a cart whose two cores disagree on
-/// `RETRO_MEMORY_SAVE_RAM`'s size truncates silently rather than failing loudly — the class of
-/// bug `resume_trusted`/`save_ram_trusted` cannot see, because as far as the core is concerned
-/// it accepted what it was given. This is the backstop for that: whatever produced a shorter
-/// save than what is already on the card, refuse it and say so, rather than trust that a
-/// smaller battery save is ever a real one.
-///
-/// The comparison goes through `read_sav`, not a stat of `sav_path` alone: `read_sav` also
-/// accepts `Saves/<platform>/<stem>.srm` (RetroArch's name for the same battery bytes, see its
-/// own doc comment below), and a card carrying only an `.srm` still has a real save on it.
-/// Stat-ing `.sav` directly would find nothing there, wave a smaller write through unguarded,
-/// and that new `.sav` would then shadow the larger `.srm` on every read after — this is the
-/// exact loss shape the guard above exists to stop, just reached from the one path it could
-/// not see.
+/// Skips an unchanged save (up to 128 KB of card writes), and refuses to shrink one: a core
+/// whose save-ram size differs truncates silently and still returns `Ok`. Compares against
+/// `read_sav` so an existing `.srm` is guarded too; a smaller `.sav` would shadow it.
 pub fn write_sav(root: &Path, platform: Platform, stem: &str, sav: &[u8]) -> std::io::Result<bool> {
     let path = sav_path(root, platform, stem);
     if let Some(old) = read_sav(root, platform, stem) {
@@ -130,17 +102,8 @@ pub fn read_sav(root: &Path, platform: Platform, stem: &str) -> Option<Vec<u8>> 
         .ok()
 }
 
-/// The counterpart to the resume write in `flush`. Without this the cart is seated on the
-/// next boot but the game restarts.
-///
-/// Takes `platform` and `core` rather than resolving them here: the caller already has to know
-/// which platform and core it is about to open, and asking this function to work them out too
-/// would be a second, independent derivation for the same cart in the same breath as the first.
-/// `session.rs` resolves them once per insert and hands those single values to both this and
-/// `open_core`, which is what keeps the resume directory and the dylib from disagreeing at that
-/// moment. It says nothing about later: `flush` and eject read the platform and core `App`
-/// stored from that same resolution rather than asking again, which is what keeps them agreeing
-/// too.
+/// The counterpart to the resume write in `flush`. `platform` and `core` are the caller's, the
+/// same values handed to `open_core`, so the resume directory and the dylib agree.
 pub fn read_resume(root: &Path, platform: Platform, core: Core, stem: &str) -> Option<Vec<u8>> {
     StateRing::new(root, platform, core, stem)
         .read_resume()

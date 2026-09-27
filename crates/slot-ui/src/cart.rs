@@ -13,22 +13,14 @@ use crate::text;
 pub const CART_W: u32 = 240;
 pub const CART_H: u32 = 135;
 
-/// A Game Boy Game Pak shares the canvas: both cartridges are 57 mm wide, and the canvas spans
-/// 60 mm because the GBA cart's grip ridge sticks out past its body. The pak's body is drawn at
-/// the same 227 px the GBA body is inset to, and its sides are parallel all the way down.
+/// Both paks are 57 mm wide; the canvas spans 60 mm for the GBA cart's grip ridge.
 pub const GB_CART_W: u32 = CART_W;
 
-/// 65.5 mm against the GBA pak's 35 mm, at one scale. Written as the rule rather than as the
-/// 253 it comes to, so that editing the rule cannot leave a stale number behind: the ×10 keeps
-/// it in whole numbers and the +175 is half the divisor, which rounds instead of truncating.
+/// 65.5 mm against the GBA pak's 35 mm, rounded to the nearest pixel.
 pub const GB_CART_H: u32 = (CART_H * 655 + 175) / 350;
 
-/// The paper label, inset in the shell rather than covering it: 9% to 91% across and 22.8%
-/// to 86.3% down. The vertical placement is the reference's, and the band it leaves above is
-/// the moulded grip; that asymmetry is most of what makes the face read as a cartridge
-/// rather than a bordered rectangle. The horizontal inset is deliberately tighter than the
-/// reference's 14.1%, which was an icon's proportion rather than a cartridge's: a real
-/// label runs nearly the full width with only a thin edge of plastic beside it.
+/// The paper label well: 9% to 91% across and 22.8% to 86.3% down. The band above is the
+/// moulded grip, which is most of what makes the face read as a cartridge.
 pub const fn label_panel(w: u32, h: u32) -> (u32, u32, u32, u32) {
     (
         (w * 90 + 500) / 1000,
@@ -43,13 +35,8 @@ pub const LABEL_Y: u32 = label_panel(CART_W, CART_H).1;
 pub const LABEL_W: u32 = label_panel(CART_W, CART_H).2 - LABEL_X;
 pub const LABEL_H: u32 = label_panel(CART_W, CART_H).3 - LABEL_Y;
 
-/// The Game Boy label well, measured off the user's own square-on drawing rather than worked
-/// out from published label dimensions. Their drawing is now the authority on placement, and it
-/// disagreed with the old numbers about where the label sits: it puts the well at 27.7% down,
-/// not 13.0%, because the moulded lettering plate occupies the whole shoulder above it and only
-/// the arrow sits below. The old placement would have printed the label straight over that
-/// plate. The well itself barely changed size — 176 x 150 against 168 x 143, and still the
-/// near-square the real 42 x 37 mm label is.
+/// The Game Boy label well, measured off a square-on drawing. It sits at 27.7% down because
+/// the moulded lettering plate fills the shoulder above it.
 pub const fn gb_label_panel(w: u32, h: u32) -> (u32, u32, u32, u32) {
     (
         (w * 133 + 500) / 1000,
@@ -68,11 +55,7 @@ const PAD: u32 = 10;
 const MAX_LINES: usize = 3;
 /// Three lines must clear the label's height; Open Sans Bold sets at about 1.36x the em.
 const MAX_PX: f32 = LABEL_H as f32 / (MAX_LINES as f32 * 1.36);
-/// The Game Boy panel is 1.17:1 where the GBA's is 2.28:1, so that estimate stops being the
-/// bound that binds: on a near square panel a size three lines clear vertically can be far too
-/// wide, and which bound binds changes with the title. The fitter is handed both instead, and
-/// starts from the tallest line the panel could hold at all rather than from a guess at how
-/// tall three of them will be.
+/// On the near square Game Boy panel either bound can bind, so the fitter gets both.
 const GB_MAX_PX: f32 = (GB_LABEL_H - 2 * PAD) as f32 / MAX_LINES as f32;
 const MIN_PX: f32 = 10.0;
 
@@ -87,11 +70,8 @@ pub struct CartFace {
     pub h: u32,
 }
 
-/// Everything about a face that is a property of the object rather than of the game: how big
-/// the cartridge is, where its label sits, the masks its outline and moulding come from, and
-/// the type size its generated label starts at. The drawing itself — the recess walls, the
-/// translucent rim, the clip to the outline — is one implementation handed one of these, so the
-/// two cartridges cannot drift into two ways of drawing a cart.
+/// What a face takes from the object rather than the game, so both cartridges share one
+/// drawing path.
 struct Spec {
     w: u32,
     h: u32,
@@ -103,28 +83,19 @@ struct Spec {
     max_px: f32,
     /// The height the type block must fit, or infinite where only the width can bind.
     max_h: f32,
-    /// How far in the translucent edge reaches. A band of fixed pixels reads as a thinner line
-    /// on a bigger object, so the pak — nearly twice the cart's height — carries a wider one to
-    /// read as the same depth of plastic.
+    /// Wider on the taller pak so it reads as the same depth of plastic.
     rim: u32,
 }
 
-/// Which shell a cart was moulded in, which is what the art is drawn from. Deliberately not a
-/// `Platform`: the shelves are one per folder, because the user split Game Boy and Game Boy
-/// Color onto shelves of their own, and the shells are one per CGB flag. The two groupings do
-/// not line up. A `.gb` file is routinely Colour-exclusive and a `.gbc` file routinely
-/// DMG-compatible — the extension is a dumping convention and the flag is the cart — so a
-/// `.gb` whose flag is 0xc0 gets the rounded shell and a `.gbc` whose flag is 0x80 gets the
-/// notched one. Asking the folder would draw a misfiled cart as something Nintendo never made.
+/// The shell a cart was moulded in, from the CGB flag rather than the folder: `.gb` and `.gbc`
+/// extensions are a dumping convention and routinely disagree with the flag.
 enum Shape {
     Gba,
     Gb(GbShell),
 }
 
-/// Which Game Pak mould this cart came out of, or `None` for a GBA cart, which came out of
-/// neither. It opens the rom for the CGB flag, so it is a question to ask once and remember and
-/// never one to ask on a frame: `Shelf::new` asks it when a row is built and `cart_face` when a
-/// face is rasterised, and both of those happen at boot.
+/// The Game Pak mould for this cart, or `None` for GBA. Opens the rom, so never call it on a
+/// frame.
 pub fn gb_shell_of(cart: &Cart) -> Option<GbShell> {
     match cart.platform {
         Platform::Gba => None,
@@ -142,8 +113,6 @@ fn shape_of(cart: &Cart) -> Shape {
     }
 }
 
-/// Anything that is a property of the plastic goes here. Anything that is a property of the
-/// game printed on it does not.
 fn spec(shape: Shape) -> Spec {
     match shape {
         Shape::Gba => Spec {
@@ -171,11 +140,8 @@ fn spec(shape: Shape) -> Spec {
     }
 }
 
-/// The box a cart of this platform is drawn in. A Game Boy Game Pak is the same width as a GBA
-/// cart and 1.87x as tall, so anything that lays carts out has to ask rather than assume. The
-/// question is a `Platform` and not a `Shape` because the answer does not depend on the shell:
-/// both Game Pak moulds are 65.5 x 57 mm and are drawn in the same box, and only what is cut
-/// out of the corners differs. A layout does not have to open a rom to place a cart.
+/// The box a cart of this platform is drawn in. Both Game Pak moulds share one box, so this
+/// needs no rom.
 pub fn cart_box(platform: Platform) -> (u32, u32) {
     let s = spec(match platform {
         Platform::Gba => Shape::Gba,
@@ -184,24 +150,13 @@ pub fn cart_box(platform: Platform) -> (u32, u32) {
     (s.w, s.h)
 }
 
-/// The cart's own shape in black. Drawn under a side cart so the dimming is a cart in shadow
-/// rather than a cart you can see through: over a wallpaper a translucent face is a ghost,
-/// and the shelf's carts are solid objects.
+/// The cart's shape in black, drawn under a side cart so dimming reads as shadow, not a ghost.
 pub fn cart_shadow() -> CartFace {
     shadow(CART_W, CART_H, cart_mask())
 }
 
-/// The same backing for the Game Boy shelves. Stretching the GBA one to a taller box would put
-/// a tapered shadow under a straight sided cart.
-///
-/// One per shell mould, where there used to be one covering both. The shared one was the two
-/// outlines *intersected* — backing larger than the cart draws black over the wallpaper beside
-/// it, so the only safe way to share was to meet in the middle — and that left 72 px of a
-/// notched pak and 169 px of a rounded one with nothing behind them, in two corner wedges where
-/// the moulds disagree. Rendered dimmed over a light wallpaper, those wedges are not a rounding
-/// error: a class C pak's top right corner came up as a pale bite taken out of it, and a class
-/// A/B pak ghosted at the top left. The shelf picks between these per cart instead, off a shell
-/// it worked out once when the row was built.
+/// The same backing for one Game Boy shell. Each mould needs its own: an intersected outline
+/// leaves corner wedges unbacked, which show pale over a light wallpaper.
 pub fn gb_cart_shadow(shell: GbShell) -> CartFace {
     shadow(GB_CART_W, GB_CART_H, gb_cart_mask(shell))
 }
@@ -352,15 +307,8 @@ fn lerp(a: [u8; 3], b: [u8; 3], num: u32, den: u32) -> [u8; 3] {
 /// The wall of the label's recess. Lit from the upper left, so top and left walls are shaded.
 const BEVEL: u32 = 3;
 
-/// The moulding in the shell — the GBA cart's grip ridge and thumb notch, the Game Boy pak's
-/// shoulder ribs, lettering plate, side grooves and arrow. Neither side is coloured: moulded
-/// plastic is the same plastic, one face turned away from the light and one turned into it.
-///
-/// The shadow is multiplied and the light is mixed toward white, which is not an inconsistency
-/// — it is how a surface behaves. Shade falls off in proportion to the colour underneath it,
-/// so a darker shell shades darker; a highlight is light arriving on top of the surface, so it
-/// lifts a dark shell about as far as a pale one. Multiplying the light as well would leave the
-/// black pak's moulding invisible, which is the case that needed it most.
+/// The moulding in the shell. Shadow is multiplied and light mixed toward white, so the
+/// moulding still shows on a black pak.
 fn mould_detail(s: &Spec, face: &mut CartFace, shell: &Shell) {
     let dark = shell.colour.map(|c| (c as f32 * 0.62) as u8);
     let lit = shell.colour.map(|c| c + ((255 - c) as f32 * 0.24) as u8);

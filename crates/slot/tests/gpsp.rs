@@ -164,18 +164,9 @@ fn mgba_is_given_its_own_frameskip_and_none_of_gpsps() {
     );
 }
 
-/// The quick menu's Colour Correction, on both cores, in each core's own spelling.
-///
-/// Pinned rather than trusted, because nothing in this tree can tell a correct option value
-/// from a typo: `slot-retro` answers `SET_VARIABLES` with a bare `true` and throws the declared
-/// list away, so `Autp` or `mgba_colour_correction` would be accepted in silence and simply
-/// never take — a row that does nothing, with nothing failing anywhere. These four strings were
-/// read off the vendored dylibs by dumping that discarded list; this is what keeps them true.
-///
-/// The two cores disagree about every part of it. mGBA declares `OFF|GBA|GBC|Auto` and gpSP
-/// `disabled|enabled`, under different keys, and only mGBA has an `Auto` — it is the core that
-/// runs Game Boy and Game Boy Color carts as well as GBA ones, so it is the only one with more
-/// than one tint to choose between. Neither core may be handed the other's words.
+/// The quick menu's Colour Correction, on both cores, in each core's own spelling. `slot-retro`
+/// discards the declared values, so a typo would be accepted silently; these were read off the
+/// vendored dylibs. mGBA declares `OFF|GBA|GBC|Auto`, gpSP `disabled|enabled`, under other keys.
 #[test]
 fn both_cores_are_told_about_colour_correction_in_their_own_words() {
     for (which, key, on, off) in [
@@ -668,21 +659,9 @@ fn open_core_reaches_a_gpsp_named_dylib_under_the_content_roots_system_directory
     );
 }
 
-/// `System/selected_core.ini` is a text file a person edits on a card, and nothing in it stops a
-/// line naming gpSP for a Game Boy cart. gpSP does not run Game Boy games at all: it would refuse
-/// the ROM outright or paint garbage, so a line naming it for a Game Boy cart is dropped and that
-/// cart runs on its platform's default, which is asked for rather than named so this stays about
-/// the dropped line when the default moves. The ini keeps every bit of its meaning
-/// for a line naming a core that really does run the platform, which is what
-/// `a_game_boy_cart_can_ask_for_mgba_by_hand` over in slot-store covers.
-///
-/// Driven through the real `Session`, because `spawn_core` is the one place a cart's core is
-/// resolved, and read back through the directory that one resolution also names. The seeded
-/// counter is 700_000, which is further than the mock could ever count to on its own, and it has
-/// to come back **moved**: only a run that read `States/GB/<default>/` and then wrote back to it can
-/// produce that, so one number pins both halves. A run that had honoured the ini would have left
-/// that file exactly as seeded and filed its own state under `States/GB/gpsp/` instead, which is
-/// what the second assertion refuses.
+/// gpSP cannot run Game Boy games, so an ini line naming it for a Game Boy cart is dropped and the
+/// cart runs on its platform's default. The seeded counter (700_000) must come back moved, which
+/// only a run that read and wrote `States/GB/<default>/` can produce.
 #[test]
 fn a_game_boy_carts_gpsp_line_is_dropped_and_it_runs_on_the_platform_default() {
     let default = Core::default_for(Platform::Gb);
@@ -714,16 +693,14 @@ fn a_game_boy_carts_gpsp_line_is_dropped_and_it_runs_on_the_platform_default() {
         std::thread::sleep(Duration::from_millis(1));
     }
 
-    // The counter each core directory holds, as the mock's eight byte state, or `None` where
-    // nothing has ever been filed under that core at all.
+    // The counter each core directory holds, or `None` where nothing was filed under that core.
     let counter = |core| {
         persist::read_resume(d.path(), Platform::Gb, core, "Tetris")
             .map(|b| u64::from_le_bytes(b.try_into().expect("the mock's state is 8 bytes")))
     };
 
-    // Frames the seated core actually runs, flushed out through the path the binary uses, until
-    // the resumed counter moves. A counter that merely still reads what it was seeded with says
-    // nothing: that is equally what a run resuming from somewhere else leaves behind.
+    // Run until the resumed counter moves; an unmoved counter is also what a run resuming from
+    // elsewhere leaves behind.
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if counter(default).is_some_and(|n| n > 700_000) {

@@ -5,9 +5,8 @@ use crate::Platform;
 
 pub const SELECTED_CORE_FILE: &str = "System/selected_core.ini";
 
-/// Which emulator runs a cart. mGBA is the default on every platform, because it carries the
-/// emulated cable for all three; gpSP exists for the serial hardware mGBA's libretro build does
-/// not carry.
+/// Which emulator runs a cart. mGBA is the default everywhere since it carries the emulated link
+/// for all three platforms; gpSP covers serial hardware mGBA's libretro build lacks.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Core {
     #[default]
@@ -16,10 +15,8 @@ pub enum Core {
 }
 
 impl Core {
-    /// The core picker's sockets, in the order they are drawn. The picker is drawn as a
-    /// two-socket GBA cartridge PCB traced from real hardware, so a third socket would be a
-    /// liberty taken with the drawing; it also refuses to open for anything but a GBA cart
-    /// (`app.rs`, `open_core_picker`).
+    /// The core picker's sockets, in drawing order. The picker is a two-socket PCB traced from
+    /// real hardware, so there is no room for a third.
     pub const ALL: [Core; 2] = [Core::Mgba, Core::Gpsp];
 
     pub fn as_str(&self) -> &'static str {
@@ -50,11 +47,7 @@ impl Core {
         }
     }
 
-    /// Whether this core runs that platform's carts at all.
-    ///
-    /// gpSP is a GBA emulator and nothing else: handed a Game Boy ROM it refuses it or paints
-    /// garbage, and either way the cart's states end up filed under a core that never ran it.
-    /// mGBA runs all three consoles, which is why it stays the fallback everywhere.
+    /// Whether this core runs that platform's carts. gpSP is GBA only.
     pub fn runs(self, platform: Platform) -> bool {
         match self {
             Core::Mgba => true,
@@ -62,14 +55,8 @@ impl Core {
         }
     }
 
-    /// The core a cart of this platform gets when nothing on the card says otherwise.
-    ///
-    /// The default when the card says nothing, which is mGBA on all three: it carries the
-    /// emulated cable for each of them, so one link route covers the lot. Linked pairs measured
-    /// on an H700 against a 16.743 ms frame: Game Boy 3.802 ms, Colour 2.661 ms.
-    ///
-    /// Not the only core that ships. gpSP is what runs the wireless adapter carts, and a card
-    /// naming it for one of those gets it; see `read_selected_cores`.
+    /// The core a cart gets when the card names none. mGBA carries the emulated link on all three;
+    /// linked pairs on an H700 cost 3.802 ms (Game Boy) and 2.661 ms (Colour) of a 16.743 ms frame.
     pub fn default_for(platform: Platform) -> Core {
         match platform {
             Platform::Gba | Platform::Gb | Platform::Gbc => Core::Mgba,
@@ -86,12 +73,8 @@ pub fn read_selected_cores(root: &Path) -> HashMap<String, Core> {
         .collect()
 }
 
-/// The core one cart wants, or the default for a cart the file does not name, which is also
-/// what a cart whose line nobody can parse gets.
-///
-/// Platform-blind, and therefore GBA-only in practice: it cannot tell a line naming gpSP for a
-/// Game Boy cart from one naming it for a GBA cart. `core_for_platform` is the one to call when
-/// the platform is known, which is everywhere that matters.
+/// The core one cart wants, or the default if its line is missing or unparseable. Platform-blind,
+/// so GBA-only in practice: prefer `core_for_platform`.
 pub fn core_for(root: &Path, stem: &str) -> Core {
     crate::ini::value(root, SELECTED_CORE_FILE, stem)
         .as_deref()
@@ -99,18 +82,8 @@ pub fn core_for(root: &Path, stem: &str) -> Core {
         .unwrap_or_default()
 }
 
-/// The core one cart runs on: its own line in `selected_core.ini` if that line names a core
-/// which runs this platform, and this platform's default otherwise.
-///
-/// The platform outranks the file, and it has to. `selected_core.ini` is hand-edited on a card,
-/// so nothing stops a line reading `Tetris = gpsp`, and gpSP does not run Game Boy games: it
-/// would refuse the ROM or paint garbage, with the cart's states filed under a core that never
-/// ran it. Dropping a line that names a core this platform cannot use is the same reading
-/// `read_selected_cores` already gives an unparseable one, for the same reason: the default is
-/// the safe answer, and a card written for a different build should not be able to break a cart.
-///
-/// The file is still what lets a GBA cart ask for gpSP by hand, which is why this is not simply
-/// a hardcoded per-platform match.
+/// The cart's line in `selected_core.ini` if it names a core that runs this platform, else the
+/// platform default. The file is hand-edited, so a line like `Tetris = gpsp` must not win.
 pub fn core_for_platform(root: &Path, stem: &str, platform: Platform) -> Core {
     crate::ini::value(root, SELECTED_CORE_FILE, stem)
         .as_deref()

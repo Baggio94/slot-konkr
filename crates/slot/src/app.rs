@@ -10,12 +10,12 @@ use slot_store::{
     StateEntry, StateRing, Theme, BLUE_LIGHT_MAX, BRIGHTNESS_MAX, FF_SPEEDS, RING_MAX, VOLUME_MAX,
 };
 use slot_ui::{
-    board_from, board_zoom, draw_backdrop, draw_empty_slot, draw_footer, draw_sticker, ease, grown,
-    lid_at, lid_from, lift_of, on_board, shelf_cart_at, ClockPicker, Draw, FfState, GbShell, Hud,
-    HudKind, Icon, LinkBadge, Millis, Placed, Polaroids, PowerChoice, QuickMenu, QuickMenuFaces,
-    QuickRow, QuickValue, Refusal, Shelf, SlotChrome, TexId, Toast, BOARD_W, BOARD_X, CART_W,
-    CHIP_H, CHIP_U, CHIP_V, CHIP_W, HINT_EDGE, HINT_H, HOP_LIFT, SHADOW_H, SHADOW_W, SOCKET_H,
-    SOCKET_U, SOCKET_V, SOCKET_W, TURN_PAD,
+    board_from, board_zoom, draw_backdrop, draw_empty_slot, draw_footer, draw_slot_name,
+    draw_sticker, ease, grown, lid_at, lid_from, lift_of, on_board, shelf_cart_at, ClockPicker,
+    Draw, FfState, GbShell, Hud, HudKind, Icon, LinkBadge, Millis, Placed, Polaroids, PowerChoice,
+    QuickMenu, QuickMenuFaces, QuickRow, QuickValue, Refusal, Shelf, SlotChrome, TexId, Toast,
+    BOARD_W, BOARD_X, CART_W, CHIP_H, CHIP_U, CHIP_V, CHIP_W, HINT_EDGE, HINT_H, HOP_LIFT,
+    SHADOW_H, SHADOW_W, SOCKET_H, SOCKET_U, SOCKET_V, SOCKET_W, TURN_PAD,
 };
 
 use crate::audio::Sfx;
@@ -86,6 +86,13 @@ const POWER_MENU_BAR_INSET: f32 = 4.0;
 /// How far the row recedes while a cart is open, as `Shelf::draw_row` counts it. Puts the
 /// neighbours at -41 and 574, where the mockup frames the open cart.
 const CORE_PICKER_RECEDE: f32 = 0.26;
+
+/// The shelf's machine, printed in the slot when the shelf changes: faded in, held, faded out,
+/// and never above `SLOT_NAME_ALPHA`, so it reads as something printed in the dark.
+const SLOT_NAME_IN_MS: Millis = 200;
+const SLOT_NAME_HOLD_MS: Millis = 1200;
+const SLOT_NAME_OUT_MS: Millis = 800;
+const SLOT_NAME_ALPHA: f32 = 0.4;
 /// Extra dim on the neighbours while a cart is open: a side face at
 /// `SIDE_ALPHA * (1 - CORE_PICKER_RECEDE)` = 0.407 goes to the mockup's 0.25 (0.25 / 0.407).
 const CORE_PICKER_DIM: f32 = 0.614;
@@ -325,21 +332,12 @@ pub enum Phase {
 
 pub struct App {
     phase: Phase,
-    /// One carousel per platform, in `Platform::ALL` order, which is the order the shoulders
-    /// ring through them. Every platform is held whether or not it has a cart on it — an empty
-    /// shelf is a place the ring passes over, not a place that stops existing — and the list is
-    /// never empty itself, so `shelf()` always has one to hand back.
-    ///
-    /// A widget each rather than one widget re-pointed, because `Shelf` is where the index, the
-    /// scroll, the spring and the key repeat all live: holding one per shelf is what makes every
-    /// one of those per-shelf, and a shelf come back to is a shelf exactly as it was left.
+    /// One carousel per platform, in `Platform::ALL` order (the shoulders' ring order). Every
+    /// platform is held even with no carts, and each keeps its own index, scroll and repeat.
     shelves: Vec<(Platform, Shelf)>,
-    /// Which of `shelves` is on screen. Not written to the card: it is where the carousel
-    /// happens to be, the same as `Shelf::index`, which is not written either.
+    /// Which of `shelves` is on screen. Not persisted, like `Shelf::index`.
     shelf_at: usize,
-    /// When A went down on the shelf, and `None` the rest of the time. The hold lives here
-    /// rather than in the gesture layer because A is the GBA's A button everywhere else, and
-    /// `Gestures` is deliberately blind to which screen is up.
+    /// When A went down on the shelf. Held here because `Gestures` is blind to the screen.
     play_held: Option<Millis>,
     /// The last refused action: the only thing telling an eject from a cart that would not seat.
     refusal: Option<Refusal>,
@@ -424,27 +422,17 @@ pub struct App {
     colour_pending: Option<bool>,
     /// The port this device drives in a cable session, read by `Session::spawn_core`.
     link_player: Option<u8>,
-    /// The seated cart's `Platform`, resolved and stored the same way and in the same breath as
-    /// `core` — see `set_platform`. Saves and states are filed under it, so a `.gb` and a `.gba`
-    /// cart sharing a stem never share a save or a ring either.
+    /// The seated cart's `Platform`, set with `core`. Saves and states are filed under it, so a
+    /// `.gb` and a `.gba` sharing a stem never share them.
     platform: Platform,
-    /// Whether the emulator actually running is the one `core` names, or the mock standing in
-    /// for a dylib that is not on this card. Set in the same breath as `core` and `platform`
-    /// by whoever opened it — see `set_named_core` — because it is knowable at exactly that
-    /// moment and nowhere else.
-    ///
-    /// `false` until told otherwise, which is the reading that acts on nothing: the one thing
-    /// this gates is `retire_refused_resume`, and a caller that has not said which emulator it
-    /// opened has not established that a refusal means the state is at fault.
+    /// Whether the running emulator is the one `core` names rather than the mock. Only
+    /// `retire_refused_resume` reads it, and `false` acts on nothing.
     named_core: bool,
-    /// How the seated cart's picture is drawn, off the card and stored the same way `core` and
-    /// `platform` are. Only a Game Boy cart can move it — see `video_mode` — so on a GBA cart
-    /// this is read but never acted on, and `source_rect` is the one place that decides.
+    /// How the seated cart's picture is drawn, off the card. Only a Game Boy cart can change it;
+    /// `source_rect` decides.
     video_mode: VideoMode,
-    /// `Some` for as long as a netpacket session is live. `App` never touches the transport
-    /// or the core itself — those live on the emulator thread, wherever `EmuHandle::begin_link`
-    /// was called from the same gesture this answers — this is only what the interlocks below
-    /// need: that one is live at all, and which side of it this device is.
+    /// `Some` while a netpacket session is live. Bookkeeping only: the transport and core live on
+    /// the emulator thread.
     link: Option<LinkSession>,
     /// The slot's sound for this frame, drained by the device owner.
     sfx: Option<Sfx>,
@@ -469,12 +457,15 @@ pub struct App {
     battery_percent: slot_ui::Printed,
     /// The charging glyph, uploaded once at boot.
     bolt: Option<TexId>,
-    /// One mark per shelf, in `Platform::ALL` order, uploaded at boot beside the bolt. Which one
-    /// is drawn is the only thing in the top plate's corner that answers to the shoulders, and it
-    /// is what replaced the banner that used to name the shelf over the carts.
-    /// The machine whose shelf is showing, printed on the case band. Empty on a card with one
-    /// shelf, where naming it would label a thing that could not be anything else.
+    /// The machine whose shelf is showing. Empty on a card with one shelf, where naming it would
+    /// label a thing that could not be anything else.
     shelf_platform: slot_ui::Printed,
+    /// The shelf changed and its name has not been shown yet.
+    name_pending: bool,
+    /// When the name started showing in the slot. Starts on the first frame after its face
+    /// exists, not at the switch: the face is rasterised a frame later, and at boot the clock
+    /// jumps by however long every cart face took to rasterise.
+    shelf_named: Option<Millis>,
     shelf_clock: slot_ui::Printed,
     hud: Hud,
     /// How far up the game layer's screen is. Not a phase: it outlives the insert.
@@ -505,9 +496,8 @@ pub struct App {
     radio: Box<dyn RadioJobs>,
 }
 
-/// The card's library split into shelves, one per platform, in the order the shoulders ring
-/// through them. Every platform `Platform::ALL` names gets a shelf even with nothing on it, so
-/// the ring is a fixed list that the library's contents only decide the stops on.
+/// The library split into one shelf per `Platform::ALL` entry, in ring order, empty ones
+/// included.
 fn shelves_of(carts: Vec<Cart>) -> Vec<(Platform, Shelf)> {
     let mut rows: Vec<(Platform, Vec<Cart>)> =
         Platform::ALL.iter().map(|p| (*p, Vec::new())).collect();
@@ -592,6 +582,8 @@ impl App {
             battery_percent: slot_ui::Printed::default(),
             bolt: None,
             shelf_platform: slot_ui::Printed::default(),
+            name_pending: false,
+            shelf_named: None,
             shelf_clock: slot_ui::Printed::default(),
             hud: Hud::new(),
             screen: 0.0,
@@ -609,12 +601,8 @@ impl App {
         }
     }
 
-    /// A seated cart goes back in through the insert animation rather than appearing
-    /// already playing, so a boot and a resume are the same movement. A card with no
-    /// `Games` directory scans empty, which is a shelf, not a boot failure — and so is a
-    /// card whose files are all still loose at the top of `Games/`, because boot reads the
-    /// platform folders and nothing else. Nothing on the card is moved on the way past:
-    /// `ensure` creates the folders a person files into and that is the whole of it.
+    /// A seated cart goes back in through the insert animation, so boot and resume look the same.
+    /// Only the platform folders under `Games/` are scanned; an empty scan is a shelf.
     pub fn boot(root: &Path) -> Self {
         crate::root::ensure(root);
         // Before anything is drawn. The card's palette is read once.
@@ -658,26 +646,18 @@ impl App {
                     *t = INSERT_S;
                 }
             }
-            // A cart the library no longer has is an empty slot. Left uncorrected on disk:
-            // the next seat rewrites it, and a boot is the worst moment to need a write.
-            //
-            // Both lines, because the two are one fact — which cartridge is in the slot — and
-            // every other place that empties the slot clears them together. Clearing only the
-            // stem left the platform standing, and the next setting the player changed wrote
-            // `cart=` with a `cart_platform=gbc` beside it: a card naming a shelf next to a line
-            // that names no cart, describing a session that never happened. Nothing reads the
-            // platform without the stem today, so this cost nobody a boot; it is the invariant
-            // `an_empty_slot_writes_an_empty_platform` exists to hold, reached by the one path
-            // that did not hold it.
+            // A cart the library no longer has is an empty slot, stem and platform both. Left on
+            // disk for the next seat to rewrite: boot is the worst moment for a write.
             None => {
                 self.state.cart = None;
                 self.state.cart_platform = None;
+                // Booting onto the shelf names it once, the way a switch does.
+                self.name_pending = true;
             }
         }
     }
 
-    /// The carousel on screen. Every shelf keeps its own place, so this is only ever "the one
-    /// being looked at": nothing may take it for "the library", which is `carts`.
+    /// The carousel on screen. Not the library, which is `carts`.
     fn shelf(&self) -> &Shelf {
         &self.shelves[self.shelf_at].1
     }
@@ -686,33 +666,41 @@ impl App {
         &mut self.shelves[self.shelf_at].1
     }
 
-    /// The shoulders, on the carousel: `by` is 1 for R1 and -1 for L1. The ring runs over the
-    /// shelves that hold a cart and passes over the rest, so a card with no Colour games has two
-    /// stops on it rather than three.
-    ///
-    /// Nothing at all happens when there is nowhere to go — no movement, no banner, and no
-    /// refusal either. A dead button is the honest answer to a library on one shelf; a shake
-    /// would be slot saying something was wrong when nothing is.
+    /// L1/R1 on the carousel: `by` is -1 or 1. Passes over empty shelves, and does nothing at all
+    /// (no refusal) when there is nowhere to go.
     fn switch_shelf(&mut self, by: i32) {
         let Some(to) = self.next_shelf(by) else {
             return;
         };
-        // Whatever the shelf being left had armed belonged to the row that was showing. A
-        // direction still held would sit there with its repeat due in the past and start
-        // walking the moment the carousel came back to it, with nothing under the player's
-        // thumb to explain it; a held A would seat a cart they are no longer looking at.
+        // A held direction or A belongs to the row being left, and would fire on coming back to it.
         self.shelf_mut().release_hold();
         self.play_held = None;
         self.shelf_at = to;
-        // Nothing is said. Which system the row is showing is the one thing this changes that
-        // the row cannot say for itself, and the top plate's corner says it: the shelf's mark is
-        // already drawn there and changes with `shelf_at`, so a banner would be the same fact
-        // stated twice — once permanently and once for a second and a half.
+        // The old name's face goes at once, so the new one is what the slot shows first.
+        self.shelf_platform = slot_ui::Printed::default();
+        self.shelf_named = None;
+        self.name_pending = true;
     }
 
-    /// The shelf `by` steps round the ring from the one showing, passing over every shelf with
-    /// nothing on it. `None` when there is nowhere else to go — one shelf holds the library, or
-    /// no shelf does — which is what leaves the buttons inert.
+    /// How strongly the shelf's name shows in the slot right now: zero once it has faded, and
+    /// always zero on a card with one shelf, which never gets a face to show.
+    fn slot_name_alpha(&self) -> f32 {
+        let Some(at) = self.shelf_named else {
+            return 0.0;
+        };
+        let t = self.now().saturating_sub(at);
+        let level = if t < SLOT_NAME_IN_MS {
+            t as f32 / SLOT_NAME_IN_MS as f32
+        } else if t < SLOT_NAME_IN_MS + SLOT_NAME_HOLD_MS {
+            1.0
+        } else {
+            let out = t - SLOT_NAME_IN_MS - SLOT_NAME_HOLD_MS;
+            1.0 - (out as f32 / SLOT_NAME_OUT_MS as f32).min(1.0)
+        };
+        SLOT_NAME_ALPHA * ease(level)
+    }
+
+    /// The shelf `by` steps round the ring, skipping empty ones. `None` when there is nowhere else.
     fn next_shelf(&self, by: i32) -> Option<usize> {
         let n = self.shelves.len() as i32;
         (1..n)
@@ -720,20 +708,9 @@ impl App {
             .find(|at| !self.shelves[*at].1.carts.is_empty())
     }
 
-    /// Where the cart named `stem` stands: which shelf, and where along it. A stem can collide
-    /// across platforms — `Tetris.gb` and `Tetris.gba` are two carts under one name — so
-    /// `platform` is what the card said about which of them was in the slot.
-    ///
-    /// Given one, that shelf is the only shelf asked. A cart that is no longer on it is gone
-    /// even if another shelf has a cart of the same name, because the cart of the same name on
-    /// another shelf is a different game: seating it would resume a session that belongs to
-    /// something the player never put in.
-    ///
-    /// `None` is a card that never said, and it resolves the way slot has always resolved a
-    /// stem: the shelves are asked in ring order and the first answer wins, which puts Game Boy
-    /// Advance ahead of both Game Boy shelves. That is the right way round for a card written
-    /// before there was more than one shelf, where every stem meant a GBA cart — which is every
-    /// card that can be holding a `cart` line with no `cart_platform` beside it.
+    /// Where the cart named `stem` stands: shelf and index. With `platform`, only that shelf is
+    /// asked, since `Tetris.gb` and `Tetris.gba` are different games. Without it (a card from
+    /// before shelves) the first shelf in ring order wins, which puts GBA first.
     fn seat_of(&self, stem: &str, platform: Option<Platform>) -> Option<(usize, usize)> {
         self.shelves
             .iter()
@@ -841,24 +818,15 @@ impl App {
         self.clock_faces = Some((line, hint));
     }
 
-    /// The GBA cart's outline in black, handed to every shelf, because every shelf dims its side
-    /// carts and the shadow is a property of the cart rather than of the shelf it stands on.
+    /// The GBA cart's outline in black, handed to every shelf for dimming its side carts.
     pub fn set_cart_shadow(&mut self, face: TexId) {
         for (_, shelf) in &mut self.shelves {
             shelf.set_shadow(face);
         }
     }
 
-    /// The Game Boy pak's outline in black, uploaded beside the GBA one rather than instead of
-    /// it: one card can hold both, and the two are different objects. A row of paks with only
-    /// the GBA shadow to hand draws no black at all, so a dimmed pak would read as a ghost over
-    /// the wallpaper.
-    ///
-    /// One per Game Pak mould, because the two disagree at their top corners and a shadow of the
-    /// wrong outline is visible either way round — see `slot_ui::gb_cart_shadow`. Every shelf
-    /// gets both, the same as it gets the GBA one. There are three shelves and three moulds and
-    /// they do not line up, so no shelf can be picked out as "the Game Boy one" to give one to;
-    /// the shelf that is drawing chooses per cart, and it can only choose from what it has.
+    /// The Game Boy paks' outlines in black, one per mould since they differ at the top corners
+    /// (see `slot_ui::gb_cart_shadow`). Every shelf gets both and picks per cart.
     pub fn set_gb_cart_shadows(&mut self, notched: TexId, rounded: TexId) {
         for (_, shelf) in &mut self.shelves {
             shelf.set_gb_shadow(GbShell::Notched, notched);
@@ -874,8 +842,7 @@ impl App {
         self.bolt = Some(bolt);
     }
 
-    /// The shelves' marks, in `Platform::ALL` order. Uploaded once, at boot: there are three of
-    /// them, they never change, and the shoulders only ever choose between them.
+    /// The shelves' marks, in `Platform::ALL` order. Uploaded once at boot.
     pub fn set_shelf_platform_face(&mut self, face: TexId, w: u32) {
         self.shelf_platform = slot_ui::Printed::new(face, w);
     }
@@ -892,20 +859,6 @@ impl App {
         Some(self.shelves[self.shelf_at].0.name())
     }
 
-    /// The mark for the shelf on screen, and nothing at all when there is no other shelf to be
-    /// on. A card whose library is all Game Boy Advance has one stop on the ring, so naming the
-    /// platform tells the player nothing they can act on — the same reason L1 and R1 do nothing
-    /// there rather than refusing.
-    ///
-    /// That is `next_shelf`, asked exactly as `switch_shelf` asks it before it moves, so a dead
-    /// pair of shoulders and an absent mark cannot come apart: one rule, stated once. One
-    /// direction is enough, since it is the same ring both ways round — if R1 has somewhere to
-    /// go then so does L1.
-    ///
-    /// Found by the shelf's own platform rather than by `shelf_at` directly: the two happen to
-    /// agree today, since `shelves_of` builds one shelf per `Platform::ALL` entry in that order,
-    /// but a shelf list that ever stopped mirroring `ALL` would otherwise start drawing the
-    /// wrong machine in the corner with nothing to say it had.
     pub fn set_battery_percent_face(&mut self, face: TexId, w: u32) {
         self.battery_percent = slot_ui::Printed::new(face, w);
     }
@@ -918,25 +871,17 @@ impl App {
         &self.phase
     }
 
-    /// The whole library, shelf by shelf in ring order. Not one shelf's: whoever is looking a
-    /// cart up by name — to spawn its core, or to build its face — wants the card, not the row
-    /// that happens to be on screen.
+    /// The whole library, every shelf in ring order. Use this, not `shelf()`, to look a cart up by
+    /// name.
     pub fn carts(&self) -> impl Iterator<Item = &Cart> {
         self.shelves
             .iter()
             .flat_map(|(_, shelf)| shelf.carts.iter())
     }
 
-    /// The cartridge in the slot, on every screen that has one: on its way in, playing, showing
-    /// its polaroids, asleep, or on its way back out. `None` wherever the slot is empty.
-    ///
-    /// Found on the shelf the cart was taken from, not with `carts()`. `carts()` walks the whole
-    /// card in ring order and stops at the first stem that matches, which for `Tetris.gb` beside
-    /// `Tetris.gba` answers with the GBA cartridge whichever one the player actually chose — the
-    /// wrong rom for the core to load, and the wrong platform for every save and state to be
-    /// filed under. The carousel cannot leave the shelf a cart was taken from while that cart is
-    /// in the slot: `switch_shelf` is only reachable from `Phase::Shelf`, and `insert` refuses
-    /// from anywhere else. So the shelf showing is still the shelf holding it.
+    /// The cartridge in the slot, on every screen that has one. Looked up on the showing shelf, not
+    /// with `carts()`, which answers `Tetris.gba` for `Tetris.gb`. The shelf cannot change while a
+    /// cart is in the slot.
     pub fn seated_cart(&self) -> Option<&Cart> {
         let stem = match &self.phase {
             Phase::Inserting { cart, .. }
@@ -976,60 +921,37 @@ impl App {
         self.core = core;
     }
 
-    /// The seated cart's `Platform`, read off the same `Cart` `session.rs` looked its rom up
-    /// from to spawn this core. Called in the same breath as `set_core`, so every later flush,
-    /// eject and polaroid read files under the platform the cart actually is rather than
-    /// deriving it a second time from the stem alone — which is exactly how a `.gb` and a `.gba`
-    /// cart sharing a stem could end up sharing a save.
+    /// The seated cart's `Platform`, from the `Cart` its core was spawned for. Called with
+    /// `set_core`, so saves are filed under it rather than re-derived from the stem.
     pub fn set_platform(&mut self, platform: Platform) {
         self.platform = platform;
     }
 
-    /// Whether the dylib `core` names is what actually opened. Handed over alongside `set_core`
-    /// by `session.rs`, which is the only caller that can know — see `crate::core::Opened`.
-    ///
-    /// Worth a field of its own rather than folding into `set_core` because it is a different
-    /// kind of fact: `core` is what the card says this cart should run, and this is whether
-    /// that turned out to be there. `retire_refused_resume` is the one thing that reads it, and
-    /// it is what stops a card with a missing core file from filing away every cart's session.
+    /// Whether the dylib `core` names actually opened (see `crate::core::Opened`). Stops a card
+    /// missing a core file from retiring every cart's resume.
     pub fn set_named_core(&mut self, named: bool) {
         self.named_core = named;
     }
 
-    /// The seated cart's picture mode, off the card, handed over in the same breath as `core`
-    /// and `platform` and for the same reason: this file never goes back to `video_mode.ini`
-    /// for a second opinion.
+    /// The seated cart's picture mode, off the card, handed over with `core` and `platform`.
     pub fn set_video_mode(&mut self, mode: VideoMode) {
         self.video_mode = mode;
     }
 
-    /// The part of the frame buffer the panel shows. `slot_gfx::WHOLE_TEXTURE` for every GBA
-    /// cart and for every Game Boy cart at actual size, which is every cart until somebody
-    /// presses L.
+    /// The part of the frame buffer the panel shows. `slot_gfx::WHOLE_TEXTURE` for GBA carts and
+    /// for Game Boy carts at actual size.
     pub fn source_rect(&self) -> [f32; 4] {
         video_mode::source_rect(self.platform, self.video_mode)
     }
 
-    /// Whether L and R belong to slot rather than to the game. The Game Boy and the Game Boy
-    /// Color had no shoulder buttons, so on one of their carts there is nothing for these two
-    /// to be and slot takes them for the picture; on a GBA cart they are the GBA's own and
-    /// slot must never see them.
-    ///
-    /// Only while a game is playing. On the shelf the shoulders already ring the carousel
-    /// between platforms, and under a menu the menu has them.
+    /// Whether L and R are slot's, for the picture, rather than the game's. Only while playing a
+    /// Game Boy or Colour cart, which had no shoulder buttons.
     fn slot_owns_the_shoulders(&self) -> bool {
         matches!(self.phase, Phase::Playing { .. }) && self.platform != Platform::Gba
     }
 
-    /// The buttons slot has taken for itself *right now*, which the core must not be handed and
-    /// must not be left holding. Empty wherever the game has the whole pad.
-    ///
-    /// A list rather than a predicate, because the answer moves without any button being touched:
-    /// it is a function of the phase and of the seated cart's platform, and both of those change
-    /// under a finger that never lifts. Something has to be able to ask "what is slot holding?"
-    /// at a moment of its choosing rather than only "is this press slot's?" as a press arrives —
-    /// see `Session::sync_pad`, which is what puts these down on the pad whenever the answer
-    /// moves. Two callers, one statement of the answer.
+    /// The buttons slot holds right now, which the core must not be given. Changes with phase and
+    /// platform under a held finger, so `Session::sync_pad` asks rather than waiting for a press.
     pub fn taken_buttons(&self) -> &'static [Btn] {
         if self.slot_owns_the_shoulders() {
             &[Btn::L1, Btn::R1]
@@ -1038,15 +960,8 @@ impl App {
         }
     }
 
-    /// Whether this action is one slot has taken for itself, and therefore one the core must
-    /// not also be handed. `Session` asks on its way to the pad; the same predicate decides
-    /// here and in `apply`, so a button cannot be acted on in one place and passed on in the
-    /// other.
-    ///
-    /// Letting the shoulders through to a Game Boy core as well would in fact be harmless —
-    /// mGBA maps libretro's L and R to nothing there — but that is correct by accident, and
-    /// this plan has already been bitten once by a title match that was reachable only by
-    /// accident.
+    /// Whether slot takes this action, so the core must not also get it. The same predicate decides
+    /// in `apply`, so a button cannot be both acted on and passed on.
     pub fn takes_from_the_game(&self, action: Action) -> bool {
         match action {
             Action::GbaDown(btn) | Action::GbaUp(btn) => self.taken_buttons().contains(&btn),
@@ -1054,13 +969,8 @@ impl App {
         }
     }
 
-    /// L or R, acted on and written down. No toast: a picture that has just become fullscreen
-    /// is self-evidently fullscreen, and a banner over it would be the screen describing what
-    /// the user can already see.
-    ///
-    /// A press that changes nothing writes nothing. Unlike the core, where writing the default
-    /// still has to record it, the absence of a line and `actual` mean the same thing here and
-    /// are reached by the same road, so there is nothing for a redundant write to preserve.
+    /// L or R, acted on and written down, with no toast. A press that changes nothing writes
+    /// nothing: no line and `actual` mean the same.
     fn set_picture(&mut self, mode: VideoMode) {
         if self.video_mode == mode {
             return;
@@ -1069,16 +979,14 @@ impl App {
         let (Some(root), Phase::Playing { cart }) = (self.root.clone(), &self.phase) else {
             return;
         };
-        // Best effort, like every other card write here: a read only or absent card is a
-        // picture that still stretches, just not one that is still stretched next boot.
+        // Best effort: without the card the picture still changes, it just is not remembered.
         if let Err(e) = video_mode::write_video_mode(&root, cart, mode) {
             eprintln!("slot: video: could not write video_mode.ini: {e}");
         }
     }
 
-    /// The `gpsp_serial` the core `Session` just spawned was loaded with. Called in the same
-    /// breath as `set_core`, from the same one place, so a picked link is compared against what
-    /// the running core was actually handed rather than against what the screen last showed.
+    /// The `gpsp_serial` the just-spawned core was loaded with, so a picked link is compared
+    /// against what the core actually got.
     pub fn set_link_loaded(&mut self, serial: &'static str) {
         self.link_loaded = Some(serial);
     }
@@ -1472,10 +1380,7 @@ impl App {
                 }
                 // Before the shelf's own movement, so an open picker takes the arrows.
                 _ if self.core_picker.is_some() => self.core_picker_input(action),
-                // Up and Down cross the row a letter at a time, where Left and Right cross it a
-                // cart at a time. A thirty cart library is a long hold on the shoulders and two
-                // presses here. SELECT+Up is brightness and reaches `adjust` before this, so the
-                // chord is unaffected.
+                // Up and Down jump a letter at a time. SELECT+Up is brightness, handled first.
                 Action::GbaDown(Btn::Up) => self.shelf_mut().jump_prev_letter(),
                 Action::GbaDown(Btn::Down) => self.shelf_mut().jump_next_letter(),
                 Action::ShelfLeft | Action::GbaDown(Btn::Left) => self.shelf_mut().hold_left(now),
@@ -1500,9 +1405,7 @@ impl App {
             // Eject reaches an insert too, so a cart whose core never arrived can be got out.
             Phase::Inserting { .. } if action == Action::Eject => self.eject(),
             Phase::Playing { .. } => match action {
-                // The two buttons the console this cart is for never had. The same predicate
-                // `takes_from_the_game` answers with, so there is exactly one statement of when
-                // slot owns these and the core does not.
+                // Shoulders this cart's console never had. Same test as `takes_from_the_game`.
                 Action::GbaDown(Btn::L1) if self.slot_owns_the_shoulders() => {
                     self.set_picture(VideoMode::Stretch)
                 }
@@ -1762,6 +1665,10 @@ impl App {
 
     pub fn update(&mut self, dt: f32) {
         self.clock += dt as f64 * 1000.0;
+        if self.name_pending && self.shelf_platform.face.is_some() {
+            self.name_pending = false;
+            self.shelf_named = Some(self.now());
+        }
         self.timers();
         // A queue poll, not a syscall, so it is cheap every frame.
         self.poll_link();
@@ -1970,10 +1877,8 @@ impl App {
     }
 
     fn record_cart(&mut self, cart: Option<String>) {
-        // Read off the same cartridge the stem came from, so the two lines the card ends up
-        // holding can never describe different objects. Not from `self.platform`: that is
-        // written by whoever spawned the core, and a run with `SLOT_NO_CORE=1` has no core to
-        // have written it.
+        // Off the same cartridge as the stem, so the two lines cannot disagree. Not
+        // `self.platform`: with `SLOT_NO_CORE=1` nothing writes it.
         let platform = self.seated_cart().map(|c| c.platform);
         if self.state.cart == cart && self.state.cart_platform == platform {
             return;
@@ -2153,10 +2058,12 @@ impl App {
                             .draw_row(Some(stem), 0.0, CORE_PICKER_RECEDE * open, dim, out);
                         draw_empty_slot(out);
                     }
-                    _ => self.shelf().draw(self.shelf_shake(), out),
+                    _ => {
+                        self.shelf().draw(self.shelf_shake(), out);
+                        draw_slot_name(self.shelf_platform, self.slot_name_alpha(), out);
+                    }
                 }
                 draw_footer(
-                    self.shelf_platform,
                     self.battery,
                     self.battery_percent,
                     self.bolt,
@@ -2737,13 +2644,9 @@ impl App {
         }
     }
 
-    /// Flush, then dark, then idle. The cart stays seated and `slot.state` is untouched, so the
-    /// next boot resumes whether the lid opens or the battery dies. Every doze path goes through
-    /// here, so the session guard lives only here.
-    ///
-    /// A live session ends and the doze still completes: pausing breaks libretro's netpacket
-    /// contract, and a session held open behind a shut lid would sit at 400-700 mA instead of a
-    /// doze's sub-45 mA.
+    /// Flush, then dark, then idle. The cart stays seated and `slot.state` untouched, so the next
+    /// boot resumes. A live session ends: pausing breaks the netpacket contract, and a held session
+    /// draws 400-700 mA against a doze's sub-45 mA.
     fn doze(&mut self) {
         if self.link_active() {
             self.end_link();
@@ -2862,17 +2765,8 @@ impl App {
         let Some(cart) = self.shelf().carts.get(self.shelf().index) else {
             return;
         };
-        // The board this opens onto is a traced GBA cartridge PCB — 32 contacts, a GBA ROM
-        // package — so a Game Boy shell coming apart to reveal it would be showing the player
-        // hardware that is not in their hand, which is not a liberty the art takes anywhere else.
-        // Nor is there a choice underneath it that this picker could express: a Game Boy cart's
-        // core is decided by its platform, and the one way to override it is a line in
-        // `selected_core.ini`, which is a thing done on a computer rather than on this panel.
-        //
-        // So the press does nothing at all, and deliberately not a refusal shake either: a shake
-        // answers a choice declined, and there is no choice here to decline. Same reasoning as
-        // L1/R1 sitting inert when the card holds only one shelf. A Game Boy board is on the
-        // backlog, and when it is drawn this is the line that lets it in.
+        // The board is a traced GBA PCB, so a Game Boy cart does not open onto it; its core is set
+        // by platform. No shake: there is no choice to decline.
         if cart.platform != Platform::Gba {
             return;
         }
@@ -2926,25 +2820,8 @@ impl App {
         if self.link_active() {
             return self.refuse();
         }
-        // The platform, ahead of both questions below, because neither of their answers is even
-        // about a Game Boy cart. `link_carried` is gpSP's question and it is keyed on a GBA
-        // header; `Toast::NeedsGpsp` says "Please switch to gpSP", which is advice that cannot
-        // work, since gpSP does not run a Game Boy game at all — a core swap and a reload to
-        // arrive at a cart that will not load.
-        //
-        // Structural rather than incidental, and a Game Boy Pokémon cart is why that distinction
-        // is not pedantry: `link_carried` matches the family by title alone, and `POKEMON RED` is
-        // exactly what a `.gb` header carries in its own eleven byte field at 0x134. Left to the
-        // old order that cart passes gpSP's own test and earns the advice above. Asking the
-        // platform first is what makes the answer right for the reason it is right, rather than
-        // for whatever a header field happened to read.
-        //
-        // When slot's mGBA lockstep route lands this becomes the place a Game Boy cart's own link
-        // is offered from — mGBA runs the cart and would be running both ends of it — and until
-        // then "no link support" is the whole truth.
-        // The core's route first, which is the inversion the long note below already asks for.
-        // mGBA links by running both machines in step rather than by speaking a game's protocol,
-        // so it carries every cart on every platform and `link_carried` is not its question.
+        // mGBA links by running both machines in lockstep, so it carries every cart on every
+        // platform and `link_carried` is not its question.
         if self.core == Core::Mgba {
             // mGBA emulates only the cable. A Wireless Adapter cart needs gpSP.
             let wireless = self
@@ -2963,27 +2840,8 @@ impl App {
             self.hud.toast(Toast::NoLink, self.now());
             return;
         }
-        // gpSP fakes named protocols rather than emulating the cable, so for a cart it has none
-        // for there is nothing on the far side of the link to reach. Offering it anyway is the
-        // worst of the three answers: the radio comes up, the two devices find each other, the
-        // screen says LINKED, and both games sit there — gpSP accepts the peer and then drops
-        // every packet. Refused before any of that starts, and the banner says why.
-        //
-        // Ahead of the core check, and that order is the whole point: this reads the cart's own
-        // header through `auto_link`, which never looks at the selected core, so the answer is
-        // the same whichever core is loaded. Asking about the core first told the player of an
-        // mGBA cart to switch to gpSP for a game gpSP cannot carry either — advice that costs
-        // them a core swap and a reload to arrive back at this same refusal, which they could
-        // not even reach from here. "Nothing can link this" outranks "something else could".
-        //
-        // The day this inverts: slot's mGBA lockstep link route is being built, and it links by
-        // running both machines in step rather than by speaking a game's protocol, so it carries
-        // every cart — Apotris included. When that route lands, a cart refused here is linkable
-        // on mGBA, and this refusal starts lying in the other direction: it will be saying "no
-        // link support" about the one core that does support it. `link_carried` is gpSP's
-        // question, and by then it is the wrong one to ask first. The order then wants to be the
-        // core's route first — mGBA links it, so open the screen — and this refusal kept only
-        // for the carts whose selected core really has nothing for them.
+        // gpSP fakes named protocols rather than emulating the cable, so a cart it has none for
+        // would reach LINKED and drop every packet. Before the core check: nothing can link it.
         let carried = self
             .seated()
             .and_then(|stem| self.auto_link(stem))
@@ -3530,10 +3388,8 @@ impl App {
         true
     }
 
-    /// `SELECT+R1` only. A state with no picture still saves; the switcher draws a blank card.
-    ///
-    /// Refused when the core rejected its resume: it is on its default machine, and a push into
-    /// a full ring would evict a real entry to keep a placeholder.
+    /// `SELECT+R1` only. A state with no picture still saves. Refused when the core rejected its
+    /// resume, or a full ring would evict a real entry for a default-machine placeholder.
     fn save_state(&mut self) {
         let (Some(ring), Some(snapshot)) = (self.ring(), &self.snapshot) else {
             return;

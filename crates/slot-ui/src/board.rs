@@ -232,25 +232,9 @@ pub fn shelf_cart() -> Placed {
     shelf_cart_at((OUT_W - CART_W) as f32 / 2.0, 1.0)
 }
 
-/// The same, off a row that is still moving. `x` and `scale` are what `Shelf::selected_at`
-/// gives, so the cart the picker opens grows out of the quad the row had it in rather than out
-/// of a rest the spring has not reached: START pressed a frame after a shoulder otherwise opens
-/// the board in the middle of the screen at full size while the cartridge it came out of is
-/// still a shrunken thing sliding past.
-///
-/// The foot is on the row's floor at any scale, because that is where the row puts it: a
-/// neighbour shrinks upward off the line the selection stands on rather than about its own
-/// middle. So the height comes off the foot and not off `rest_y`, which is only the top of a
-/// cart the row has finished growing.
-///
-/// `CART_W` and `CART_H` are the right constants here, where `SlotChrome` asks `cart_box` for
-/// the same two numbers. The difference is what the two are drawing. The chrome carries
-/// whatever cartridge was chosen, so it has to ask. This is the cart the core picker opens, and
-/// `App::open_core_picker` refuses to open one on anything but a GBA cart — the board inside is
-/// a traced GBA PCB, and there is no core to choose for a Game Boy cart anyway. So these are
-/// not a GBA cart standing in for a cartridge in general: they are the GBA cart, which is the
-/// only cartridge this rect is ever the rest of. Asking `cart_box` would read as a promise that
-/// a pak can open here, which is a decision the app has deliberately taken the other way.
+/// The same, off a row that is still moving, from `Shelf::selected_at`, so the opened cart
+/// grows out of the quad the row had it in. Only GBA carts open here, hence `CART_W`/`CART_H`
+/// rather than `cart_box`.
 pub fn shelf_cart_at(x: f32, scale: f32) -> Placed {
     let (w, h) = (CART_W as f32 * scale, CART_H as f32 * scale);
     Placed {

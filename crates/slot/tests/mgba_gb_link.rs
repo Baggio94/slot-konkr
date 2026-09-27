@@ -1,11 +1,8 @@
 //! mGBA's Game Boy lockstep, against the core slot actually loads.
 //!
-//! The GBA half lives in `mgba_link.rs`. This is the Game Boy half, and it is a different driver:
-//! `GBSIOLockstep` is the pre-2024 `mLockstep` API, whose master is expected to block inside
-//! `wait()`. `cores/mgba/zz-gb-link-mode.patch` compiles it into the libretro target and supplies
-//! the six callbacks on one thread.
-//!
-//! Skipped where the vendored core is absent, as every test here that needs a real core is.
+//! `GBSIOLockstep` is the pre-2024 `mLockstep` API, whose master blocks inside `wait()`;
+//! `cores/mgba/zz-gb-link-mode.patch` compiles it into the libretro target. The GBA half is in
+//! `mgba_link.rs`. Skipped where the vendored core is absent.
 
 mod common;
 
@@ -37,8 +34,7 @@ fn lit(px: &[u8]) -> usize {
     px.chunks_exact(4).filter(|p| p[0..3] != [0, 0, 0]).count()
 }
 
-/// Link mode takes a Game Boy cart at all. Before the patch the lockstep was not in the build, so
-/// `mgba_link` on a `.gb` had nothing behind it.
+/// Link mode takes a Game Boy cart; the lockstep is only in the build with the patch.
 #[test]
 fn link_mode_accepts_a_game_boy_cart() {
     let _g = common::core_lock();
@@ -50,8 +46,7 @@ fn link_mode_accepts_a_game_boy_cart() {
     pair.load(&rom).expect("link mode refused a Game Boy rom");
 }
 
-/// Both consoles run. A lockstep that deadlocks or drops one end paints nothing, so the picture
-/// advancing over a boot is what says two Game Boys were actually stepped.
+/// Both consoles run: a lockstep that deadlocks or drops one end paints nothing.
 #[test]
 fn a_linked_game_boy_pair_runs_and_paints() {
     let _g = common::core_lock();

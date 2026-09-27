@@ -9,11 +9,8 @@ const GBC_CART_SVG: &str = include_str!("../assets/gbc_cart.svg");
 const GB_DETAIL_SVG: &str = include_str!("../assets/gb_cart_detail.svg");
 const GBC_DETAIL_SVG: &str = include_str!("../assets/gbc_cart_detail.svg");
 
-/// Which of the two Game Pak shell moulds a cart came out of. Nintendo's typology names three
-/// classes and slot draws three plastics, but there are only two shells: a grey 0x00 pak and a
-/// black 0x80 pak share one mould, and a clear 0xc0 pak has its own. The arms are named for
-/// what separates them rather than for the flags that pick them, because the notch is the
-/// difference that does something — it is what a Game Boy's power switch needs somewhere to go.
+/// The Game Pak shell mould. A grey 0x00 pak and a black 0x80 pak share one mould; a clear
+/// 0xc0 pak has its own.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum GbShell {
     /// Classes A and B: the power-switch notch cut out of the top right corner.
@@ -27,9 +24,8 @@ pub fn silhouette(w: u32, h: u32) -> Vec<u8> {
     rasterise(w, h).unwrap_or_else(|| vec![255; (w * h) as usize])
 }
 
-/// The same, for the Game Boy Game Pak. A separate outline rather than the GBA one at a taller
-/// size: the pak's sides are parallel where the GBA cart's taper into a grip ridge, and
-/// stretching one into the other would put a ridge on an object that never had one.
+/// The same, for the Game Boy Game Pak. Its own outline, because the pak's sides are parallel
+/// where the GBA cart's taper into a grip ridge.
 pub fn gb_silhouette(shell: GbShell, w: u32, h: u32) -> Vec<u8> {
     let svg = match shell {
         GbShell::Notched => GB_CART_SVG,
@@ -44,8 +40,7 @@ pub(crate) fn cart_mask() -> &'static [u8] {
     MASK.get_or_init(|| silhouette(CART_W, CART_H))
 }
 
-/// One cached mask per shell mould. Two `OnceLock`s rather than a map: there are exactly two
-/// Game Pak shells and there will not be a third, so a match reads better than a lookup.
+/// One cached mask per shell mould.
 pub(crate) fn gb_cart_mask(shell: GbShell) -> &'static [u8] {
     static NOTCHED: OnceLock<Vec<u8>> = OnceLock::new();
     static ROUNDED: OnceLock<Vec<u8>> = OnceLock::new();
@@ -132,18 +127,8 @@ pub(crate) fn detail_mask() -> &'static Detail {
     })
 }
 
-/// The Game Boy pak's own moulding, which is a different object's: the ribbing on each shoulder,
-/// the lettering plate above the label, the grooves down both sides and the arrow that says
-/// which way up it goes. The GBA cart's ridge and thumb notch are nowhere on it.
-///
-/// One mask per shell, where there used to be one for both. The two moulds were thought to
-/// differ only at the top corners and the notch, neither of which any moulding reaches — but the
-/// user, looking at the rendered shelf, said the class C shoulder has no lines across it, and a
-/// square-on photograph of that shell agrees: its header panel is completely smooth and its
-/// ribbing survives only as short ridges on the outer side edges. So the shells differ in their
-/// moulding too, and this is what forces the two assets apart. They are still one drawing with
-/// one feature cut back rather than two drawings: see the note at the top of
-/// `gbc_cart_detail.svg`.
+/// The Game Boy pak's moulding: shoulder ribs, lettering plate, side grooves and arrow. One per
+/// shell, because the class C shoulder is smooth (see `gbc_cart_detail.svg`).
 pub(crate) fn gb_detail_mask(shell: GbShell) -> &'static Detail {
     static NOTCHED: OnceLock<Detail> = OnceLock::new();
     static ROUNDED: OnceLock<Detail> = OnceLock::new();

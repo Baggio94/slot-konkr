@@ -177,8 +177,7 @@ fn every_platform_defaults_to_mgba() {
     );
 }
 
-/// The ini escape hatch, read with the platform known: a cart naming a core that is not its
-/// platform's default gets the one it asked for.
+/// A cart naming a core other than its platform's default gets the one it asked for.
 #[test]
 fn a_cart_can_ask_for_a_non_default_core_by_hand() {
     let d = tempfile::tempdir().unwrap();

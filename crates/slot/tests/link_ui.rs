@@ -31,10 +31,8 @@ use tempfile::TempDir;
 /// How long a test waits on a real worker thread before deciding it never will answer.
 const BAIL: Duration = Duration::from_secs(5);
 
-/// A game in the slot on a stated core, set once as `session.rs` does, since the core decides
-/// whether the link screen exists. Two carts, so `single_cart` does not make it a dedicated
-/// device. The seated cart has Ruby's code so gpSP carries it (`mul_poke`); a header with no
-/// code is a cart gpSP would link and then ignore.
+/// A game in the slot on a stated core, which decides whether the link screen exists. Two
+/// carts, so `single_cart` does not apply; Ruby's code so gpSP carries it (`mul_poke`).
 fn playing_on(core: Core) -> (App, TempDir) {
     let d = common::tmp_root_with_carts(&["Emerald", "Zzz"]);
     common::write_retail_header(&d, "Emerald", "POKEMON RUBY", "AXVE");
@@ -343,9 +341,8 @@ fn a_peer_lost_during_the_hold_closes_the_screen_and_breaks_the_badge() {
     assert_eq!(app.link_badge(), slot_ui::LinkBadge::JoinedLost);
 }
 
-/// B asks the worker to stop, and the screen stays until it answers, or the player would be
-/// back in the game with an access point still coming up. This fake ignores the flag, the
-/// slowest case.
+/// B asks the worker to stop, and the screen stays until it answers, or the access point could
+/// still be coming up behind the game. This fake ignores the flag, the slowest case.
 #[test]
 fn b_during_the_radio_step_does_not_hand_the_game_back_early() {
     let (mut app, _d) = playing_on(Core::Gpsp);
@@ -458,7 +455,7 @@ fn b_leaves_the_session_running() {
     );
 }
 
-/// A ends the session immediately, and the banner says so since the game carries straight on.
+/// A ends the session immediately, and the banner says so.
 #[test]
 fn a_ends_the_session_and_says_so() {
     let (mut app, _d) = playing_on(Core::Gpsp);
@@ -830,10 +827,8 @@ fn seated_on(d: &TempDir, core: Core) -> App {
     seated_on_platform(d, core, Platform::Gba)
 }
 
-/// The same again, for a cart that is not a GBA cart. The core and the platform are set here in
-/// one breath, exactly as `session::spawn_core` sets them for the cart it just spawned, because
-/// the refusal below asks the platform before it asks anything else and a cart whose platform
-/// never arrived would be answered as a GBA cart.
+/// The same, for any platform. Core and platform are set together as `session::spawn_core`
+/// does: a cart with no platform yet would be answered as a GBA cart.
 fn seated_on_platform(d: &TempDir, core: Core, platform: Platform) -> App {
     let mut app = common::boot(d.path());
     app.apply(Action::Insert);
@@ -1672,16 +1667,8 @@ fn a_wireless_adapter_cart_on_mgba_still_says_to_switch_to_gpsp() {
     );
 }
 
-/// The platform outranks both questions above, and a Game Boy cart is where getting that order
-/// wrong shows. `link_carried` is gpSP's question and it matches the Pokémon family by title
-/// alone, so `POKEMON RED` — which is exactly what a `.gb` header carries in its own eleven byte
-/// field — passes gpSP's test for a game gpSP has never been able to load at all. Asked in the
-/// old order that earns "Please switch to gpSP": a core swap the player cannot benefit from,
-/// for a cart that core cannot run. `Toast::NoLink` is the one banner that is true here, and it
-/// has to be reached structurally rather than by a header field happening to read empty.
-///
-/// Both cores, because neither is an excuse. The platform check sits ahead of the core check, so
-/// a device somehow sitting on gpSP with a Game Boy cart is refused the screen just the same.
+/// The platform is asked first: `link_carried` matches Pokémon by title, so `POKEMON RED` in a
+/// `.gb` header would pass gpSP's test. On gpSP a Game Boy cart gets `NoLink`, never `NeedsGpsp`.
 #[test]
 fn a_game_boy_cart_links_on_mgba_and_is_refused_on_gpsp() {
     for (core, open) in [(Core::Mgba, true), (Core::Gpsp, false)] {
@@ -1718,10 +1705,8 @@ fn a_game_boy_cart_links_on_mgba_and_is_refused_on_gpsp() {
     }
 }
 
-/// The legend names SELECT only where SELECT does something. A game gpSP links the same way on
-/// either hardware refuses the press — `select_is_refused_where_gpsp_would_link_the_same_either_way`
-/// is that refusal — so a legend offering Mode over it is the screen promising a choice the core
-/// will not honour.
+/// The legend names SELECT only where the press is not refused (see
+/// `select_is_refused_where_gpsp_would_link_the_same_either_way`).
 #[test]
 fn the_pick_legend_names_mode_only_where_the_hardware_can_be_switched() {
     let faces: Vec<(TexId, u32)> = LinkLegend::ALL

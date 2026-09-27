@@ -27,14 +27,8 @@ pub struct StateRing {
 }
 
 impl StateRing {
-    /// States are core private: a serialized machine from one emulator cannot be loaded by
-    /// another, so offering them together would only produce a confusing failure. Battery
-    /// saves under `Saves/` are raw cartridge bytes and stay shared.
-    ///
-    /// Platform first, then core: `States/<platform>/<core>/<stem>/`, which is also the shape a
-    /// person organising a card by hand has to build. A `.gb` and a `.gba` cart can share a stem —
-    /// two different games, two different carts — so the platform has to separate them before
-    /// the core does, or one cart's states would be offered to the other's.
+    /// `States/<platform>/<core>/<stem>/`. Per core because one emulator cannot load another's
+    /// state; per platform because a `.gb` and a `.gba` cart can share a stem.
     pub fn new(root: &Path, platform: Platform, core: Core, stem: &str) -> Self {
         StateRing {
             dir: root

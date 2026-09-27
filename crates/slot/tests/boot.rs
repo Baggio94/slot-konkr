@@ -83,15 +83,8 @@ fn a_seated_cart_is_recorded_so_the_next_boot_can_resume_it() {
     assert_eq!(read_slot_state(d.path()).cart, Some("Emerald".into()));
 }
 
-/// The stem and the shelf are one fact — which cartridge is in the slot — so a boot that gives
-/// up on the stem has to give up the shelf with it. It did not: the platform stayed standing in
-/// memory, and the next setting the player changed wrote `cart=` with `cart_platform=gbc` beside
-/// it, a card naming a shelf next to a line that names no cart.
-///
-/// Reached by taking a Game Boy Color cart off the card while it was the seated one, which is a
-/// USB cable and a delete. Nothing reads the platform without the stem today, so the pair cost
-/// nobody a boot; it is the same invariant `an_empty_slot_writes_an_empty_platform` holds for
-/// every other path that empties the slot.
+/// The stem and the shelf are one fact, so a boot that gives up on the stem gives up the shelf
+/// too, or the next settings write pairs `cart=` with a stale `cart_platform=`.
 #[test]
 fn a_cart_that_is_gone_takes_its_shelf_out_of_the_slot_with_it() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -279,9 +272,8 @@ fn boot_creates_the_folders_a_person_has_to_file_into() {
     }
 }
 
-/// A card holding both Tetrises: `Games/GBA/Tetris.gba` and `Games/GB/Tetris.gb`, which is the
-/// only shape of card `cart_platform` exists for. `Emerald` is there so the GBA shelf is not a
-/// single cart library, which boots past the shelf entirely.
+/// A card holding both `Games/GBA/Tetris.gba` and `Games/GB/Tetris.gb`. `Emerald` keeps the
+/// GBA shelf from being a single cart library, which boots past the shelf.
 fn two_tetrises() -> tempfile::TempDir {
     let d = tmp_root_with_carts(&["Tetris", "Emerald"]);
     common::write_gb_cart(&d, "Tetris", "TETRIS");
@@ -303,9 +295,7 @@ fn resumed(d: &tempfile::TempDir, platform: Option<Platform>) -> App {
     App::boot(d.path())
 }
 
-/// The line the card writes is the line the next boot obeys. `cart=Tetris` on its own names two
-/// cartridges once a card can hold both, and the platform beside it is the only thing that says
-/// which of them the player was holding.
+/// `cart=Tetris` names two cartridges on such a card; the platform line says which was seated.
 #[test]
 fn the_platform_on_the_card_decides_which_tetris_comes_back() {
     let d = two_tetrises();
@@ -329,9 +319,7 @@ fn the_platform_on_the_card_decides_which_tetris_comes_back() {
     }
 }
 
-/// Every card written before this line existed held only GBA carts, so that is what a card with
-/// no line means — and it is also what slot did before the line existed, so nothing about an
-/// upgraded card changes.
+/// A card with no platform line holds GBA carts.
 #[test]
 fn a_card_that_never_said_resumes_the_gba_cart() {
     let d = two_tetrises();
@@ -342,10 +330,8 @@ fn a_card_that_never_said_resumes_the_gba_cart() {
     );
 }
 
-/// A named shelf is the only shelf asked. The cart of the same name on another shelf is a
-/// different game with a different save, so seating it would resume a session belonging to
-/// something the player never put in — an empty slot is the honest answer, and it is the one an
-/// unreadable stem has always got.
+/// A named shelf is the only shelf asked: the same name on another shelf is a different game
+/// with a different save, so the slot boots empty.
 #[test]
 fn a_named_shelf_that_no_longer_has_the_cart_is_an_empty_slot() {
     let d = two_tetrises();
@@ -357,9 +343,8 @@ fn a_named_shelf_that_no_longer_has_the_cart_is_an_empty_slot() {
     );
 }
 
-/// The other half of the round trip: what a session actually writes down. Ringing to the Game
-/// Boy shelf and seating the cart standing on it has to record that shelf, or the next boot
-/// resolves the same ambiguous stem all over again and lands on the GBA cart.
+/// Seating a cart on the Game Boy shelf records that shelf, or the next boot resolves the
+/// ambiguous stem to the GBA cart.
 #[test]
 fn seating_a_cart_records_the_shelf_it_came_off() {
     let d = two_tetrises();
@@ -391,8 +376,7 @@ fn seating_a_cart_records_the_shelf_it_came_off() {
     );
 }
 
-/// An empty slot says nothing about a platform. A shelf left naming one would be read next boot
-/// beside a `cart` line naming no cart.
+/// An empty slot writes no platform, or next boot would read one beside an empty `cart` line.
 #[test]
 fn an_eject_forgets_the_platform_with_the_cart() {
     let d = two_tetrises();

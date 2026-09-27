@@ -1,16 +1,13 @@
 //! L and R on a Game Boy cart, through the whole frontend: the real core, the real cart, the
 //! real compositor, composited on the GPU and read back as pixels.
 //!
-//! The draw list is not the screen and neither is a uniform. This crate has had list
-//! assertions pass while the panel was visibly wrong, so the claim "L fills the panel and R
-//! gives back the centred picture" is settled here, against the composited frame — and the
-//! PNGs are written so the one thing only eyes can judge, what the grille's change of
-//! relationship looks like, can actually be looked at.
+//! Draw-list assertions have passed while the panel was wrong, so "L fills the panel and R gives
+//! back the centred picture" is checked against the composited frame, and PNGs are written for
+//! judging the grille by eye.
 //!
 //! `SCRATCH_PNG_DIR=/tmp cargo test -p slot --test render_picture_modes -- --nocapture`
 //!
-//! Skipped on a machine with no mGBA dylib and no card to take a cart off, the same way every
-//! other test here that needs a real core is.
+//! Skipped without an mGBA dylib and a card to take a cart off.
 
 #![cfg(target_os = "macos")]
 
@@ -46,9 +43,8 @@ fn at(px: &[u8], x: usize, y: usize) -> [u8; 3] {
 const BAR_W: usize = 120;
 const BAR_H: usize = 24;
 
-/// How much of a band has anything on it at all. Black is the backdrop the margin shows, and
-/// the mask darkens but never blanks a lit pixel, so this separates picture from margin
-/// without having to know what the game drew.
+/// How much of a band has anything on it. The margin is black and the mask never blanks a lit
+/// pixel, so this separates picture from margin.
 fn lit(px: &[u8], xs: std::ops::Range<usize>, ys: std::ops::Range<usize>) -> usize {
     ys.flat_map(|y| xs.clone().map(move |x| (x, y)))
         .filter(|(x, y)| at(px, *x, *y).iter().any(|c| *c > 8))
@@ -71,8 +67,7 @@ fn write_png(name: &str, w: u32, h: u32, rgba: &[u8]) {
     println!("wrote {path}");
 }
 
-/// Two panels beside each other with a grey rule between them, which is the only way to judge
-/// what the stretch did to the grille's relationship with the picture's own pixels.
+/// Two panels side by side with a grey rule between them.
 fn side_by_side(left: &[u8], right: &[u8], gap: usize) -> (u32, u32, Vec<u8>) {
     let w = OUT_W as usize * 2 + gap;
     let mut out = vec![0u8; w * OUT_H as usize * 4];
@@ -91,9 +86,8 @@ fn side_by_side(left: &[u8], right: &[u8], gap: usize) -> (u32, u32, Vec<u8>) {
     (w as u32, OUT_H, out)
 }
 
-/// A patch of each panel blown up, nearest, so single mask cells and single source pixels are
-/// both big enough to see. At actual size a 3x3 cell sits on exactly one source pixel; stretched
-/// it does not, and that is the whole of what this picture is for.
+/// A patch of each panel blown up, nearest. At actual size a 3x3 mask cell sits on exactly one
+/// source pixel; stretched it does not.
 fn zoom(
     left: &[u8],
     right: &[u8],
@@ -126,9 +120,8 @@ fn zoom(
     (out_w as u32, out_h as u32, out)
 }
 
-/// The card's own Game Boy cart, copied into the root the test boots from. Read only: nothing
-/// here writes to the card. `None` on a fresh clone with no `sdcard/`, which is a skip rather
-/// than a failure — a stand-in rom paints nothing worth looking at.
+/// The card's own Game Boy cart, copied into the test root; the card is only read. `None`
+/// without `sdcard/`: a stand-in rom paints nothing worth looking at.
 fn put_card_cart(root: &Path) -> Option<()> {
     let from = repo_root().join("sdcard/Games/GB/Tetris Rosy Retrospection.gb");
     let rom = std::fs::read(&from).ok()?;
@@ -137,9 +130,8 @@ fn put_card_cart(root: &Path) -> Option<()> {
     Some(())
 }
 
-/// Advances the whole frontend for a stretch of wall clock. The animations and the emulator
-/// thread both run on real time, so this is what a cart going in and a game painting actually
-/// costs; a tight loop with no clock behind it would compose the same first frame forever.
+/// Advances the whole frontend for a stretch of wall clock, since the animations and the
+/// emulator thread both run on real time.
 fn run_for(f: &mut Frontend, input: &mut Script, secs: f32) {
     let until = Instant::now() + Duration::from_secs_f32(secs);
     while Instant::now() < until {
@@ -151,8 +143,8 @@ fn run_for(f: &mut Frontend, input: &mut Script, secs: f32) {
 #[test]
 fn l_fills_the_panel_and_r_gives_back_the_centred_picture() {
     let _core = core_lock();
-    // The core this cart resolves to. Planting a named one that the cart does not use leaves
-    // nothing for the search to find, and `MockCore`'s test pattern lights every margin.
+    // The core this cart resolves to: a core the cart does not use is never found, and
+    // `MockCore`'s test pattern lights every margin.
     let core = Core::default_for(Platform::Gb);
     let file = format!(
         "{}_libretro.{}",
@@ -177,8 +169,7 @@ fn l_fills_the_panel_and_r_gives_back_the_centred_picture() {
         eprintln!("no Game Boy cart on this machine's card, skipping");
         return;
     };
-    // `candidates` looks in the content root's own `System/` first, which is how a test plants
-    // a core somewhere the search will actually find it.
+    // `candidates` looks in the content root's own `System/` first.
     std::fs::copy(&dylib, d.path().join("System").join(&file)).expect("plant the core");
     clocked(d.path());
 
@@ -189,8 +180,7 @@ fn l_fills_the_panel_and_r_gives_back_the_centred_picture() {
     f.advance(&mut input);
     input.0.push_back(vec![RawEvent::Up(Btn::A)]);
     f.advance(&mut input);
-    // Long enough for the cart to go in, the panel to strike, and Tetris to get past its
-    // copyright screen onto something with structure in it.
+    // Long enough for the insert and for Tetris to get past its copyright screen.
     run_for(&mut f, &mut input, 5.0);
 
     f.compose(&mut c);
@@ -230,8 +220,7 @@ fn l_fills_the_panel_and_r_gives_back_the_centred_picture() {
     let stretched = c.read_frame();
     write_png("picture-stretch", OUT_W, OUT_H, &stretched);
 
-    // The margins are gone, which is the whole claim. Measured as "most of the band has
-    // something on it", because a Game Boy picture has black in it too.
+    // Measured as "most of the band has something on it": a Game Boy picture has black in it.
     let left = lit(&stretched, 0..BAR_W, 0..OUT_H as usize);
     let top = lit(&stretched, 0..OUT_W as usize, 0..BAR_H);
     assert!(

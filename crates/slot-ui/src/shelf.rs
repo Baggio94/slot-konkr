@@ -11,23 +11,14 @@ use crate::slot_chrome::draw_empty_slot;
 const PITCH: f32 = 240.0;
 const SIDE_SCALE: f32 = 0.78;
 const SIDE_ALPHA: f32 = 0.55;
-/// Where a cartridge of this height stands on the row: centred on the screen. Every shelf holds
-/// one platform — the card is one folder per system — so a row never mixes heights, and what the
-/// eye reads on the carousel is where the selected cartridge sits in the frame. A GBA cart has
-/// always been centred; a Game Boy pak measured from a shared floor instead sat 59 px higher,
-/// crowding the top of the screen and leaving a gap above the slot, which is what the user
-/// objected to. The two now share a centre rather than a floor.
-///
-/// This is where the *full size* cartridge rests. A side cart is smaller, and it keeps its foot
-/// on the line the selection's foot is on rather than shrinking about the middle, so the row
-/// still reads as objects standing on a shelf: see `foot_y`.
+/// Where a full size cartridge of this height rests: centred on the screen, so a GBA row and a
+/// Game Boy row share a centre rather than a floor. Side carts keep their foot on `foot_y`.
 pub fn rest_y(h: f32) -> f32 {
     (OUT_H as f32 - h) / 2.0
 }
 
-/// The line this platform's cartridges stand on, which is `rest_y` plus that cartridge's own
-/// height. Asked with the cart's full height even for a shrunken neighbour: the foot stays put
-/// as a cart shrinks away, which is what stops the row reading as carts floating.
+/// The line the cartridges stand on. Pass the full height even for a shrunken neighbour, so
+/// the foot stays put as it shrinks.
 pub fn foot_y(h: f32) -> f32 {
     rest_y(h) + h
 }
@@ -52,21 +43,15 @@ pub struct Shelf {
     pub index: usize,
     pub scroll: f32,
     faces: Vec<TexId>,
-    /// The cart silhouette in black, drawn under a dimmed cart. One texture per *mould* rather
-    /// than one for the row: a row can hold GBA carts or Game Boy paks, the two Game Pak shells
-    /// differ at their top corners, and all three are different objects. Backing of the wrong
-    /// outline either draws black over the wallpaper beside the cart or leaves part of the
-    /// dimmed face with nothing behind it, and both of those are visible.
+    /// The cart silhouette in black, drawn under a dimmed cart. One per mould: a backing of the
+    /// wrong outline shows beside the cart or leaves part of the face unbacked.
     shadow: Option<TexId>,
     gb_shadow: Option<TexId>,
     gbc_shadow: Option<TexId>,
-    /// Which mould each cart in `carts` came out of, `None` for a GBA cart. Worked out once
-    /// here because the answer is in the rom's header: asking it while drawing would open a
-    /// file on every cart of every frame.
+    /// Each cart's mould, `None` for GBA. Read from the rom header once, never while drawing.
     shells: Vec<Option<GbShell>>,
-    /// The presses added up, in the same continuous coordinate `scroll` lives in, so it counts
-    /// laps rather than wrapping. This is what the spring aims at — see `scroll_target` — because
-    /// it is the only thing that remembers which button was pressed once the row has wrapped.
+    /// The presses added up in `scroll`'s coordinate, counting laps rather than wrapping. The
+    /// spring aims at it (see `scroll_target`), since it remembers which way the row was pressed.
     ride: f32,
     vel: f32,
     /// The held direction, when it next repeats, and how many repeats it has fired. Kept here
@@ -100,15 +85,11 @@ impl Shelf {
         self.vel = 0.0;
     }
 
-    /// Face textures in `carts` order. The caller uploads them because only the compositor
-    /// can mint a `TexId`.
     pub fn set_shadow(&mut self, face: TexId) {
         self.shadow = Some(face);
     }
 
-    /// The Game Boy pak's outline in black, one per shell mould. A row whose carts are paks and
-    /// whose only uploaded shadow is the GBA one draws no black at all rather than a tapered
-    /// shape stretched under a straight sided cart.
+    /// The Game Boy pak's outline in black, one per shell mould.
     pub fn set_gb_shadow(&mut self, shell: GbShell, face: TexId) {
         match shell {
             GbShell::Notched => self.gb_shadow = Some(face),
@@ -116,6 +97,8 @@ impl Shelf {
         }
     }
 
+    /// Face textures in `carts` order. The caller uploads them because only the compositor
+    /// can mint a `TexId`.
     pub fn set_faces(&mut self, faces: Vec<TexId>) {
         self.faces = faces;
     }
@@ -289,27 +272,9 @@ impl Shelf {
         Some((self.index as i32 + off).rem_euclid(n) as usize)
     }
 
-    /// Where the row is drawing its selected cart *this frame*: the left edge of its quad, and
-    /// how big that quad is against the cartridge's own size. The cart going into the slot and
-    /// the cart the core picker opens are both drawn by somebody else, taking over from this
-    /// row mid-movement, so the row has to be able to say where it had the cart rather than
-    /// have each of them assume.
-    ///
-    /// This frame and not once the spring has settled, which is the whole of what it is for. A
-    /// settled row has its selection dead centre at full size and that is what this answers for
-    /// it — but nothing makes the player wait for the spring before pressing A or START. Press
-    /// either while the row is still travelling and the selection is somewhere between two
-    /// slots, shrunken as much as `SIDE_SCALE`, with its foot on the row's floor; answering
-    /// "dead centre, full size" then is a cartridge that jumps up to 266 px sideways and grows a
-    /// third on the frame the button goes down. Composited and looked at, the chosen cart
-    /// teleports into the middle of the screen while the cart it was passing is still sliding.
-    ///
-    /// The sum is `draw_row`'s own for the slot the selection is in, with `recede` at zero
-    /// because nothing has begun to part yet — not a second copy of it. The width is asked of
-    /// the selected cart rather than assumed to be `CART_W`: both cartridges are 240 wide today
-    /// and the number is the same either way, and the point is that it stays the same as what is
-    /// drawn if a later one is not. `CART_W` stands in for an empty row, which draws no cart to
-    /// measure.
+    /// Where the row draws its selected cart this frame: the quad's left edge and its scale. The
+    /// slot and core picker take over mid-movement, so a press before the spring settles must
+    /// start from here rather than dead centre.
     pub fn selected_at(&self) -> (f32, f32) {
         let w = self
             .carts
@@ -368,23 +333,12 @@ impl Shelf {
                 continue;
             }
             let x = x + shake;
-            // The floor is this platform's, asked of the cartridge's own full height rather than
-            // of the scaled one: a neighbour shrinks upward off a floor it shares with the
-            // selection instead of shrinking about its own middle.
+            // The foot, from the full height, so a neighbour shrinks upward off the shared floor.
             let y = foot_y(ch as f32) - h;
-            // Black in the cart's own shape, under the dimmed face. Without it the dimming is
-            // transparency, and over a wallpaper the row reads as ghosts of carts.
+            // Black in the cart's own shape, so the dimming is shadow rather than transparency.
             if alpha < 1.0 {
-                // Three backings for three moulds: it is the cart's own outline, and a class C
-                // pak's corners are not a class A/B pak's. See `cart::gb_cart_shadow`.
-                //
-                // Asked for rather than indexed, the way `faces` is asked for eighteen lines
-                // below and for the same reason: `carts` is public, `shells` is not, and a push
-                // through the public field would leave this one entry short. Indexed, that is a
-                // panic inside the draw loop — on the device a black screen and a dead handset,
-                // with no message anywhere — for a row that would otherwise have drawn. A cart
-                // whose mould was never recorded gets the straight sided backing, which is the
-                // same degrading a cart whose face was never uploaded already gets.
+                // `get`, not indexing: `carts` is public and can outgrow `shells`, and a panic
+                // here is a black screen on the device.
                 let backing = match self.shells.get(i).copied().flatten() {
                     None => self.shadow,
                     Some(GbShell::Notched) => self.gb_shadow,

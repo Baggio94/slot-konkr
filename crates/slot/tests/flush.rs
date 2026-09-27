@@ -221,9 +221,8 @@ fn at(percent: u8, charge: Charge) -> Battery {
     Battery { percent, charge }
 }
 
-/// The collision, closed. Before platform folders these were one file, and a 128 KB GBA save
-/// truncated into a Game Boy game's SRAM was *accepted* by the core — then the shrink guard
-/// stopped that game ever saving again, silently.
+/// A GBA save and a Game Boy save of the same stem are separate files: a 128 KB GBA save
+/// truncated into Game Boy SRAM is accepted by the core, then the shrink guard blocks saving.
 #[test]
 fn one_stem_on_two_platforms_writes_two_saves() {
     let d = tempfile::tempdir().unwrap();
@@ -242,8 +241,7 @@ fn one_stem_on_two_platforms_writes_two_saves() {
     assert!(d.path().join("Saves/GB/Tetris.sav").is_file());
 }
 
-/// Plug in a flat device, boot it, and the frontend used to flush and power off with the
-/// cable in. The charge state is the whole reason this can now be told apart.
+/// A flat device booted with the cable in does not flush and power off.
 #[test]
 fn a_critical_battery_on_a_charger_keeps_running() {
     let d = tmp_root_with_carts(&["Emerald"]);

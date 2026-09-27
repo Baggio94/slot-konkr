@@ -25,18 +25,8 @@ pub const FF_SPEED_DEFAULT: u8 = 6;
 pub struct SlotState {
     /// Filename stem. `None` is an empty slot, which is the shelf.
     pub cart: Option<String>,
-    /// Which shelf `cart` stands on, when the card says so. A stem is ambiguous exactly when it
-    /// collides across the three platform folders — `Tetris.gb` beside `Tetris.gba` is two
-    /// cartridges under one name — and this is the only thing that says which of them was in
-    /// the slot.
-    ///
-    /// `None` is a card that never said, which is every card written before this line existed
-    /// and every card written by a build that does not know it. That is deliberately *not* the
-    /// same as a stated `Gba`: unstated means "look the stem up across the shelves and take the
-    /// first that has it", which is what slot has always done and which puts Game Boy Advance
-    /// first, while a stated platform means that shelf and no other. A card written before this
-    /// change held only GBA carts, so the old behaviour is what the line meant when it was
-    /// written, and it is what a missing line still means.
+    /// Which shelf `cart` stands on, since a stem can collide across platform folders.
+    /// `None` is not `Gba`: it means look the stem up across the shelves and take the first match.
     pub cart_platform: Option<Platform>,
     pub brightness: u8,
     pub blue_light: u8,
@@ -149,11 +139,7 @@ fn parse(text: &str) -> Option<SlotState> {
     let fallback = SlotState::default();
     Some(SlotState {
         cart: (!cart.is_empty()).then_some(cart),
-        // Assigned rather than resolved against the fallback, which the three settings below do,
-        // because for this one key the fallback *is* `None`: absent is a meaning of its own —
-        // "the card never said, look the stem up" — and not a value waiting on a default. It is
-        // forgiven in exactly the same way for exactly the same reason: a line this build cannot
-        // read costs its own answer and takes nothing else on the card with it.
+        // Absent is a meaning of its own, not a value waiting on a default.
         cart_platform,
         brightness: brightness?,
         blue_light: blue_light?,
@@ -168,18 +154,12 @@ fn parse(text: &str) -> Option<SlotState> {
     })
 }
 
-/// How a platform is spelled on this line: its own directory name in lower case, so the file
-/// says `cart_platform=gb` for the cart that lives in `Games/GB/`. Built from `dir_name` rather
-/// than from a second list of three strings, which is what stops the state file and the card's
-/// own folders coming to disagree about what a platform is called.
+/// The platform's directory name in lower case, e.g. `cart_platform=gb`.
 fn platform_key(platform: Platform) -> String {
     platform.dir_name().to_ascii_lowercase()
 }
 
-/// The reverse, and forgiving of case for the same reason the extension check is: the line is
-/// plain text on a card anyone can open in an editor, and `GB` means what `gb` means. Anything
-/// that is not one of the three — an empty value, a platform a later build added, a typo — is
-/// `None`, which reads as a card that never said.
+/// The reverse, ignoring case. Anything unrecognised is `None`, as if the card never said.
 fn platform_value(value: &str) -> Option<Platform> {
     Platform::ALL
         .into_iter()

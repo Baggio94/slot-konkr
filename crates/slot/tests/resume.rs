@@ -168,10 +168,8 @@ fn a_power_press_does_not_let_a_refusing_mock_overwrite_a_real_save() {
     )
     .unwrap();
 
-    // Read back exactly the way `session.rs::spawn_core` would, and hand it to a core that
-    // will refuse both: the mock, standing in for "no dylib present" or "SLOT_CORE points at
-    // the wrong game" — `open_core_for` cannot tell those apart from a core that opened fine,
-    // and this is deliberately exercising the downstream guard rather than that fallback.
+    // Read back as `session.rs::spawn_core` does, and handed to the mock, which refuses both;
+    // this exercises the downstream guard, not `open_core_for`'s fallback.
     let sav = persist::read_sav(d.path(), Platform::Gba, "Emerald");
     let resume = persist::read_resume(d.path(), Platform::Gba, slot_store::Core::Mgba, "Emerald");
     let emu = EmuHandle::spawn(
@@ -404,9 +402,8 @@ fn a_refused_resume_is_not_offered_to_the_core_a_second_time() {
         "the retired file is not the bytes that were refused"
     );
 
-    // The one thing the new name must never do: come back as something else the player can be
-    // offered. `list` is what the switcher and `load_newest` read, and `evict` only ever
-    // deletes what `list` returns.
+    // The retired file must never be offered again: `list` feeds the switcher and
+    // `load_newest`, and `evict` only deletes what `list` returns.
     let ring =
         slot_store::StateRing::new(d.path(), Platform::Gba, slot_store::Core::Mgba, "Emerald");
     assert!(

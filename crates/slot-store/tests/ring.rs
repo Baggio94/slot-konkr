@@ -183,8 +183,7 @@ fn resume_is_core_private_too() {
     );
 }
 
-/// The collision, closed. A `.gb` and a `.gba` cart of the same stem are not the same cart,
-/// and a state saved for one must not be offered to the other.
+/// A `.gb` and a `.gba` cart of the same stem do not share states.
 #[test]
 fn each_platform_keeps_its_own_states() {
     let d = tempdir().unwrap();

@@ -24,8 +24,7 @@ fn every_shell_is_visible_against_the_backdrop() {
         );
     }
     assert!(distance(DEFAULT_SHELL.colour, BACKDROP) > 60);
-    // The Game Boy paks are not in the code table — a pak has no game code — so they have to be
-    // named here or the shelf they appear on is the one nothing checks.
+    // Game Boy paks have no game code, so they are not in the table and must be named here.
     for (what, s) in [
         ("the grey pak", DMG_SHELL),
         ("the black pak", DUAL_MODE_SHELL),

@@ -4,14 +4,7 @@ use slot_input::{
     SELECT_TAP_MS, VOLUME_REPEAT_DELAY_MS, VOLUME_REPEAT_MS,
 };
 
-/// The reported bug, and the half of it this fixes. SELECT used to be withheld for the whole
-/// chord window, so a *held* SELECT arrived at the game `SELECT_CHORD_MS` late whether or not a
-/// chord ever followed it. On a Game Boy cart that uses SELECT to hold a piece, 600 ms is the
-/// whole gesture — and disabling chords for Game Boy carts would not have helped, because the
-/// latency was never the chord's, it was the waiting.
-///
-/// The press goes straight through now and the chord arms off the same hold, so nothing about
-/// the gesture moves: only the game stops being kept waiting to find out.
+/// A held SELECT reaches the game on the press, not after the chord window.
 #[test]
 fn a_held_select_reaches_the_game_on_the_press() {
     let mut g = Gestures::new();

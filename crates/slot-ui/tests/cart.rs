@@ -15,9 +15,8 @@ fn tmp_root() -> TempDir {
     d
 }
 
-/// A Game Boy rom long enough to carry the header fields the scan reads: the title at 0x134 and
-/// the CGB flag at 0x143, which is the only thing in the file that says what colour plastic the
-/// cart shipped in.
+/// A Game Boy rom long enough for the header fields the scan reads: the title at 0x134 and
+/// the CGB flag at 0x143.
 fn write_gb_rom(d: &TempDir, dir: &str, name: &str, cgb: u8) {
     let mut rom = vec![0u8; 0x150];
     rom[0x143] = cgb;
@@ -55,14 +54,12 @@ fn pixel(face: &slot_ui::CartFace, x: u32, y: u32) -> [u8; 3] {
     [face.rgba[i], face.rgba[i + 1], face.rgba[i + 2]]
 }
 
-/// Whether the cart is there at all at this pixel. The face is clipped to the outline, so a
-/// hole cut in the shell reads as nothing rather than as a different colour.
+/// Whether the cart is there at all at this pixel; the face is clipped to the outline.
 fn pixel_alpha(face: &slot_ui::CartFace, x: u32, y: u32) -> u8 {
     face.rgba[((y * face.w + x) * 4 + 3) as usize]
 }
 
-/// The label sits inset in the shell, so a face pixel is only the label's business inside
-/// this rect. Coordinates are relative to the label's own top left.
+/// The label's rect, relative to the label's own top left.
 fn label_pixel(face: &slot_ui::CartFace, x: u32, y: u32) -> [u8; 3] {
     pixel(face, LABEL_X + x, LABEL_Y + y)
 }
@@ -320,10 +317,8 @@ fn a_rom_with_no_header_title_is_labelled_from_its_stem() {
     );
 }
 
-/// The published dimensions are 65.5 x 57 mm for a Game Boy Game Pak against 35 x 57 mm for a
-/// GBA one, so the two are the same width and the Game Boy is taller by the ratio of the
-/// heights. The rule is what is asserted rather than the 253 it comes to: a typed literal
-/// would let the rule be edited away with the test still green.
+/// A Game Boy Game Pak is the GBA cart's width and 65.5/35 of its height. The rule is asserted,
+/// not the 253 it comes to.
 #[test]
 fn the_game_boy_pak_is_the_published_ratio_taller_at_the_same_width() {
     assert_eq!(
@@ -337,11 +332,8 @@ fn the_game_boy_pak_is_the_published_ratio_taller_at_the_same_width() {
     );
 }
 
-/// The GBA cart's canvas spans its grip ridge and its body is inset below that. A Game Boy Game
-/// Pak has no ridge — that ridge is what physically stops a GBA cart entering a Game Boy — so
-/// its sides are parallel, and at the same 57 mm they are the GBA body's own width. Both shells
-/// are checked: the two differ at the top corners and nowhere else, so a pak that tapered would
-/// be a mistake in whichever one it appeared in.
+/// A Game Boy Game Pak has no grip ridge, so its sides are parallel at the GBA body's width, in
+/// both shells.
 #[test]
 fn the_game_boy_outline_has_parallel_sides_and_no_grip_ears() {
     for shell in [GbShell::Notched, GbShell::Rounded] {
@@ -372,11 +364,8 @@ fn the_game_boy_outline_has_parallel_sides_and_no_grip_ears() {
     }
 }
 
-/// The two shells differ in exactly two places and both are at the top. The notch is a bite out
-/// of the top right corner of the class A/B shell, so at the height of the notch floor the
-/// notched pak is the narrower of the two; the rounded shell's corners are cut back much
-/// further than the older mould's shallow step, so along the very top row it is the narrower.
-/// Below the shoulder they are the same object.
+/// The shells differ only at the top: the notch makes the notched pak narrower at the notch
+/// floor, and the rounded corners make the clear pak narrower along the top row.
 #[test]
 fn the_colour_only_shell_loses_the_notch_and_rounds_the_corners() {
     let notched = gb_silhouette(GbShell::Notched, GB_CART_W, GB_CART_H);
@@ -390,8 +379,7 @@ fn the_colour_only_shell_loses_the_notch_and_rounds_the_corners() {
     let left_at = |m: &[u8], y: u32| covered(m, y)[0];
     let right_at = |m: &[u8], y: u32| *covered(m, y).last().expect("an empty row");
 
-    // Inside the notch, which runs about eleven rows down from the top edge. The clear shell
-    // has plastic here and the notched one has a hole.
+    // Inside the notch, about eleven rows down: plastic on the clear shell, a hole on the other.
     let y = 6;
     assert!(
         right_at(&rounded, y) > right_at(&notched, y) + 10,
@@ -399,8 +387,7 @@ fn the_colour_only_shell_loses_the_notch_and_rounds_the_corners() {
         right_at(&rounded, y),
         right_at(&notched, y)
     );
-    // The top left corner, where no notch confuses the reading: the rounded shell's corner is
-    // cut back much further than the older mould's shallow step.
+    // The top left corner, where no notch confuses the reading.
     assert!(
         left_at(&rounded, 0) > left_at(&notched, 0) + 10,
         "the top row starts at {} against the notched {}: the corners are not rounded",
@@ -417,11 +404,8 @@ fn the_colour_only_shell_loses_the_notch_and_rounds_the_corners() {
     }
 }
 
-/// The real label is 42 x 37 mm on a 57 x 65.5 mm face: near square, against the GBA label's
-/// 2.28:1 landscape. It is centred across the pak and sits **low**, under the moulded lettering
-/// plate that fills the whole shoulder, with only the arrow below it. That placement is read
-/// off the user's own square-on drawing, which is the authority on it — no published dimension
-/// gives the offset, and the number that used to be here put the label over the plate.
+/// The Game Boy label is near square and sits low, under the moulded lettering plate that
+/// fills the shoulder.
 #[test]
 fn the_game_boy_label_well_is_near_square_and_sits_under_the_lettering_plate() {
     let (x0, y0, x1, y1) = gb_label_panel(GB_CART_W, GB_CART_H);
@@ -439,16 +423,8 @@ fn the_game_boy_label_well_is_near_square_and_sits_under_the_lettering_plate() {
     );
 }
 
-/// The class C top edge is modelled as a roll, not as a flat plate. Read down the middle of the
-/// face, where nothing else is drawn above the lettering plate, it has to come out in three
-/// parts: a lit band along the top, a darker break where the roll turns onto the shoulder, and
-/// the shoulder itself at the shell's own value. Any one of those missing and the top is flat
-/// again, which is the thing the user asked to have fixed.
-///
-/// This is a weak test on purpose and it is not what settled the drawing — the renders were.
-/// What it is for is the regression: the roll lives in an SVG that is read at runtime, so a
-/// mistyped path or a lost group would otherwise take the whole feature out in silence and
-/// nothing else in the suite would notice.
+/// The class C top edge reads as a roll down the middle of the face: a lit band, a darker break,
+/// then the shoulder at the shell's own value. Guards against the SVG silently losing it.
 #[test]
 fn the_colour_only_shell_has_a_rolled_top_edge_and_the_older_mould_does_not() {
     let d = tmp_root();
@@ -463,7 +439,6 @@ fn the_colour_only_shell_has_a_rolled_top_edge_and_the_older_mould_does_not() {
                 .unwrap_or_else(|| panic!("no cart {stem}")),
         )
     };
-    // Green alone, since all three channels move together here and one number reads better.
     let down = |f: &slot_ui::CartFace, y: u32| pixel(f, GB_CART_W / 2, y)[1] as i32;
 
     let rolled = face("Rolled");
@@ -480,7 +455,7 @@ fn the_colour_only_shell_has_a_rolled_top_edge_and_the_older_mould_does_not() {
          it just fades"
     );
 
-    // The same rows on the shell this one was derived from, which is flat there and stays flat.
+    // The same rows on the notched shell, which is flat there.
     let flat = face("Flat");
     let shoulder = down(&flat, 14);
     for y in 0..=13 {
@@ -501,17 +476,8 @@ fn a_game_boy_cart_face_is_drawn_at_the_game_boy_size() {
     assert!(face.rgba.iter().any(|b| *b != 0), "face is blank");
 }
 
-/// Every cartridge is centred on the carousel, which is what a GBA cart has always been and
-/// what the user asked for the paks to be. They share a centre and not a floor: a pak stood on
-/// a GBA cart's floor sat 59 px higher up the frame, top-heavy against the HUD plate with a gap
-/// under it, and the user named that as the thing to fix. The floors are per platform now and
-/// fall out of the centre rather than the other way round.
-///
-/// The consequence the user accepted in as many words is that a pak ends up closer to the slot.
-/// Closer is not touching, and the numbers that say so are pinned here: a centred pak's foot is
-/// at 366.5 against a lip at 422, which is 55.5 px of ground between the cartridge and the
-/// machine. It also buys back headroom at the top — 113.5 against 54.5 — so the clearance the
-/// old test was written to protect got better, not worse.
+/// Every cartridge is centred on the carousel, sharing a centre rather than a floor. A centred
+/// pak's foot still clears the lip by 55.5 px.
 #[test]
 fn every_cartridge_is_centred_on_the_row_and_clears_both_the_plate_and_the_slot() {
     let lip = OUT_H as f32 - MOUTH_H;
@@ -531,8 +497,7 @@ fn every_cartridge_is_centred_on_the_row_and_clears_both_the_plate_and_the_slot(
             "{name}'s foot at {foot} has reached the lip at {lip}: it is standing in the slot"
         );
     }
-    // The GBA cart is where it has always been, which is the point of centring rather than
-    // moving: nothing about the shelf the user already liked changed.
+    // The GBA cart is where it has always been.
     assert_eq!(
         (rest_y(CART_H as f32), foot_y(CART_H as f32)),
         (172.5, 307.5)
@@ -543,12 +508,8 @@ fn every_cartridge_is_centred_on_the_row_and_clears_both_the_plate_and_the_slot(
     );
 }
 
-/// A Game Boy cart carries no four character game code, so the shell table has nothing to key
-/// on. The CGB flag is what the header does say about the plastic, and it says three things,
-/// not two: 0x00 is grey, 0x80 is **black**, 0xc0 is clear. slot used to draw 0x80 translucent
-/// on the reasoning that a Colour-enhanced cart shipped in the same plastic as a Colour-only
-/// one. It did not — a 0x80 cart runs on original hardware and was sold in a black shell — so
-/// the three are pinned apart here rather than left to collapse back onto two.
+/// A Game Boy cart has no game code, so the CGB flag picks the plastic: 0x00 grey, 0x80 black,
+/// 0xc0 clear.
 #[test]
 fn each_of_the_three_cgb_flags_gets_its_own_plastic() {
     let d = tmp_root();
@@ -590,19 +551,15 @@ fn each_of_the_three_cgb_flags_gets_its_own_plastic() {
     }
 }
 
-/// The shape follows the flag too, and not the folder. A `.gb` file is routinely Colour-only
-/// and a `.gbc` file routinely DMG-compatible — the extension is a dumping convention and the
-/// flag is the cart — so a misfiled rom must still be drawn as the object Nintendo made. Read
-/// off the drawn face rather than the table: the notch is a hole in the top right corner, so
-/// the pixel there is the shell on one cart and nothing at all on the other.
+/// The shape follows the flag, not the folder. Read off the drawn face: the notch corner pixel
+/// is shell on one cart and nothing on the other.
 #[test]
 fn the_notch_follows_the_cgb_flag_and_not_the_folder() {
     let d = tmp_root();
     write_gb_rom(&d, "GB", "Filed As Mono.gb", 0xc0);
     write_gb_rom(&d, "GBC", "Filed As Colour.gbc", 0x80);
     let carts = scan(d.path()).unwrap();
-    // Inside the notch of the class A/B shell, and clear of the rounded shell's own corner:
-    // twenty pixels in from the right edge, eight rows down.
+    // Inside the notch and clear of the rounded corner: 20 px in from the right, 8 rows down.
     let notched_away = |stem: &str| {
         let cart = carts.iter().find(|c| c.stem == stem).expect("scanned");
         pixel_alpha(&cart_face(cart), GB_CART_W - 20, 8) < 8
@@ -617,15 +574,8 @@ fn the_notch_follows_the_cgb_flag_and_not_the_folder() {
     );
 }
 
-/// The moulding follows the flag too, and the shoulder is where the two shells part company.
-/// A class A/B pak wears five ribs a side running most of the way across its shoulder; a class C
-/// pak's shoulder is smooth, with its ribbing left only as short ridges on the outer side edges.
-/// The user named this looking at the rendered shelf — "gbc carts don't have lines on the
-/// header" — and a square-on photograph of a class C shell bears it out.
-///
-/// Read off the drawn face, in the band the class A/B ribs occupy and far enough in from the
-/// edge to clear the class C ridges. A rib is a horizontal line, so it shows as a step between
-/// one row and the next; flat plastic has no steps in it at all.
+/// The moulding follows the flag: a class A/B shoulder is ribbed, a class C shoulder smooth. A
+/// rib shows as a step between rows, so flat plastic has none.
 #[test]
 fn only_the_notched_shell_has_lines_across_its_shoulder() {
     let d = tmp_root();
@@ -633,8 +583,8 @@ fn only_the_notched_shell_has_lines_across_its_shoulder() {
     write_gb_rom(&d, "GB", "Black.gb", 0x80);
     write_gb_rom(&d, "GBC", "Clear.gbc", 0xc0);
     let carts = scan(d.path()).unwrap();
-    // The rib band: rows 21 to 57, from past the class C ridges at x 14 to short of x 33,
-    // where the lettering plate's own rounded left cap starts bulging into the shoulder.
+    // The rib band: rows 21 to 57, x 14 to 33, between the class C ridges and the lettering
+    // plate's rounded cap.
     let steps = |stem: &str| {
         let cart = carts.iter().find(|c| c.stem == stem).expect("scanned");
         let face = cart_face(cart);
@@ -662,9 +612,8 @@ fn only_the_notched_shell_has_lines_across_its_shoulder() {
     );
 }
 
-/// The finish has to reach the drawn pixels, not merely the table: a clear shell lightens
-/// toward its rim where a solid one is one colour all the way out. Sampled beside the label,
-/// where nothing but the shell is drawn.
+/// A clear shell lightens toward its rim on the drawn face; a solid one does not. Sampled
+/// beside the label.
 #[test]
 fn the_clear_shell_lightens_at_its_rim_and_the_plain_one_does_not() {
     let d = tmp_root();
@@ -689,9 +638,7 @@ fn the_clear_shell_lightens_at_its_rim_and_the_plain_one_does_not() {
     }
 }
 
-/// The GBA label is landscape, so three lines ran out of height long before any line ran out of
-/// width and one bound was enough. On a 1.17:1 panel the bounds cross, and which one binds
-/// depends on the title — so a short title that fits vertically at any size must still be held
+/// On the near square Game Boy panel either bound can bind, so a short title must still be held
 /// inside the width.
 #[test]
 fn a_game_boy_title_stays_inside_its_near_square_label() {
@@ -728,9 +675,7 @@ fn a_game_boy_title_stays_inside_its_near_square_label() {
     }
 }
 
-/// A side cart is dimmed by sitting a translucent face on this, not by letting the ground
-/// show through it. Only the compositor can mint a `TexId`, so what reaches the screen is not
-/// reachable here; the shape and the colour are.
+/// The black backing under a dimmed side cart: the cart's shape, all black.
 #[test]
 fn the_cart_shadow_is_the_cart_in_black() {
     let s = slot_ui::cart_shadow();
@@ -746,16 +691,7 @@ fn the_cart_shadow_is_the_cart_in_black() {
     );
 }
 
-/// The same black backing in the Game Boy pak's own shape. Stretching the GBA one to a taller
-/// box would put a tapered shadow under a straight sided cart.
-///
-/// One texture per shell, exactly that shell's outline. It used to be one for both, and it had
-/// to be their *intersection*: backing wider than the cart paints black over the wallpaper
-/// beside it, so the only safe way to share was to meet in the middle. What that cost was 72 px
-/// of a notched pak and 169 px of a rounded one left with nothing behind them, in the two corner
-/// wedges where the moulds disagree — and dimmed over a light wallpaper those are not
-/// invisible: the class C corner came up as a pale bite out of the cart. So they are separate,
-/// and each is required to be its own shell precisely rather than merely to stay inside it.
+/// The same backing in each Game Boy shell's own outline, exactly.
 #[test]
 fn each_game_boy_shell_gets_a_black_shadow_of_its_own_exact_outline() {
     for shell in [GbShell::Notched, GbShell::Rounded] {
@@ -770,8 +706,7 @@ fn each_game_boy_shell_gets_a_black_shadow_of_its_own_exact_outline() {
             );
         }
     }
-    // And the two really are different objects, so sharing one was a choice with a cost rather
-    // than a tidy-up: this is the count of cartridge the shared intersection used to leave bare.
+    // The two shells really differ, so one shared backing would leave some cartridge bare.
     let notched = gb_silhouette(GbShell::Notched, GB_CART_W, GB_CART_H);
     let rounded = gb_silhouette(GbShell::Rounded, GB_CART_W, GB_CART_H);
     let bare: u32 = notched

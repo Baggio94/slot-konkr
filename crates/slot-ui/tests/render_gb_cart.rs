@@ -1,9 +1,6 @@
-//! The Game Boy paks as they stand on the row, rasterised to a PNG so the drawing can be looked
-//! at rather than asserted about. Four carts on one screen-high ground: a GBA cart for scale and
-//! all three Game Boy classes — 0x00 grey in the notched shell, 0x80 black in the same shell,
-//! 0xc0 clear in the rounded one — each centred on the row the way the carousel centres it,
-//! under a band the height of the HUD plate. Does nothing unless `SCRATCH_PNG` names an output
-//! file:
+//! The Game Boy paks as they stand on the row, rasterised to a PNG: a GBA cart for scale and
+//! the grey, black and clear paks, each centred as the carousel centres it. Does nothing unless
+//! `SCRATCH_PNG` names an output file:
 //!
 //! `SCRATCH_PNG=/tmp/gb-carts.png cargo test -p slot-ui --test render_gb_cart -- --nocapture`
 
@@ -11,13 +8,11 @@ use slot_store::scan;
 use slot_ui::{cart_face, rest_y, CartFace, CART_W, MOUTH_H, OUT_H, PLATE_H};
 use tempfile::TempDir;
 
-/// Four carts side by side, which is wider than the screen. The row is a contact sheet rather
-/// than a screenshot — what is being judged is how the carts relate to each other.
+/// Four carts side by side, wider than the screen: a contact sheet, not a screenshot.
 const COLS: u32 = 4;
 const SHEET_W: u32 = COLS * CART_W;
 
-/// The ground the shelf draws over, near enough the wallpaper's own darkness that a shell reads
-/// against it the way it will on the device.
+/// Near the wallpaper's darkness, so a shell reads as it will on the device.
 const GROUND: [u8; 3] = [0x14, 0x15, 0x1a];
 const PLATE: [u8; 3] = [0x25, 0x27, 0x2e];
 const FLOOR: [u8; 3] = [0x3a, 0x3d, 0x46];
@@ -77,15 +72,12 @@ fn render_gb_cart() {
             frame.extend_from_slice(&c);
         }
     }
-    // The line the carts are centred on, drawn so a cart hanging off it is visible rather than
-    // inferred. It is the middle of the screen and not a floor: the row shares a centre across
-    // platforms now, which is what puts a pak and a GBA cart in the same place in the frame.
+    // The screen's centre line, which the row centres every cartridge on.
     for x in 0..SHEET_W {
         let d = (((OUT_H / 2) * SHEET_W + x) * 3) as usize;
         frame[d..d + 3].copy_from_slice(&FLOOR);
     }
-    // And the lip of the slot, so "closer to the slot" can be read off the sheet rather than
-    // taken on trust: no cartridge may reach it.
+    // And the lip of the slot, which no cartridge may reach.
     for x in 0..SHEET_W {
         let d = (((OUT_H - MOUTH_H as u32) * SHEET_W + x) * 3) as usize;
         frame[d..d + 3].copy_from_slice(&FLOOR);

@@ -6,9 +6,7 @@ use std::time::{Duration, Instant};
 use slot_gfx::{Compositor, Draw, TexId, OUT_H, OUT_W};
 use slot_input::{InputSource, Millis};
 use slot_power::{Platform, Power};
-// Aliased because `slot_power::Platform` above is already `Platform` here and is a different
-// thing entirely: that one is the machine slot is running on, this one is the machine a shelf's
-// cartridges were made for.
+// Aliased: `slot_power::Platform` is the machine slot runs on; this is a shelf's console.
 use slot_store::format_stamp;
 use slot_ui::{
     arrows_hint_face, badge_face, cart_face, cart_shadow, chip_face, chip_shadow_face,
@@ -91,9 +89,8 @@ struct Clocks {
     shown: String,
     battery: String,
     battery_tex: Option<TexId>,
-    /// The machine the band is naming, and its face. Re-made only when the shoulders move to
-    /// another shelf: this is type through a rasteriser, which is the one thing that must not
-    /// happen on a frame.
+    /// The machine the band is naming, and its face. Re-made only when the shelf changes, since
+    /// rasterising must not happen on a frame.
     platform: String,
     platform_tex: Option<TexId>,
 }
@@ -288,22 +285,17 @@ impl Frontend {
         let shadow = cart_shadow();
         let id = compositor.create_texture(shadow.w, shadow.h, &shadow.rgba);
         self.session.app_mut().set_cart_shadow(id);
-        // One per Game Pak mould: the two shells' corners differ, and a shared backing was
-        // showing through a dimmed cart at the corner where they disagree.
+        // One per Game Pak mould: the shells' corners differ, and a shared backing shows through
+        // a dimmed cart where they disagree.
         let notched = gb_cart_shadow(GbShell::Notched);
         let notched = compositor.create_texture(notched.w, notched.h, &notched.rgba);
         let rounded = gb_cart_shadow(GbShell::Rounded);
         let rounded = compositor.create_texture(rounded.w, rounded.h, &rounded.rgba);
         self.session.app_mut().set_gb_cart_shadows(notched, rounded);
-        // `draw_gauge` now draws the bolt beside the capsule, on the housing, in its own
-        // reserved slot rather than over the fill. The housing tint was only ever needed to
-        // hide the bolt inside the fill it sat on; out here it sits where every other HUD
-        // glyph does, so it takes the same ink they do.
+        // The bolt sits beside the capsule, not over the fill, so it takes the HUD ink.
         let bolt = icon_face(Icon::Charging, BOLT_PX, HUD_INK);
         let bolt_id = compositor.create_texture(bolt.w, bolt.h, &bolt.rgba);
         self.session.app_mut().set_bolt_face(bolt_id);
-        // One mark per shelf, in `Platform::ALL` order, beside the bolt because they are the
-        // same kind of thing: a small tinted drawing that never changes. At boot and not on the
         self.upload_wallpaper(compositor);
     }
 
@@ -335,8 +327,7 @@ impl Frontend {
         compositor.set_blue_light(self.session.app().blue_light());
         compositor.set_shake(self.session.app().screen_shake());
         compositor.set_screen_power(self.session.app().screen_power());
-        // Every frame rather than on the edge, for the same reason the grade and the power are:
-        // the pass has to be told what to draw whether or not anything just changed it.
+        // Every frame: the pass must be told what to draw whether or not anything changed.
         compositor.set_game_source_rect(self.session.app().source_rect());
         compositor.begin_frame();
         if let Some(frame) = self.session.frame() {
@@ -525,8 +516,8 @@ fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
         let id = upload(compositor, &mut clocks.shelf, face);
         app.set_shelf_clock_face(id, w);
     }
-    // The shelf's own name, printed on the case band beside the clock's own type. Empty on a
-    // card with one shelf, where `shelf_platform_name` answers `None` and the band says nothing.
+    // The shelf's own name, shown faintly in the slot when the shelf changes. None on a card
+    // with one shelf.
     let platform_shown = app.shelf_platform_name().unwrap_or_default().to_string();
     if platform_shown != clocks.platform {
         clocks.platform = platform_shown.clone();

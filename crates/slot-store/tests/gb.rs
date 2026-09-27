@@ -20,9 +20,7 @@ fn a_dmg_cart_reads_its_title_and_flag() {
     assert_eq!(slot_store::gb::class(&rom), Class::Original);
 }
 
-/// A Colour-only cart: flag 0xc0, and a title field that is **entirely zero**. An empty title
-/// is not a malformed ROM and must not be treated as one — the shelf names a cart from its
-/// filename anyway.
+/// A Colour-only cart: flag 0xc0, and an all-zero title, which is not a malformed ROM.
 #[test]
 fn a_colour_only_cart_has_no_title_and_that_is_fine() {
     let Some(rom) = card_rom("GBC/Tetris Chromatic.gbc") else {
@@ -38,10 +36,7 @@ fn a_colour_only_cart_has_no_title_and_that_is_fine() {
     assert_eq!(slot_store::gb::class(&rom), Class::ColourOnly);
 }
 
-/// Nobody has an 0x80 cart, so the middle of the three-way flag is synthesised. It is its own
-/// class and not a Colour one: a Colour-enhanced cart runs on original hardware and shipped in
-/// black plastic, where a Colour-only cart is the clear one. Collapsing the two is the error
-/// this test exists to keep from coming back.
+/// A synthesised 0x80 cart is `DualMode`, not collapsed into Colour-only.
 #[test]
 fn a_colour_enhanced_cart_is_its_own_class_and_not_a_colour_only_one() {
     let d = tempfile::tempdir().unwrap();
@@ -57,8 +52,7 @@ fn a_colour_enhanced_cart_is_its_own_class_and_not_a_colour_only_one() {
     assert_ne!(slot_store::gb::class(&rom), Class::ColourOnly);
 }
 
-/// The title field shortened to 11 bytes on later carts to make room for a manufacturer code
-/// and the flag itself. Reading 16 from 0x134 swallows both.
+/// The title is 11 bytes; reading 16 from 0x134 would swallow the manufacturer code and flag.
 #[test]
 fn the_title_read_does_not_swallow_the_manufacturer_code_or_the_flag() {
     let d = tempfile::tempdir().unwrap();
@@ -82,9 +76,7 @@ fn a_truncated_rom_is_not_a_panic() {
     assert_eq!(slot_store::gb::cgb_flag(&rom), None);
 }
 
-/// The manual lists 00H, 80H and C0H and nothing else, so anything else has to land somewhere.
-/// It lands on the original pak, which is the safe way to be wrong: a cart drawn as the
-/// commonest object rather than as one that was never made.
+/// Any flag besides 00H, 80H and C0H is an original pak.
 #[test]
 fn a_flag_the_manual_never_named_falls_back_to_the_original_pak() {
     let d = tempfile::tempdir().unwrap();

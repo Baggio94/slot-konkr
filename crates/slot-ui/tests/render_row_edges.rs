@@ -3,7 +3,6 @@
 //! A missing quad is invisible to draw-list assertions, so this measures bare backdrop at each
 //! edge through a scroll, against another row of the same carousel as the yardstick.
 //!
-//!
 //! `SCRATCH_PNG_DIR=/tmp cargo test -p slot-ui --test render_row_edges -- --nocapture`
 
 #![cfg(target_os = "macos")]

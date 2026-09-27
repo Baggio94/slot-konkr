@@ -92,9 +92,7 @@ fn a_cart_takes_the_platform_of_the_folder_it_is_in() {
     assert_eq!(by_stem("Chromatic"), Platform::Gbc);
 }
 
-/// A `.gba` filed under `GB/` is not a Game Boy cart. The folder says where a cart's files go;
-/// it cannot make a GBA ROM into a Game Boy game, and running it as one would be a broken
-/// screen. It simply does not appear, and slot says nothing.
+/// A `.gba` filed under `GB/` does not appear.
 #[test]
 fn a_gba_rom_in_the_game_boy_folder_does_not_appear() {
     let d = tmp_root();
@@ -102,17 +100,14 @@ fn a_gba_rom_in_the_game_boy_folder_does_not_appear() {
     assert!(scan(d.path()).unwrap().is_empty());
 }
 
-/// `App::boot` does `scan(root).unwrap_or_default()`, so an `Err` out of `scan` is not a message
-/// anywhere — it is every cart on the card gone from the shelf. One platform folder that will
-/// not open must cost the player that folder and nothing else, the same isolation the two boot
-/// sweeps already argue for at length.
+/// An unreadable platform folder costs only that folder, since `App::boot` turns an `Err` into
+/// an empty shelf.
 #[test]
 fn an_unreadable_platform_folder_does_not_take_the_rest_of_the_library_with_it() {
     let d = tmp_root();
     write_rom(&d, "GBA/Metroid Fusion.gba", "METROID");
     std::fs::write(d.path().join("Games/GB/Tetris.gb"), vec![0u8; 0x150]).unwrap();
-    // A corrupted card: a plain file standing where the Colour folder belongs, so `read_dir`
-    // answers ENOTDIR rather than "nothing here".
+    // A plain file where the Colour folder belongs, so `read_dir` answers ENOTDIR.
     std::fs::remove_dir(d.path().join("Games/GBC")).unwrap();
     std::fs::write(d.path().join("Games/GBC"), b"not a directory").unwrap();
 
@@ -123,8 +118,7 @@ fn an_unreadable_platform_folder_does_not_take_the_rest_of_the_library_with_it()
     assert!(carts.iter().any(|c| c.stem == "Tetris"));
 }
 
-/// Two carts of the same name on different platforms are two carts, and their labels are two
-/// files. This is the collision the whole layout exists to close.
+/// Two carts of the same name on different platforms are two carts with two labels.
 #[test]
 fn the_same_stem_on_two_platforms_is_two_carts_with_two_labels() {
     let d = tmp_root();

@@ -155,27 +155,9 @@ impl Session {
         self.sync_pad();
     }
 
-    /// The one seam the pad reaches the core through, and the one place ownership of a button is
-    /// settled rather than merely answered for a press.
-    ///
-    /// Everything `act` decides, it decides on an edge — and a phase change is not an edge. Who
-    /// owns L and R is a function of the phase and of the seated cart's platform
-    /// (`App::taken_buttons`), so the answer moves when a cart is seated, when a game starts, and
-    /// when one ends: all things that happen with nobody touching a button. Press and hold L on
-    /// the shelf, where nothing has taken it, and insert a Game Boy cart under it — the edge that
-    /// would have released it on the pad has already been and gone, and there is no next one
-    /// while the thumb stays down. The core is handed L held for as long as the player keeps
-    /// holding it, which is not a moment they pass through but the state they are in.
-    ///
-    /// So this asks the question again every time it runs, rather than waiting for an edge that
-    /// may never come while the state is wrong, and it runs everywhere the mask can reach the
-    /// core: at the end of every `feed`, where an edge may have changed the pad, and at the end
-    /// of every `update`, where a phase may have changed who owns it. Idempotent and two buttons
-    /// wide, so running it every frame costs nothing.
-    ///
-    /// *Released* rather than withheld, and released one button at a time rather than by clearing
-    /// the pad: this is a button being spoken for, not the whole pad changing hands the way an
-    /// overlay opening is, and a direction held through the same moment is still the game's.
+    /// Releases every button slot owns, then hands the pad to the core. Ownership moves with the
+    /// phase, not on an edge, so a shoulder held across a cart seating would stay held in the core
+    /// unless this re-asks every `feed` and `update`. Releases one button, never clears the pad.
     fn sync_pad(&mut self) {
         for btn in self.app.taken_buttons() {
             self.pad.apply(Action::GbaUp(*btn));
@@ -224,28 +206,8 @@ impl Session {
         if menu || self.overlaid() {
             self.pad.clear();
         } else if self.app.takes_from_the_game(action) {
-            // A button slot has taken is a button the core never sees — and it is *released*
-            // on the pad rather than merely withheld from it, whichever edge this was.
-            //
-            // Ownership is decided on the phase the action lands in, and a shoulder can be
-            // held across a change of phase. Press and hold L on the shelf, where nothing owns
-            // it and it reaches the pad; insert a Game Boy cart; let go in `Phase::Playing`,
-            // where slot does own it. Withholding that release leaves the bit set and the core
-            // holding L for the rest of the session. It is the mirror of the asymmetry
-            // `takes_from_the_game` already guards by answering for `GbaUp` as well as
-            // `GbaDown`, and it is invisible today only because mGBA maps libretro's L and R to
-            // nothing on a Game Boy — correct by accident, which is a thing this plan has been
-            // caught by before.
-            //
-            // Released rather than cleared, because unlike a menu opening this is one button
-            // being spoken for and not the whole pad changing hands: a stretch pressed while
-            // the player is holding a direction must not put that direction down.
-            //
-            // This is what an edge means as it arrives, and it is only half the answer: a finger
-            // that never lifts produces no edge at all, so `sync_pad` asks the same question
-            // again wherever ownership can have moved. Kept here as well because the gate has to
-            // hold inside a batch too — an edge and the frame's own re-decision are different
-            // moments, and only this one can keep a press slot took from touching the pad at all.
+            // Released, not withheld: a shoulder pressed before slot took it would otherwise stay
+            // held in the core. One button only, so a held direction stays down.
             if let Action::GbaDown(btn) | Action::GbaUp(btn) = action {
                 self.pad.apply(Action::GbaUp(btn));
             }
@@ -469,11 +431,7 @@ impl Session {
 
     /// `serial` is the `gpsp_serial` the core loads with.
     fn spawn_core(&mut self, stem: &str, serial: &'static str) {
-        // The cartridge in the slot, not the first one on the card wearing this name. Looking a
-        // stem up across the whole library answers with the GBA cartridge whenever a `.gb` and a
-        // `.gba` share a stem, whichever of them the player actually chose — so the core would
-        // open the wrong rom and every save, state and polaroid for the session would be filed
-        // under the wrong platform. See `App::seated_cart`.
+        // The seated cart, not a stem lookup: a `.gb` and a `.gba` can share a stem.
         let Some((rom, platform)) = self
             .app
             .seated_cart()
@@ -482,29 +440,13 @@ impl Session {
         else {
             return;
         };
-        // Resolved once, and only here: this is which dylib gets opened, which
-        // `States/<platform>/<core>/` directory the resume lookup below reads from, and — via
-        // `set_core` — every later flush, eject and polaroid read for this cart too. Deriving it
-        // twice let a `gpsp` cart run on mGBA with its state filed under the `gpsp` directory —
-        // the two calls always agreed in practice, right up until `open_core` did not yet know
-        // `Core` existed. `App` stores this rather than re-deriving it later, which is what
-        // makes that class of drift structurally unreachable now instead of merely unobserved.
-        //
-        // The platform outranks the file, and `core_for_platform` is where that rule lives rather
-        // than here: a line naming a core the platform cannot run is dropped rather than obeyed,
-        // which is what stops `Tetris = gpsp` from filing a cart's states under a core that never
-        // ran it. `SLOT_CORE` is untouched by this: it names a dylib rather than a `Core`, and
-        // its own doc comment already calls it the trap it is.
+        // Resolved once, here, and stored in `App`: it picks the dylib, the resume directory and
+        // every later flush, so deriving it twice could let the two drift apart.
         let core = slot_store::core_for_platform(&self.root, stem, platform);
         self.app.set_core(core);
-        // `platform` comes straight off the `Cart` the shelf scanned, not re-derived from the
-        // stem: it is what closes the same class of drift for a `.gb` and a `.gba` cart that
-        // happen to share a stem.
+        // Off the scanned `Cart`, not the stem, for the same shared-stem reason.
         self.app.set_platform(platform);
-        // Read for every cart rather than only for the Game Boy ones. It is a cosmetic
-        // preference with no core or directory hanging off it, and reading it unconditionally
-        // is what stops a GBA cart inheriting whatever the last Game Boy cart was left in —
-        // `App::source_rect` is the one place that decides a GBA picture never moves.
+        // Read for every cart, so a GBA cart never inherits the last Game Boy cart's mode.
         self.app
             .set_video_mode(crate::video_mode::video_mode_for(&self.root, stem));
         // gpSP reads its link mode only while a game loads, so what this hands the core is what

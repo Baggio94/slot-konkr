@@ -9,8 +9,7 @@ pub const SCALE: u32 = 3;
 pub const SRC_W: u32 = OUT_W / SCALE;
 pub const SRC_H: u32 = OUT_H / SCALE;
 
-/// Origin then size, in texture coordinates: everything there is. The default, what a GBA
-/// picture is always drawn with, and what a still is always drawn with.
+/// The whole texture as origin then size, in texture coordinates. Used for GBA and for stills.
 pub const WHOLE_TEXTURE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
 pub struct GamePass {
@@ -22,10 +21,7 @@ pub struct GamePass {
     u_uv: gl::types::GLint,
     /// A compositor with nobody driving it is a screen that is on.
     power: f32,
-    /// The part of the live game's texture the panel shows: origin then size, in texture
-    /// coordinates. The whole texture until somebody says otherwise, which is every GBA
-    /// picture and every Game Boy one at actual size. A still never reads it — see
-    /// `draw_still`.
+    /// The part of the live game's texture the panel shows. Stills never read it.
     src: [f32; 4],
 }
 
@@ -77,12 +73,8 @@ impl GamePass {
         self.power = t.clamp(0.0, 1.0);
     }
 
-    /// Which part of the *live game's* texture fills the panel, as origin then size in texture
-    /// coordinates. `WHOLE_TEXTURE` is the default and draws exactly what this pass drew before
-    /// there was a sub-rect at all; a Game Boy's own 160x144 window inside the 240x160 buffer is
-    /// what the fullscreen mode asks for. The grille is unaffected either way — see `GAME_FRAG`.
-    ///
-    /// A still does not take it. See `draw_still`.
+    /// Which part of the live game's texture fills the panel, as origin then size in texture
+    /// coordinates. Fullscreen Game Boy asks for its 160x144 window. Stills do not take it.
     pub fn set_source_rect(&mut self, rect: [f32; 4]) {
         self.src = rect;
     }
@@ -112,23 +104,11 @@ impl GamePass {
         self.draw_source(self.game, quad, self.src);
     }
 
-    /// The same pass over a still. A saved shot is a picture of this panel at exactly the
-    /// scale the mask is built for, so it is filtered at draw time rather than blitted flat
-    /// beside a game that is filtered.
+    /// The same pass over a still, so it wears the same mask as the game.
     ///
-    /// `WHOLE_TEXTURE` explicitly, and never `self.src`: a still is a *photograph*, taken at
-    /// some earlier moment, and `thumb::png` encodes the whole 240x160 buffer — so a Game Boy
-    /// polaroid is the centred picture with black at its sides whatever the panel is set to
-    /// now. Cropping it to the current mode would render the same stored image differently
-    /// depending on a setting that has nothing to do with when it was taken: a state saved
-    /// before the player ever pressed L would come back stretched because of a preference set
-    /// afterwards.
-    ///
-    /// This does mean a polaroid does not match a stretched game showing behind the switcher.
-    /// That is the honest inconsistency, and it is deliberate: a polaroid is a picture of the
-    /// game, not of the display setting it was viewed at, and looking different is how it says
-    /// so. A photograph on a shelf does not change shape when you rearrange the room. Do not
-    /// "fix" this for consistency.
+    /// Always `WHOLE_TEXTURE`, never `self.src`: a still stores the whole 240x160 buffer, so it
+    /// must not change shape with the current picture mode. Do not "fix" the mismatch with a
+    /// stretched game behind the switcher.
     pub fn draw_still(&self, tex: gl::types::GLuint, quad: &Quad) {
         self.draw_source(tex, quad, WHOLE_TEXTURE);
     }
@@ -138,10 +118,8 @@ impl GamePass {
         unsafe {
             gl::UseProgram(self.prog);
             gl::Uniform4f(self.u_rect, x, y, w, h);
-            // Here rather than in `set_source_rect`, so the value is whatever this draw asked
-            // for on whichever program the caller left bound — the same discipline `u_rect` and
-            // `u_bright` already follow. Taken as an argument rather than read off the field,
-            // because the game and a still deliberately want different answers.
+            // Set per draw, like `u_rect` and `u_bright`, since game and still want different
+            // values.
             gl::Uniform4f(self.u_uv, src[0], src[1], src[2], src[3]);
             gl::Uniform1f(self.u_bright, screen_brightness(self.power));
             gl::ActiveTexture(gl::TEXTURE0);

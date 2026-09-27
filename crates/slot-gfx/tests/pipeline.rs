@@ -26,15 +26,13 @@ fn flat_shot(rgb: [u8; 3]) -> Vec<u8> {
         .collect()
 }
 
-/// Where `video_refresh` centres a Game Boy's 160x144 picture inside the 240x160 buffer this
-/// whole path is built on. Spelled out here rather than imported, because the point of these
-/// tests is that the compositor is told a sub-rect and honours it, whoever worked it out.
+/// Where `video_refresh` centres a Game Boy's 160x144 picture inside the 240x160 buffer.
 const GB_X: usize = 40;
 const GB_Y: usize = 8;
 const GB_W: usize = 160;
 const GB_H: usize = 144;
 
-/// That window as the game pass takes it: origin and size in texture coordinates.
+/// That window in texture coordinates, origin then size.
 const GB_RECT: [f32; 4] = [
     GB_X as f32 / SRC_W as f32,
     GB_Y as f32 / SRC_H as f32,
@@ -42,11 +40,11 @@ const GB_RECT: [f32; 4] = [
     GB_H as f32 / SRC_H as f32,
 ];
 
-/// The whole texture, which is what the pass draws when nobody has asked for anything else.
+/// The whole texture, the default.
 const WHOLE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
 /// A core's frame: XRGB8888, which is B, G, R, unused in memory. `inside` paints the Game Boy
-/// window and `margin` fills the border `video_refresh` leaves around it.
+/// window and `margin` the border around it.
 fn gb_shaped(inside: impl Fn(usize, usize) -> [u8; 3], margin: [u8; 3]) -> Vec<u8> {
     let mut buf = Vec::with_capacity((SRC_W * SRC_H * 4) as usize);
     for y in 0..SRC_H as usize {
@@ -69,9 +67,8 @@ fn masked(rgb: [u8; 3], ox: usize, oy: usize) -> [i32; 3] {
     [0, 1, 2].map(|ch| (rgb[ch] as f32 * cell[ch]).round() as i32)
 }
 
-/// The smallest shift, in panel pixels, that leaves every pixel of the band where it was —
-/// which is the period of whatever pattern is on the panel, read off the panel. `None` when
-/// nothing up to eight pixels does, which is what a grille come unstuck looks like.
+/// The horizontal period of the pattern in the band, in panel pixels, or `None` if none up to
+/// eight.
 fn period_x(frame: &[u8], xs: std::ops::Range<usize>, ys: std::ops::Range<usize>) -> Option<usize> {
     (1..=8).find(|p| {
         (xs.start..xs.end - p).all(|x| ys.clone().all(|y| px(frame, x, y) == px(frame, x + p, y)))
@@ -252,14 +249,8 @@ fn a_saved_shot_is_drawn_through_the_lcd_pass() {
     }
 }
 
-/// A still is a photograph, taken at some earlier moment, and `thumb::png` encodes the whole
-/// 240x160 buffer — so a Game Boy polaroid is the centred picture with black at its sides
-/// whatever the panel is set to now. It must not take the picture mode: the same stored image
-/// rendering differently because of a preference set after it was taken would mean a state
-/// saved before the player ever pressed L comes back stretched.
-///
-/// The live game beside it is the control: without one, a build that had simply stopped
-/// honouring the sub-rect at all would pass this.
+/// A still ignores the game's sub-rect and always draws the whole buffer. The live game is the
+/// control, so a build that ignored the sub-rect everywhere would fail.
 #[test]
 fn a_still_is_not_cropped_by_the_picture_mode() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -434,13 +425,8 @@ fn a_quarter_turn_takes_the_top_left_corner_to_the_top_right() {
     assert_eq!(px(&frame, 113, 127), [0, 0, 255]);
 }
 
-/// The default sub-rect is the whole texture, which is the arithmetic the pass did before
-/// there was a sub-rect to ask for: nearest sampled at exactly 3x, one source pixel under
-/// each 3x3 mask cell. Checked against that arithmetic recomputed here rather than against a
-/// recorded frame, so it pins the relationship and not one capture of it — and then asked for
-/// explicitly as well, because a default that only happens to agree is one that can drift.
-///
-/// This is the whole of what keeps a GBA picture unmoved by a change made for the Game Boy.
+/// The default and explicit whole-texture sub-rect both draw one source pixel under each 3x3
+/// mask cell, checked against the arithmetic rather than a recorded frame.
 #[test]
 fn the_default_source_rect_draws_exactly_as_before() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -492,10 +478,8 @@ fn the_default_source_rect_draws_exactly_as_before() {
     );
 }
 
-/// Fullscreen draws only the Game Boy's own picture, over the whole panel. The picture's
-/// corner texels land in the panel's corners, and the margin `video_refresh` leaves around it
-/// is nowhere on screen at all — which is the difference between a stretch and a crop that
-/// merely moved.
+/// Fullscreen puts the Game Boy picture's corner texels in the panel's corners, with no margin
+/// anywhere on screen.
 #[test]
 fn fullscreen_puts_the_pictures_corners_in_the_panels_corners() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -563,10 +547,8 @@ fn fullscreen_puts_the_pictures_corners_in_the_panels_corners() {
     assert!(!strayed, "the margin is still on screen in fullscreen");
 }
 
-/// The mask is sampled at `v_uv * u_src` and the quad is always the whole panel, so the
-/// grille is locked to the panel rather than to the texture: stretching the picture must not
-/// disturb its regularity. Measured off the composited frame, because the uniform saying 240
-/// is not evidence about what a panel shows.
+/// Stretching the picture must not disturb the grille's period, measured off the composited
+/// frame.
 #[test]
 fn the_mask_period_is_three_pixels_in_both_modes() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -604,8 +586,7 @@ fn the_mask_period_is_three_pixels_in_both_modes() {
         "actual size: the grille does not repeat every 3 px down"
     );
 
-    // Fullscreen has no margin, so the measurement runs edge to edge — including the columns
-    // that were black a moment ago.
+    // Fullscreen has no margin, so the measurement runs edge to edge.
     assert_eq!(
         period_x(&full, 0..OUT_W as usize, 0..OUT_H as usize),
         Some(3),

@@ -6,17 +6,15 @@ use crate::platform::Platform;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Cart {
-    /// Which console this cart is for, and therefore which folder under `Games/`, `Saves/`,
-    /// `States/` and `Labels/` its files live in. Decided by the folder `scan` found the rom
-    /// in, never by reading the rom itself.
+    /// Decided by the folder `scan` found the rom in, never by reading the rom.
     pub platform: Platform,
     /// Filename stem, which is the key for labels, saves and states. Not a content hash.
     pub stem: String,
     pub rom: PathBuf,
     pub label: Option<PathBuf>,
     pub title: String,
-    /// The four character header game code, empty when the rom has none. A Game Boy cart has
-    /// no equivalent field, so this is always empty for `Platform::Gb` and `Platform::Gbc`.
+    /// The four character header game code, empty when the rom has none. Always empty for
+    /// Game Boy carts, which have no such field.
     pub code: String,
 }
 
@@ -41,16 +39,9 @@ impl From<std::io::Error> for StoreError {
     }
 }
 
-/// An unmounted card or a card with no library is an empty shelf, not a boot failure — and so
-/// is a platform folder that does not exist, which is the normal state of a card with no
-/// Colour carts.
-///
-/// A platform folder that exists and cannot be read is not a boot failure either, and this is
-/// the one place that has to decide that. The only caller is `App::boot`, which does
-/// `scan(root).unwrap_or_default()` — so an `Err` out of here is not an error message anywhere,
-/// it is every cart on the card gone from the shelf. One folder being unreadable says nothing
-/// about the other two, so a folder that will not open costs the player that folder and nothing
-/// else. Same for a single directory entry that will not stat: it costs that one cart.
+/// A missing card, library or platform folder is an empty shelf, not a boot failure. An
+/// unreadable folder or entry is skipped, since `App::boot` turns any `Err` into an empty shelf
+/// and one bad folder must not hide the others.
 pub fn scan(root: &Path) -> Result<Vec<Cart>, StoreError> {
     let mut carts = Vec::new();
     for platform in Platform::ALL {
@@ -68,8 +59,7 @@ pub fn scan(root: &Path) -> Result<Vec<Cart>, StoreError> {
                 continue;
             };
             let rom = entry.path();
-            // The folder decides the platform; the extension decides whether this is a cart at
-            // all. A `.gba` under `GB/` is neither, and is passed over in silence.
+            // The folder decides the platform; the extension decides whether this is a cart.
             if is_hidden(&rom) || !rom.is_file() || !platform.accepts(&rom) {
                 continue;
             }
@@ -85,9 +75,8 @@ pub fn scan(root: &Path) -> Result<Vec<Cart>, StoreError> {
                     header_title(&rom).unwrap_or_default(),
                     header_code(&rom).unwrap_or_default(),
                 ),
-                // A Game Boy cart has no GBA-style four-character game code, and the fields
-                // `gba.rs` reads sit below the Game Boy header entirely — 0xA0 and 0xAC are in
-                // the cartridge's RST vectors, so they would read arbitrary opcode bytes.
+                // `gba.rs` offsets 0xA0 and 0xAC are in a Game Boy cart's RST vectors, so they
+                // would read opcode bytes.
                 _ => (crate::gb::title(&rom).unwrap_or_default(), String::new()),
             };
             carts.push(Cart {
@@ -106,14 +95,8 @@ pub fn scan(root: &Path) -> Result<Vec<Cart>, StoreError> {
     Ok(carts)
 }
 
-/// Where a title files on the shelf: digits first, then A to Z, and case ignored.
-///
-/// Plain byte order put `apple` after `Zebra`, because every lowercase letter sorts above every
-/// uppercase one, so a card's row depended on how its files happened to be capitalised.
-///
-/// The group runs ahead of the text rather than being folded into it, so that one digit-led title
-/// cannot land between two letters however it is spelled, and anything led by neither, a bracket
-/// or a quote, files after both rather than silently first.
+/// Where a title files on the shelf: digits first, then A to Z ignoring case, then anything led
+/// by neither (a bracket, a quote).
 pub fn sort_key(stem: &str) -> (u8, String) {
     (group_of(stem), stem.to_uppercase())
 }
