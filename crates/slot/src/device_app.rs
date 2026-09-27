@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use slot::frontend::Frontend;
 use slot::input::DeviceInput;
 use slot_gfx::{Compositor, FbdevSurface, Surface};
-use slot_power::DevicePlatform;
+use slot_power::{trace_first_frame, DevicePlatform};
 
 /// Where BaseOS mounts the card slot has never been checked against a running device, so
 /// `launch.sh` exports `SLOT_ROOT` and this is only what is left if it did not.
@@ -38,12 +38,20 @@ pub fn run() {
     let mut frontend = Frontend::boot(Box::new(platform));
     frontend.upload_faces(&mut compositor);
     let mut input = DeviceInput::open(&root);
+    // The boot budget stopped at frontend-exec, which is the exec and not the picture on
+    // the panel. Stamped after the swap rather than before it: the frame is only up once
+    // EGL has taken it, and a number recorded earlier would flatter every measurement.
+    let mut drawn = false;
     loop {
         let began = Instant::now();
         frontend.render(&mut compositor, surface.window_size());
         if let Err(e) = surface.swap() {
             eprintln!("slot: {e}");
             return;
+        }
+        if !drawn {
+            drawn = true;
+            trace_first_frame();
         }
         frontend.advance(&mut input);
         if frontend.restarting() {

@@ -3,7 +3,10 @@ mod motor;
 mod power;
 mod sim;
 
-pub use device::{has_bit, motor_change, rumble_node, DevicePlatform};
+pub use device::{
+    has_bit, motor_change, record_first_frame, rumble_node, trace_first_frame, uptime_seconds,
+    DevicePlatform,
+};
 pub use motor::Motor;
 pub use power::Power;
 pub use sim::SimPlatform;

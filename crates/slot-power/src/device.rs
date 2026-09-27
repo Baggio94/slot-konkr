@@ -17,6 +17,66 @@ const TOP_STEP: u32 = 9;
 /// binary's own business.
 const DEV_INPUT: &str = "/dev/input";
 
+/// Where the OS keeps its boot markers. tmpfs, so it is empty again every boot, which is
+/// what makes "does the marker exist" mean "has this boot drawn yet".
+const RUN_DIR: &str = "/run";
+
+/// The first field of /proc/uptime: seconds since kernel start, the unit every
+/// /run/boot-* marker is counted in. Anything that is not a number reads as no answer
+/// rather than as a marker file full of nonsense.
+pub fn uptime_seconds(s: &str) -> Option<String> {
+    let first = s.split_whitespace().next()?;
+    if !first.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        return None;
+    }
+    if !first.chars().any(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(first.to_string())
+}
+
+/// Record the boot's first frame under `run`: `boot-first-frame` joins the marker family
+/// the OS writes, and a line on `boot-trace` puts it on the same timeline as every rcS
+/// step. Only the first frame of a boot may claim the marker — slot restarts without the
+/// machine rebooting, and a marker rewritten then reports the newest frame as though it
+/// were the boot's. Later frames still reach the trace as `first-frame-again`, so a
+/// restart stays visible without corrupting the number.
+///
+/// Best effort throughout: a frontend that cannot write a diagnostic still has to draw.
+pub fn record_first_frame(run: &Path, uptime: &str) {
+    let marker = run.join("boot-first-frame");
+    let again = marker.exists();
+    if !again {
+        let _ = fs::write(&marker, format!("{uptime}\n"));
+    }
+    let label = if again {
+        "first-frame-again"
+    } else {
+        "first-frame"
+    };
+    if let Ok(mut f) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(run.join("boot-trace"))
+    {
+        let _ = writeln!(f, "{uptime} {label}");
+    }
+}
+
+/// Stamp the boot's first frame from the device's own clock.
+///
+/// This is the number the player actually feels, and the one block of the boot budget
+/// nothing measured: `frontend-exec` is the exec, not the picture on the panel.
+pub fn trace_first_frame() {
+    let Ok(raw) = fs::read_to_string("/proc/uptime") else {
+        return;
+    };
+    let Some(up) = uptime_seconds(&raw) else {
+        return;
+    };
+    record_first_frame(Path::new(RUN_DIR), &up);
+}
+
 const EV_FF: u16 = 0x15;
 const FF_RUMBLE: u16 = 0x50;
 /// `_IOW('E', 0x80, struct ff_effect)`. The struct is 48 bytes once the union's eight byte
