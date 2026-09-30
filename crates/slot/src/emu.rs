@@ -531,7 +531,7 @@ struct Worker {
 
 impl Worker {
     /// A state from the card, as the core takes it.
-    fn to_core(&self, state: Vec<u8>) -> Vec<u8> {
+    fn for_core(&self, state: Vec<u8>) -> Vec<u8> {
         match self.player {
             Some(_) if !link_state::is_pair(&state) => link_state::pair(&state),
             _ => state,
@@ -539,7 +539,7 @@ impl Worker {
     }
 
     /// A state from the core, as the card keeps it: only the local GBA.
-    fn from_core(&self, state: Vec<u8>) -> Vec<u8> {
+    fn for_card(&self, state: Vec<u8>) -> Vec<u8> {
         self.player
             .and_then(|p| link_state::local(&state, p))
             .unwrap_or(state)
@@ -572,7 +572,7 @@ impl Worker {
         // Before Ready, so the reveal shows where the cart left off. A refused state still
         // leaves the save ram loaded: position lost, progress kept.
         if let Some(resume) = resume {
-            if let Err(e) = core.unserialize(&self.to_core(resume)) {
+            if let Err(e) = core.unserialize(&self.for_core(resume)) {
                 eprintln!("slot: resume: {e}");
                 // As with `sav_refused`: this core's `serialize()` is not the player's session.
                 self.shared.resume_refused.store(true, Ordering::Release);
@@ -602,9 +602,11 @@ impl Worker {
         let mut gated = (false, false);
         let rewind = RewindThread::spawn(REWIND_BYTES);
         let mut since_snapshot = 0;
-        // Worst recent core frame cost, to predict whether another fits in a fast present. Worst,
-        // not mean: the mean overran 54% of mGBA presents. Seeded at a whole present, cautious.
-        let mut frame_peak = PRESENT;
+        // Seeded at a whole present each, cautious: one frame until measured.
+        let mut cost = FrameCost {
+            skip: PRESENT,
+            draw: PRESENT,
+        };
         // Measured cost of a present's work after its core frames, blended. Seeded
         // pessimistically at the full margin `FAST_TARGET` leaves.
         let mut post_cost = PRESENT - FAST_TARGET;
@@ -630,6 +632,8 @@ impl Worker {
         let mut cable_said = Instant::now();
         let mut cable_core = Duration::ZERO;
         let mut cable_wait = Duration::ZERO;
+        // Fast forward diagnostics: presents, core frames, core time, since the run began.
+        let mut ff = (0u32, 0u32, Duration::ZERO, Instant::now());
         while !self.shared.stop.load(Ordering::Relaxed) {
             for cmd in self.cmds.try_iter() {
                 self.apply(cmd, core.as_mut(), &mut transport, &mut cable, &link);
@@ -742,10 +746,10 @@ impl Worker {
                 let budget = FAST_TARGET.saturating_sub(post_cost);
                 let began = Instant::now();
                 let mut ran = 0u32;
-                let mut worst = Duration::ZERO;
+                let (mut skipped, mut drawn) = (None::<Duration>, Duration::ZERO);
                 loop {
                     ran += 1;
-                    let last = ran >= ceiling || began.elapsed() + frame_peak * 2 > budget;
+                    let last = ran >= ceiling || cost.last(began.elapsed(), budget);
                     core.set_frame_skip(!last);
                     let frame_began = Instant::now();
                     match cable.as_mut() {
@@ -764,7 +768,7 @@ impl Worker {
                                 if let Some(pair) = c.ready() {
                                     break Some(pair);
                                 }
-                                if began.elapsed() + frame_peak > budget {
+                                if began.elapsed() + cost.draw > budget {
                                     break None;
                                 }
                                 if let Some(t) = transport.as_deref_mut() {
@@ -794,18 +798,18 @@ impl Worker {
                         }
                         None => core.run_frame(input),
                     }
-                    worst = worst.max(frame_began.elapsed());
+                    let took = frame_began.elapsed();
+                    if last {
+                        drawn = took;
+                    } else {
+                        skipped = Some(skipped.map_or(took, |w| w.max(took)));
+                    }
                     if last {
                         break;
                     }
                 }
                 let core_time = began.elapsed();
-                // Up at once, down slowly: the next present must survive a heavy frame.
-                frame_peak = if worst > frame_peak {
-                    worst
-                } else {
-                    blend(frame_peak, worst)
-                };
+                cost.measured(skipped, drawn);
                 if cable.is_some() {
                     cable_presents += 1;
                     cable_core += core_time;
@@ -828,6 +832,23 @@ impl Worker {
                     }
                 }
                 fast_span = Some((began, core_time));
+                if speed != Speed::Fast {
+                    ff = (0, 0, Duration::ZERO, Instant::now());
+                } else if crate::session::trace() {
+                    ff = (ff.0 + 1, ff.1 + ran, ff.2 + core_time, ff.3);
+                    if ff.0 == 300 {
+                        let secs = ff.3.elapsed().as_secs_f32();
+                        eprintln!(
+                            "slot: ff: {:.1} frames a present, {:.0} fps, {:.1} ms core of {:.1} ms present, {:.1} ms after",
+                            ff.1 as f32 / 300.0,
+                            ff.1 as f32 / secs,
+                            ff.2.as_secs_f32() * 1000.0 / 300.0,
+                            secs * 1000.0 / 300.0,
+                            post_cost.as_secs_f32() * 1000.0,
+                        );
+                        ff = (0, 0, Duration::ZERO, Instant::now());
+                    }
+                }
                 // Send now: serial only runs inside `run_frame`, and waiting a present adds
                 // 16.7 ms to a ~2 ms wire. A GBA unanswered for four frames reports an error.
                 flush_outbound(&mut transport, &link);
@@ -946,12 +967,12 @@ impl Worker {
         match cmd {
             Cmd::Save(reply) => match core.serialize() {
                 Ok(state) => {
-                    let _ = reply.send(self.from_core(state));
+                    let _ = reply.send(self.for_card(state));
                 }
                 Err(e) => eprintln!("slot: {e}"),
             },
             Cmd::Load(state) => {
-                if let Err(e) = core.unserialize(&self.to_core(state)) {
+                if let Err(e) = core.unserialize(&self.for_core(state)) {
                     eprintln!("slot: {e}");
                 }
             }
@@ -1095,6 +1116,40 @@ fn blend(estimate: Duration, measured: Duration) -> Duration {
     (estimate * (COST_BLEND - 1) + measured) / COST_BLEND
 }
 
+/// Worst recent cost of a skipped and of a drawn core frame, to predict whether another fits in
+/// a fast present. Worst, not mean: the mean overran 54% of mGBA presents. Kept apart because a
+/// skipped frame is cheaper, and charging each at the drawn cost left mGBA at one a present.
+struct FrameCost {
+    skip: Duration,
+    draw: Duration,
+}
+
+impl FrameCost {
+    /// Whether the frame about to run must be the drawn last one: another skipped frame and the
+    /// drawn one after it would not both fit.
+    fn last(&self, elapsed: Duration, budget: Duration) -> bool {
+        elapsed + self.skip + self.draw > budget
+    }
+
+    /// Up at once, down slowly: the next present must survive a heavy frame.
+    fn measured(&mut self, skip: Option<Duration>, draw: Duration) {
+        let follow = |estimate: Duration, seen: Duration| {
+            if seen > estimate {
+                seen
+            } else {
+                blend(estimate, seen)
+            }
+        };
+        self.draw = follow(self.draw, draw);
+        // Skipping a frame never costs more than drawing it, so with none measured yet the
+        // drawn cost stands in, or a skipped frame would never be tried.
+        self.skip = match skip {
+            Some(skip) => follow(self.skip, skip),
+            None => self.skip.min(self.draw),
+        };
+    }
+}
+
 /// The display's present, measured over windows of its ticks. Counts ticks, not frames served, so
 /// a worker that falls behind cannot inflate it.
 struct TickRate {
@@ -1151,6 +1206,94 @@ mod tests {
     use slot_retro::LoopbackLink;
 
     const PANEL: Duration = Duration::from_micros(16_760);
+
+    /// Core frames one fast present runs at these costs, as the worker's loop decides them.
+    fn frames_in(cost: &FrameCost, budget: Duration, ceiling: u32) -> u32 {
+        let mut elapsed = Duration::ZERO;
+        let mut ran = 0;
+        loop {
+            ran += 1;
+            let last = ran >= ceiling || cost.last(elapsed, budget);
+            elapsed += if last { cost.draw } else { cost.skip };
+            if last {
+                return ran;
+            }
+        }
+    }
+
+    fn ms(ms: f64) -> Duration {
+        Duration::from_secs_f64(ms / 1000.0)
+    }
+
+    /// Recharged Yellow on mGBA, measured on the SP: 4.8 ms skipped, 5.7 ms drawn, with 11.9 ms
+    /// of the present left for core frames. Charging every frame at the drawn cost twice over
+    /// ran one frame a present, which is no fast forward at all.
+    #[test]
+    fn a_core_whose_skipped_frames_fit_runs_more_than_one_a_present() {
+        let cost = FrameCost {
+            skip: ms(4.8),
+            draw: ms(5.7),
+        };
+        assert_eq!(frames_in(&cost, ms(11.9), 6), 2);
+    }
+
+    #[test]
+    fn cheap_frames_run_up_to_the_ceiling() {
+        let cost = FrameCost {
+            skip: ms(1.2),
+            draw: ms(2.0),
+        };
+        assert_eq!(frames_in(&cost, ms(11.9), 6), 6);
+    }
+
+    #[test]
+    fn a_present_never_plans_past_its_budget() {
+        let cost = FrameCost {
+            skip: ms(4.8),
+            draw: ms(5.7),
+        };
+        for budget in [5.0, 8.0, 11.9, 14.0, 20.0] {
+            let n = frames_in(&cost, ms(budget), 6);
+            let planned = cost.skip * (n - 1) + cost.draw;
+            assert!(
+                n == 1 || planned <= ms(budget),
+                "{n} frames plan {planned:?} into {budget} ms"
+            );
+        }
+    }
+
+    /// Seeded at a whole present, a skip estimate that only skipped frames could lower would
+    /// never let one run: every present stayed at one drawn frame.
+    #[test]
+    fn with_no_skipped_frame_yet_the_skip_estimate_follows_the_drawn_one() {
+        let mut cost = FrameCost {
+            skip: PRESENT,
+            draw: PRESENT,
+        };
+        // A few presents of one drawn frame each, as the start of a fast forward run.
+        for _ in 0..12 {
+            cost.measured(None, ms(3.6));
+        }
+        assert_eq!(cost.skip, cost.draw);
+        assert!(frames_in(&cost, ms(13.6), 6) > 1);
+    }
+
+    #[test]
+    fn a_slow_frame_raises_its_estimate_at_once_and_a_fast_one_lowers_it_slowly() {
+        let mut cost = FrameCost {
+            skip: ms(4.0),
+            draw: ms(5.0),
+        };
+        cost.measured(Some(ms(9.0)), ms(5.0));
+        assert_eq!(cost.skip, ms(9.0));
+        cost.measured(Some(ms(1.0)), ms(5.0));
+        assert!(cost.skip > ms(6.0) && cost.skip < ms(9.0));
+        cost.measured(None, ms(5.0));
+        assert!(
+            cost.skip <= cost.draw,
+            "a skipped frame was costed above a drawn one"
+        );
+    }
 
     fn run_window(rate: &mut TickRate, start: Instant, ticks_per_frame: u64) -> Option<f64> {
         let mut scale = None;
