@@ -109,6 +109,8 @@ code{
   transition:color .2s ease,background .2s ease;
 }
 .tab{padding:9px 14px;font-size:16px;font-weight:600}
+/* The studio is its own page, so it sits in the row as a link rather than a tab. */
+a.tab{text-decoration:none}
 .tab:hover,.subtab:hover{color:var(--ink)}
 .tab[aria-selected=true]{color:var(--ink);background:var(--rule)}
 .tab:focus-visible,.subtab:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
@@ -255,7 +257,7 @@ code{
   /* No perspective property here. A perspective establishes the containing block for any
      fixed-position descendant, which would pin the travelling device to this wrapper
      instead of to the viewport. It moves onto the device itself, via the transform
-     function — same as the guide, and for a related reason. */
+     function, same as the guide, and for a related reason. */
 }
 /* A soft pool of light behind the shell, so a silver device is not floating on
    black with a hard edge. */
@@ -311,12 +313,12 @@ code{
 .pose-flat .dv-lid{transform:none}
 
 /* Nothing in this pose turns on Y, so the side walls, the top edge and the lid's back are
-   all exactly edge-on or exactly behind the front — and every one of them relies on
+   all exactly edge-on or exactly behind the front, and every one of them relies on
    backface culling at precisely 90 or 180 degrees to vanish. That is the one place
    rasterisers disagree: it culls under software rendering and can draw under GPU
    compositing, which puts the lid's back face above the open lid as a pale trapezoid with
    a second hinge barrel under it. A face that cannot legitimately be seen here should not
-   be drawn at all, rather than drawn and hoped away. The hero keeps all of them — it
+   be drawn at all, rather than drawn and hoped away. The hero keeps all of them: it
    genuinely turns, so they sit at angles where the answer is not a coin flip. */
 .pose-flat .dv-edge,
 .pose-flat .f3d,
@@ -327,7 +329,7 @@ code{
    was, so a lid box off by anything at all came out elongated. Pinning the top and giving
    it the art's own ratio makes it the right shape no matter what the parent measures.
    The translateZ goes too: it existed to stand the back off the front by the lid's
-   thickness, and nothing in this pose shows a thickness — the walls that would are hidden
+   thickness, and nothing in this pose shows a thickness; the walls that would are hidden
    above. That leaves one rotation on the lid and nothing offset in Z. */
 .guide-stage .device.is-shut .dv-back,
 .guide-stage .device.is-swinging .dv-back{
@@ -345,11 +347,11 @@ code{
    inside it is a row of carts on a shelf line. */
 /* The perspective rides in the transform; see the note on .hero-device. It has to be a
    multiple of the device's width rather than a fixed length, so the projection is the same
-   shape at every size — 750px was 2.5x a 300px device, and the closer the viewer the more
+   shape at every size: 750px was 2.5x a 300px device, and the closer the viewer the more
    violently the turned faces foreshorten. */
 .pose-hero{transform:perspective(calc(var(--dw) * 2.5)) rotateZ(13deg) rotateX(6deg) rotateY(-27deg)}
 /* The lid's opening animation outranks an inline style while it runs, so it is switched off
-   the moment the device starts travelling — otherwise the lid holds its animated angle
+   the moment the device starts travelling; otherwise the lid holds its animated angle
    while the rest of the device flattens. */
 .pose-hero.no-lid-anim .dv-lid{animation:none}
 .pose-hero .dv-lid{
@@ -426,8 +428,8 @@ code{
   z-index:5;
   opacity:0;
   transition:opacity .45s ease;
-  /* `fill`, not `cover`. Both give the same picture here — the box is exactly 3:2 and
-     so are the clips — but `cover` has to derive a fit from the video's intrinsic size,
+  /* `fill`, not `cover`. Both give the same picture here (the box is exactly 3:2 and
+     so are the clips), but `cover` has to derive a fit from the video's intrinsic size,
      and any frame where that size is not yet known is a frame drawn at the wrong offset
      which then snaps into place. `fill` stretches to the box and asks nothing about the
      source, so there is no fit to get wrong. The cost is that a clip which is NOT 720x480
@@ -436,7 +438,7 @@ code{
   border:0;
   /* The element also carries width="720" height="480". Without an intrinsic size a
      video is 300x150 until its metadata arrives, and object-fit:cover crops a 2:1
-     source into a 3:2 box quite differently from a 3:2 one — which is the frame that
+     source into a 3:2 box quite differently from a 3:2 one, which is the frame that
      appears wrong and then snaps into place.
 
      translateZ(0) puts it in its own layer up front. A video inside a preserve-3d
@@ -522,7 +524,7 @@ kbd{
 .faq{padding:clamp(26px,4vh,52px) 0}
 .faq h2{margin-bottom:22px}
 .faq dl{margin:0}
-.faq .qa{margin:0 0 26px;max-width:64ch}
+.faq .qa{margin:0 0 26px}
 .faq .qa:last-child{margin-bottom:0}
 .faq dt{font-weight:600;font-size:20px;color:var(--ink);margin-bottom:7px}
 .faq dd{margin:0;font-size:19px;line-height:1.7;color:var(--muted)}
@@ -600,7 +602,7 @@ kbd{
 }
 .guide-stage{
   /* Sized off viewport HEIGHT, because the stage is 100vh and the device is nearly
-     twice as tall as it is wide — height is what runs out first. A width cap alone made
+     twice as tall as it is wide, so height is what runs out first. A width cap alone made
      it shrink against the view as the screen grew: 73% of the height at 1280x800 but
      58% at 1920x1080. 41vh holds it at about 78% everywhere. The clamp is only there to
      stop it outgrowing its own grid column. */
@@ -612,7 +614,7 @@ kbd{
   justify-content:center;
   /* No perspective here. This element is position:sticky, and a sticky box that also
      establishes a perspective and holds a preserve-3d subtree is the combination that has
-     the compositor painting the device's layer at an offset the layout never had — the
+     the compositor painting the device's layer at an offset the layout never had: the
      duplicate lid, floating clear of where the element actually is. The DOM measures
      correctly throughout, which is why it only ever showed on a real GPU and never under
      the software rasteriser here. The perspective moves to the device instead, via the
@@ -622,7 +624,7 @@ kbd{
 .guide-stage .device{width:var(--dw)}
 /* Held back until the hero's device has finished travelling down to it. display, not
    visibility: the artwork's flake texture is drawn through an SVG filter, which renders
-   into its own surface and keeps painting through a hidden ancestor — it showed as a dark
+   into its own surface and keeps painting through a hidden ancestor; it showed as a dark
    textured slab sitting where the device was going to land. */
 .guide-stage .device.is-waiting{display:none}
 
@@ -634,7 +636,7 @@ kbd{
 .guide-stage .dv-lid,.guide-stage .device{transition:transform 1.15s cubic-bezier(.45,.05,.3,1)}
 /* Folding the lid down leaves the shut silhouette in the bottom half of a box that is
    still full height, so it sinks out of the stage's centre. Its visible mass runs from
-   the hinge at 725 to 1560 of 1555 units, centred at about 73% — this lifts it the
+   the hinge at 725 to 1560 of 1555 units, centred at about 73%, and this lifts it the
    23% that puts it back on the middle. The perspective rides along, since replacing the
    transform outright would drop it. */
 .guide-stage .device.is-shut{transform:perspective(calc(var(--dw) * 2.5)) translateY(-23%)}
@@ -739,7 +741,7 @@ kbd{
   .step p{line-height:1.58}
   /* Every <br> on the page separates one keybinding from the next, not one clause from the
      next, so the lines either side want a little air. Narrow, they also wrap, and without
-     this a two-line binding and the next binding are the same distance apart — the break
+     this a two-line binding and the next binding are the same distance apart, so the break
      stops reading as a break. A <br> has no box of its own, so generated content and
      display:block are what let a margin take. */
   .step p br,
@@ -754,8 +756,8 @@ kbd{
 @media (max-width:880px){
   /* Stretch, not flex-start: a column flex item at flex-start sizes to its max-content
      width, so the copy stopped wrapping and ran off the right edge. */
-  /* The whole hero has to land inside one screen on the smallest phone still in use —
-     an iPhone SE is 375x667 — so the device is sized off viewport HEIGHT as well as width.
+  /* The whole hero has to land inside one screen on the smallest phone still in use
+     (an iPhone SE is 375x667), so the device is sized off viewport HEIGHT as well as width.
      Width alone let it grow to 415px tall on a 667px screen and pushed the buttons 13px
      past the fold. The gap and the bottom padding give back the rest. */
   /* Centred on a phone: the device sits above the copy rather than beside it, so the wordmark,
@@ -812,7 +814,7 @@ kbd{
 
   .reference h3{margin-top:32px}
 }
-/* Shorter than an iPhone SE — the 2016 one is 320x568, and a phone held sideways lands
+/* Shorter than an iPhone SE: the 2016 one is 320x568, and a phone held sideways lands
    here too. The height cap alone cannot save it: at that width the device is pinned by
    46vw, not by height, so the width cap comes in and the copy gives up a little of its
    own scale. Everything above stays untouched at 375x667. */

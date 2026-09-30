@@ -35,6 +35,7 @@
     <button class="tab" role="tab" id="t-questions" aria-controls="questions" aria-selected="false" tabindex="-1">Questions</button>
     <button class="tab" role="tab" id="t-credits" aria-controls="credits" aria-selected="false" tabindex="-1">Credits</button>
     <button class="tab" role="tab" id="t-disclosure" aria-controls="disclosure" aria-selected="false" tabindex="-1">AI</button>
+    <a class="tab" href="https://studio.slot-cfw.fyi">Studio</a>
   </nav>
 </header>
 
@@ -46,21 +47,11 @@
     <p class="tagline">A bespoke, Game Boy-centric frontend for the Anbernic RG SP.</p>
     <div class="actions">
       <a class="btn" href="https://github.com/BrandonKowalski/slot/releases/latest">Download</a>
-      <a class="btn ghost" href="https://brandonkowalski.github.io/slot-cart-studio/" target="_blank">Cart Studio</a>
+      <a class="btn ghost" href="https://studio.slot-cfw.fyi" target="_blank">Cart Studio</a>
     </div>
   </div>
 
   <div class="hero-device">
-    <!-- The RG SP, open. 360x720 of viewBox is the device; the screen is the 300x200
-         rect at 30,82 — 3:2, which is exactly 3x the GBA's 240x160 and exactly what
-         slot composites at. The clip above is pinned to those coordinates. -->
-    <!-- The device is defined once and instantiated by <use>, so the documentation
-         section can drop in another one without a second copy of the artwork. -->
-
-    <!-- Lid and deck are separate elements so the hinge can bend: the stage holds the
-         perspective, the device turns on Y, and the lid alone turns on X about its
-         bottom edge, which is where the hinge is. The screen lives inside the lid, so a
-         clip foreshortens with it rather than floating flat in front. -->
     <div class="device pose-hero">
       <div class="dv-lid">
         <div class="dv-front">
@@ -95,9 +86,9 @@
     <h2>Installing</h2>
     <ol class="install-steps">
       <li>
-        <h3>Flash AGS-102 to a card</h3>
+        <h3>Flash BaseOS to an SD Card</h3>
         <p>Download the latest release of
-           <a href="https://github.com/BrandonKowalski/AGS-102">AGS-102</a> and write the image to an SD card with
+           <a href="https://github.com/pvaibhav/BaseOS/releases/latest">BaseOS</a> and write the <code>.img</code> to an SD card with
            something like <a href="https://www.raspberrypi.com/software/">Raspberry Pi Imager</a>.</p>
         <p>Insert this card into the SD card slot labeled <code>SD1</code>.</p>
       </li>
@@ -107,22 +98,20 @@
       </li>
       <li>
         <h3>Copy it onto SD2</h3>
-        <p>Prepare you second SD card by formatting it to <code>FAT32</code> or <code>exFAT</code> with the <code>Master Boot Record (MBR)</code> partition scheme.</p>
+        <p>Prepare your second SD card by formatting it to <code>FAT32</code> or <code>exFAT</code> with a <code>Master Boot Record (MBR)</code> partition scheme.</p>
         <p>Once formatted, unzip the release zip you downloaded and copy the contents to the second SD card.</p>
       </li>
       <li>
         <h3>Add your games</h3>
-        <p>Drop each ROM into its platform's folder, and optionally a label into the matching
-           <code>Labels/</code> folder, named after the ROM.</p>
+        <p>Drop your legally obtained ROM files into their corresponding platform's folder in <code>Games/</code>. You may optionally place labels into the matching platform folder found in
+           <code>Labels/</code>.</p>
       </li>
       <li>
         <h3>Put the second card into <code>SD2</code> and boot!</h3>
         <p>I hope you enjoy using slot!</p>
-        <p>Feedback and contributions are welcomed!</p>
-        <p>Please do reach out before setting out to build a new feature as I am looking to avoid bloating slot.</p>
       </li>
     </ol>
-    <p class="install-note">To update, replace the <code>System/</code>
+    <p class="install-note">To update, download a fresh release, unzip the archive, and replace the <code>System/</code>
        folder on your second card.</p>
   </div>
 </section>
@@ -228,7 +217,7 @@
         </div>
         <div class="key">
           <dt><kbd>VOL+</kbd> + <kbd>VOL&minus;</kbd></dt>
-          <dd>Toggle Mute</dd>
+          <dd>Toggle mute</dd>
         </div>
       </dl>
     </div>
@@ -257,7 +246,7 @@
         </div>
         <div class="key">
           <dt><kbd>START</kbd></dt>
-          <dd>Choose which emulator runs the cart</dd>
+          <dd>Choose which emulator runs the cart (GBA only)</dd>
         </div>
       </dl>
     </div>
@@ -315,7 +304,7 @@
         </div>
         <div class="key">
           <dt><kbd>X</kbd></dt>
-          <dd>Undo the last save or load, up to 30 seconds after it</dd>
+          <dd>Undo the last save or load, up to 30 seconds after</dd>
         </div>
         <div class="key">
           <dt><kbd>B</kbd></dt>
@@ -334,6 +323,7 @@
       <button class="subtab" role="tab" id="t-faq-carts" aria-controls="faq-carts" aria-selected="false" tabindex="-1">Your carts</button>
       <button class="subtab" role="tab" id="t-faq-games" aria-controls="faq-games" aria-selected="false" tabindex="-1">Your games</button>
       <button class="subtab" role="tab" id="t-faq-linking" aria-controls="faq-linking" aria-selected="false" tabindex="-1">Linking</button>
+      <button class="subtab" role="tab" id="t-faq-contributing" aria-controls="faq-contributing" aria-selected="false" tabindex="-1">Contributing</button>
     </nav>
 
     <div class="subpanel" id="faq" role="tabpanel" aria-labelledby="t-faq">
@@ -363,7 +353,7 @@
         </div>
         <div class="qa">
           <dt>Do I have to craft them by hand?</dt>
-          <dd>Nah! You can use the slot cart studio.</dd>
+          <dd>Nah! You can use the <a href="https://studio.slot-cfw.fyi">slot Cart Studio</a>.</dd>
         </div>
       </dl>
     </div>
@@ -395,11 +385,28 @@
       <dl>
         <div class="qa">
           <dt>Can I trade Pokémon with a friend?</dt>
-          <dd>Yes, with a second RG SP. First navigate to the game and press <kbd>START</kbd> to open the core selection menu. Pick <code>gpSP</code>.<br><br>While in game press <span class="chord"><kbd>SELECT</kbd> + <kbd>MENU</kbd></span> and choose <code>LINK</code>. One player needs to pick <code>HOST</code> while the other chooses <code>JOIN</code>.</dd>
+          <dd>
+            <p>Yes, with a second RG SP running <code>slot</code>.</p>
+            <p>First, navigate to the game and press <kbd>START</kbd> to open the core selection menu. Pick <code>gpSP</code>.</p>
+            <p>While in game, press <span class="chord"><kbd>SELECT</kbd> + <kbd>MENU</kbd></span> and choose <code>LINK</code>.</p>
+            <p>One player needs to pick <code>HOST</code> while the other chooses <code>JOIN</code>.</p>
+          </dd>
         </div>
         <div class="qa">
           <dt>Which games can link?</dt>
-          <dd>Pokémon Ruby through LeafGreen, both Advance Wars, and a handful of wireless adapter games.</dd>
+          <dd><p>Pokémon Emerald, LeafGreen, and FireRed.</p><p>Additionally, both Advance Wars have worked for me.</p></dd>
+        </div>
+      </dl>
+    </div>
+
+    <div class="subpanel" id="faq-contributing" role="tabpanel" aria-labelledby="t-faq-contributing" hidden>
+      <dl>
+        <div class="qa">
+          <dt>Do you accept contributions?</dt>
+          <dd>
+              <p>I am not opposed to accepting pull requests. I just ask that you come discuss planned work in an issue on GitHub ahead of time.</p>
+              <p>slot is intentionally light on features. I am not looking to add the kitchen sink. If this form of collaboration doesn't appeal to you, several individuals have forked slot and gone off to make it their own.</p>
+          </dd>
         </div>
       </dl>
     </div>
@@ -409,7 +416,8 @@
 <section class="panel endnote" id="credits" role="tabpanel" aria-labelledby="t-credits" hidden>
   <div class="wrap">
     <h2>Credits</h2>
-    <p>Emulation is handled by <a href="https://mgba.io">mGBA</a> and <a href="https://github.com/libretro/gpsp">gpSP</a>, both through <a href="https://www.libretro.com">libretro</a>. The device boots <a href="https://github.com/BrandonKowalski/AGS-102">AGS-102</a>, a purpose-made fork of <a href="https://github.com/pvaibhav/BaseOS">BaseOS</a> by @pvaibhav.</p>
+    <p>Emulation is handled by <a href="https://mgba.io">mGBA</a> and <a href="https://github.com/libretro/gpsp">gpSP</a>.</p>
+    <p><a href="https://github.com/pvaibhav/BaseOS">BaseOS</a> by @pvaibhav serves as the operating system image.</p>
     <p>Type is <a href="https://github.com/googlefonts/opensans">Open Sans</a>, under the SIL Open Font License, and <a href="https://www.nerdfonts.com">Nerd Fonts</a> symbols by Ryan L. McIntyre, under MIT. The panel mask is derived from LCD3x, a public-domain shader by Gigaherz in the libretro shader collection.</p>
     <p>The cart sounds are a recording of me shoving a cartridge into my childhood GBA.</p>
   </div>

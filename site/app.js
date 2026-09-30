@@ -4,7 +4,7 @@
   /* The device art lives in device.svg but has to end up INSIDE this document. Its
      gradients read CSS custom properties (.sl { stop-color: var(--shell-light) } and
      friends), and an external <use href="device.svg#lidArt"> renders into a shadow
-     tree that never sees this page's stylesheet — every colourway would come out
+     tree that never sees this page's stylesheet, so every colourway would come out
      black. So: fetch it, inline it, then re-point the <use> elements at the defs that
      have just arrived, because they resolved to nothing while it was missing. */
   fetch("device.svg")
@@ -33,7 +33,7 @@
      screen underneath carries on doing the job. That is why the page ships before a
      single frame has been recorded.
 
-     Record at 720x480 — the panel's native size — and the fit is exact. */
+     Record at 720x480 (the panel's native size) and the fit is exact. */
 
   /* --------------------------------------------------------- colourway --- */
 
@@ -86,7 +86,7 @@
      The element carries the clip's own first frame as its poster, so the reveal is on a
      timer rather than on loadeddata. A slow connection then shows a true frame of slot at
      the moment the lid opens instead of a black panel, and a clip that never arrives
-     leaves that frame up rather than nothing. play() before the data lands is fine — the
+     leaves that frame up rather than nothing. play() before the data lands is fine: the
      poster holds until there is a frame to paint over it. */
   var heroVid = document.querySelector(".hero-screen");
   if (heroVid) {
@@ -162,7 +162,7 @@
     if (gdev) {
       var wantShut = step.getAttribute("data-lid") === "shut";
       /* Opening. For the first half of the swing the lid's front is turned away and culled,
-         so the back is the only face there is to see — but the back is only drawn while
+         so the back is the only face there is to see, but the back is only drawn while
          shut, to keep it off the screen when the lid is open and at rest. Without this the
          lid vanishes from the moment it starts opening until it comes past vertical. Hold
          the back for the length of the swing, then drop it again. Nothing to hold under
@@ -178,7 +178,7 @@
     var clip = step.getAttribute("data-clip");
     if (!clip) { vid.style.opacity = "0"; vid.removeAttribute("src"); return; }
     /* Each clip ships a still of its own first frame beside it. It is the poster, so it
-       is what the screen shows until the clip has enough data to paint — and what it
+       is what the screen shows until the clip has enough data to paint, and what it
        keeps showing if the clip never arrives. */
     var still = "media/" + clip.replace(/\.mp4$/, ".webp");
     if (reduced) {
@@ -187,7 +187,7 @@
       vid.style.opacity = "1";
       return;
     }
-    /* Consecutive steps can name the same clip — the lid step closes on whatever the
+    /* Consecutive steps can name the same clip: the lid step closes on whatever the
        step before it was already playing. Re-setting an identical src would reload and
        restart it, so the picture would jump at the very moment the lid starts to swing. */
     var path = "media/" + clip;

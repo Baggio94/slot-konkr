@@ -3,7 +3,7 @@
 One clip per guide step, plus `main.mp4` for the hero. Which step plays which is set by
 `data-clip` on the `.step` in `index.html`; the hero's is named in `app.js`.
 
-**Record at 720x480** — the panel's native size, and exactly 3x the GBA's 240x160. The
+**Record at 720x480**: the panel's native size, and exactly 3x the GBA's 240x160. The
 screen box is 3:2 and the video is `object-fit:fill`, so a clip at any other aspect is
 stretched rather than cropped.
 
@@ -32,5 +32,5 @@ for f in *.mp4; do
 done
 ```
 
-If a clip's first frame is black or a fade-in, pick a later one (`select=eq(n\,30)`) —
+If a clip's first frame is black or a fade-in, pick a later one (`select=eq(n\,30)`);
 the poster should show the thing the step is about.
