@@ -1,0 +1,29 @@
+# cart:
+# Hero, a loop: flip to Drill Dozer, insert, play a moment, eject, keep flipping right round
+# the shelf back to the start.
+wait 180
+rec
+wait 5
+tap right
+wait 20
+tap right
+wait 20
+tap right
+wait 30
+tap a
+wait 110
+hold right 35
+wait 10
+hold menu 66
+wait 60
+tap right
+wait 20
+tap right
+wait 20
+tap right
+wait 20
+tap right
+wait 20
+tap right
+wait 46
+cut

@@ -17,6 +17,18 @@ impl StubSink {
         }
     }
 
+    /// Drains itself on a thread, like a device with room to spare.
+    pub fn draining() -> Self {
+        let sink = StubSink::new();
+        let ring = sink.ring.clone();
+        std::thread::spawn(move || loop {
+            let frames = ring.queued_frames();
+            ring.fill(&mut vec![0i16; frames * 2]);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        });
+        sink
+    }
+
     pub fn muted(&self) -> bool {
         self.ring.muted()
     }

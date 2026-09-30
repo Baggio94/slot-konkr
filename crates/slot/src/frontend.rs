@@ -412,6 +412,18 @@ impl Frontend {
         self.session.update(dt);
     }
 
+    /// See `Session::core_settling`.
+    pub fn core_settling(&self) -> bool {
+        self.session.core_settling()
+    }
+
+    /// `advance` on a clock the caller keeps, for recording at an exact frame rate.
+    pub fn advance_at(&mut self, input: &mut dyn InputSource, now: Millis, dt: f32) {
+        let events = input.poll(now);
+        self.session.feed(events, now);
+        self.session.update(dt);
+    }
+
     fn now(&self) -> Millis {
         self.start.elapsed().as_millis() as Millis
     }

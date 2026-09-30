@@ -21,6 +21,10 @@ pub const GBA_HZ: u32 = 32_768;
 /// cpal on a desktop, ALSA on the device. A sink that fails to open is not a boot failure.
 #[cfg(feature = "host")]
 pub fn open_sink() -> Box<dyn AudioSink> {
+    // No sound device: the recorder runs faster or slower than real time.
+    if std::env::var_os("SLOT_SILENT").is_some() {
+        return Box::new(StubSink::draining());
+    }
     Box::new(HostAudio::new())
 }
 

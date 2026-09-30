@@ -131,6 +131,13 @@ impl Session {
     }
 
     /// A cart in the slot is a core running, so this is also "is there a game layer".
+    /// A core is still loading, which happens in real time on its own thread.
+    pub fn core_settling(&self) -> bool {
+        self.emu
+            .as_ref()
+            .is_some_and(|e| e.state() == CoreState::Loading)
+    }
+
     pub fn has_core(&self) -> bool {
         self.emu.is_some()
     }

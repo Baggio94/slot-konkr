@@ -1,0 +1,12 @@
+# cart:
+# From the shelf, bring Apotris to the centre, then tap A: the cart goes in and the game resumes.
+wait 60
+tap right
+wait 24
+tap right
+wait 40
+rec
+wait 15
+tap a
+wait 150
+cut

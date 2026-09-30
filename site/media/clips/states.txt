@@ -1,0 +1,30 @@
+# cart: Apotris
+# Apotris: SELECT+R1 saves, move the piece, SELECT+L1 loads back, then double-tap MENU for the switcher.
+wait 260
+rec
+wait 15
+down select
+tap r1
+up select
+wait 30
+tap left 4
+wait 4
+tap left 4
+wait 4
+tap left 4
+wait 4
+tap left 4
+wait 30
+down select
+tap l1
+up select
+wait 50
+tap menu 5
+wait 6
+tap menu 5
+wait 50
+tap left
+wait 35
+tap b
+wait 25
+cut

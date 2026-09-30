@@ -1,0 +1,18 @@
+# cart: Pokémon - Recharged Yellow
+# Walk, hold R2 to fast-forward, then hold L2 to rewind.
+wait 260
+tap b
+wait 40
+rec
+wait 10
+down left
+wait 40
+down r2
+wait 30
+up r2
+wait 10
+up left
+wait 10
+hold l2 120
+wait 20
+cut
