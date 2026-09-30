@@ -1,0 +1,27 @@
+# cart:
+# Game Boy Color: from the shelf, start Tetris Chromatic fresh (hold A) and press into a game,
+# then L1 stretches the picture over the panel and R1 gives it back at its own size.
+wait 60
+tap r1
+wait 30
+tap r1
+wait 40
+hold a 40
+wait 400
+tap start
+wait 60
+tap a
+wait 60
+tap a
+wait 60
+tap a
+wait 60
+tap a
+wait 200
+rec
+wait 45
+tap l1
+wait 70
+tap r1
+wait 45
+cut

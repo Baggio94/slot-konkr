@@ -5,7 +5,8 @@
 #
 # CARD is a folder holding a card's Games, States, Saves, Labels, BIOS, Wallpapers and System
 # (`adb pull` them off the SP). Each take starts from a fresh copy of it with the cart named by
-# the script's `# cart:` line seated, or the shelf when it names none. Writes NAME.mp4 and its
+# the script's `# cart:` line seated (on `# platform:`, gba by default), or the shelf when it
+# names none. Writes NAME.mp4 and its
 # frame-0 poster NAME.webp beside this script. No clip names records all of them.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
@@ -21,8 +22,8 @@ for name in "$@"; do
 	rm -rf "$work/card" && cp -R "$card" "$work/card"
 	# The site shows slot on a blank canvas.
 	rm -rf "$work/card/Wallpapers"
-	platform=""
-	[ -n "$cart" ] && platform=gba
+	platform=$(sed -n 's/^# platform: *//p' "$here/clips/$name.txt")
+	[ -n "$cart" ] && [ -z "$platform" ] && platform=gba
 	sed -i.bak "s|^cart=.*|cart=$cart|; s|^cart_platform=.*|cart_platform=$platform|" \
 		"$work/card/System/slot.state"
 	SLOT_SILENT=1 target/release/examples/record "$work/card" "$here/clips/$name.txt" \
