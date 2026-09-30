@@ -11,6 +11,7 @@ fn cart(stem: &str) -> Cart {
         label: None,
         title: stem.to_uppercase(),
         code: String::new(),
+        shell: None,
     }
 }
 

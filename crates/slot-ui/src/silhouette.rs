@@ -122,8 +122,10 @@ impl Detail {
 pub(crate) fn detail_mask() -> &'static Detail {
     static MASK: OnceLock<Detail> = OnceLock::new();
     MASK.get_or_init(|| {
-        rasterise_detail(DETAIL_SVG, CART_W, CART_H)
-            .unwrap_or_else(|| Detail::blank(CART_W, CART_H))
+        let mut detail = rasterise_detail(DETAIL_SVG, CART_W, CART_H)
+            .unwrap_or_else(|| Detail::blank(CART_W, CART_H));
+        emboss(&mut detail, GBA_LETTERING, CART_W, CART_H);
+        detail
     })
 }
 
@@ -137,9 +139,63 @@ pub(crate) fn gb_detail_mask(shell: GbShell) -> &'static Detail {
         GbShell::Rounded => (&ROUNDED, GBC_DETAIL_SVG),
     };
     lock.get_or_init(|| {
-        rasterise_detail(svg, GB_CART_W, GB_CART_H)
-            .unwrap_or_else(|| Detail::blank(GB_CART_W, GB_CART_H))
+        let mut detail = rasterise_detail(svg, GB_CART_W, GB_CART_H)
+            .unwrap_or_else(|| Detail::blank(GB_CART_W, GB_CART_H));
+        let lettering = match shell {
+            GbShell::Notched => GB_LETTERING,
+            GbShell::Rounded => GBC_LETTERING,
+        };
+        emboss(&mut detail, lettering, GB_CART_W, GB_CART_H);
+        if shell == GbShell::Rounded {
+            // The groove under GAME BOY COLOR: a cut, so shadow above and light below.
+            for x in 72..168 {
+                detail.shadow[(52 * GB_CART_W + x) as usize] = 200;
+                detail.highlight[(53 * GB_CART_W + x) as usize] = 160;
+            }
+        }
+        detail
     })
+}
+
+/// The platform name moulded into the shell, set by `examples/lettering.rs` in Nintendo's own
+/// faces and kept as a coverage mask the size of the face.
+const GB_LETTERING: &[u8] = include_bytes!("../assets/lettering_gb.png");
+const GBC_LETTERING: &[u8] = include_bytes!("../assets/lettering_gbc.png");
+const GBA_LETTERING: &[u8] = include_bytes!("../assets/lettering_gba.png");
+
+/// Raises the lettering in `png` on the shell, lit from the upper left like the rest of the
+/// moulding: an edge facing the light is highlight, the plastic just past a far edge is shadow.
+fn emboss(detail: &mut Detail, png: &[u8], w: u32, h: u32) {
+    let Some(mask) = decode_mask(png, w, h) else {
+        return;
+    };
+    let at = |x: i32, y: i32| -> u8 {
+        if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
+            0
+        } else {
+            mask[(y as u32 * w + x as u32) as usize]
+        }
+    };
+    for y in 0..h as i32 {
+        for x in 0..w as i32 {
+            let (here, before) = (at(x, y), at(x - 1, y - 1));
+            let i = (y as u32 * w + x as u32) as usize;
+            detail.highlight[i] = detail.highlight[i].saturating_add(here.saturating_sub(before));
+            detail.shadow[i] = detail.shadow[i].saturating_add(before.saturating_sub(here));
+        }
+    }
+}
+
+/// One grey byte per pixel, or `None` for a mask that is not the face's size.
+fn decode_mask(png: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
+    let mut reader = png::Decoder::new(std::io::Cursor::new(png))
+        .read_info()
+        .ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let grey =
+        info.color_type == png::ColorType::Grayscale && info.bit_depth == png::BitDepth::Eight;
+    (grey && (info.width, info.height) == (w, h)).then(|| buf[..(w * h) as usize].to_vec())
 }
 
 fn rasterise(w: u32, h: u32) -> Option<Vec<u8>> {

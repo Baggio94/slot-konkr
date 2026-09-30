@@ -245,3 +245,45 @@ fn writing_collapses_a_duplicate_the_file_already_had() {
         Some("actual")
     );
 }
+
+#[test]
+fn parse_reads_text_the_way_read_reads_a_file() {
+    let text = "# c\nEmerald = gpsp\nbad line\nEmerald = mgba\n";
+    let d = root_with(Some(text));
+    assert_eq!(ini::parse(text), ini::read(d.path(), FILE));
+    assert_eq!(
+        ini::parse(text).get("Emerald").map(String::as_str),
+        Some("mgba")
+    );
+}
+
+#[test]
+fn set_replaces_appends_removes_and_keeps_everything_else() {
+    let text = "# keep me\n\nA = 1\nB = 2\nA = 3\nnot an entry\n";
+    assert_eq!(
+        ini::set(text, "A", Some("9")).unwrap(),
+        "# keep me\n\nA = 9\nB = 2\nnot an entry\n"
+    );
+    assert_eq!(
+        ini::set(text, "C", Some("4")).unwrap(),
+        "# keep me\n\nA = 1\nB = 2\nA = 3\nnot an entry\nC = 4\n"
+    );
+    assert_eq!(
+        ini::set(text, "A", None).unwrap(),
+        "# keep me\n\nB = 2\nnot an entry\n"
+    );
+    assert_eq!(ini::set("", "A", None).unwrap(), "");
+}
+
+#[test]
+fn set_refuses_a_key_or_value_that_would_not_read_back() {
+    for (key, value) in [
+        ("[Hack] Game", Some("x")),
+        ("a=b", Some("x")),
+        (" A", None),
+        ("A", Some("x\ny")),
+    ] {
+        let err = ini::set("", key, value).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{key:?}");
+    }
+}

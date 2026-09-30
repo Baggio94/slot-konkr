@@ -92,3 +92,49 @@ fn a_flag_the_manual_never_named_falls_back_to_the_original_pak() {
     std::fs::write(&short, [0u8; 0x50]).unwrap();
     assert_eq!(slot_store::gb::class(&short), Class::Original);
 }
+
+fn header_rom(title: &[u8], code: &[u8], cgb: u8, dest: u8) -> Vec<u8> {
+    let mut bytes = vec![0u8; 0x150];
+    bytes[0x134..0x134 + title.len()].copy_from_slice(title);
+    bytes[0x13f..0x13f + code.len()].copy_from_slice(code);
+    bytes[0x143] = cgb;
+    bytes[0x14a] = dest;
+    bytes
+}
+
+/// Gold's header, as pret builds it: an 11-byte title, then the code the label carries.
+#[test]
+fn the_header_reads_the_manufacturer_code_and_the_destination() {
+    let h = slot_store::gb::Header::parse(&header_rom(b"POKEMON_GLD", b"AAUE", 0x80, 0x01))
+        .expect("a full header");
+    assert_eq!(h.title, "POKEMON_GLD");
+    assert_eq!(h.code, "AAUE");
+    assert_eq!(h.class(), Class::DualMode);
+    assert!(!h.japan);
+
+    let jp = slot_store::gb::Header::parse(&header_rom(b"POKEMON RED", b"", 0x00, 0x00)).unwrap();
+    assert!(jp.japan);
+    assert_eq!(jp.code, "");
+}
+
+/// A 16-byte title runs through 0x13F, so what sits there is only a code if it looks like one.
+#[test]
+fn the_tail_of_a_long_title_is_not_a_code() {
+    let h = slot_store::gb::Header::parse(&header_rom(b"POKEMON YELLOW", b"", 0x80, 0x01)).unwrap();
+    assert_eq!(h.title, "POKEMON YEL");
+    assert_eq!(h.code, "");
+}
+
+#[test]
+fn the_header_is_read_from_the_file_and_a_short_one_is_none() {
+    let d = tempfile::tempdir().unwrap();
+    let rom = d.path().join("Crystal.gbc");
+    std::fs::write(&rom, header_rom(b"PM_CRYSTAL", b"BYTE", 0xc0, 0x01)).unwrap();
+    let h = slot_store::gb::header(&rom).expect("header");
+    assert_eq!((h.title.as_str(), h.code.as_str()), ("PM_CRYSTAL", "BYTE"));
+    assert_eq!(h.class(), Class::ColourOnly);
+
+    let short = d.path().join("Short.gb");
+    std::fs::write(&short, [0u8; 0x144]).unwrap();
+    assert!(slot_store::gb::header(&short).is_none());
+}

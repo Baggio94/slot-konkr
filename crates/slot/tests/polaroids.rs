@@ -13,6 +13,7 @@ fn app_playing(stem: &str) -> App {
         rom: format!("Games/GBA/{stem}.gba").into(),
         label: None,
         code: String::new(),
+        shell: None,
         title: stem.to_uppercase(),
     }]);
     a.apply(Action::Insert);

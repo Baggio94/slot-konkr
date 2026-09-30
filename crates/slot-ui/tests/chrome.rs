@@ -15,6 +15,7 @@ fn cart() -> Cart {
         rom: "Games/GBA/Emerald.gba".into(),
         label: None,
         code: String::new(),
+        shell: None,
         title: "POKEMON EMER".into(),
     }
 }
@@ -27,6 +28,7 @@ fn pak() -> Cart {
         rom: "Games/GB/Tetris.gb".into(),
         label: None,
         code: String::new(),
+        shell: None,
         title: "TETRIS".into(),
     }
 }

@@ -1,5 +1,5 @@
 use slot_store::gb::Class;
-use slot_store::{Cart, Platform};
+use slot_store::{Cart, Outline, Platform};
 
 use crate::art;
 use crate::shell::{shell_for, Finish, Shell};
@@ -85,6 +85,18 @@ struct Spec {
     max_h: f32,
     /// Wider on the taller pak so it reads as the same depth of plastic.
     rim: u32,
+    /// The board clear plastic shows, as fractions of the face.
+    board: Board,
+}
+
+/// Where a mould's board sits: its sides, its top, and its edge connector along the bottom.
+struct Board {
+    x: (f32, f32),
+    top: f32,
+    /// The span the 32 contacts are spread over.
+    pins: (f32, f32),
+    contacts_from: f32,
+    traces_from: f32,
 }
 
 /// The shell a cart was moulded in, from the CGB flag rather than the folder: `.gb` and `.gbc`
@@ -99,9 +111,13 @@ enum Shape {
 pub fn gb_shell_of(cart: &Cart) -> Option<GbShell> {
     match cart.platform {
         Platform::Gba => None,
-        Platform::Gb | Platform::Gbc => Some(match slot_store::gb::class(&cart.rom) {
-            Class::ColourOnly => GbShell::Rounded,
-            Class::Original | Class::DualMode => GbShell::Notched,
+        Platform::Gb | Platform::Gbc => Some(match cart.shell.map(|c| c.outline) {
+            Some(Outline::Notched) => GbShell::Notched,
+            Some(Outline::Rounded) => GbShell::Rounded,
+            _ => match slot_store::gb::class(&cart.rom) {
+                Class::ColourOnly => GbShell::Rounded,
+                Class::Original | Class::DualMode => GbShell::Notched,
+            },
         }),
     }
 }
@@ -125,6 +141,15 @@ fn spec(shape: Shape) -> Spec {
             max_px: MAX_PX,
             max_h: f32::INFINITY,
             rim: RIM,
+            // Narrower than the grip ears, just under the top wall, and with tall contacts: about
+            // the bottom sixth of the board, as a photographed AGB board has them.
+            board: Board {
+                x: (0.09, 0.91),
+                top: 0.1,
+                pins: (0.13, 0.87),
+                contacts_from: 0.85,
+                traces_from: 0.76,
+            },
         },
         Shape::Gb(shell) => Spec {
             w: GB_CART_W,
@@ -136,6 +161,14 @@ fn spec(shape: Shape) -> Spec {
             max_px: GB_MAX_PX,
             max_h: (GB_LABEL_H - 2 * PAD) as f32,
             rim: GB_RIM,
+            // The board starts just under the rolled top edge.
+            board: Board {
+                x: (0.075, 0.925),
+                top: 0.07,
+                pins: (0.1, 0.9),
+                contacts_from: 0.905,
+                traces_from: 0.84,
+            },
         },
     }
 }
@@ -178,7 +211,7 @@ pub fn cart_face(cart: &Cart) -> CartFace {
         Some(rgba) => rgba,
         None => generated_label(&s, &label_text(cart)),
     };
-    mould_detail(&s, &mut face, &shell);
+    mould_detail(&s, &mut face);
     recess_label(&s, &mut face, &shell);
     paste_label(&s, &mut face, &label);
     clip_to_silhouette(&s, &mut face);
@@ -272,11 +305,21 @@ pub fn label_tags(stem: &str) -> Vec<String> {
 
 fn shell_face(s: &Spec, shell: &Shell) -> CartFace {
     let mut rgba = Vec::with_capacity((s.w * s.h * 4) as usize);
-    let edge = rim_colour(shell.colour);
-    for depth in s.depth {
+    // The rim of clear plastic is the highlight of the colour the body shows: two layers deep.
+    let edge = rim_colour(through(shell.colour, shell.colour));
+    for (i, depth) in s.depth.iter().enumerate() {
+        let (x, y) = (i as u32 % s.w, i as u32 / s.w);
         let c = match shell.finish {
             Finish::Solid => shell.colour,
-            Finish::Translucent => lerp(edge, shell.colour, (*depth as u32).min(s.rim), s.rim),
+            Finish::Translucent | Finish::Glitter => {
+                let body = through(shell.colour, inside(s, x, y).unwrap_or(shell.colour));
+                let c = lerp(edge, body, (*depth as u32).min(s.rim), s.rim);
+                if shell.finish == Finish::Glitter && fleck(x, y) {
+                    lerp(c, [0xff; 3], 100, 255)
+                } else {
+                    c
+                }
+            }
         };
         rgba.extend_from_slice(&[c[0], c[1], c[2], 255]);
     }
@@ -285,6 +328,63 @@ fn shell_face(s: &Spec, shell: &Shell) -> CartFace {
         w: s.w,
         h: s.h,
     }
+}
+
+/// How much of what clear plastic shows is its own colour, out of 255; the rest is whatever lies
+/// behind the front, seen through it.
+const SURFACE: u32 = 150;
+
+/// A green board, a paler trace and the gold of the contacts, as a photographed board has them.
+const BOARD: [u8; 3] = [0x2c, 0x96, 0x52];
+const TRACE: [u8; 3] = [0x5a, 0xb4, 0x74];
+const GOLD: [u8; 3] = [0xe6, 0xb4, 0x46];
+
+/// Clear plastic is a filter: what lies behind the front comes through multiplied by the
+/// plastic's colour, and the plastic's own colour is itself seen through the back half. So where
+/// only the back half is behind it, a clear cart is its colour seen through twice, the deep colour
+/// scanned carts have, and the board is a shadow in it: darker behind red, green behind colourless.
+fn through(plastic: [u8; 3], behind: [u8; 3]) -> [u8; 3] {
+    let filter =
+        |a: [u8; 3], b: [u8; 3]| [0, 1, 2].map(|c| (a[c] as u32 * b[c] as u32 / 255) as u8);
+    lerp(
+        filter(plastic, behind),
+        filter(plastic, plastic),
+        SURFACE,
+        255,
+    )
+}
+
+/// What clear plastic shows through its front: the board, its edge contacts along the bottom and
+/// the traces running up from them. `None` off the board, where the back half of the shell shows:
+/// the same plastic, so a clear cart there is its colour seen through twice.
+fn inside(s: &Spec, x: u32, y: u32) -> Option<[u8; 3]> {
+    let b = &s.board;
+    let (fx, fy) = (x as f32 / s.w as f32, y as f32 / s.h as f32);
+    if !(b.x.0..b.x.1).contains(&fx) || fy < b.top {
+        return None;
+    }
+    // 32 contacts, as both cartridge edge connectors have.
+    let (c0, c1) = b.pins;
+    let pitch = (c1 - c0) / 32.0;
+    let on_contact = (c0..c1).contains(&fx) && ((fx - c0) % pitch) < pitch * 0.6;
+    if on_contact && fy >= b.contacts_from {
+        return Some(GOLD);
+    }
+    // One trace up from each contact.
+    if on_contact && ((fx - c0) % pitch) < pitch * 0.2 && fy >= b.traces_from {
+        Some(TRACE)
+    } else {
+        Some(BOARD)
+    }
+}
+
+/// A fixed scatter of flecks, about one pixel in a hundred, the same on every boot.
+fn fleck(x: u32, y: u32) -> bool {
+    let mut h = x.wrapping_mul(0x9e37_79b9) ^ y.wrapping_mul(0x85eb_ca6b);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2c1b_3c6d);
+    h ^= h >> 12;
+    h.is_multiple_of(100)
 }
 
 /// Lighter and less saturated; lightening alone looks like a white outline on the shell.
@@ -309,9 +409,7 @@ const BEVEL: u32 = 3;
 
 /// The moulding in the shell. Shadow is multiplied and light mixed toward white, so the
 /// moulding still shows on a black pak.
-fn mould_detail(s: &Spec, face: &mut CartFace, shell: &Shell) {
-    let dark = shell.colour.map(|c| (c as f32 * 0.62) as u8);
-    let lit = shell.colour.map(|c| c + ((255 - c) as f32 * 0.24) as u8);
+fn mould_detail(s: &Spec, face: &mut CartFace) {
     let mix = |px: &mut [u8], to: [u8; 3], a: u32| {
         for c in 0..3 {
             px[c] = ((to[c] as u32 * a + px[c] as u32 * (255 - a) + 127) / 255) as u8;
@@ -319,11 +417,17 @@ fn mould_detail(s: &Spec, face: &mut CartFace, shell: &Shell) {
     };
     let sides = s.detail.shadow.iter().zip(&s.detail.highlight);
     for (px, (shade, light)) in face.rgba.chunks_exact_mut(4).zip(sides) {
+        // From the plastic under it, which on a clear pak is not the shell's own colour.
+        let under = [px[0], px[1], px[2]];
         if *shade > 0 {
-            mix(px, dark, *shade as u32);
+            mix(px, under.map(|c| (c as f32 * 0.62) as u8), *shade as u32);
         }
         if *light > 0 {
-            mix(px, lit, *light as u32);
+            mix(
+                px,
+                under.map(|c| c + ((255 - c) as f32 * 0.24) as u8),
+                *light as u32,
+            );
         }
     }
 }

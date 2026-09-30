@@ -35,6 +35,7 @@ fn app_with_carts(stems: &[&str]) -> App {
                 rom: format!("Games/GBA/{stem}.gba").into(),
                 label: None,
                 code: String::new(),
+                shell: None,
                 title: stem.to_uppercase(),
             })
             .collect(),
@@ -333,6 +334,7 @@ fn app_with_platforms(carts: &[(Platform, &str)]) -> App {
                 .into(),
                 label: None,
                 code: String::new(),
+                shell: None,
                 title: stem.to_uppercase(),
             })
             .collect(),

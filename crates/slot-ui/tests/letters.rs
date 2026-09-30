@@ -60,6 +60,7 @@ fn shelf_of(names: &[&str]) -> Shelf {
                 rom: format!("Games/GBA/{n}.gba").into(),
                 label: None,
                 code: String::new(),
+                shell: None,
                 title: n.to_uppercase(),
             })
             .collect(),

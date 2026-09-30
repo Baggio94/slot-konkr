@@ -605,10 +605,12 @@ fn only_the_notched_shell_has_lines_across_its_shoulder() {
             steps(stem)
         );
     }
-    assert_eq!(
-        steps("Clear"),
-        0,
-        "the Colour pak has lines across its header, which that shell does not have"
+    // A few pixels where the clear plastic's rim fades into its body on the diagonal are not
+    // ribs, which leave hundreds.
+    assert!(
+        steps("Clear") < 10,
+        "the Colour pak has lines across its header, which that shell does not have: {}",
+        steps("Clear")
     );
 }
 
@@ -719,4 +721,70 @@ fn each_game_boy_shell_gets_a_black_shadow_of_its_own_exact_outline() {
         "the two shells now differ by {} px, so the shared backing was harmless after all",
         bare / 255
     );
+}
+
+/// A clear pak shows the board inside it: green beside the label and gold at the contacts along
+/// the bottom. A solid pak shows its own plastic at the same points.
+#[test]
+fn a_clear_pak_shows_its_board_and_a_solid_one_does_not() {
+    let d = tmp_root();
+    write_gb_rom(&d, "GBC", "Clear.gbc", 0xc0);
+    write_gb_rom(&d, "GB", "Grey.gb", 0x00);
+    let carts = scan(d.path()).unwrap();
+    let face = |stem: &str| cart_face(carts.iter().find(|c| c.stem == stem).expect("scanned"));
+    let (clear, grey) = (face("Clear"), face("Grey"));
+    // Between the side groove and the label, halfway down; and on the first contact.
+    let (board, contact) = ((24, GB_CART_H / 2), (26, GB_CART_H - 8));
+
+    let [r, g, b] = pixel(&clear, board.0, board.1);
+    assert!(
+        g > r + 8 && g > b,
+        "no board beside the label: {:?}",
+        [r, g, b]
+    );
+    let [r, _, b] = pixel(&clear, contact.0, contact.1);
+    assert!(r > b + 20, "no gold contact at the bottom: {:?}", [r, b]);
+
+    for (x, y) in [board, contact] {
+        let [r, g, b] = pixel(&grey, x, y);
+        assert!(
+            r.abs_diff(g) < 12 && g.abs_diff(b) < 12,
+            "the grey pak shows something through it at {x},{y}: {:?}",
+            [r, g, b]
+        );
+    }
+}
+
+/// Each mould carries its platform's name, raised: somewhere in the band it is set in, the face
+/// is both lit and shaded against the plain plastic beside it.
+#[test]
+fn every_mould_is_lettered_with_its_platform() {
+    let d = tmp_root();
+    write_rom(&d, "Advance.gba", "ADVANCE");
+    write_gb_rom(&d, "GB", "Grey.gb", 0x00);
+    write_gb_rom(&d, "GBC", "Clear.gbc", 0xc0);
+    let carts = scan(d.path()).unwrap();
+    // Rows the lettering is set in, and a row of plain plastic to hold it to, per mould.
+    for (stem, rows, plain) in [
+        ("Advance", 19..28, (120, 3)),
+        ("Grey", 30..48, (197, 40)),
+        ("Clear", 26..44, (197, 40)),
+    ] {
+        let face = cart_face(carts.iter().find(|c| c.stem == stem).expect("scanned"));
+        let lum = |(x, y): (u32, u32)| {
+            pixel(&face, x, y)
+                .iter()
+                .map(|c| u32::from(*c))
+                .sum::<u32>()
+        };
+        let base = lum(plain);
+        let band: Vec<u32> = rows
+            .flat_map(|y| (60..180).map(move |x| (x, y)))
+            .map(lum)
+            .collect();
+        assert!(
+            band.iter().any(|l| *l > base + 30) && band.iter().any(|l| *l + 30 < base),
+            "the {stem} face has no raised lettering where its platform name goes"
+        );
+    }
 }

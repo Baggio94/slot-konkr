@@ -16,6 +16,7 @@ fn render_board() {
         rom: "Games/GBA/Emerald.gba".into(),
         label: None,
         code: "BPEE".into(),
+        shell: None,
         title: "POKEMON EMER".into(),
     });
     let f = std::fs::File::create(&out).unwrap();

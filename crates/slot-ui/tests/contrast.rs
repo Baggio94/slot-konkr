@@ -1,7 +1,7 @@
 use slot_gfx::BACKDROP;
 use slot_ui::{
-    edge, gba_shell_for, housing, opening, DEFAULT_SHELL, DMG_SHELL, DUAL_MODE_SHELL,
-    GB_CLEAR_SHELL,
+    edge, gb_table_shells, gba_shell_for, housing, opening, shell_presets, table_keys,
+    DEFAULT_SHELL, DMG_SHELL, DUAL_MODE_SHELL, GB_CLEAR_SHELL,
 };
 
 fn distance(a: [u8; 3], b: [f32; 4]) -> u32 {
@@ -13,7 +13,7 @@ fn distance(a: [u8; 3], b: [f32; 4]) -> u32 {
 /// Shells and backdrop live in different crates, so only this test sees them together.
 #[test]
 fn every_shell_is_visible_against_the_backdrop() {
-    let codes = ["", "AMTE", "AXVE", "AXPE", "BPEE", "BPRE", "BPGE", "MSKE"];
+    let codes = ["", "AMTE", "MSKE"].into_iter().chain(table_keys());
     for code in codes {
         let s = gba_shell_for(code);
         let d = distance(s.colour, BACKDROP);
@@ -24,17 +24,27 @@ fn every_shell_is_visible_against_the_backdrop() {
         );
     }
     assert!(distance(DEFAULT_SHELL.colour, BACKDROP) > 60);
-    // Game Boy paks have no game code, so they are not in the table and must be named here.
-    for (what, s) in [
+    // Game Boy paks are keyed on more than a game code, so they are named here.
+    let paks = [
         ("the grey pak", DMG_SHELL),
         ("the black pak", DUAL_MODE_SHELL),
         ("the clear pak", GB_CLEAR_SHELL),
-    ] {
+    ];
+    let rows = gb_table_shells()
+        .into_iter()
+        .map(|s| ("a Game Boy table row", s));
+    for (what, s) in paks.into_iter().chain(rows) {
         let d = distance(s.colour, BACKDROP);
         assert!(
             d > 60,
             "{what} {:?} is only {d}/765 from the backdrop, it will not be seen",
             s.colour
+        );
+    }
+    for (name, s) in shell_presets() {
+        assert!(
+            distance(s.colour, BACKDROP) > 60,
+            "the {name} preset will not be seen"
         );
     }
 }
