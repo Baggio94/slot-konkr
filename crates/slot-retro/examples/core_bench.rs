@@ -12,6 +12,9 @@
 //!     --state /mnt/sdcard/States/gpsp/Apotris/resume.state --system /mnt/sdcard/BIOS \
 //!     --steps 4 --frameskip'
 //! ```
+//!
+//! `--serialize` instead times a save and a load after every frame, and what preemptive frames
+//! (save every frame; on an input change, load and re-run N frames) would cost per display frame.
 
 use std::error::Error;
 use std::path::PathBuf;
@@ -21,7 +24,7 @@ use std::time::Instant;
 use slot_retro::{ButtonMask, LibretroCore, RetroCore};
 
 const USAGE: &str = "usage: core_bench CORE ROM [--state FILE] [--system DIR] [--steps S] \
-[--frames N] [--warmup W] [--repeats R] [--frameskip] [--option KEY=VALUE]...";
+[--frames N] [--warmup W] [--repeats R] [--frameskip] [--serialize] [--option KEY=VALUE]...";
 
 struct Args {
     core: PathBuf,
@@ -34,6 +37,7 @@ struct Args {
     warmup: u32,
     repeats: u32,
     frameskip: bool,
+    serialize: bool,
     options: Vec<(String, String)>,
 }
 
@@ -61,6 +65,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
         warmup: 300,
         repeats: 5,
         frameskip: false,
+        serialize: false,
         options: Vec::new(),
     };
     while let Some(arg) = it.next() {
@@ -72,6 +77,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
             "--warmup" => a.warmup = value(&mut it, &arg)?.parse().map_err(|e| format!("{e}"))?,
             "--repeats" => a.repeats = count(&mut it, &arg)?,
             "--frameskip" => a.frameskip = true,
+            "--serialize" => a.serialize = true,
             "--option" => {
                 let kv = value(&mut it, &arg)?;
                 let (k, v) = kv.split_once('=').ok_or("--option takes KEY=VALUE")?;
@@ -133,6 +139,10 @@ fn run(a: &Args) -> Result<(), Box<dyn Error>> {
         }
     };
 
+    if a.serialize {
+        return serialize_cost(&mut core, &start, a.frames);
+    }
+
     let presents = a.frames.div_ceil(a.steps);
     let frames = presents * a.steps;
     println!(
@@ -178,6 +188,51 @@ fn run(a: &Args) -> Result<(), Box<dyn Error>> {
         (fps / 60.0).min(f64::from(a.steps)),
         a.steps,
     );
+    Ok(())
+}
+
+/// Median, p95 and max of `ms`, sorted in place.
+fn spread(ms: &mut [f64]) -> (f64, f64, f64) {
+    ms.sort_by(f64::total_cmp);
+    (median(ms), ms[(ms.len() - 1) * 95 / 100], ms[ms.len() - 1])
+}
+
+fn serialize_cost(
+    core: &mut LibretroCore,
+    start: &[u8],
+    frames: u32,
+) -> Result<(), Box<dyn Error>> {
+    core.unserialize(start)?;
+    let idle = ButtonMask::default();
+    let (mut run, mut save, mut load) = (Vec::new(), Vec::new(), Vec::new());
+    let mut size = 0;
+    for _ in 0..frames {
+        let t = Instant::now();
+        core.run_frame(idle);
+        core.take_audio();
+        run.push(t.elapsed().as_secs_f64() * 1000.0);
+        let t = Instant::now();
+        let state = core.serialize()?;
+        save.push(t.elapsed().as_secs_f64() * 1000.0);
+        size = state.len();
+        let t = Instant::now();
+        core.unserialize(&state)?;
+        load.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    let (r, s, l) = (spread(&mut run), spread(&mut save), spread(&mut load));
+    println!("state {size} bytes, {frames} frames");
+    for (name, (m, p, x)) in [("run", r), ("save", s), ("load", l)] {
+        println!("{name:>5}: median {m:.3}  p95 {p:.3}  max {x:.3} ms");
+    }
+    for n in 1..=2 {
+        // A frame with no input change: run and save. One with a change: load, re-run the n
+        // frames it replaces plus the new one, and save. Both at p95.
+        let steady = r.1 + s.1;
+        let change = l.1 + f64::from(n + 1) * r.1 + s.1;
+        println!(
+            "preemptive {n}: steady {steady:.1} ms, on a change {change:.1} ms, against 16.76"
+        );
+    }
     Ok(())
 }
 
