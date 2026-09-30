@@ -1,23 +1,15 @@
 # cart:
-# Game Boy Color: from the shelf, start Tetris Chromatic fresh (hold A) and press into a game,
-# then L1 stretches the picture over the panel and R1 gives it back at its own size.
+# Game Boy Color: from the shelf, start Pokemon Crystal fresh (hold A), skip to its title, then
+# L1 stretches the picture over the panel and R1 gives it back at its own size.
 wait 60
 tap r1
 wait 30
 tap r1
 wait 40
 hold a 40
-wait 400
+wait 300
 tap start
-wait 60
-tap a
-wait 60
-tap a
-wait 60
-tap a
-wait 60
-tap a
-wait 200
+wait 110
 rec
 wait 45
 tap l1

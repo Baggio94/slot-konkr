@@ -15,8 +15,6 @@ wait 20
 tap right
 wait 20
 tap right
-wait 20
-tap right
 wait 30
 tap a
 wait 110
