@@ -1,5 +1,4 @@
-//! Build provenance for the about label. Every probe fails soft to `unknown`, since the device
-//! build runs git as root over a bind mount another uid owns.
+//! Build provenance for the about label. Every probe fails soft to `unknown`.
 
 use std::process::Command;
 
@@ -15,10 +14,17 @@ fn main() {
     // A new commit changes the hash, so the label has to be rebuilt with it.
     println!("cargo:rerun-if-changed=../../.git/HEAD");
 
-    // Git refuses a repo owned by another uid ("dubious ownership") unless it is marked safe.
-    let _ = git(&["config", "--global", "--add", "safe.directory", "/src"]);
-
-    let hash = git(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".into());
+    // Git refuses a repo owned by another uid ("dubious ownership") unless it is marked safe:
+    // /src in the device container, /__w/slot/slot in CI. Only on refusal, so a desk build
+    // never touches the global config.
+    let hash = git(&["rev-parse", "--short", "HEAD"])
+        .or_else(|| {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            let root = root.canonicalize().ok()?;
+            git(&["config", "--global", "--add", "safe.directory", root.to_str()?])?;
+            git(&["rev-parse", "--short", "HEAD"])
+        })
+        .unwrap_or_else(|| "unknown".into());
     let dirty = git(&["status", "--porcelain"]).is_some_and(|s| !s.is_empty());
     // UTC, like every date in the project, so container and host agree on the day.
     let date = Command::new("date")
