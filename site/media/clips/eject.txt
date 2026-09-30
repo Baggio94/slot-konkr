@@ -1,8 +1,0 @@
-# cart: Apotris
-# Apotris playing; hold MENU and the cart comes back out to the shelf.
-wait 260
-rec
-wait 30
-hold menu 66
-wait 90
-cut

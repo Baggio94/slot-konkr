@@ -26,8 +26,13 @@ for name in "$@"; do
 	[ -n "$cart" ] && [ -z "$platform" ] && platform=gba
 	sed -i.bak "s|^cart=.*|cart=$cart|; s|^cart_platform=.*|cart_platform=$platform|" \
 		"$work/card/System/slot.state"
-	SLOT_SILENT=1 target/release/examples/record "$work/card" "$here/clips/$name.txt" \
-		"$here/$name.mp4"
-	ffmpeg -v error -y -i "$here/$name.mp4" -vf "select=eq(n\,0)" -vframes 1 \
-		-c:v libwebp -quality 82 "$here/$name.webp"
+	# A script whose `rec` lines name their clips is a session cut into several.
+	clips=$(sed -n 's/^rec \([a-z0-9-]*\)$/\1/p' "$here/clips/$name.txt")
+	out="$here/$name.mp4"
+	[ -n "$clips" ] && out="$here"
+	SLOT_SILENT=1 target/release/examples/record "$work/card" "$here/clips/$name.txt" "$out"
+	for clip in ${clips:-$name}; do
+		ffmpeg -v error -y -i "$here/$clip.mp4" -vf "select=eq(n\,0)" -vframes 1 \
+			-c:v libwebp -quality 82 "$here/$clip.webp"
+	done
 done

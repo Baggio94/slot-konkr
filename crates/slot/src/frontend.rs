@@ -412,6 +412,10 @@ impl Frontend {
         self.session.update(dt);
     }
 
+    pub fn app(&self) -> &crate::app::App {
+        self.session.app()
+    }
+
     /// See `Session::core_settling`.
     pub fn core_settling(&self) -> bool {
         self.session.core_settling()

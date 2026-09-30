@@ -1644,6 +1644,10 @@ impl App {
         self.state.blue_light
     }
 
+    pub fn brightness(&self) -> u8 {
+        self.state.brightness
+    }
+
     /// The chosen level, which a mute does not touch.
     pub fn volume(&self) -> u8 {
         self.state.volume
