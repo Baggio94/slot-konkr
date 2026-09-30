@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use slot_input::{Action, Gestures, Millis, RawEvent};
 use slot_retro::Rumble;
@@ -29,6 +30,8 @@ pub struct Session {
     motor: u16,
     /// A reload for a link is underway and `App` is waiting to hear whether it loaded.
     reloading: bool,
+    /// The display drives each emulator's frame clock; see `EmuHandle::set_driven`.
+    driven: bool,
 }
 
 impl Session {
@@ -49,6 +52,7 @@ impl Session {
             fast: false,
             motor: 0,
             reloading: false,
+            driven: false,
         }
     }
 
@@ -101,6 +105,24 @@ impl Session {
     /// The emulator thread's handle, or `None` before a cart spawns one. `App` never touches it.
     pub fn emu(&self) -> Option<&EmuHandle> {
         self.emu.as_ref()
+    }
+
+    /// Hand every emulator's frame clock to the display, which then calls `step_emulator` once
+    /// per present. The device loop does; the host's window can refresh at any rate.
+    pub fn set_driven(&mut self, driven: bool) {
+        self.driven = driven;
+        if let Some(emu) = &self.emu {
+            emu.set_driven(driven);
+        }
+    }
+
+    /// One present of `present`: a locked emulator runs its frame, and this waits for it, at most
+    /// `timeout`. False when no frame came, including when the emulator keeps its own clock.
+    pub fn step_emulator(&self, present: Duration, timeout: Duration) -> bool {
+        self.emu.as_ref().is_some_and(|emu| {
+            emu.tick(present);
+            emu.wait_frame(timeout)
+        })
     }
 
     pub fn frame(&self) -> Option<FrameRef> {
@@ -474,6 +496,7 @@ impl Session {
         );
         // A cart seated after the level was lowered has to start there, not at full.
         emu.set_volume(self.app.output_volume());
+        emu.set_driven(self.driven);
         self.app.set_snapshot(Box::new(emu.snapshot()));
         self.emu = Some(emu);
     }

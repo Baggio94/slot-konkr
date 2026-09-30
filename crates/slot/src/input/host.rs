@@ -77,6 +77,9 @@ impl HostInput {
     }
 
     fn push(&mut self, btn: Btn, pressed: bool) {
+        if pressed {
+            crate::latency::read();
+        }
         self.pending.push(if pressed {
             RawEvent::Down(btn)
         } else {

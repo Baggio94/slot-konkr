@@ -332,6 +332,7 @@ impl Frontend {
         compositor.begin_frame();
         if let Some(frame) = self.session.frame() {
             compositor.upload_game(&frame);
+            crate::latency::taken();
         }
         sync_clock(self.session.app_mut(), compositor, &mut self.clocks);
         sync_about(self.session.app_mut(), compositor, &mut self.about);
@@ -392,6 +393,16 @@ impl Frontend {
 
     /// Input and time, after the frame is on screen. Called every frame since gesture windows
     /// expire regardless of input.
+    /// See `Session::set_driven`.
+    pub fn drive_emulator(&mut self) {
+        self.session.set_driven(true);
+    }
+
+    /// See `Session::step_emulator`.
+    pub fn step_emulator(&self, present: Duration, timeout: Duration) -> bool {
+        self.session.step_emulator(present, timeout)
+    }
+
     pub fn advance(&mut self, input: &mut dyn InputSource) {
         let now = self.now();
         let events = input.poll(now);

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -42,6 +42,13 @@ const COST_BLEND: u32 = 4;
 /// Snapshot every other frame, so rewinding at one pop per present runs back at 2x. On the H700
 /// a snapshot costs 9.2 ms of the 16.67 ms frame, too much for every frame.
 const SNAPSHOT_EVERY: u32 = 2;
+
+/// How long a locked worker waits for the display before running a frame on its own: a frame
+/// and a half, so a late tick is still followed and a stalled display does not stall the game.
+const STALL: Duration = Duration::from_millis(25);
+
+/// Ticks per window when measuring the display's present for the audio base rate.
+const RATE_WINDOW: u32 = 300;
 
 /// Frames between traced pacing lines, about five seconds.
 const TRACE_EVERY: u64 = 300;
@@ -139,6 +146,22 @@ struct Shared {
     /// The far end said it was ending the session, rather than merely going away. Separate from
     /// `link_lost` because a goodbye then a dropped wire sets both. Cleared like `link_lost`.
     peer_ended: AtomicBool,
+    /// The display drives the frame clock, via `tick`. Set by the display loop that ticks.
+    driven: AtomicBool,
+    /// Following the display right now: driven, at normal speed, not rewinding, no link session.
+    /// Everything else keeps the worker's own clock, so it can never stall the display.
+    locked: AtomicBool,
+    /// The display's present, in nanoseconds: the audio base rate's first guess.
+    present_ns: AtomicU64,
+    clock: Mutex<Clock>,
+    clocked: Condvar,
+}
+
+/// Ticks sent by the display, and the last tick whose frame the worker has published.
+#[derive(Default)]
+struct Clock {
+    tick: u64,
+    done: u64,
 }
 
 impl EmuHandle {
@@ -175,6 +198,11 @@ impl EmuHandle {
             link_lost: AtomicBool::new(false),
             linked: AtomicU64::new(0),
             peer_ended: AtomicBool::new(false),
+            driven: AtomicBool::new(false),
+            locked: AtomicBool::new(false),
+            present_ns: AtomicU64::new(PRESENT.as_nanos() as u64),
+            clock: Mutex::new(Clock::default()),
+            clocked: Condvar::new(),
         });
         let (tx, rx) = channel();
         let worker = Worker {
@@ -255,8 +283,54 @@ impl EmuHandle {
             .send(Cmd::SetOption(key.to_owned(), value.to_owned()));
     }
 
+    /// Hand the frame clock to the display, which then calls `tick` once per present. A worker
+    /// nobody ticks keeps its own clock.
+    pub fn set_driven(&self, driven: bool) {
+        self.shared.driven.store(driven, Ordering::Relaxed);
+        self.shared.clocked.notify_all();
+    }
+
+    /// Whether the worker is following the display right now. See `Shared::locked`.
+    pub fn locked(&self) -> bool {
+        self.shared.locked.load(Ordering::Acquire)
+    }
+
+    /// One present of the display, which lasts `present`: a locked worker runs one frame for it.
+    pub fn tick(&self, present: Duration) {
+        self.shared
+            .present_ns
+            .store(present.as_nanos() as u64, Ordering::Relaxed);
+        let mut clock = self.shared.clock.lock().unwrap_or_else(|e| e.into_inner());
+        clock.tick += 1;
+        self.shared.clocked.notify_all();
+    }
+
+    /// Waits, at most `timeout`, for the frame of the last tick to be published. Returns at once,
+    /// false, when the worker is not locked, so a paused or fast forwarding game never stalls the
+    /// display.
+    pub fn wait_frame(&self, timeout: Duration) -> bool {
+        let until = Instant::now() + timeout;
+        let mut clock = self.shared.clock.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if !self.locked() {
+                return false;
+            }
+            if clock.done >= clock.tick {
+                return true;
+            }
+            let Some(left) = until.checked_duration_since(Instant::now()) else {
+                return false;
+            };
+            clock = match self.shared.clocked.wait_timeout(clock, left) {
+                Ok((c, _)) => c,
+                Err(e) => e.into_inner().0,
+            };
+        }
+    }
+
     pub fn set_input(&self, mask: ButtonMask) {
-        self.shared.input.store(mask.0, Ordering::Relaxed);
+        let before = self.shared.input.swap(mask.0, Ordering::Relaxed);
+        crate::latency::applied(before, mask.0);
     }
 
     /// What the worker will read on its next pass. Lets tests check whether a press a menu used
@@ -488,7 +562,15 @@ impl Worker {
         // Set by a fast present: when it began and how long its core frames took.
         let mut fast_span: Option<(Instant, Duration)> = None;
         let mut deadline = Instant::now();
+        let mut served = 0u64;
+        let mut ticked = false;
         let mut paced = 0u64;
+        // Locked to the display, the audio's base rate: the present the display actually keeps,
+        // against the 60 Hz the resampler was built for. Measured over windows of real ticks,
+        // since the panel is not 60 Hz (16.79 ms on the SP) and rate control only reaches 0.5%.
+        let mut scale = 0.0f64;
+        let mut window = (Instant::now(), 0u32, true);
+        let mut stalled = false;
         // `None` until a session begins. Owned by this loop, which alone drains and feeds it.
         let mut transport: Option<Box<dyn LinkChannel>> = None;
         // `Some` only on the emulated link route; netpacket sessions leave it `None`.
@@ -562,9 +644,22 @@ impl Worker {
                 ring.set_idle(gate.1);
                 gated = gate;
             }
+            let lock = self.shared.driven.load(Ordering::Relaxed)
+                && speed == Speed::Normal
+                && !rewinding
+                && transport.is_none();
+            if lock != self.shared.locked.load(Ordering::Relaxed) {
+                self.shared.locked.store(lock, Ordering::Release);
+                // Leaving the lock picks the worker's own clock up from now.
+                deadline = Instant::now();
+                self.shared.clocked.notify_all();
+            }
             let input = ButtonMask(self.shared.input.load(Ordering::Relaxed));
+            crate::latency::emu_frame(input.0);
             let ceiling = match speed {
                 Speed::Paused => 0,
+                // Locked, a frame runs only for a tick or in place of a missed one.
+                Speed::Normal if lock && !ticked => 0,
                 Speed::Normal => 1,
                 Speed::Fast => self.shared.fast_steps.load(Ordering::Relaxed),
             };
@@ -681,6 +776,9 @@ impl Worker {
                 // 16.7 ms to a ~2 ms wire. A GBA unanswered for four frames reports an error.
                 flush_outbound(&mut transport, &link);
                 self.publish(core.video_xrgb8888());
+                // The display waits for this frame and nothing after it: the snapshot and the
+                // audio below run while it draws.
+                self.frame_done(served);
 
                 // Per present, fast forward included, so rewind covers it. Skipped during a
                 // link session: rewind is refused, and a two-console state is the costliest work.
@@ -705,8 +803,12 @@ impl Worker {
                 if speed == Speed::Normal || ff_sound {
                     let target = drc_target(ring.capacity_frames());
                     let queued = ring.queued_frames();
-                    // `ran`, not the ceiling: the audio the present actually produced.
-                    resampler.set_ratio(drc_ratio(queued, target) / f64::from(ran));
+                    if lock && scale == 0.0 {
+                        scale = self.shared.present_ns.load(Ordering::Relaxed) as f64
+                            / PRESENT.as_nanos() as f64;
+                    }
+                    let base = if lock { scale } else { 1.0 };
+                    resampler.set_ratio(drc_ratio(queued, target) * base / f64::from(ran));
                     resampler.process(&audio, &mut out);
                     crate::audio::volume::apply(
                         &mut out,
@@ -718,7 +820,7 @@ impl Worker {
                     if crate::session::trace() && paced.is_multiple_of(TRACE_EVERY) {
                         let (dropped, starved) = (ring.overruns(), ring.underruns());
                         eprintln!(
-                            "slot: audio: {queued}/{target} queued, {dropped} dropped, {starved} starved"
+                            "slot: audio: {queued}/{target} queued, {dropped} dropped, {starved} starved, locked {lock} at {scale:.5}"
                         );
                     }
                 }
@@ -729,6 +831,36 @@ impl Worker {
             if let Some((began, core_time)) = fast_span.take() {
                 post_cost = blend(post_cost, began.elapsed().saturating_sub(core_time));
             }
+            self.frame_done(served);
+            if lock {
+                // Once stalled, the worker keeps its own 60 Hz until a tick comes back.
+                let patience = if stalled { PRESENT } else { STALL };
+                match self.next_tick(served, patience) {
+                    Some(tick) => {
+                        served = tick;
+                        stalled = false;
+                        // A window of real ticks is the display's present; one with a stall in
+                        // it is not, and is dropped.
+                        window.1 += 1;
+                        if window.1 == RATE_WINDOW {
+                            if window.2 {
+                                let present = window.0.elapsed() / RATE_WINDOW;
+                                scale = present.as_secs_f64() / PRESENT.as_secs_f64();
+                            }
+                            window = (Instant::now(), 0, true);
+                        }
+                    }
+                    // The display stalled (an autosave writing to the card, say): run this frame
+                    // on the worker's own clock so the game and its audio carry on.
+                    None => {
+                        window.2 = false;
+                        stalled = true;
+                    }
+                }
+                ticked = true;
+                continue;
+            }
+            ticked = false;
             deadline += PRESENT;
             let now = Instant::now();
             match deadline.checked_duration_since(now) {
@@ -840,12 +972,45 @@ impl Worker {
         }
     }
 
+    /// The frame for tick `served` is published, or there was none to run.
+    fn frame_done(&self, served: u64) {
+        let mut clock = self.shared.clock.lock().unwrap_or_else(|e| e.into_inner());
+        if clock.done < served {
+            clock.done = served;
+            self.shared.clocked.notify_all();
+        }
+    }
+
+    /// Waits for a display tick newer than `served`. `None` when none comes within `patience`, or
+    /// the display lets go of the clock: the caller then runs the frame on its own. Two ticks that
+    /// arrive before the worker gets to them are served by one frame.
+    fn next_tick(&self, served: u64, patience: Duration) -> Option<u64> {
+        let until = Instant::now() + patience;
+        let mut clock = self.shared.clock.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if clock.tick > served {
+                return Some(clock.tick);
+            }
+            let left = until.checked_duration_since(Instant::now())?;
+            if self.shared.stop.load(Ordering::Relaxed)
+                || !self.shared.driven.load(Ordering::Relaxed)
+            {
+                return None;
+            }
+            clock = match self.shared.clocked.wait_timeout(clock, left) {
+                Ok((c, _)) => c,
+                Err(e) => e.into_inner().0,
+            };
+        }
+    }
+
     fn publish(&self, video: &[u8]) {
         let mut buf = self.frames.take_write();
         buf.clear();
         buf.extend_from_slice(video);
         self.frames.publish(buf);
         self.shared.published.fetch_add(1, Ordering::Relaxed);
+        crate::latency::published();
     }
 
     fn speed(&self) -> Speed {

@@ -7,7 +7,7 @@ use std::time::Instant;
 use slot_input::{Btn, InputSource, Millis, RawEvent};
 
 use super::evdev::{
-    decode, device_name, pick_devices, to_raw, Ev, Hat, EVENT_BYTES, EV_ABS, EV_SYN,
+    decode, device_name, pick_devices, to_raw, Ev, Hat, EVENT_BYTES, EV_ABS, EV_KEY, EV_SYN,
 };
 use super::trace;
 
@@ -50,6 +50,7 @@ impl DeviceInput {
                 node.display(),
                 device_name(sys, &node)
             );
+            quicken_poll(sys, &node);
             let queue = pending.clone();
             let name = node.display().to_string();
             let trace = trace.clone();
@@ -65,6 +66,36 @@ impl DeviceInput {
             hall: find_hall(Path::new(PSY)),
             lid_shut: None,
             next_lid_poll: 0,
+        }
+    }
+}
+
+/// The SP's key devices are polled, 20 ms by default, and a press waits for the next poll. The
+/// kernel ticks at 100 Hz and the driver schedules in whole ticks, so 10 ms is the fastest poll
+/// there is: asking for less rounds up to it, and 0 would re-poll without pause and spin a core.
+/// Measured on the SP: no bounces at 10 ms, and no CPU cost above the noise.
+const POLL_MS: u32 = 10;
+
+/// Poll `node` every `POLL_MS` if it is polled more slowly. Best effort: an unpolled device has no
+/// attribute, and a refused write leaves the old rate.
+fn quicken_poll(sys: &Path, node: &Path) {
+    let Some(name) = node.file_name() else {
+        return;
+    };
+    let attr = sys.join(name).join("device/poll");
+    let Some(now) = std::fs::read_to_string(&attr)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+    else {
+        return;
+    };
+    if now > POLL_MS {
+        match std::fs::write(&attr, POLL_MS.to_string()) {
+            Ok(()) => eprintln!(
+                "slot: input {}: poll {now} ms -> {POLL_MS} ms",
+                node.display()
+            ),
+            Err(e) => eprintln!("slot: input {}: poll: {e}", node.display()),
         }
     }
 }
@@ -101,6 +132,9 @@ fn read_node(node: &Path, queue: &Mutex<Vec<RawEvent>>, trace: Option<&Trace>) {
         for ev in buf[..read].chunks_exact(EVENT_BYTES).filter_map(decode) {
             if let Some(trace) = trace {
                 trace.event(&label, ev);
+            }
+            if (ev.kind == EV_KEY && ev.value == 1) || (ev.kind == EV_ABS && ev.value != 0) {
+                crate::latency::read();
             }
             match ev.kind {
                 // The d-pad needs its axis state to know what it released.

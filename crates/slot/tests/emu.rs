@@ -1068,3 +1068,84 @@ fn a_state_asked_for_in_the_last_present_is_still_answered() {
         "a flush racing the cart out of the slot was never answered"
     );
 }
+
+// --- the display drives the emulator ---------------------------------------------------------
+
+/// The panel on the SP: what a driven worker is told a present lasts.
+const PANEL: Duration = Duration::from_micros(16_760);
+
+/// Driven at normal speed and ticked, the worker runs exactly one frame per tick, so the frame
+/// shown is the one run for the input just read.
+#[test]
+fn a_driven_worker_runs_one_frame_per_tick() {
+    let emu = spawn();
+    emu.set_driven(true);
+    assert!(
+        wait_for(|| emu.locked()),
+        "the worker never locked to the display"
+    );
+    emu.tick(PANEL);
+    emu.wait_frame(Duration::from_millis(100));
+    let before = emu.published_count();
+    for _ in 0..20 {
+        emu.tick(PANEL);
+        assert!(
+            emu.wait_frame(Duration::from_millis(100)),
+            "a tick's frame never arrived"
+        );
+        std::thread::sleep(Duration::from_millis(8));
+    }
+    assert_eq!(emu.published_count(), before + 20, "not one frame per tick");
+}
+
+/// A display that stops ticking, as it does while an autosave writes to the card, must not stop
+/// the game: the worker runs on its own clock until ticks come back, so the audio never starves.
+#[test]
+fn a_stalled_display_does_not_stall_the_worker() {
+    let emu = spawn();
+    emu.set_driven(true);
+    assert!(
+        wait_for(|| emu.locked()),
+        "the worker never locked to the display"
+    );
+    let before = emu.published_count();
+    std::thread::sleep(Duration::from_millis(200));
+    let ran = emu.published_count() - before;
+    assert!(
+        (9..=14).contains(&ran),
+        "{ran} frames in a 200 ms stall, where its own 60 Hz would run about 11"
+    );
+}
+
+/// Fast forward keeps its own clock: it runs several frames a present, and waiting on it would
+/// stall the display.
+#[test]
+fn a_driven_worker_paces_itself_in_fast_forward() {
+    let emu = spawn();
+    emu.set_driven(true);
+    emu.set_speed(Speed::Fast);
+    assert!(wait_for(|| !emu.locked()), "fast forward stayed locked");
+    let before = emu.published_count();
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        emu.published_count() > before + 5,
+        "fast forward waited for ticks nobody sent"
+    );
+}
+
+/// Waiting on a worker that is not locked returns at once, so the display never stalls on a
+/// paused game.
+#[test]
+fn waiting_on_an_unlocked_worker_does_not_block() {
+    let emu = spawn();
+    emu.set_driven(true);
+    emu.set_speed(Speed::Paused);
+    assert!(wait_for(|| !emu.locked()), "a paused worker stayed locked");
+    emu.tick(PANEL);
+    let began = Instant::now();
+    assert!(!emu.wait_frame(Duration::from_millis(100)));
+    assert!(
+        began.elapsed() < Duration::from_millis(20),
+        "the wait blocked"
+    );
+}

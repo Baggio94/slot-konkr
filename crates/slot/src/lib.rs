@@ -10,6 +10,7 @@ pub mod face_builder;
 pub mod frames;
 pub mod frontend;
 pub mod input;
+pub mod latency;
 pub mod link_art_builder;
 pub mod link_kind;
 pub mod link_net;

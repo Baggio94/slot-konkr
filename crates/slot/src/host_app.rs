@@ -60,7 +60,10 @@ impl ApplicationHandler for Slot {
                 // Times the whole frame, not just the present, as `device_app` does.
                 let began = Instant::now();
                 self.frontend.render(compositor, surface.window_size());
-                if let Err(e) = surface.swap() {
+                let swap = std::time::Instant::now();
+                let swapped = surface.swap();
+                slot::latency::swapped(swap.elapsed().as_secs_f64() * 1000.0);
+                if let Err(e) = swapped {
                     eprintln!("slot: {e}");
                     events.exit();
                     return;

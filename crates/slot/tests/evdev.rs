@@ -208,6 +208,48 @@ fn no_trace_file_is_written_unless_one_was_asked_for() {
     assert!(!card.path().join("input-trace.log").exists());
 }
 
+/// The SP's key devices are polled, 20 ms by default. At the kernel's 100 Hz tick 10 ms is the
+/// fastest poll there is, so slot asks for it on the pad it opens, and never goes slower than a
+/// device already is. A node with no poll attribute is not polled and is left alone.
+#[test]
+fn the_pad_is_polled_as_fast_as_the_kernel_tick_allows() {
+    let d = input_tree();
+    let sys = d.path().join("sys/class/input");
+    write(&sys.join("event1/device/poll"), "20\n");
+    write(&sys.join("event0/device/poll"), "20\n");
+    let card = tempfile::tempdir().unwrap();
+    let input =
+        slot::input::DeviceInput::open_in(&d.path().join("dev/input"), &sys, card.path(), false);
+    drop(input);
+    let poll = |node: &str| std::fs::read_to_string(sys.join(node).join("device/poll")).unwrap();
+    assert_eq!(
+        poll("event1").trim(),
+        "10",
+        "the pad is still polled at 20 ms"
+    );
+    assert_eq!(
+        poll("event0").trim(),
+        "20",
+        "a node slot does not read was changed"
+    );
+}
+
+#[test]
+fn a_pad_already_polled_faster_is_left_alone() {
+    let d = input_tree();
+    let sys = d.path().join("sys/class/input");
+    write(&sys.join("event1/device/poll"), "5\n");
+    let card = tempfile::tempdir().unwrap();
+    drop(slot::input::DeviceInput::open_in(
+        &d.path().join("dev/input"),
+        &sys,
+        card.path(),
+        false,
+    ));
+    let poll = std::fs::read_to_string(sys.join("event1/device/poll")).unwrap();
+    assert_eq!(poll.trim(), "5");
+}
+
 /// Every code here came off a device trace. The kernel's names are scrambled relative to the
 /// legends on the case, so the standard spellings are wrong.
 #[test]
