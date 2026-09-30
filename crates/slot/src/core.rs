@@ -139,17 +139,15 @@ pub fn colour_option(which: Core, on: bool) -> Option<(&'static str, &'static st
 }
 
 /// mGBA's in-core link: `mgba_link_player` says which console this device drives. Other cores
-/// are left alone. `mgba_use_bios` is forced off so both devices boot identical machines: a card
-/// without `gba_bios.bin` cannot match one with it, and mGBA refuses a state whose BIOS checksum
-/// differs while the BIOS is still running (`GBADeserialize`).
+/// are left alone. The BIOS stays the card's, so a game resumes across link mode; the joiner
+/// refuses a host on another one (`link_state::same_bios`).
 pub fn apply_link_options(core: &mut LibretroCore, which: Core, player: u8) {
     if which != Core::Mgba {
         return;
     }
     core.set_option("mgba_link", "on");
     core.set_option("mgba_link_player", &player.to_string());
-    core.set_option("mgba_use_bios", "OFF");
-    eprintln!("slot: core: link mode on, player {player}, built-in bios");
+    eprintln!("slot: core: link mode on, player {player}");
 }
 
 /// Options a core reads only during `retro_load_game`, so they must be set before `load`.

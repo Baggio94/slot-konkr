@@ -1197,3 +1197,70 @@ fn skipping_the_peers_picture_and_sound_does_not_change_the_machine() {
          not state-safe, and two devices would drift apart in a race"
     );
 }
+
+fn ready(emu: &slot::emu::EmuHandle) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while emu.state() == slot::emu::CoreState::Loading {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the core never settled"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(emu.state(), slot::emu::CoreState::Ready);
+}
+
+/// Reloading a game into link mode keeps the player's progress rather than refusing it.
+#[test]
+fn a_link_mode_worker_resumes_a_one_gba_state() {
+    use slot::audio::AudioSink;
+    use slot::persist::Snapshot;
+    let _g = common::core_lock();
+    let Some(dylib) = vendored() else { return };
+    let rom = rom("mgba-link-resume.gba", common::gba_rom());
+    let one = single_state(&dylib, &rom, 30);
+
+    let emu = slot::emu::EmuHandle::spawn_linked(
+        Box::new(link_core(&dylib, 0)),
+        rom,
+        slot::audio::StubSink::new().ring(),
+        None,
+        Some(one),
+        0,
+    );
+    ready(&emu);
+    assert!(
+        emu.snapshot().resume_trusted(),
+        "link mode refused the one-GBA resume"
+    );
+}
+
+/// What a link-mode worker writes to the card is the local player's GBA, so the game resumes
+/// once it is loaded on its own again.
+#[test]
+fn a_link_mode_workers_state_resumes_on_a_single_core() {
+    use slot::audio::AudioSink;
+    use slot::persist::Snapshot;
+    let _g = common::core_lock();
+    let Some(dylib) = vendored() else { return };
+    let rom = rom("mgba-link-leave.gba", common::gba_rom());
+
+    let emu = slot::emu::EmuHandle::spawn_linked(
+        Box::new(link_core(&dylib, 1)),
+        rom.clone(),
+        slot::audio::StubSink::new().ring(),
+        None,
+        None,
+        1,
+    );
+    ready(&emu);
+    let state = emu.snapshot().state().expect("no state");
+    drop(emu);
+    assert_ne!(&state[..4], b"SLK1");
+
+    let mut single = single_core(&dylib);
+    single.load(&rom).expect("load");
+    single
+        .unserialize(&state)
+        .expect("a single GBA refused the link-mode worker's state");
+}

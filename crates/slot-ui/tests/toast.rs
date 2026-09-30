@@ -35,6 +35,7 @@ fn the_banner_says_what_happened_and_never_what_is_on_screen() {
             Toast::NoLink,
             Toast::LinkEnded,
             Toast::PeerEnded,
+            Toast::BiosMismatch,
             Toast::ColourOn,
             Toast::ColourOff,
         ],

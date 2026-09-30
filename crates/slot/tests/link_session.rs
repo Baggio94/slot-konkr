@@ -1077,3 +1077,15 @@ fn a_peer_that_ends_the_link_ends_the_session_at_once_and_says_so() {
     );
     assert_eq!(app.toast(), Some(Toast::PeerEnded));
 }
+
+/// A host on another GBA BIOS ends the session here and says why.
+#[test]
+fn a_host_on_another_bios_ends_the_session_and_says_so() {
+    let d = tmp_root_with_carts(&["Emerald"]);
+    let mut app = common::app_playing_in(d.path(), "Emerald");
+    app.begin_link(1);
+    app.bios_mismatch();
+
+    assert!(!app.link_active());
+    assert_eq!(app.toast(), Some(Toast::BiosMismatch));
+}

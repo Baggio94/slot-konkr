@@ -120,11 +120,10 @@ fn both_cores_declare_a_colour_correction_option() {
     }
 }
 
-/// A cable session pins mGBA's BIOS option rather than deciding it from the card, since two
-/// cards may disagree and each device runs both consoles. On hardware a mismatch made the
-/// joiner refuse the state swap.
+/// A cable session runs the card's BIOS, so a game resumes across link mode. The joiner checks
+/// that the host's BIOS is its own before taking its state.
 #[test]
-fn a_cable_session_pins_the_bios_so_both_devices_agree() {
+fn a_cable_session_leaves_the_bios_to_the_card() {
     let _g = common::core_lock();
     let path = dylib_for(Core::Mgba);
     if !path.exists() {
@@ -136,8 +135,8 @@ fn a_cable_session_pins_the_bios_so_both_devices_agree() {
     let set: std::collections::HashMap<String, String> = core.options().into_iter().collect();
     assert_eq!(
         set.get("mgba_use_bios").map(String::as_str),
-        Some("OFF"),
-        "a session left the BIOS to whatever each card happened to carry"
+        None,
+        "link mode overrode the card's BIOS"
     );
     assert_eq!(set.get("mgba_link").map(String::as_str), Some("on"));
     assert_eq!(

@@ -17,6 +17,8 @@ pub enum Toast {
     /// The far end ended the session. Separate from `LinkEnded` because the player here cannot
     /// see which device ended it.
     PeerEnded,
+    /// The host runs another GBA BIOS, so its game cannot run here.
+    BiosMismatch,
     /// TEMPORARY, with `Action::ColourCorrectionToggle`. Two variants because faces are
     /// rasterised per variant.
     ColourOn,
@@ -24,13 +26,14 @@ pub enum Toast {
 }
 
 impl Toast {
-    pub const ALL: [Toast; 8] = [
+    pub const ALL: [Toast; 9] = [
         Toast::StateSaved,
         Toast::StateLoaded,
         Toast::NeedsGpsp,
         Toast::NoLink,
         Toast::LinkEnded,
         Toast::PeerEnded,
+        Toast::BiosMismatch,
         Toast::ColourOn,
         Toast::ColourOff,
     ];
@@ -49,6 +52,7 @@ impl Toast {
             Toast::LinkEnded => "Link ended",
             // Passive: here the link was ended by the other device, not by this player.
             Toast::PeerEnded => "Link was ended",
+            Toast::BiosMismatch => "BIOS does not match",
             Toast::ColourOn => "Correction On",
             Toast::ColourOff => "Correction Off",
         }

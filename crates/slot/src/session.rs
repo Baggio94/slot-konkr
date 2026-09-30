@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use slot_input::{Action, Gestures, Millis, RawEvent};
 use slot_retro::Rumble;
+use slot_store::Platform;
 use slot_ui::FfState;
 
 use crate::app::{App, Phase};
@@ -274,7 +275,9 @@ impl Session {
         // wire, so both can be up on one frame. `peer_lost` only breaks the badge; `App::timers`
         // ends that session after `LINK_LOST_MS`.
         if self.app.link_active() {
-            if self.emu.as_ref().is_some_and(EmuHandle::peer_ended) {
+            if self.emu.as_ref().is_some_and(EmuHandle::bios_mismatch) {
+                self.bridge_link(|app| app.bios_mismatch());
+            } else if self.emu.as_ref().is_some_and(EmuHandle::peer_ended) {
                 self.bridge_link(|app| app.peer_ended());
             } else if self.emu.as_ref().is_some_and(EmuHandle::link_lost) {
                 self.app.peer_lost();
@@ -478,22 +481,23 @@ impl Session {
         let resume = (!self.app.starting_clean())
             .then(|| persist::read_resume(&self.root, platform, core, stem))
             .flatten();
+        let player = self.app.link_player();
         let opened = open_core(
             &self.root,
             core,
             serial,
             self.app.colour_correction(),
-            self.app.link_player(),
+            player,
         );
         // A refusal from the mock means a missing dylib, not a bad resume state.
         self.app.set_named_core(opened.named);
-        let emu = EmuHandle::spawn(
-            opened.core,
-            rom,
-            self.sink.ring(),
-            persist::read_sav(&self.root, platform, stem),
-            resume,
-        );
+        let sav = persist::read_sav(&self.root, platform, stem);
+        let ring = self.sink.ring();
+        // Game Boy link mode keeps no link state.
+        let emu = match player.filter(|_| platform == Platform::Gba) {
+            Some(p) => EmuHandle::spawn_linked(opened.core, rom, ring, sav, resume, p),
+            None => EmuHandle::spawn(opened.core, rom, ring, sav, resume),
+        };
         // A cart seated after the level was lowered has to start there, not at full.
         emu.set_volume(self.app.output_volume());
         emu.set_driven(self.driven);
