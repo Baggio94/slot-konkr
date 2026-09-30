@@ -119,12 +119,20 @@ fn main() {
     let mut input = Scripted::default();
     let (mut frame, mut recording, mut written) = (0u64, false, 0u32);
     let present = Duration::from_secs_f64(1.0 / FPS);
+    // Real time: fast forward runs the emulator on its own clock, so a recorder racing ahead of
+    // it caught a fraction of the frames the device shows.
+    let mut due = std::time::Instant::now();
     let mut run = |input: &mut Scripted, frame: &mut u64, recording: bool, written: &mut u32| {
         // A core loads on its own thread in real time. Waiting here keeps that out of the
         // video, so a take never depends on how fast this machine loads it.
         let loading = std::time::Instant::now();
         while frontend.core_settling() && loading.elapsed() < Duration::from_secs(5) {
             std::thread::sleep(Duration::from_millis(5));
+        }
+        due += present;
+        match due.checked_duration_since(std::time::Instant::now()) {
+            Some(wait) => std::thread::sleep(wait),
+            None => due = std::time::Instant::now(),
         }
         *frame += 1;
         let now = (*frame as f64 * 1000.0 / FPS) as Millis;

@@ -1,9 +1,17 @@
 # cart:
-# Hero, a loop: flip to Drill Dozer, insert, play a moment, eject, keep flipping right round
-# the shelf back to the start.
-wait 180
+# Hero, a loop: from Drill Dozer flip right to LeafGreen, insert, walk a moment, eject, keep
+# flipping right round the shelf back to Drill Dozer.
+wait 60
+tap right
+wait 20
+tap right
+wait 20
+tap right
+wait 200
 rec
 wait 5
+tap right
+wait 20
 tap right
 wait 20
 tap right
@@ -25,5 +33,5 @@ wait 20
 tap right
 wait 20
 tap right
-wait 46
+wait 50
 cut
