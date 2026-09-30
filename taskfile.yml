@@ -228,7 +228,8 @@ tasks:
         curl -fsSL -o vendor/gpsp-src.tar.gz \
           "https://github.com/libretro/gpsp/archive/{{.GPSP_COMMIT}}.tar.gz"
         # A real gpSP checkout, not just a valid tarball.
-        tar -tzf vendor/gpsp-src.tar.gz | grep -q "^gpsp-{{.GPSP_COMMIT}}/Makefile$"
+        # Not `grep -q`: it would stop reading, and pipefail counts tar's SIGPIPE.
+        tar -tzf vendor/gpsp-src.tar.gz | grep "^gpsp-{{.GPSP_COMMIT}}/Makefile$" > /dev/null
       # Built from that archive in the device box (glibc 2.31). Recipe in cores/gpsp/build.sh.
       - task: device:sh
         vars:
