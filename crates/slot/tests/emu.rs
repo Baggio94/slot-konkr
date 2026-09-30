@@ -529,9 +529,10 @@ fn the_renderer_is_handed_whole_gba_frames() {
     }
 }
 
-/// Fast forward snapshots too, so a rewind walks back through it instead of skipping it all.
+/// Fast forward takes no rewind snapshots: they cost mGBA a fast frame. A rewind after one
+/// jumps back over it to where it began.
 #[test]
-fn fast_forward_still_records_rewind_history() {
+fn fast_forward_records_no_rewind_history() {
     let emu = spawn();
     std::thread::sleep(Duration::from_millis(200));
     let before_ff = frame_count(&emu);
@@ -545,16 +546,15 @@ fn fast_forward_still_records_rewind_history() {
         "fast forward did not advance the core: {before_ff} then {after_ff}"
     );
 
-    // A brief rewind should walk a little way into the fast stretch, not past it.
     emu.set_rewinding(true);
     std::thread::sleep(Duration::from_millis(60));
     emu.set_rewinding(false);
     let rewound = frame_count(&emu);
 
     assert!(
-        rewound > before_ff,
-        "a short rewind fell back past where the fast forward began, so nothing was \
-         recorded while it ran: {before_ff} -> {after_ff} -> {rewound}"
+        rewound <= before_ff,
+        "a short rewind landed inside the fast stretch, so it was recorded: \
+         {before_ff} -> {after_ff} -> {rewound}"
     );
 }
 

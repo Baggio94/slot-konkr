@@ -603,10 +603,7 @@ impl Worker {
         let rewind = RewindThread::spawn(REWIND_BYTES);
         let mut since_snapshot = 0;
         // Seeded at a whole present each, cautious: one frame until measured.
-        let mut cost = FrameCost {
-            skip: PRESENT,
-            draw: PRESENT,
-        };
+        let mut cost = FrameCost::seed();
         // Measured cost of a present's work after its core frames, blended. Seeded
         // pessimistically at the full margin `FAST_TARGET` leaves.
         let mut post_cost = PRESENT - FAST_TARGET;
@@ -716,6 +713,7 @@ impl Worker {
             }
             let input = ButtonMask(self.shared.input.load(Ordering::Relaxed));
             crate::latency::emu_frame(input.0);
+            let mut span = 1u32;
             let ceiling = match speed {
                 Speed::Paused => 0,
                 // Locked, a frame runs only for a tick or in place of a missed one.
@@ -743,7 +741,12 @@ impl Worker {
                 // As many core frames as the present can afford, up to the ceiling; only the
                 // last draws. "Last" is predicted before it runs, the only time a core can skip.
                 // What is left of the present for core frames once what follows them is paid.
-                let budget = FAST_TARGET.saturating_sub(post_cost);
+                let one = FAST_TARGET.saturating_sub(post_cost);
+                if speed == Speed::Fast {
+                    span = cost.span(one, ceiling);
+                }
+                let ceiling = ceiling * span;
+                let budget = one + PRESENT * (span - 1);
                 let began = Instant::now();
                 let mut ran = 0u32;
                 let (mut skipped, mut drawn) = (None::<Duration>, Duration::ZERO);
@@ -857,10 +860,11 @@ impl Worker {
                 // audio below run while it draws.
                 self.frame_done(served);
 
-                // Per present, fast forward included, so rewind covers it. Skipped during a
-                // link session: rewind is refused, and a two-console state is the costliest work.
+                // Per present. Skipped during a link session, where rewind is refused and a
+                // two-console state is the costliest work, and during fast forward, where it cost
+                // mGBA a fast frame: rewinding after one jumps back over it.
                 since_snapshot += 1;
-                if cable.is_some() {
+                if cable.is_some() || speed == Speed::Fast {
                     since_snapshot = 0;
                 }
                 if since_snapshot >= SNAPSHOT_EVERY {
@@ -885,7 +889,10 @@ impl Worker {
                             / PRESENT.as_nanos() as f64;
                     }
                     let base = if lock { scale } else { 1.0 };
-                    resampler.set_ratio(drc_ratio(queued, target) * base / f64::from(ran));
+                    // `span` presents of sound from `ran` frames.
+                    resampler.set_ratio(
+                        drc_ratio(queued, target) * base * f64::from(span) / f64::from(ran),
+                    );
                     resampler.process(&audio, &mut out);
                     crate::audio::volume::apply(
                         &mut out,
@@ -931,7 +938,7 @@ impl Worker {
                 continue;
             }
             ticked = false;
-            deadline += PRESENT;
+            deadline += PRESENT * span;
             let now = Instant::now();
             match deadline.checked_duration_since(now) {
                 Some(wait) => std::thread::sleep(wait),
@@ -1122,17 +1129,61 @@ fn blend(estimate: Duration, measured: Duration) -> Duration {
 struct FrameCost {
     skip: Duration,
     draw: Duration,
+    /// Still the seed: the first measurement replaces it rather than blending into it.
+    seeded: bool,
 }
 
 impl FrameCost {
+    /// A whole present each, cautious: one frame a step until measured.
+    fn seed() -> Self {
+        FrameCost {
+            skip: PRESENT,
+            draw: PRESENT,
+            seeded: true,
+        }
+    }
+
     /// Whether the frame about to run must be the drawn last one: another skipped frame and the
     /// drawn one after it would not both fit.
     fn last(&self, elapsed: Duration, budget: Duration) -> bool {
         elapsed + self.skip + self.draw > budget
     }
 
+    /// Core frames one step runs in `budget`, as the worker's loop decides them.
+    fn frames(&self, budget: Duration, ceiling: u32) -> u32 {
+        let mut elapsed = Duration::ZERO;
+        let mut ran = 0;
+        loop {
+            ran += 1;
+            let last = ran >= ceiling || self.last(elapsed, budget);
+            elapsed += if last { self.draw } else { self.skip };
+            if last {
+                return ran;
+            }
+        }
+    }
+
+    /// Refreshes one fast step spans: two when one refresh cannot reach the ceiling. The
+    /// picture then updates at 30 fps, and the game runs as fast as the core allows.
+    fn span(&self, budget: Duration, ceiling: u32) -> u32 {
+        if self.seeded {
+            return 1;
+        }
+        if self.frames(budget, ceiling) < ceiling {
+            2
+        } else {
+            1
+        }
+    }
+
     /// Up at once, down slowly: the next present must survive a heavy frame.
     fn measured(&mut self, skip: Option<Duration>, draw: Duration) {
+        if self.seeded {
+            self.seeded = false;
+            self.draw = draw;
+            self.skip = skip.unwrap_or(draw).min(draw);
+            return;
+        }
         let follow = |estimate: Duration, seen: Duration| {
             if seen > estimate {
                 seen
@@ -1207,18 +1258,37 @@ mod tests {
 
     const PANEL: Duration = Duration::from_micros(16_760);
 
-    /// Core frames one fast present runs at these costs, as the worker's loop decides them.
     fn frames_in(cost: &FrameCost, budget: Duration, ceiling: u32) -> u32 {
-        let mut elapsed = Duration::ZERO;
-        let mut ran = 0;
-        loop {
-            ran += 1;
-            let last = ran >= ceiling || cost.last(elapsed, budget);
-            elapsed += if last { cost.draw } else { cost.skip };
-            if last {
-                return ran;
-            }
-        }
+        cost.frames(budget, ceiling)
+    }
+
+    /// Recharged Yellow on mGBA again: one refresh holds two frames at most, so a step spans
+    /// two refreshes and runs as many as fit in those.
+    #[test]
+    fn a_core_that_cannot_reach_its_ceiling_in_one_refresh_spans_two() {
+        let cost = FrameCost {
+            skip: ms(4.8),
+            draw: ms(5.7),
+            seeded: false,
+        };
+        assert_eq!(cost.span(ms(11.9), 6), 2);
+        assert!(frames_in(&cost, ms(11.9) + PRESENT, 12) >= 5);
+    }
+
+    #[test]
+    fn an_unmeasured_core_keeps_one_refresh() {
+        let cost = FrameCost::seed();
+        assert_eq!(cost.span(ms(11.9), 6), 1);
+    }
+
+    #[test]
+    fn a_core_that_reaches_its_ceiling_keeps_one_refresh() {
+        let cost = FrameCost {
+            skip: ms(1.2),
+            draw: ms(2.0),
+            seeded: false,
+        };
+        assert_eq!(cost.span(ms(11.9), 6), 1);
     }
 
     fn ms(ms: f64) -> Duration {
@@ -1233,6 +1303,7 @@ mod tests {
         let cost = FrameCost {
             skip: ms(4.8),
             draw: ms(5.7),
+            seeded: false,
         };
         assert_eq!(frames_in(&cost, ms(11.9), 6), 2);
     }
@@ -1242,6 +1313,7 @@ mod tests {
         let cost = FrameCost {
             skip: ms(1.2),
             draw: ms(2.0),
+            seeded: false,
         };
         assert_eq!(frames_in(&cost, ms(11.9), 6), 6);
     }
@@ -1251,6 +1323,7 @@ mod tests {
         let cost = FrameCost {
             skip: ms(4.8),
             draw: ms(5.7),
+            seeded: false,
         };
         for budget in [5.0, 8.0, 11.9, 14.0, 20.0] {
             let n = frames_in(&cost, ms(budget), 6);
@@ -1266,10 +1339,7 @@ mod tests {
     /// never let one run: every present stayed at one drawn frame.
     #[test]
     fn with_no_skipped_frame_yet_the_skip_estimate_follows_the_drawn_one() {
-        let mut cost = FrameCost {
-            skip: PRESENT,
-            draw: PRESENT,
-        };
+        let mut cost = FrameCost::seed();
         // A few presents of one drawn frame each, as the start of a fast forward run.
         for _ in 0..12 {
             cost.measured(None, ms(3.6));
@@ -1283,6 +1353,7 @@ mod tests {
         let mut cost = FrameCost {
             skip: ms(4.0),
             draw: ms(5.0),
+            seeded: false,
         };
         cost.measured(Some(ms(9.0)), ms(5.0));
         assert_eq!(cost.skip, ms(9.0));
