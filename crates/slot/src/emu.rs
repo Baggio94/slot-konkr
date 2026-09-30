@@ -569,7 +569,7 @@ impl Worker {
         // against the 60 Hz the resampler was built for. Measured over windows of real ticks,
         // since the panel is not 60 Hz (16.79 ms on the SP) and rate control only reaches 0.5%.
         let mut scale = 0.0f64;
-        let mut window = (Instant::now(), 0u32, true);
+        let mut rate = TickRate::new(Instant::now(), 0);
         let mut stalled = false;
         // `None` until a session begins. Owned by this loop, which alone drains and feeds it.
         let mut transport: Option<Box<dyn LinkChannel>> = None;
@@ -652,6 +652,7 @@ impl Worker {
                 self.shared.locked.store(lock, Ordering::Release);
                 // Leaving the lock picks the worker's own clock up from now.
                 deadline = Instant::now();
+                rate.restart(deadline, self.current_tick());
                 self.shared.clocked.notify_all();
             }
             let input = ButtonMask(self.shared.input.load(Ordering::Relaxed));
@@ -839,21 +840,14 @@ impl Worker {
                     Some(tick) => {
                         served = tick;
                         stalled = false;
-                        // A window of real ticks is the display's present; one with a stall in
-                        // it is not, and is dropped.
-                        window.1 += 1;
-                        if window.1 == RATE_WINDOW {
-                            if window.2 {
-                                let present = window.0.elapsed() / RATE_WINDOW;
-                                scale = present.as_secs_f64() / PRESENT.as_secs_f64();
-                            }
-                            window = (Instant::now(), 0, true);
+                        if let Some(measured) = rate.served(Instant::now(), tick) {
+                            scale = measured;
                         }
                     }
                     // The display stalled (an autosave writing to the card, say): run this frame
                     // on the worker's own clock so the game and its audio carry on.
                     None => {
-                        window.2 = false;
+                        rate.stalled();
                         stalled = true;
                     }
                 }
@@ -981,6 +975,14 @@ impl Worker {
         }
     }
 
+    fn current_tick(&self) -> u64 {
+        self.shared
+            .clock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .tick
+    }
+
     /// Waits for a display tick newer than `served`. `None` when none comes within `patience`, or
     /// the display lets go of the clock: the caller then runs the frame on its own. Two ticks that
     /// arrive before the worker gets to them are served by one frame.
@@ -1035,6 +1037,45 @@ fn blend(estimate: Duration, measured: Duration) -> Duration {
     (estimate * (COST_BLEND - 1) + measured) / COST_BLEND
 }
 
+/// The display's present, measured over windows of its ticks. Counts ticks, not frames served, so
+/// a worker that falls behind cannot inflate it.
+struct TickRate {
+    began: Instant,
+    start_tick: u64,
+    clean: bool,
+}
+
+impl TickRate {
+    fn new(now: Instant, tick: u64) -> Self {
+        TickRate {
+            began: now,
+            start_tick: tick,
+            clean: true,
+        }
+    }
+
+    /// When the lock engages: nothing before it belongs in a window.
+    fn restart(&mut self, now: Instant, tick: u64) {
+        *self = TickRate::new(now, tick);
+    }
+
+    fn stalled(&mut self) {
+        self.clean = false;
+    }
+
+    /// The scale once a clean window of `RATE_WINDOW` ticks closes.
+    fn served(&mut self, now: Instant, tick: u64) -> Option<f64> {
+        let ticks = tick.saturating_sub(self.start_tick);
+        if ticks < u64::from(RATE_WINDOW) {
+            return None;
+        }
+        let present = (now - self.began).as_secs_f64() / ticks as f64;
+        let clean = self.clean;
+        self.restart(now, tick);
+        clean.then(|| present / PRESENT.as_secs_f64())
+    }
+}
+
 /// Moves up to `cap` packets from `transport` into `link`'s inbound queue, leaving the rest
 /// queued. Free so tests can drive the cap without a worker.
 fn drain_transport(transport: &mut dyn LinkChannel, link: &Link, cap: u32) {
@@ -1050,6 +1091,55 @@ fn drain_transport(transport: &mut dyn LinkChannel, link: &Link, cap: u32) {
 mod tests {
     use super::*;
     use slot_retro::LoopbackLink;
+
+    const PANEL: Duration = Duration::from_micros(16_760);
+
+    fn run_window(rate: &mut TickRate, start: Instant, ticks_per_frame: u64) -> Option<f64> {
+        let mut scale = None;
+        let mut tick = rate.start_tick;
+        while scale.is_none() {
+            tick += ticks_per_frame;
+            scale = rate.served(start + PANEL * (tick - rate.start_tick) as u32, tick);
+        }
+        scale
+    }
+
+    fn near_panel(scale: Option<f64>) -> bool {
+        scale.is_some_and(|s| (s - PANEL.as_secs_f64() / PRESENT.as_secs_f64()).abs() < 1e-3)
+    }
+
+    #[test]
+    fn a_worker_serving_two_ticks_a_frame_still_measures_the_panel() {
+        let start = Instant::now();
+        let mut rate = TickRate::new(start, 0);
+        let scale = run_window(&mut rate, start, 2);
+        assert!(near_panel(scale), "measured {scale:?}");
+    }
+
+    #[test]
+    fn a_pause_before_the_lock_returns_is_not_measured() {
+        let start = Instant::now();
+        let mut rate = TickRate::new(start, 0);
+        rate.served(start + PANEL * 10, 10);
+        // Six seconds paused, then the lock engages again at tick 370.
+        let back = start + PANEL * 10 + Duration::from_secs(6);
+        rate.restart(back, 370);
+        let scale = run_window(&mut rate, back, 1);
+        assert!(near_panel(scale), "measured {scale:?}");
+    }
+
+    #[test]
+    fn a_window_with_a_stall_is_dropped() {
+        let start = Instant::now();
+        let mut rate = TickRate::new(start, 0);
+        rate.stalled();
+        let first: Vec<_> = (1..=u64::from(RATE_WINDOW))
+            .filter_map(|t| rate.served(start + PANEL * t as u32, t))
+            .collect();
+        assert!(first.is_empty(), "a stalled window gave {first:?}");
+        let next = start + PANEL * RATE_WINDOW;
+        assert!(near_panel(run_window(&mut rate, next, 1)));
+    }
 
     /// A flooding peer's packets stop at the cap and the rest stay queued.
     #[test]
