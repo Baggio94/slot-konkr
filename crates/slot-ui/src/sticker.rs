@@ -59,7 +59,7 @@ pub struct StickerFields<'a> {
 /// column width: Open Sans is wider than the original's condensed type.
 pub const CREDITS: [&str; 10] = [
     "EMULATION POWERED BY MGBA",
-    "AND GPSP. AGS-102 IS A FORK OF",
+    "AND GPSP. UNDERLYING OS IS",
     "BASEOS BY PVAIBHAV. TYPE IS",
     "OPEN SANS AND NERD FONTS",
     "SYMBOLS BY RYAN L MCINTYRE.",
