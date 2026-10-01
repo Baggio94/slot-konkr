@@ -148,27 +148,64 @@
     }
     pvid = peer.querySelector("video");
     pvid.classList.remove("guide-screen");
-    pvid.loop = true;
     stage.appendChild(peer);
-    /* The main clip is the clock: the peer follows it whenever the two drift apart. */
-    if (vid) vid.addEventListener("timeupdate", function(){
-      if (!pvid.getAttribute("src")) return;
-      if (Math.abs(pvid.currentTime - vid.currentTime) > 0.12) pvid.currentTime = vid.currentTime;
-      if (vid.paused !== pvid.paused) { var p = vid.paused ? pvid.pause() : pvid.play(); if (p && p.catch) p.catch(function(){}); }
+  }
+
+  /* The pair plays as one: neither starts until both can play through, both start from the top
+     together, and neither loops on its own. The main clip ending restarts both. Drift while
+     playing is taken up by nudging the peer's rate, not by seeking it, which stalls a video. */
+  var pairOn = false, pairStarting = false;
+  function play(v){ var p = v.play(); if (p && p.catch) p.catch(function(){}); }
+  function pairReady(){ return vid.readyState >= 3 && pvid.readyState >= 3; }
+  function startPair(){
+    if (!pairOn || pairStarting || !pairReady()) return;
+    pairStarting = true;
+    vid.pause(); pvid.pause();
+    pvid.playbackRate = 1;
+    var left = 2, done = false;
+    function go(){
+      if (done || --left > 0) return;
+      done = true;
+      pairStarting = false;
+      if (!pairOn) return;
+      play(vid); play(pvid);
+    }
+    vid.addEventListener("seeked", go, { once:true });
+    pvid.addEventListener("seeked", go, { once:true });
+    vid.currentTime = 0; pvid.currentTime = 0;
+    /* A seek to where it already is may not report back. */
+    setTimeout(function(){ left = 1; go(); }, 600);
+  }
+  if (vid && pvid) {
+    ["canplay", "canplaythrough"].forEach(function(e){
+      [vid, pvid].forEach(function(v){
+        v.addEventListener(e, function(){ if (vid.paused || pvid.paused) startPair(); });
+      });
+    });
+    /* One stalling to buffer holds the other, and both go again from the top together. */
+    vid.addEventListener("waiting", function(){ if (pairOn) pvid.pause(); });
+    pvid.addEventListener("waiting", function(){ if (pairOn) vid.pause(); });
+    vid.addEventListener("ended", function(){ if (pairOn) startPair(); });
+    vid.addEventListener("timeupdate", function(){
+      if (!pairOn || pairStarting || vid.paused) return;
+      if (pvid.paused) { play(pvid); return; }
+      var d = vid.currentTime - pvid.currentTime;
+      if (Math.abs(d) > 0.3) { startPair(); return; }
+      pvid.playbackRate = 1 + Math.max(-0.1, Math.min(0.1, d * 0.5));
     });
   }
   function showPeer(clip){
     if (!stage || !pvid) return;
     stage.classList.toggle("is-pair", !!clip);
-    if (!clip) { pvid.pause(); pvid.removeAttribute("src"); return; }
-    var still = "media/" + clip.replace(/\.mp4$/, ".webp");
-    pvid.poster = still;
+    pairOn = !!clip && !reduced;
+    vid.loop = !pairOn;
+    if (!clip) { pvid.pause(); pvid.removeAttribute("src"); pvid.playbackRate = 1; return; }
+    pvid.poster = "media/" + clip.replace(/\.mp4$/, ".webp");
     if (reduced) { pvid.removeAttribute("src"); return; }
-    if (pvid.getAttribute("src") === "media/" + clip) return;
-    pvid.src = "media/" + clip;
-    pvid.load();
-    /* Both from the top together, so the two screens start on the same moment. */
-    vid.currentTime = 0;
+    if (pvid.getAttribute("src") !== "media/" + clip) {
+      pvid.src = "media/" + clip;
+      pvid.load();
+    }
   }
 
   var current = null;
@@ -181,6 +218,7 @@
   var playRetries = [];
   function ensurePlaying(){
     if (reduced || !vid || !vid.getAttribute("src") || !vid.paused) return;
+    if (pairOn) { startPair(); return; }
     var p = vid.play();
     if (p && p.catch) p.catch(function(){});
   }
@@ -193,7 +231,7 @@
     playRetries.push(setTimeout(ensurePlaying, 220), setTimeout(ensurePlaying, 800));
   }
   if (vid) {
-    vid.loop = true;
+    vid.loop = !pairOn;
     /* Asked again on every signal that the element might now be able to start. */
     vid.addEventListener("loadeddata", ensurePlaying);
     vid.addEventListener("canplay", ensurePlaying);
