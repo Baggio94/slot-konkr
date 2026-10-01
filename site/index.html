@@ -15,15 +15,9 @@
 </head>
 <body>
 
-<!-- The masthead is the whole navigation. What used to be seventeen sections snapped one
-     per screen is seven panels behind seven tabs: the page no longer moves unless you ask it
-     to. The mark sits at the left and is the way back to the hero, which has no tab of its
-     own; the row of tabs is centred on the page. -->
 <header class="mast">
   <a class="mast-mark" href="#hero">slot.</a>
-  <!-- Narrow, the six labels come to 448px against 229px of room, so the row hid two thirds
-       of itself off the right edge with nothing to say it was there. The button is what opens
-       them on a phone; side by side it is not drawn at all and the row speaks for itself. -->
+
   <button class="menu-btn" type="button" id="menu-btn" aria-expanded="false"
           aria-controls="section-tabs" aria-label="Sections">
     <span class="menu-bars" aria-hidden="true"></span>
@@ -116,10 +110,6 @@
   </div>
 </section>
 
-<!-- The device is pinned and the steps are a list beside it. One screen carries every step,
-     as it always did side by side. The difference is that the step is chosen by pressing it
-     rather than by scrolling onto it, so there is one <video> on the page instead of seven
-     and a phone no longer fetches all four megabytes of clips to show one. -->
 <section class="panel guide" id="guide" role="tabpanel" aria-labelledby="t-guide" hidden>
   <h2 class="sr-only">User guide</h2>
   <div class="guide-stage">
@@ -157,11 +147,15 @@
       </li>
       <li class="step" id="core-picker" data-clip="core-picker.mp4">
         <h3>Pick an Emulator</h3>
-        <p>GBA games run on mGBA or gpSP.<br><kbd>START</kbd> on a cart opens it up. <kbd>Left</kbd> and <kbd>Right</kbd> swap the chip, <kbd>A</kbd> keeps it.</p>
+        <p>Press <kbd>START</kbd> to open a cart.<br><kbd>Left</kbd> and <kbd>Right</kbd> swaps the core "chip".<br><kbd>A</kbd> saves your choice.</p>
       </li>
       <li class="step" id="insert" data-clip="insert.mp4">
         <h3>Insert and Play</h3>
         <p>Tapping <kbd>A</kbd> loads the last save state.<br>Holding <kbd>A</kbd> starts the game fresh.</p>
+      </li>
+      <li class="step" id="eject" data-clip="eject.mp4">
+        <h3>Ejecting a Game</h3>
+        <p>Hold <kbd>MENU</kbd> to eject the cart.<br>On exit, slot creates a save state.</p>
       </li>
       <li class="step" id="save-states" data-clip="states.mp4">
         <h3>Save States</h3>
@@ -169,39 +163,32 @@
       </li>
       <li class="step" id="switcher" data-clip="switcher.mp4">
         <h3>Save State Switcher</h3>
-        <p>Double tap <kbd>MENU</kbd> to flick through your save states.<br><kbd>A</kbd> loads the one on screen. <kbd>B</kbd> goes back to the game.</p>
+        <p>Double tap <kbd>MENU</kbd> to view your save states.<br><kbd>A</kbd> loads the one currently selected.<br><kbd>B</kbd> goes back to the game.</p>
       </li>
       <li class="step" id="fast-forward" data-clip="rewind.mp4">
         <h3>Fast-Forward and Rewind</h3>
         <p>Hold <kbd>R2</kbd> to fast-forward.<br>Double tap <kbd>R2</kbd> to lock FF on.<br>Hold <kbd>L2</kbd> to rewind.</p>
       </li>
-      <!-- Not id="lid": device.svg has a path by that name and app.js inlines it at the top
-           of the body, so it would win getElementById and the anchor would land on the
-           artwork rather than this step. -->
+      <li class="step" id="expand" data-clip="gbc-stretch.mp4">
+        <h3>Commit Aspect Ratio Crimes</h3>
+        <p>Just like the OG, <kbd>L1</kbd> stretches GB and GBC games.<br><kbd>R1</kbd> puts them back to their original size.</p>
+      </li>
+      <li class="step" id="link" data-clip="link.mp4" data-pair="link-join.mp4">
+        <h3>Link Up</h3>
+        <p><kbd>SELECT</kbd> + <kbd>MENU</kbd> opens the link screen.<br>Host on one SP, Join on the other.<br>The link is hosted over an Ad Hoc network.</p>
+      </li>
+      <li class="step" id="settings" data-clip="settings.mp4">
+        <h3>Settings</h3>
+        <p><kbd>MENU</kbd> on the carousel opens the settings.</p>
+      </li>
+      <li class="step" id="brightness" data-clip="brightness.mp4">
+        <h3>Brightness and Blue Light</h3>
+        <p><kbd>SELECT</kbd> + <kbd>Up</kbd> / <kbd>Down</kbd> adjusts brightness.<br><kbd>SELECT</kbd> + <kbd>Left</kbd> / <kbd>Right</kbd> adjusts color temperature.<br>You can change both on the carousel or in-game.</p>
+      </li>
       <li class="step" id="lid-detection" data-clip="idle.mp4" data-lid="shut">
         <h3>Lid Detection</h3>
         <p>Closing the lid writes a save state and turns off the display. Open it again and you're back in the game.</p><br>
         <p>Leave it shut for three minutes and slot powers off. It will resume with that save state on the next boot.</p>
-      </li>
-      <li class="step" id="link" data-clip="link.mp4" data-pair="link-join.mp4">
-        <h3>Link Up</h3>
-        <p><kbd>SELECT</kbd> + <kbd>MENU</kbd> opens the link screen.<br>Host on one SP, Join on the other.</p>
-      </li>
-      <li class="step" id="eject" data-clip="eject.mp4">
-        <h3>Ejecting a Game</h3>
-        <p>Hold <kbd>MENU</kbd> to eject the cart.<br>On exit, slot creates a save state.</p>
-      </li>
-      <li class="step" id="settings" data-clip="settings.mp4">
-        <h3>Settings</h3>
-        <p><kbd>MENU</kbd> on the carousel opens the settings.<br>Fast-forward speed and sound, colour correction, rumble, and the date and time.</p>
-      </li>
-      <li class="step" id="brightness" data-clip="brightness.mp4">
-        <h3>Brightness and Blue Light</h3>
-        <p><kbd>SELECT</kbd> + <kbd>Up</kbd> / <kbd>Down</kbd> sets the brightness.<br><kbd>SELECT</kbd> + <kbd>Left</kbd> / <kbd>Right</kbd> warms the screen. Both work anywhere.</p>
-      </li>
-      <li class="step" id="expand" data-clip="gbc-stretch.mp4">
-        <h3>Commit Aspect Ratio Crimes</h3>
-        <p>Just like the OG, <kbd>L1</kbd> stretches GB and GBC games.<br><kbd>R1</kbd> puts them back at their original size.</p>
       </li>
   </ol>
   <div class="stepper">
@@ -449,6 +436,7 @@
     <p><a href="https://github.com/pvaibhav/BaseOS">BaseOS</a> by <a href="https://github.com/pvaibhav">Prashant Vaibhav</a> serves as the operating system image.</p>
     <p>Type is <a href="https://github.com/googlefonts/opensans">Open Sans</a>, under the SIL Open Font License, and <a href="https://www.nerdfonts.com">Nerd Fonts</a> symbols by Ryan L. McIntyre, under MIT. The panel mask is derived from LCD3x, a public-domain shader by Gigaherz in the libretro shader collection.</p>
     <p>The sounds are a recording of me shoving a cartridge into my childhood GBA.</p>
+    <p>Game Boy is a trademark of Nintendo. slot is not affiliated with Nintendo.</p>
   </div>
 </section>
 
