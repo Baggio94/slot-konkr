@@ -109,6 +109,40 @@
   var gdev  = document.querySelector(".guide-stage .device");
   var steps = Array.prototype.slice.call(document.querySelectorAll(".step"));
 
+  /* A step with data-pair shows a second SP beside the first, playing that clip in step with
+     the main one: the link step, where the two screens are the two players. */
+  var stage = gdev ? gdev.parentNode : null;
+  var peer = null, pvid = null;
+  if (gdev) {
+    peer = gdev.cloneNode(true);
+    peer.classList.add("is-peer");
+    peer.classList.remove("is-waiting", "is-shut", "is-swinging");
+    peer.setAttribute("aria-hidden", "true");
+    pvid = peer.querySelector("video");
+    pvid.classList.remove("guide-screen");
+    pvid.loop = true;
+    stage.appendChild(peer);
+    /* The main clip is the clock: the peer follows it whenever the two drift apart. */
+    if (vid) vid.addEventListener("timeupdate", function(){
+      if (!pvid.getAttribute("src")) return;
+      if (Math.abs(pvid.currentTime - vid.currentTime) > 0.12) pvid.currentTime = vid.currentTime;
+      if (vid.paused !== pvid.paused) { var p = vid.paused ? pvid.pause() : pvid.play(); if (p && p.catch) p.catch(function(){}); }
+    });
+  }
+  function showPeer(clip){
+    if (!stage || !pvid) return;
+    stage.classList.toggle("is-pair", !!clip);
+    if (!clip) { pvid.pause(); pvid.removeAttribute("src"); return; }
+    var still = "media/" + clip.replace(/\.mp4$/, ".webp");
+    pvid.poster = still;
+    if (reduced) { pvid.removeAttribute("src"); return; }
+    if (pvid.getAttribute("src") === "media/" + clip) return;
+    pvid.src = "media/" + clip;
+    pvid.load();
+    /* Both from the top together, so the two screens start on the same moment. */
+    vid.currentTime = 0;
+  }
+
   var current = null;
 
   /* The lid's transition in the stylesheet. Kept in step by hand: a swing that outlasts this
@@ -175,6 +209,7 @@
       gdev.classList.toggle("is-shut", wantShut);
     }
 
+    showPeer(step.getAttribute("data-pair"));
     var clip = step.getAttribute("data-clip");
     if (!clip) { vid.style.opacity = "0"; vid.removeAttribute("src"); return; }
     /* Each clip ships a still of its own first frame beside it. It is the poster, so it

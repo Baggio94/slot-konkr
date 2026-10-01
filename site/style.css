@@ -627,6 +627,12 @@ kbd{
    into its own surface and keeps painting through a hidden ancestor; it showed as a dark
    textured slab sitting where the device was going to land. */
 .guide-stage .device.is-waiting{display:none}
+/* The link step's second SP. Each of the pair at a little over half the single device's width,
+   so the two together take about the room one did. */
+.guide-stage .device.is-peer{display:none}
+.guide-stage.is-pair{gap:clamp(10px,1.6vw,22px)}
+.guide-stage.is-pair .device{width:calc(var(--dw) * .64)}
+.guide-stage.is-pair .device.is-peer{display:block}
 
 /* The lid step shuts the device where it stands. Same hinge and the same angle the
    hero opens from, so the two read as one mechanism. -178 rather than -180 keeps the

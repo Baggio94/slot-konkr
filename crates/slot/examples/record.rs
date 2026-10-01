@@ -186,10 +186,11 @@ fn main() {
         while frontend.core_settling() && loading.elapsed() < Duration::from_secs(5) {
             std::thread::sleep(Duration::from_millis(5));
         }
+        // Off camera, as fast as the frames come, so a long walk to a scene costs no wait.
         due += present;
         match due.checked_duration_since(std::time::Instant::now()) {
-            Some(wait) => std::thread::sleep(wait),
-            None => due = std::time::Instant::now(),
+            Some(wait) if clip.is_some() => std::thread::sleep(wait),
+            _ => due = std::time::Instant::now(),
         }
         *frame += 1;
         let now = (*frame as f64 * 1000.0 / FPS) as Millis;
