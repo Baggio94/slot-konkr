@@ -1,14 +1,17 @@
 # cart:
 # The guide's core steps as one continuous session, each `rec NAME` one step's clip, so each
 # starts where the last ended: browse, core picker, insert, save states, switcher, fast forward
-# and rewind, link screen, eject, settings, brightness and blue light. Apotris throughout: its
-# SELECT does nothing visible, and the chords here are SELECT chords.
+# and rewind, link screen, eject, settings, brightness and blue light. Pokemon Recharged Yellow
+# throughout, walking: the core picker moves it to gpSP, which its wireless link needs. The card
+# starts it on mGBA and needs a gpSP resume (see the clip notes).
 wait 180
 rec carousel
 wait 10
 tap right
 wait 24
-tap right
+tap left
+wait 24
+tap left
 wait 30
 tap r1
 wait 45
@@ -19,10 +22,10 @@ rec core-picker
 wait 10
 tap start
 wait 50
-tap right
-wait 45
 tap left
-wait 45
+wait 40
+tap right
+wait 50
 tap a
 wait 40
 cut
@@ -37,20 +40,14 @@ down select
 tap r1
 up select
 wait 30
-tap left 4
-wait 4
-tap left 4
+hold left 30
 wait 20
 down select
 tap r1
 up select
 wait 30
-tap right 4
-wait 4
-tap right 4
-wait 4
-tap right 4
-wait 30
+hold down 24
+wait 20
 down select
 tap l1
 up select
@@ -71,11 +68,15 @@ wait 30
 cut
 rec rewind
 wait 10
-down r2
-wait 60
-up r2
+down right
 wait 20
-hold l2 120
+down r2
+wait 24
+up r2
+wait 6
+up right
+wait 10
+hold l2 110
 wait 20
 cut
 rec link

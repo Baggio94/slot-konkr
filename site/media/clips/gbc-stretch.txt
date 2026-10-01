@@ -6,8 +6,10 @@ tap r1
 wait 30
 tap r1
 wait 40
+tap right
+wait 40
 hold a 40
-wait 300
+wait 540
 tap start
 wait 110
 rec

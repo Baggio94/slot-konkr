@@ -1,13 +1,13 @@
 #!/bin/sh
-# Re-records the site clips from a copy of an SP's card.
+# Re-records the site clips from a copy of the repo's card.
 #
 #   sh site/media/record.sh CARD [clip...]
 #
-# CARD is a folder holding a card's Games, States, Saves, Labels, BIOS, Wallpapers and System
-# (`adb pull` them off the SP). Each take starts from a fresh copy of it with the cart named by
-# the script's `# cart:` line seated (on `# platform:`, gba by default), or the shelf when it
-# names none. Writes NAME.mp4 and its
-# frame-0 poster NAME.webp beside this script. No clip names records all of them.
+# CARD is a copy of the repo's sdcard/, never sdcard/ itself: takes write to it. Recharged Yellow
+# needs an overworld resume on mGBA and one on gpSP in it. Each take starts from a fresh copy
+# with the cart named by the script's `# cart:` line seated (on `# platform:`, gba by default),
+# or the shelf when it names none. Writes NAME.mp4 and its frame-0 poster NAME.webp beside this
+# script. No clip names records all of them.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 card=$(cd "$1" && pwd)

@@ -8,6 +8,8 @@ pub struct SimPlatform {
     root: PathBuf,
     /// What `set_clock` moved the clock by. The host's own clock is never written.
     offset: i64,
+    /// A clock that does not move, for recordings that must match from end to start.
+    stopped: Option<i64>,
     motor: Motor,
     relinks: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -21,9 +23,16 @@ impl SimPlatform {
         SimPlatform {
             root,
             offset: 0,
+            stopped: None,
             motor: Motor::default(),
             relinks: std::sync::Arc::default(),
         }
+    }
+
+    /// The clock reads `secs` and stays there.
+    pub fn stopped_at(mut self, secs: i64) -> Self {
+        self.stopped = Some(secs);
+        self
     }
 
     pub fn relinks(&self) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
@@ -73,11 +82,14 @@ impl Platform for SimPlatform {
     }
 
     fn now(&self) -> i64 {
-        system_secs() + self.offset
+        self.stopped.unwrap_or_else(|| system_secs() + self.offset)
     }
 
     fn set_clock(&mut self, secs: i64) {
-        self.offset = secs - system_secs();
+        match &mut self.stopped {
+            Some(stopped) => *stopped = secs,
+            None => self.offset = secs - system_secs(),
+        }
     }
 
     fn relink_adb(&mut self) -> bool {

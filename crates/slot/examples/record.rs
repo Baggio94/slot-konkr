@@ -23,6 +23,9 @@ use slot_power::SimPlatform;
 
 const FPS: f64 = 60.0;
 
+/// 2026-09-30 16:00 UTC, noon on the card's UTC-4.
+const CLOCK: i64 = 1_790_784_000;
+
 enum Step {
     Wait(u32),
     Down(Btn),
@@ -162,7 +165,8 @@ fn main() {
 
     let surface = HeadlessSurface::new().expect("headless GL");
     let mut compositor = Compositor::new(&surface).expect("compositor");
-    let mut frontend = Frontend::boot(Box::new(SimPlatform::at(root.into())));
+    // A stopped clock: every clip shows the same time, and a loop ends on the minute it began.
+    let mut frontend = Frontend::boot(Box::new(SimPlatform::at(root.into()).stopped_at(CLOCK)));
     frontend.upload_faces(&mut compositor);
     frontend.drive_emulator();
 
