@@ -1,7 +1,7 @@
 use crate::{Btn, Millis, RawEvent};
 
 /// How long a held SELECT may still arm a chord with a second key. 120 ms was too short to land
-/// the second key. Nothing is withheld during it.
+/// the second key. SELECT is withheld from the game during it.
 pub const SELECT_CHORD_MS: Millis = 600;
 
 /// The least time SELECT stays down on the pad, measured from the press. The core reads the
@@ -69,9 +69,13 @@ pub enum Action {
 enum Select {
     #[default]
     Idle,
-    /// Down and handed to the core. `chorded` means a chord already fired under this hold,
-    /// which keeps the window open for the rest of it.
-    Held { since: Millis, chorded: bool },
+    /// Down. `chorded` means a chord already fired under this hold, which keeps the window open
+    /// for the rest of it. `sent` is when the core was handed it, if it has been.
+    Held {
+        since: Millis,
+        chorded: bool,
+        sent: Option<Millis>,
+    },
     /// Up, with the release held back until `due` so a very short tap is still polled.
     ReleaseDue(Millis),
 }
@@ -151,6 +155,17 @@ impl Gestures {
                 out.push(Action::GbaUp(Btn::Select));
             }
         }
+        // Held past the window with no chord: it is the game's SELECT after all.
+        if let Select::Held {
+            since,
+            chorded: false,
+            sent: None,
+        } = self.select
+        {
+            if now.saturating_sub(since) >= SELECT_CHORD_MS {
+                out.extend(self.hand_over_select(now));
+            }
+        }
         if let Some(d) = self.menu_down_at {
             if !self.menu_eject_fired && now.saturating_sub(d) >= MENU_HOLD_MS {
                 self.menu_eject_fired = true;
@@ -197,7 +212,10 @@ impl Gestures {
                     self.chord_held |= bit;
                     return vec![action];
                 }
-                vec![Action::GbaDown(b)]
+                // A game's own SELECT combination: SELECT goes first.
+                let mut out = self.hand_over_select(now);
+                out.push(Action::GbaDown(b));
+                out
             }
         }
     }
@@ -228,7 +246,7 @@ impl Gestures {
     /// Read from the clock, not tick state, so a batch drained after a stall is judged right.
     fn chording(&self, now: Millis) -> bool {
         match self.select {
-            Select::Held { since, chorded } => {
+            Select::Held { since, chorded, .. } => {
                 chorded || now.saturating_sub(since) < SELECT_CHORD_MS
             }
             _ => false,
@@ -241,9 +259,7 @@ impl Gestures {
         }
     }
 
-    /// The press goes straight to the game and the chord arms off the same hold, so a chord
-    /// also hands the game a SELECT press. Withholding it would delay held SELECT by the whole
-    /// chord window; taking it back would be a release the player never made.
+    /// Withheld until it cannot be a chord, so a chord never presses SELECT in the game.
     ///
     /// A press inside a pending `SELECT_TAP_MS` release (a bounce) sends that owed release
     /// first, or the core would hold SELECT forever.
@@ -253,28 +269,52 @@ impl Gestures {
             out.push(Action::GbaUp(Btn::Select));
         }
         // Never press a held button again, or presses and releases stop balancing.
-        let held = matches!(self.select, Select::Held { .. });
-        self.select = Select::Held {
-            since: now,
-            chorded: false,
-        };
-        if !held {
-            out.push(Action::GbaDown(Btn::Select));
+        if !matches!(self.select, Select::Held { .. }) {
+            self.select = Select::Held {
+                since: now,
+                chorded: false,
+                sent: None,
+            };
         }
         out
     }
 
-    /// The release always reaches the game. Only a tap shorter than `SELECT_TAP_MS` from the
-    /// press is deferred, so the core gets to poll it.
+    /// Hands a withheld, unchorded SELECT to the game. Nothing when it has it, or a chord took it.
+    fn hand_over_select(&mut self, now: Millis) -> Vec<Action> {
+        match &mut self.select {
+            Select::Held {
+                chorded: false,
+                sent: sent @ None,
+                ..
+            } => {
+                *sent = Some(now);
+                vec![Action::GbaDown(Btn::Select)]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// A SELECT the game has gets its release, held to `SELECT_TAP_MS` so the core polls it. One
+    /// still withheld was a tap: it is handed over whole now. One a chord took is the game's
+    /// business no further.
     fn select_up(&mut self, now: Millis) -> Vec<Action> {
-        let Select::Held { since, .. } = std::mem::take(&mut self.select) else {
+        let Select::Held { chorded, sent, .. } = std::mem::take(&mut self.select) else {
             return Vec::new();
         };
-        if now.saturating_sub(since) >= SELECT_TAP_MS {
-            return vec![Action::GbaUp(Btn::Select)];
+        match (sent, chorded) {
+            (Some(at), _) if now.saturating_sub(at) >= SELECT_TAP_MS => {
+                vec![Action::GbaUp(Btn::Select)]
+            }
+            (Some(at), _) => {
+                self.select = Select::ReleaseDue(at + SELECT_TAP_MS);
+                Vec::new()
+            }
+            (None, true) => Vec::new(),
+            (None, false) => {
+                self.select = Select::ReleaseDue(now + SELECT_TAP_MS);
+                vec![Action::GbaDown(Btn::Select)]
+            }
         }
-        self.select = Select::ReleaseDue(since + SELECT_TAP_MS);
-        Vec::new()
     }
 
     /// MENU never reaches the `chord` table, so its chord lives here. The chord check must stay

@@ -2123,10 +2123,10 @@ fn the_power_menus_own_buttons_never_reach_the_game() {
     );
 }
 
-/// A held SELECT reaches the core on the frame it goes down, not after the 600 ms chord window,
-/// and the chord and the release still work. Read at `EmuHandle::input`, the mask the core polls.
+/// A SELECT that becomes a chord never reaches the core, and the chord still works. Read at
+/// `EmuHandle::input`, the mask the core polls.
 #[test]
-fn a_held_select_reaches_the_pad_on_the_frame_it_is_pressed() {
+fn a_chorded_select_never_reaches_the_pad() {
     let d = common::tmp_root_with_carts(&["Emerald", "Zzz"]);
     let mut s = session_playing(d.path());
     // A panel, so the chord's outcome is read past `Platform`, not from the action.
@@ -2136,10 +2136,10 @@ fn a_held_select_reaches_the_pad_on_the_frame_it_is_pressed() {
     assert!(lit > 0 && lit < 9, "the level has to have room to move");
 
     s.feed([RawEvent::Down(Btn::Select)], 1000);
-    assert_ne!(
+    assert_eq!(
         pad(&s) & ButtonMask::SELECT,
         0,
-        "the game is still waiting for a SELECT the player already has their thumb on"
+        "the game got a SELECT that may yet be a chord"
     );
 
     // Inside the window, so the chord still arms off that same hold.
@@ -2165,7 +2165,7 @@ fn a_held_select_reaches_the_pad_on_the_frame_it_is_pressed() {
     assert_eq!(
         pad(&s) & ButtonMask::SELECT,
         0,
-        "the game was left holding a SELECT nobody is holding"
+        "the chord's SELECT reached the game on its release"
     );
 }
 
