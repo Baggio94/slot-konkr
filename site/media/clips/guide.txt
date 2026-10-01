@@ -1,9 +1,8 @@
 # cart:
-# The guide's core steps as one continuous session, each `rec NAME` one step's clip, so each
-# starts where the last ended: browse, core picker, insert, save states, switcher, fast forward
-# and rewind, link screen, eject, settings, brightness and blue light. Pokemon Recharged Yellow
-# throughout, walking: the core picker moves it to gpSP, which its wireless link needs. The card
-# starts it on mGBA and needs a gpSP resume (see the clip notes).
+# The guide's steps as one continuous session, each `rec NAME` one step's clip, so each starts
+# where the last ended: browse, core picker, insert, eject, save states, switcher, fast forward
+# and rewind. Pokemon Recharged Yellow on mGBA, from a resume at the pond's edge facing the
+# water (see the clip notes), where the rod finds a wild battle.
 wait 180
 rec carousel
 wait 10
@@ -22,10 +21,10 @@ rec core-picker
 wait 10
 tap start
 wait 50
-tap left
-wait 40
 tap right
-wait 50
+wait 45
+tap left
+wait 45
 tap a
 wait 40
 cut
@@ -34,19 +33,26 @@ wait 5
 tap a
 wait 140
 cut
+rec eject
+wait 30
+hold menu 66
+wait 90
+cut
+tap a
+wait 300
 rec states
 wait 10
 down select
 tap r1
 up select
 wait 30
-hold left 30
+hold right 30
 wait 20
 down select
 tap r1
 up select
 wait 30
-hold down 24
+hold up 24
 wait 20
 down select
 tap l1
@@ -59,103 +65,51 @@ tap menu 5
 wait 6
 tap menu 5
 wait 50
-tap left
-wait 40
 tap right
-wait 40
-tap b
-wait 30
+wait 50
+tap a
+wait 60
 cut
 rec rewind
 wait 10
-down right
+tap select
+wait 40
+tap right
 wait 20
 down r2
-wait 24
-up r2
-wait 6
-up right
-wait 10
-hold l2 110
-wait 20
-cut
-rec link
-wait 10
-down select
-tap menu
-up select
-wait 70
-tap right
-wait 50
-tap left
-wait 50
-tap b
-wait 40
-cut
-rec eject
-wait 10
-hold menu 66
-wait 90
-cut
-rec settings
-wait 10
-tap menu
 wait 60
-tap down
-wait 30
-tap down
-wait 30
-tap down
-wait 30
-tap down
-wait 30
-tap b
-wait 30
-cut
-rec brightness
+tap a 3
+wait 5
+tap a 3
+wait 5
+tap a 3
+wait 5
+tap a 3
+wait 5
+tap a 3
+wait 5
+tap a 3
+wait 5
+tap a 3
+wait 5
+tap a 3
+wait 5
+tap a 3
+wait 5
+tap a 3
+wait 5
+tap a 3
+wait 5
+tap a 3
+wait 5
+tap a 3
+wait 5
+tap a 3
+wait 5
+up r2
 wait 10
-down select
-tap up
-wait 18
-tap up
-wait 18
-tap down
-wait 18
-tap down
-wait 18
-tap down
-wait 18
-tap down
-wait 18
-tap up
-wait 18
-tap up
-wait 25
-tap right
-wait 12
-tap right
-wait 12
-tap right
-wait 12
-tap right
-wait 12
-tap right
-wait 12
-tap right
-wait 12
+tap b
 wait 20
-tap left
-wait 12
-tap left
-wait 12
-tap left
-wait 12
-tap left
-wait 12
-tap left
-wait 12
-tap left
-wait 12
-up select
+hold l2 100
 wait 30
 cut
