@@ -15,6 +15,18 @@
       var defs = holder.querySelector("svg");
       if (!defs) return;
       document.body.insertBefore(defs, document.body.firstChild);
+      /* A second copy for the link step's other SP, ids suffixed so its gradients can take
+         their own colourway (.peer-defs in the stylesheet). */
+      var peerTxt = txt
+        .replace(/id="([\w-]+)"/g, 'id="$1-peer"')
+        .replace(/url\(#([\w-]+)\)/g, "url(#$1-peer)")
+        .replace(/href="#([\w-]+)"/g, 'href="#$1-peer"');
+      holder.innerHTML = peerTxt;
+      var peerDefs = holder.querySelector("svg");
+      if (peerDefs) {
+        peerDefs.classList.add("peer-defs");
+        document.body.insertBefore(peerDefs, defs.nextSibling);
+      }
       var uses = document.querySelectorAll("use");
       for (var i = 0; i < uses.length; i++) {
         var h = uses[i].getAttribute("href");
@@ -118,6 +130,22 @@
     peer.classList.add("is-peer");
     peer.classList.remove("is-waiting", "is-shut", "is-swinging");
     peer.setAttribute("aria-hidden", "true");
+    /* The other player's SP is one of the other three colourways. */
+    var others = SHELLS.filter(function(x){ return x !== shell; });
+    var their = others[Math.floor(Math.random() * others.length)];
+    var peerVars = { "light":their.light, "base":their.base, "shade":their.shade,
+                     "btn":their.btn, "btn-hi":their.btnHi };
+    for (var pk in peerVars) root.setProperty("--peer-" + pk, peerVars[pk]);
+    peer.style.setProperty("--shell-light", their.light);
+    peer.style.setProperty("--shell-base",  their.base);
+    peer.style.setProperty("--shell-shade", their.shade);
+    peer.style.setProperty("--btn",         their.btn);
+    peer.style.setProperty("--btn-hi",      their.btnHi);
+    peer.style.setProperty("--etch",        their.etch);
+    var peerUses = peer.querySelectorAll("use");
+    for (var pu = 0; pu < peerUses.length; pu++) {
+      peerUses[pu].setAttribute("href", peerUses[pu].getAttribute("href") + "-peer");
+    }
     pvid = peer.querySelector("video");
     pvid.classList.remove("guide-screen");
     pvid.loop = true;

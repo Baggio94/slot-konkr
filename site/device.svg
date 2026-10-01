@@ -139,7 +139,7 @@
 
       <!-- Face buttons, same dish, X up / Y left / A right / B down -->
       <circle cx="612" cy="1110" r="146" class="dish"/><circle cx="612" cy="1110" r="139" class="dishIn"/>
-      <g class="face">
+      <g class="face" fill="url(#btnGrad)">
         <circle cx="612" cy="1026" r="40"/><text x="612" y="1036">X</text>
         <circle cx="533" cy="1106" r="40"/><text x="533" y="1116">Y</text>
         <circle cx="694" cy="1106" r="40"/><text x="694" y="1116">A</text>

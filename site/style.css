@@ -552,6 +552,11 @@ kbd{
 .ss{stop-color:var(--shell-shade)}
 .bh{stop-color:var(--btn-hi)}
 .bb{stop-color:var(--btn)}
+.peer-defs .sl{stop-color:var(--peer-light)}
+.peer-defs .sb{stop-color:var(--peer-base)}
+.peer-defs .ss{stop-color:var(--peer-shade)}
+.peer-defs .bh{stop-color:var(--peer-btn-hi)}
+.peer-defs .bb{stop-color:var(--peer-btn)}
 
 /* Strokes are in viewBox units, where 1 unit is 0.1 mm. */
 .rim{stroke:var(--shell-light);stroke-opacity:.8;stroke-width:3}
@@ -570,7 +575,7 @@ kbd{
 .ledOn{fill:#6fd39b}
 .ledGlow{fill:#6fd39b;opacity:.22}
 .ledOff{fill:var(--etch);opacity:.5}
-.face circle{fill:url(#btnGrad);stroke:var(--etch);stroke-opacity:.32;stroke-width:3}
+.face circle{stroke:var(--etch);stroke-opacity:.32;stroke-width:3}
 .face text,.glyph{fill:var(--etch);font-family:"Open Sans",sans-serif;font-weight:600;text-anchor:middle}
 .face text{font-size:32px}
 .micro text{fill:var(--etch);font:600 20px "Open Sans",sans-serif;letter-spacing:2.5px;text-anchor:middle}
