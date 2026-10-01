@@ -13,6 +13,8 @@ fn git(args: &[&str]) -> Option<String> {
 fn main() {
     // A new commit changes the hash, so the label has to be rebuilt with it.
     println!("cargo:rerun-if-changed=../../.git/HEAD");
+    // HEAD only names the branch; this log moves with every commit and checkout.
+    println!("cargo:rerun-if-changed=../../.git/logs/HEAD");
 
     // Git refuses a repo owned by another uid ("dubious ownership") unless it is marked safe:
     // /src in the device container, /__w/slot/slot in CI. Only on refusal, so a desk build
