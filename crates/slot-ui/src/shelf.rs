@@ -1,20 +1,20 @@
 use slot_gfx::{Draw, TexId, OUT_H, OUT_W};
 use slot_store::Cart;
 
-use crate::cart::{cart_box, gb_shell_of, label_colour, label_text, CART_W};
+use crate::cart::{cart_box, gb_shell_of, label_colour, label_text, CART_H, CART_W};
 use crate::hud::Millis;
 use crate::silhouette::GbShell;
-use crate::slot_chrome::draw_empty_slot;
+use crate::slot_chrome::{draw_empty_slot, MOUTH_H};
 
-/// Distance between cart centres. Puts the outer carts fully on screen with an edge margin
-/// equal to the gap beside the centre cart.
-const PITCH: f32 = 240.0;
 const SIDE_SCALE: f32 = 0.78;
 const SIDE_ALPHA: f32 = 0.55;
-/// Where a full size cartridge of this height rests: centred on the screen, so a GBA row and a
-/// Game Boy row share a centre rather than a floor. Side carts keep their foot on `foot_y`.
+/// Where a full size cartridge of this height rests. Side carts keep their foot on `foot_y`.
 pub fn rest_y(h: f32) -> f32 {
-    (OUT_H as f32 - h) / 2.0
+    if h > CART_H as f32 {
+        (OUT_H as f32 - MOUTH_H - h) / 2.0
+    } else {
+        (OUT_H + CART_H) as f32 / 2.0 - h
+    }
 }
 
 /// The line the cartridges stand on. Pass the full height even for a shrunken neighbour, so
@@ -282,7 +282,7 @@ impl Shelf {
             .map_or(CART_W, |c| cart_box(c.platform).0) as f32;
         let offset = self.scroll_target() - self.scroll;
         let scale = shrink(offset);
-        (OUT_W as f32 / 2.0 + offset * PITCH - w * scale / 2.0, scale)
+        (OUT_W as f32 / 2.0 + offset * w - w * scale / 2.0, scale)
     }
 
     pub fn update(&mut self, dt: f32) {
@@ -328,7 +328,7 @@ impl Shelf {
             // Away from the middle, and further the further out it already was, so the row
             // opens rather than sliding sideways.
             let away = offset.signum() * (1.0 + offset.abs());
-            let x = OUT_W as f32 / 2.0 + offset * PITCH - w / 2.0 + away * PART * recede;
+            let x = OUT_W as f32 / 2.0 + offset * cw as f32 - w / 2.0 + away * PART * recede;
             if x + w <= 0.0 || x >= OUT_W as f32 || alpha <= 0.0 {
                 continue;
             }

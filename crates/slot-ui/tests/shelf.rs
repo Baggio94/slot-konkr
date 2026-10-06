@@ -2,7 +2,7 @@ use slot_power::{Battery, Charge};
 use slot_store::{Cart, Platform};
 use slot_ui::{
     draw_footer, label_colour, rest_y, Draw, GbShell, Printed, Shelf, TexId, CART_W, GB_CART_H,
-    OUT_W,
+    GB_CART_W, OUT_W,
 };
 
 fn shelf_with(n: usize) -> Shelf {
@@ -63,16 +63,6 @@ fn drawn_cart_indices(out: &[Draw]) -> Vec<usize> {
                 .unwrap_or_else(|| panic!("quad {rgb:?} belongs to no cart"))
         })
         .collect()
-}
-
-#[test]
-fn three_carts_fit_across_the_shelf() {
-    let row = CART_W * 3;
-    assert!(
-        row <= OUT_W,
-        "three carts are {row} px across a {OUT_W} px row, so it cannot show one either \
-         side of the selection"
-    );
 }
 
 #[test]
@@ -182,7 +172,7 @@ fn two_carts_repeat_around_the_ring() {
     );
     for (a, b) in [(centres[0], centres[1]), (centres[1], centres[2])] {
         assert!(
-            (b - a - 240.0).abs() < 0.5,
+            (b - a - CART_W as f32).abs() < 0.5,
             "the row is {} apart rather than one pitch",
             b - a
         );
@@ -680,41 +670,26 @@ fn carts_past_the_edges_of_the_row_are_not_drawn() {
     assert!(n <= 5, "{n} carts drawn into a 720 px row");
 }
 
-/// All three carts are wholly on screen.
 #[test]
-fn all_three_carts_fit_on_screen() {
-    let s = shelf_with(5);
-    let mut out = Vec::new();
-    s.draw(0.0, &mut out);
-    let spans = cart_spans(&out);
-    assert_eq!(
-        spans.len(),
-        3,
-        "expected three carts on screen, got {}",
-        spans.len()
-    );
-    for (x0, x1) in &spans {
-        assert!(*x0 >= 0.0, "a cart starts at {x0}, off the left edge");
-        assert!(
-            *x1 <= OUT_W as f32,
-            "a cart ends at {x1}, off the right edge"
-        );
-    }
-}
-
-/// The edge margin matches the gap beside the centre cart.
-#[test]
-fn the_row_is_evenly_spaced() {
+fn the_neighbours_peek_in_from_both_edges() {
     let s = shelf_with(5);
     let mut out = Vec::new();
     s.draw(0.0, &mut out);
     let mut spans = cart_spans(&out);
     spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-    let margin = spans[0].0;
-    let gap = spans[1].0 - spans[0].1;
+    assert_eq!(spans.len(), 3, "expected three carts, got {}", spans.len());
+    let (left, mid, right) = (spans[0], spans[1], spans[2]);
     assert!(
-        (margin - gap).abs() < 4.0,
-        "edge margin {margin:.1} but gap {gap:.1}: the row is lopsided"
+        mid.0 >= 0.0 && mid.1 <= OUT_W as f32,
+        "the selected cart runs off screen at {mid:?}"
+    );
+    assert!(
+        left.0 < 0.0 && left.1 > 20.0,
+        "the left neighbour is not peeking in: {left:?}"
+    );
+    assert!(
+        right.1 > OUT_W as f32 && right.0 < OUT_W as f32 - 20.0,
+        "the right neighbour is not peeking in: {right:?}"
     );
 }
 
@@ -818,8 +793,7 @@ fn gb_shelf_with(n: usize) -> Shelf {
     )
 }
 
-/// A Game Boy Game Pak is drawn at its own size, 1.87x as tall, and centred like a GBA cart, so
-/// its floor and top are 59 px lower than the GBA shelf's.
+/// A Game Boy Game Pak is drawn at its own size.
 #[test]
 fn the_row_draws_a_game_boy_pak_at_its_own_height() {
     let mut s = gb_shelf_with(3);
@@ -830,7 +804,7 @@ fn the_row_draws_a_game_boy_pak_at_its_own_height() {
     let (h, y) = out
         .iter()
         .find_map(|d| match *d {
-            Draw::Tex { y, w, h, .. } if (w - CART_W as f32).abs() < 0.01 => Some((h, y)),
+            Draw::Tex { y, w, h, .. } if (w - GB_CART_W as f32).abs() < 0.01 => Some((h, y)),
             _ => None,
         })
         .expect("no cart is drawn at full size");

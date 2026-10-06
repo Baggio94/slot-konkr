@@ -4,11 +4,11 @@ use slot_gfx::{Draw, TexId, OUT_H, OUT_W};
 use slot_store::Cart;
 use slot_store::Theme;
 
-use crate::cart::{cart_box, label_colour, label_text, CART_W};
+use crate::cart::{cart_box, label_colour, label_text, seated_box, SEATED_W};
 use crate::footer::Printed;
 use crate::icon::icon_box;
 use crate::plate::HINT_H;
-use crate::shelf::{foot_y, rest_y};
+use crate::shelf::foot_y;
 
 /// Big enough to read as a symbol on a 240 px cart rather than a mark on its label.
 pub const ALERT_PX: f32 = 44.0;
@@ -19,7 +19,7 @@ const BAND_Y: f32 = OUT_H as f32 - MOUTH_H;
 
 /// The opening: the one piece of the slot drawn *behind* the cart. Everything else is plastic
 /// and draws in front, which is what cuts the cart off.
-pub const MOUTH_W: f32 = CART_W as f32 + 14.0;
+pub const MOUTH_W: f32 = SEATED_W as f32 + 14.0;
 const SLIT_H: f32 = 9.0;
 const MOUTH_X: f32 = (OUT_W as f32 - MOUTH_W) / 2.0;
 const SLIT_Y: f32 = BAY_Y + 5.0;
@@ -93,15 +93,10 @@ const LIP_Y: f32 = BAND_Y;
 /// it. Must not depend on the cartridge, or a taller pak would sink further under the lip.
 const SEATED_Y: f32 = BAY_Y + 4.0;
 
-/// The cart arrives centred on the mouth, which cannot move.
-fn seated_x(w: f32) -> f32 {
-    (OUT_W as f32 - w) / 2.0
-}
-
 /// The fraction of the travel at which the cart's foot meets the lip. Derived, not tuned: the
 /// catch is a collision, so it must happen exactly there for either cartridge.
-fn catch_at(h: f32) -> f32 {
-    (LIP_Y - foot_y(h)) / (SEATED_Y - rest_y(h))
+fn catch_at(foot: f32, seated_foot: f32) -> f32 {
+    (LIP_Y - foot) / (seated_foot - foot)
 }
 
 /// The seat either side of the catch. Fractions of the animation, so both cartridges catch on
@@ -164,11 +159,16 @@ impl SlotChrome<'_> {
         // keeps `catch_at` exact from any starting scale.
         let scale = self.scale.clamp(0.0, 1.0);
         let (w0, h0) = (cw * scale, ch * scale);
-        let stands = foot_y(ch) - h0;
-        let travel = travel(seat, ch);
-        let x = self.rest + (seated_x(cw) - self.rest) * travel;
-        let y = stands + (SEATED_Y - stands) * travel;
-        let (cw, ch) = (w0 + (cw - w0) * travel, h0 + (ch - h0) * travel);
+        let (sw, sh) = seated_box(self.cart.platform);
+        let (sw, sh) = (sw as f32, sh as f32);
+        let (foot0, seated_foot) = (foot_y(ch), SEATED_Y + sh);
+        let catch = catch_at(foot0, seated_foot);
+        let travel = travel(seat, catch);
+        let k = (travel / catch).min(1.0);
+        let (cw, ch) = (w0 + (sw - w0) * k, h0 + (sh - h0) * k);
+        let centre = self.rest + w0 / 2.0;
+        let x = centre + (CX - centre) * k - cw / 2.0;
+        let y = foot0 + (seated_foot - foot0) * travel - ch;
         // A seated cart fades with the case, as one object.
         let cart_alpha = if seat >= 1.0 { chrome } else { 1.0 };
         out.push(match self.face {
@@ -330,8 +330,7 @@ pub fn draw_empty_slot(out: &mut Vec<Draw>) {
 
 /// The travel in three parts: fall to the lip, rest on it, then push through and settle. A
 /// single ease never meets anything and reads as a chute.
-fn travel(seat: f32, h: f32) -> f32 {
-    let catch = catch_at(h);
+fn travel(seat: f32, catch: f32) -> f32 {
     if seat < CATCH_IN {
         catch * ease(seat / CATCH_IN)
     } else if seat < CATCH_OUT {

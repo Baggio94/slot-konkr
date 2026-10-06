@@ -3,7 +3,7 @@ mod common;
 use common::{app_playing_in, boot, tmp_root_with_carts};
 use slot::app::{App, Phase};
 use slot_input::Action;
-use slot_ui::{Draw, CART_W};
+use slot_ui::{Draw, CART_H, CART_W};
 
 #[test]
 fn double_tap_menu_with_no_states_shakes_instead_of_doing_nothing() {
@@ -145,10 +145,13 @@ fn drawn(a: &App) -> Vec<Draw> {
 }
 
 fn cart_x(a: &App) -> f32 {
+    let shaped = |w: f32, h: f32| w > 200.0 && (w / h - CART_W as f32 / CART_H as f32).abs() < 0.05;
     drawn(a)
         .iter()
-        .find_map(|d| match d {
-            Draw::Rect { x, w, .. } | Draw::Tex { x, w, .. } if *w == CART_W as f32 => Some(*x),
+        .find_map(|d| match *d {
+            Draw::Rect { x, w, h, .. } | Draw::Tex { x, w, h, .. } if shaped(w, h) => {
+                Some(x + w / 2.0)
+            }
             _ => None,
         })
         .expect("no cart in the list")

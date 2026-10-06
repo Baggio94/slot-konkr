@@ -1,11 +1,21 @@
-use slot_store::scan;
+use slot_store::{scan, Platform};
 use slot_ui::{
     cart_face, clean_label, foot_y, gb_label_panel, gb_silhouette, label_colour, label_panel,
-    label_text, rest_y, shell_for, silhouette, Finish, GbShell, CART_H, CART_W, GB_CART_H,
-    GB_CART_W, GB_LABEL_H, GB_LABEL_W, GB_LABEL_X, GB_LABEL_Y, LABEL_H, LABEL_W, LABEL_X, LABEL_Y,
-    MOUTH_H, OUT_H, OUT_W, PLATE_H,
+    label_text, rest_y, seated_box, shell_for, silhouette, Finish, GbShell, CART_H, CART_W,
+    GB_CART_H, GB_CART_W, GB_LABEL_H, GB_LABEL_W, GB_LABEL_X, GB_LABEL_Y, LABEL_H, LABEL_W,
+    LABEL_X, LABEL_Y, MOUTH_H, OUT_H, PLATE_H,
 };
 use tempfile::TempDir;
+
+fn gx(v: u32) -> u32 {
+    let w = seated_box(Platform::Gb).0;
+    (v * GB_CART_W + w / 2) / w
+}
+
+fn gy(v: u32) -> u32 {
+    let h = seated_box(Platform::Gb).1;
+    (v * GB_CART_H + h / 2) / h
+}
 
 fn tmp_root() -> TempDir {
     let d = tempfile::tempdir().expect("tempdir");
@@ -153,11 +163,6 @@ fn the_cart_box_matches_the_traced_outline() {
     assert!(
         (ratio - 1.778).abs() < 0.02,
         "aspect {ratio:.3}, the svg is being stretched"
-    );
-    assert_eq!(
-        CART_W * 3,
-        OUT_W,
-        "three carts no longer span the shelf exactly"
     );
 }
 
@@ -317,19 +322,22 @@ fn a_rom_with_no_header_title_is_labelled_from_its_stem() {
     );
 }
 
-/// A Game Boy Game Pak is the GBA cart's width and 65.5/35 of its height. The rule is asserted,
-/// not the 253 it comes to.
+/// A Game Boy Game Pak is 65.5/35 the height of a GBA cart of its width. The rule is asserted,
+/// not the pixels it comes to.
 #[test]
 fn the_game_boy_pak_is_the_published_ratio_taller_at_the_same_width() {
-    assert_eq!(
-        GB_CART_W, CART_W,
-        "both paks are 57 mm wide, so they share a canvas width"
-    );
-    let want = (CART_H as f64 * 65.5 / 35.0).round() as u32;
+    let (sw, sh) = seated_box(Platform::Gba);
+    let want = (GB_CART_W as f64 * sh as f64 / sw as f64 * 65.5 / 35.0).round() as u32;
     assert_eq!(
         GB_CART_H, want,
-        "the height is no longer CART_H scaled by 65.5/35"
+        "the height is no longer a GBA cart's at this width scaled by 65.5/35"
     );
+    let (gw, gh) = seated_box(Platform::Gb);
+    assert_eq!(
+        gw, sw,
+        "both paks are 57 mm wide, so they seat at one width"
+    );
+    assert_eq!(gh, (sh as f64 * 65.5 / 35.0).round() as u32);
 }
 
 /// A Game Boy Game Pak has no grip ridge, so its sides are parallel at the GBA body's width, in
@@ -356,6 +364,7 @@ fn the_game_boy_outline_has_parallel_sides_and_no_grip_ears() {
         let gba_body = (0..CART_W)
             .filter(|&x| gba[((CART_H / 2) * CART_W + x) as usize] > 128)
             .count();
+        let gba_body = (gba_body * GB_CART_W as usize + CART_W as usize / 2) / CART_W as usize;
         assert!(
             middle.abs_diff(gba_body) <= 2,
             "{shell:?}: the pak's body is {middle}px against the GBA body's {gba_body}px, \
@@ -409,7 +418,6 @@ fn the_colour_only_shell_loses_the_notch_and_rounds_the_corners() {
 #[test]
 fn the_game_boy_label_well_is_near_square_and_sits_under_the_lettering_plate() {
     let (x0, y0, x1, y1) = gb_label_panel(GB_CART_W, GB_CART_H);
-    assert_eq!((x1 - x0, y1 - y0), (176, 150));
     let aspect = (x1 - x0) as f32 / (y1 - y0) as f32;
     assert!(
         (aspect - 1.17).abs() < 0.02,
@@ -442,9 +450,15 @@ fn the_colour_only_shell_has_a_rolled_top_edge_and_the_older_mould_does_not() {
     let down = |f: &slot_ui::CartFace, y: u32| pixel(f, GB_CART_W / 2, y)[1] as i32;
 
     let rolled = face("Rolled");
-    let band = (2..=9).map(|y| down(&rolled, y)).min().expect("a band");
-    let brk = (10..=13).map(|y| down(&rolled, y)).min().expect("a break");
-    let shoulder = down(&rolled, 14);
+    let band = (gy(2)..=gy(9))
+        .map(|y| down(&rolled, y))
+        .min()
+        .expect("a band");
+    let brk = (gy(10)..=gy(13))
+        .map(|y| down(&rolled, y))
+        .min()
+        .expect("a break");
+    let shoulder = down(&rolled, gy(14));
     assert!(
         band > shoulder + 10,
         "the class C top edge is {band} against a {shoulder} shoulder: the roll carries no light"
@@ -457,8 +471,8 @@ fn the_colour_only_shell_has_a_rolled_top_edge_and_the_older_mould_does_not() {
 
     // The same rows on the notched shell, which is flat there.
     let flat = face("Flat");
-    let shoulder = down(&flat, 14);
-    for y in 0..=13 {
+    let shoulder = down(&flat, gy(14));
+    for y in 0..=gy(13) {
         assert_eq!(
             down(&flat, y),
             shoulder,
@@ -476,17 +490,20 @@ fn a_game_boy_cart_face_is_drawn_at_the_game_boy_size() {
     assert!(face.rgba.iter().any(|b| *b != 0), "face is blank");
 }
 
-/// Every cartridge is centred on the carousel, sharing a centre rather than a floor. A centred
-/// pak's foot still clears the lip by 55.5 px.
+/// The GBA cart is centred on the screen; the taller Game Boy pak is centred between the top of
+/// the screen and the slot, which it would otherwise crowd.
 #[test]
 fn every_cartridge_is_centred_on_the_row_and_clears_both_the_plate_and_the_slot() {
     let lip = OUT_H as f32 - MOUTH_H;
-    for (name, h) in [("the GBA cart", CART_H), ("the Game Boy pak", GB_CART_H)] {
+    for (name, h, span) in [
+        ("the GBA cart", CART_H, OUT_H as f32),
+        ("the Game Boy pak", GB_CART_H, lip),
+    ] {
         let (top, foot) = (rest_y(h as f32), foot_y(h as f32));
         assert_eq!(
             top + foot,
-            OUT_H as f32,
-            "{name} stands at {top}..{foot}, which is not centred on a {OUT_H}px screen"
+            span,
+            "{name} stands at {top}..{foot}, which is not centred in {span}px"
         );
         assert!(
             top > PLATE_H,
@@ -497,15 +514,6 @@ fn every_cartridge_is_centred_on_the_row_and_clears_both_the_plate_and_the_slot(
             "{name}'s foot at {foot} has reached the lip at {lip}: it is standing in the slot"
         );
     }
-    // The GBA cart is where it has always been.
-    assert_eq!(
-        (rest_y(CART_H as f32), foot_y(CART_H as f32)),
-        (172.5, 307.5)
-    );
-    assert_eq!(
-        (rest_y(GB_CART_H as f32), foot_y(GB_CART_H as f32)),
-        (113.5, 366.5)
-    );
 }
 
 /// A Game Boy cart has no game code, so the CGB flag picks the plastic: 0x00 grey, 0x80 black,
@@ -592,8 +600,8 @@ fn only_the_notched_shell_has_lines_across_its_shoulder() {
             let p = pixel(&face, x, y);
             p.iter().map(|c| u32::from(*c)).sum::<u32>() / 3
         };
-        (16..32)
-            .flat_map(|x| (21..58).map(move |y| (x, y)))
+        (gx(16)..gx(32))
+            .flat_map(|x| (gy(21)..gy(58)).map(move |y| (x, y)))
             .filter(|(x, y)| lum(*x, *y).abs_diff(lum(*x, y - 1)) > 10)
             .count()
     };
@@ -629,7 +637,7 @@ fn the_clear_shell_lightens_at_its_rim_and_the_plain_one_does_not() {
     let y = GB_CART_H / 2;
     for cart in &carts {
         let face = cart_face(cart);
-        let (rim, body) = (luma(&face, 8, y), luma(&face, 20, y));
+        let (rim, body) = (luma(&face, gx(8), y), luma(&face, gx(20), y));
         match cart.stem.as_str() {
             "Tetris" => assert_eq!(rim, body, "the plain pak has a lit rim"),
             _ => assert!(
@@ -734,7 +742,7 @@ fn a_clear_pak_shows_its_board_and_a_solid_one_does_not() {
     let face = |stem: &str| cart_face(carts.iter().find(|c| c.stem == stem).expect("scanned"));
     let (clear, grey) = (face("Clear"), face("Grey"));
     // Between the side groove and the label, halfway down; and on the first contact.
-    let (board, contact) = ((24, GB_CART_H / 2), (26, GB_CART_H - 8));
+    let (board, contact) = ((gx(24), GB_CART_H / 2), (gx(26), GB_CART_H - gy(8)));
 
     let [r, g, b] = pixel(&clear, board.0, board.1);
     assert!(

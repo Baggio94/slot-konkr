@@ -9,15 +9,14 @@ use crate::silhouette::{
 };
 use crate::text;
 
-/// The traced outline's aspect, so `cart.svg` rasterises unstretched. Three fit a 720 wide row.
-pub const CART_W: u32 = 240;
-pub const CART_H: u32 = 135;
+/// The traced outline's aspect, so `cart.svg` rasterises unstretched.
+pub const CART_W: u32 = 360;
+pub const CART_H: u32 = 203;
 
-/// Both paks are 57 mm wide; the canvas spans 60 mm for the GBA cart's grip ridge.
-pub const GB_CART_W: u32 = CART_W;
+pub const GB_CART_W: u32 = 312;
 
 /// 65.5 mm against the GBA pak's 35 mm, rounded to the nearest pixel.
-pub const GB_CART_H: u32 = (CART_H * 655 + 175) / 350;
+pub const GB_CART_H: u32 = (GB_CART_W * SEATED_H * 655 + SEATED_W * 175) / (SEATED_W * 350);
 
 /// The paper label well: 9% to 91% across and 22.8% to 86.3% down. The band above is the
 /// moulded grip, which is most of what makes the face read as a cartridge.
@@ -60,9 +59,9 @@ const GB_MAX_PX: f32 = (GB_LABEL_H - 2 * PAD) as f32 / MAX_LINES as f32;
 const MIN_PX: f32 = 10.0;
 
 /// How far the translucent edge reaches in; any pixel deeper is the plastic's own colour.
-const RIM: u32 = 4;
+const RIM: u32 = (4 * CART_W + SEATED_W / 2) / SEATED_W;
 /// The same depth of plastic on an object 1.87x as tall.
-const GB_RIM: u32 = 7;
+const GB_RIM: u32 = (7 * GB_CART_W + SEATED_W / 2) / SEATED_W;
 
 pub struct CartFace {
     pub rgba: Vec<u8>,
@@ -170,6 +169,17 @@ fn spec(shape: Shape) -> Spec {
                 traces_from: 0.84,
             },
         },
+    }
+}
+
+pub const SEATED_W: u32 = 240;
+const SEATED_H: u32 = 135;
+const GB_SEATED_H: u32 = (SEATED_H * 655 + 175) / 350;
+
+pub fn seated_box(platform: Platform) -> (u32, u32) {
+    match platform {
+        Platform::Gba => (SEATED_W, SEATED_H),
+        Platform::Gb | Platform::Gbc => (SEATED_W, GB_SEATED_H),
     }
 }
 
@@ -445,8 +455,9 @@ fn recess_label(s: &Spec, face: &mut CartFace, shell: &Shell) {
 
     let (lx, ly, lw, lh) = s.label;
     let (w, h) = (s.w, s.h);
-    let (x0, y0) = (lx - BEVEL, ly - BEVEL);
-    let (x1, y1) = (lx + lw + BEVEL, ly + lh + BEVEL);
+    let bevel = (BEVEL * w + SEATED_W / 2) / SEATED_W;
+    let (x0, y0) = (lx - bevel, ly - bevel);
+    let (x1, y1) = (lx + lw + bevel, ly + lh + bevel);
     let mut put = |x: u32, y: u32, c: [u8; 3]| {
         if x >= w || y >= h {
             return;

@@ -1,12 +1,16 @@
 use slot_store::{Cart, Platform};
 use slot_ui::{
-    cart_box, draw_empty_slot, edge, foot_y, housing, icon_box, opening, recess, Draw, Shelf,
-    SlotChrome, TexId, ALERT_PX, CART_H, CART_W, GB_LABEL_H, GB_LABEL_Y, LABEL_H, LABEL_Y, MOUTH_H,
-    OUT_H, OUT_W,
+    cart_box, draw_empty_slot, edge, foot_y, housing, icon_box, opening, recess, seated_box, Draw,
+    Shelf, SlotChrome, TexId, ALERT_PX, CART_H, CART_W, GB_LABEL_H, GB_LABEL_Y, LABEL_H, LABEL_Y,
+    MOUTH_H, OUT_H, OUT_W,
 };
 
 /// Where a settled shelf stands its selected cart.
 const CENTRED: f32 = (OUT_W - CART_W) as f32 / 2.0;
+
+fn centred(c: &Cart) -> f32 {
+    (OUT_W - cart_box(c.platform).0) as f32 / 2.0
+}
 
 fn cart() -> Cart {
     Cart {
@@ -38,12 +42,14 @@ fn both() -> [(&'static str, Cart); 2] {
     [("the GBA cart", cart()), ("the Game Boy pak", pak())]
 }
 
-/// Where this cartridge's label well starts and how tall it is.
+/// Where this cartridge's label well starts and how tall it is, on the seated cart.
 fn label_band(c: &Cart) -> (f32, f32) {
-    match c.platform {
+    let (y, h) = match c.platform {
         Platform::Gba => (LABEL_Y as f32, LABEL_H as f32),
         Platform::Gb | Platform::Gbc => (GB_LABEL_Y as f32, GB_LABEL_H as f32),
-    }
+    };
+    let k = seated_box(c.platform).1 as f32 / cart_box(c.platform).1 as f32;
+    (y * k, h * k)
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -69,11 +75,11 @@ fn quad(d: &Draw) -> Quad {
     }
 }
 
-/// A quad the width of either cartridge, so a pak is still found.
+/// The one quad that is not the slot, the veil or the cover under the plastic.
 fn is_cart(d: &Draw) -> bool {
-    [Platform::Gba, Platform::Gb]
-        .iter()
-        .any(|p| (quad(d).w - cart_box(*p).0 as f32).abs() < 0.01)
+    let cover = matches!(*d, Draw::Rect { colour, .. } if colour == [0.0, 0.0, 0.0, 1.0]);
+    !(is_mouth(d) || is_lip(d) || is_housing(d) || tinted(d, recess()) || cover)
+        && quad(d).w < OUT_W as f32
 }
 
 fn is_game_layer(d: &Draw) -> bool {
@@ -143,7 +149,7 @@ fn chrome_into(c: &Cart, seat: f32, out: &mut Vec<Draw>) {
     SlotChrome {
         cart: c,
         face: None,
-        rest: CENTRED,
+        rest: centred(c),
         scale: 1.0,
         seat,
         alert: None,
@@ -155,7 +161,7 @@ fn chrome_into(c: &Cart, seat: f32, out: &mut Vec<Draw>) {
 }
 
 /// The cart going in leaves from the quad the row had it in mid-spring (taken from a real row
-/// two frames into a press) and arrives over the mouth at full size.
+/// two frames into a press) and arrives over the mouth at the slot's size.
 #[test]
 fn a_cart_the_row_had_not_finished_moving_slides_across_as_it_goes_in() {
     let c = cart();
@@ -201,23 +207,26 @@ fn a_cart_the_row_had_not_finished_moving_slides_across_as_it_goes_in() {
         start.y + start.h
     );
     let seated = at(1.0);
+    let sw = seated_box(c.platform).0 as f32;
+    let mid = OUT_W as f32 / 2.0;
     assert!(
-        (seated.x - CENTRED).abs() < 0.01 && (seated.w - CART_W as f32).abs() < 0.01,
-        "the cart seats at {seated:?} rather than full size in the mouth"
+        (seated.x + seated.w / 2.0 - mid).abs() < 0.01 && (seated.w - sw).abs() < 0.01,
+        "the cart seats at {seated:?} rather than the slot's size in the mouth"
     );
     // Measured as distance left to go, since the travel direction depends on the start side.
+    let off = |q: Quad| (q.x + q.w / 2.0 - mid).abs();
     let mut last = start;
     for step in 1..=20 {
         let q = at(step as f32 / 20.0);
         assert!(
-            (q.x - CENTRED).abs() <= (last.x - CENTRED).abs() + 0.01,
+            off(q) <= off(last) + 0.01,
             "the cart went back to {} from {}",
             q.x,
             last.x
         );
         assert!(
-            q.w >= last.w - 0.01,
-            "the cart shrank to {} from {}",
+            (q.w - sw).abs() <= (last.w - sw).abs() + 0.01,
+            "the cart moved away from the slot's size, to {} from {}",
             q.w,
             last.w
         );
@@ -265,9 +274,13 @@ fn draw_ejecting(c: &Cart, t: f32, out: &mut Vec<Draw>) {
 }
 
 /// Just short of seated. An arrived cart is not in the list at all.
-fn cart_y(c: &Cart, t: f32) -> f32 {
+fn cart_quad(c: &Cart, t: f32) -> Quad {
     let out = chrome(c, t.min(0.999));
-    quad(&out[cart_at(&out)]).y
+    quad(&out[cart_at(&out)])
+}
+
+fn cart_y(c: &Cart, t: f32) -> f32 {
+    cart_quad(c, t).y
 }
 
 fn visible_cart_height(c: &Cart, t: f32) -> f32 {
@@ -349,21 +362,35 @@ fn an_unseated_cart_stands_where_the_shelf_left_it() {
     }
 }
 
-/// The cartridge keeps its own `cart_box` on every frame of the way in.
+/// The cartridge leaves the shelf at its own `cart_box`, shrinks without growing back, and is
+/// the slot's size by the time its foot reaches the lip.
 #[test]
-fn a_cart_keeps_its_own_size_the_whole_way_in() {
+fn a_cart_shrinks_to_the_slot_by_the_lip() {
+    let lip = OUT_H as f32 - MOUTH_H;
     for (name, c) in both() {
         let (w, h) = cart_box(c.platform);
-        for step in 0..=20 {
-            let out = chrome(&c, step as f32 / 20.0);
-            let q = quad(&out[cart_at(&out)]);
-            assert!(
-                (q.w - w as f32).abs() < 0.01 && (q.h - h as f32).abs() < 0.01,
-                "{name} is drawn {}x{} at seat {} rather than at its own {w}x{h}",
-                q.w,
-                q.h,
-                step as f32 / 20.0
-            );
+        let (sw, sh) = seated_box(c.platform);
+        let start = cart_quad(&c, 0.0);
+        assert!(
+            (start.w - w as f32).abs() < 0.01 && (start.h - h as f32).abs() < 0.01,
+            "{name} leaves the shelf at {}x{} rather than its own {w}x{h}",
+            start.w,
+            start.h
+        );
+        let mut last = start;
+        for step in 1..=400 {
+            let t = step as f32 / 400.0;
+            let q = cart_quad(&c, t);
+            assert!(q.w <= last.w + 0.01, "{name} grew to {} at seat {t}", q.w);
+            if q.y + q.h >= lip {
+                assert!(
+                    (q.w - sw as f32).abs() < 0.01 && (q.h - sh as f32).abs() < 0.01,
+                    "{name} is {}x{} at the lip, not the slot's {sw}x{sh}",
+                    q.w,
+                    q.h
+                );
+            }
+            last = q;
         }
     }
 }
@@ -399,8 +426,10 @@ fn every_cartridge_lands_its_foot_on_the_lip_at_the_same_moment() {
     let landings: Vec<(&str, f32, f32)> = both()
         .iter()
         .map(|(name, c)| {
-            let (_, h) = cart_box(c.platform);
-            let foot = |t: f32| cart_y(c, t) + h as f32;
+            let foot = |t: f32| {
+                let q = cart_quad(c, t);
+                q.y + q.h
+            };
             // Fine enough (1/400ths) that the answer is the animation's, not the sampling's.
             let at = (0..=400)
                 .map(|s| s as f32 / 400.0)
@@ -610,19 +639,14 @@ fn the_seated_cart_never_shows_through_the_fading_housing() {
     }
 }
 
-/// The refusal symbol fits on a 240x135 face. Only the compositor can mint a `TexId`, so the
-/// size is what can be tested.
+/// The refusal symbol fits on the seated cart's face. Only the compositor can mint a `TexId`,
+/// so the size is what can be tested.
 #[test]
 fn the_alert_fits_on_the_cart_face() {
     let (w, h) = icon_box(ALERT_PX);
-    assert!(
-        w < CART_W && h < CART_H,
-        "a {w}x{h} alert on a {CART_W}x{CART_H} cart"
-    );
-    assert!(
-        h * 4 > CART_H,
-        "a {h} px alert on a {CART_H} px cart is a speck"
-    );
+    let (cw, ch) = seated_box(Platform::Gba);
+    assert!(w < cw && h < ch, "a {w}x{h} alert on a {cw}x{ch} cart");
+    assert!(h * 4 > ch, "a {h} px alert on a {ch} px cart is a speck");
 }
 
 /// Measured against the drop through the lip, not the catch, which is the slowest stretch.

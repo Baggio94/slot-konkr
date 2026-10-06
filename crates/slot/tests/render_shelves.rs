@@ -18,8 +18,8 @@ use slot_power::SimPlatform;
 // `slot_power::Platform` is the device; this one is the console a cart is for.
 use slot_store::{Cart, Platform as CartPlatform};
 use slot_ui::{
-    cart_box, cart_face, clean_label, edge, housing, label_colour, opening, recess, rest_y, Draw,
-    SlotChrome, CART_W, GB_CART_H, GB_LABEL_H, GB_LABEL_Y, LABEL_H, LABEL_Y, PLATE_H,
+    cart_box, cart_face, clean_label, edge, housing, label_colour, label_text, opening, recess,
+    rest_y, Draw, SlotChrome, CART_W, GB_CART_H, GB_LABEL_H, GB_LABEL_Y, LABEL_H, LABEL_Y, PLATE_H,
 };
 
 /// One batch of events per poll, and nothing once they run out.
@@ -520,7 +520,7 @@ fn a_scrolled_row_slides_by_a_pitch_rather_than_swapping_its_carts() {
         return;
     };
     for (carts, stems, least) in [
-        (2, &["Emerald", "Fusion", ""][..2], 3),
+        (2, &["Emerald", "Fusion", ""][..2], 2),
         (3, &["Emerald", "Fusion", "Sapphire"][..], 2),
     ] {
         let d = tmp_root_with_carts(stems);
@@ -552,10 +552,10 @@ fn a_scrolled_row_slides_by_a_pitch_rather_than_swapping_its_carts() {
             let row: Vec<f32> = runs
                 .iter()
                 .filter(|(a, b)| *a > 0 && *b < OUT_W as usize - 1)
-                .map(|(a, b)| ((a + b) as f32 / 2.0 - OUT_W as f32 / 2.0) / 240.0)
+                .map(|(a, b)| ((a + b) as f32 / 2.0 - OUT_W as f32 / 2.0) / CART_W as f32)
                 .collect();
             assert!(
-                row.len() >= 2,
+                !row.is_empty(),
                 "{carts} carts, frame {f}: only {} carts are wholly on screen, so there is \
                  nothing to compare the row against itself with",
                 row.len()
@@ -584,7 +584,7 @@ fn a_scrolled_row_slides_by_a_pitch_rather_than_swapping_its_carts() {
                 "{carts} carts, frame {f}: the row turned round, from {stood} to {now}"
             );
             // 23.5 px is the fastest a critically damped spring at this stiffness carries a
-            // one-pitch move in a 60th of a second; a cart jumping a slot is 240.
+            // one-pitch move in a 60th of a second.
             assert!(
                 stood - now < 0.12,
                 "{carts} carts, frame {f}: the row jumped {} of a pitch, which is a cart \
@@ -799,7 +799,6 @@ fn both_cartridges_go_into_the_slot_at_their_own_size() {
                 panic!("{name} at {beat}: no cartridge on the screen at all");
             };
             if seat == 0.0 {
-                // The carousel shares a centre across platforms, not a floor.
                 assert!(
                     (top as f32 - rest_y(h as f32)).abs() < 1.5,
                     "{name} stands with its top edge at {top}, not at {} where the carousel \
@@ -807,11 +806,10 @@ fn both_cartridges_go_into_the_slot_at_their_own_size() {
                     rest_y(h as f32)
                 );
                 let middle = (top + bottom) as f32 / 2.0;
+                let want = rest_y(h as f32) + h as f32 / 2.0;
                 assert!(
-                    (middle - OUT_H as f32 / 2.0).abs() < 1.5,
-                    "{name} stands {top}..{bottom}, centred on {middle} rather than on the \
-                     screen's own {}",
-                    OUT_H as f32 / 2.0
+                    (middle - want).abs() < 1.5,
+                    "{name} stands {top}..{bottom}, centred on {middle} rather than on {want}"
                 );
                 // The paper is the full label-well height at its own inset: a squashed cart
                 // or the wrong platform's numbers would show here.
@@ -866,14 +864,16 @@ fn both_cartridges_go_into_the_slot_at_their_own_size() {
 #[test]
 fn no_frame_of_the_travel_jumps_further_than_the_cartridge_is_tall() {
     for (name, cart) in cartridges() {
-        let (_, h) = cart_box(cart.platform);
+        let (w, h) = cart_box(cart.platform);
+        let ink = label_colour(&label_text(&cart));
+        let ink = ink.map(|v| v as f32 / 255.0);
         let ys: Vec<f32> = (0..=27)
             .map(|f| {
                 let mut out = Vec::new();
                 SlotChrome {
                     cart: &cart,
                     face: None,
-                    rest: (OUT_W - CART_W) as f32 / 2.0,
+                    rest: (OUT_W - w) as f32 / 2.0,
                     scale: 1.0,
                     seat: (f as f32 / 27.0).min(1.0),
                     alert: None,
@@ -884,7 +884,11 @@ fn no_frame_of_the_travel_jumps_further_than_the_cartridge_is_tall() {
                 .draw(&mut out);
                 out.iter()
                     .find_map(|d| match d {
-                        Draw::Rect { y, h: qh, .. } if (*qh - h as f32).abs() < 0.01 => Some(*y),
+                        Draw::Rect { y, colour, .. }
+                            if (0..3).all(|k| (colour[k] - ink[k]).abs() < 0.002) =>
+                        {
+                            Some(*y)
+                        }
                         _ => None,
                     })
                     .expect("no cartridge in the list")
