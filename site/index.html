@@ -37,7 +37,17 @@
 
 <section class="panel hero" id="hero" aria-label="slot.">
   <div class="hero-copy">
-    <h1 class="wordmark">slot</h1>
+    <div class="wordmark-row">
+      <h1 class="wordmark">slot</h1>
+      <button class="say" type="button" aria-label="Hear how slot is pronounced" title="Pronunciation">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path class="say-body" d="M3 9.5h4.2L12.5 5v14l-5.3-4.5H3z"/>
+          <path class="say-wave say-wave-1" d="M15.5 9.2a4 4 0 0 1 0 5.6"/>
+          <path class="say-wave say-wave-2" d="M18.3 6.4a8 8 0 0 1 0 11.2"/>
+        </svg>
+      </button>
+      <audio id="say-slot" src="media/slot.mp3" preload="none"></audio>
+    </div>
     <p class="tagline">A bespoke, Game Boy-centric frontend for the Anbernic RG SP.</p>
     <div class="actions">
       <a class="btn" href="https://github.com/BrandonKowalski/slot/releases/latest">Download</a>

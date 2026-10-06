@@ -497,4 +497,18 @@
   /* A hash naming nothing leaves the markup's own selection alone, which is the hero. */
   reveal(location.hash.slice(1));
 
+  var say = document.querySelector(".say");
+  var voice = document.getElementById("say-slot");
+  if (say && voice) {
+    say.addEventListener("click", function(){
+      voice.currentTime = 0;
+      var playing = voice.play();
+      if (playing && playing.catch) playing.catch(function(){});
+    });
+    voice.addEventListener("play", function(){ say.classList.add("is-playing"); });
+    ["pause", "ended"].forEach(function(e){
+      voice.addEventListener(e, function(){ say.classList.remove("is-playing"); });
+    });
+  }
+
 })();
