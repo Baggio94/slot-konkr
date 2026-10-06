@@ -796,3 +796,45 @@ fn every_mould_is_lettered_with_its_platform() {
         );
     }
 }
+
+fn clear_gba(d: &TempDir) -> slot_ui::CartFace {
+    let mut rom = vec![0u8; 0x100];
+    rom[0xac..0xb0].copy_from_slice(b"U3IE");
+    std::fs::write(d.path().join("Games/GBA/Boktai.gba"), rom).expect("write rom");
+    let carts = scan(d.path()).unwrap();
+    let cart = carts.iter().find(|c| c.stem == "Boktai").expect("scanned");
+    assert_eq!(shell_for(cart).finish, Finish::Translucent);
+    cart_face(cart)
+}
+
+fn bevel() -> u32 {
+    (3 * CART_W + seated_box(Platform::Gba).0 / 2) / seated_box(Platform::Gba).0
+}
+
+#[test]
+fn a_clear_gba_cart_keeps_its_board_behind_the_label() {
+    let d = tmp_root();
+    let face = clear_gba(&d);
+    let green = |[r, g, b]: [u8; 3]| g as i32 - (r as i32 + b as i32) / 2;
+    let y = LABEL_Y + LABEL_H / 2;
+    let beside = pixel(&face, LABEL_X - bevel() - 2, y);
+    let above = pixel(&face, LABEL_X - bevel() - 2, CART_H / 20);
+    assert!(
+        green(beside) - green(above) < 8,
+        "board shows beside the label: {beside:?} against plastic {above:?}"
+    );
+}
+
+#[test]
+fn a_clear_cart_lights_its_label_recess_no_brighter_than_its_plastic() {
+    let d = tmp_root();
+    let face = clear_gba(&d);
+    let luma = |[r, g, b]: [u8; 3]| (r as u32 * 54 + g as u32 * 183 + b as u32 * 19) / 256;
+    let y = LABEL_Y + LABEL_H / 2;
+    let lit = pixel(&face, LABEL_X + LABEL_W + 1, y);
+    let plastic = pixel(&face, LABEL_X + LABEL_W + bevel() + 2, y);
+    assert!(
+        luma(lit) <= luma(plastic) * 13 / 10 + 4,
+        "the recess edge {lit:?} glares against the plastic {plastic:?}"
+    );
+}

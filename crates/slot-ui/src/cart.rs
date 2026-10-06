@@ -141,9 +141,9 @@ fn spec(shape: Shape) -> Spec {
             // Narrower than the grip ears, just under the top wall, and with tall contacts: about
             // the bottom sixth of the board, as a photographed AGB board has them.
             board: Board {
-                x: (0.09, 0.91),
+                x: (0.135, 0.875),
                 top: 0.1,
-                pins: (0.13, 0.87),
+                pins: (0.17, 0.84),
                 contacts_from: 0.85,
                 traces_from: 0.76,
             },
@@ -456,11 +456,20 @@ fn recess_label(s: &Spec, face: &mut CartFace, shell: &Shell) {
     let bevel = (BEVEL * w + SEATED_W / 2) / SEATED_W;
     let (x0, y0) = (lx - bevel, ly - bevel);
     let (x1, y1) = (lx + lw + bevel, ly + lh + bevel);
-    let mut put = |x: u32, y: u32, c: [u8; 3]| {
+    let clear = shell.finish != Finish::Solid;
+    let mut put = |x: u32, y: u32, upper: bool| {
         if x >= w || y >= h {
             return;
         }
         let d = ((y * w + x) * 4) as usize;
+        let c = if clear {
+            let under = [face.rgba[d], face.rgba[d + 1], face.rgba[d + 2]];
+            shade(under, if upper { 0.7 } else { 1.18 })
+        } else if upper {
+            dark
+        } else {
+            lit
+        };
         face.rgba[d] = c[0];
         face.rgba[d + 1] = c[1];
         face.rgba[d + 2] = c[2];
@@ -477,7 +486,7 @@ fn recess_label(s: &Spec, face: &mut CartFace, shell: &Shell) {
             let from_right = x1.saturating_sub(x + 1);
             let upper = from_top.min(from_left);
             let lower = from_bottom.min(from_right);
-            put(x, y, if upper <= lower { dark } else { lit });
+            put(x, y, upper <= lower);
         }
     }
 }
