@@ -170,7 +170,7 @@ fn main() {
     let futura = face(FUTURA, FUTURA_MEDIUM);
     let futura_bold = face(FUTURA, FUTURA_BOLD);
     let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
-    let (gb_w, gb_h) = (slot_ui::GB_CART_W, slot_ui::GB_CART_H);
+    let (gb_w, gb_h) = slot_ui::seated_box(slot_store::Platform::Gb);
 
     let game_boy = |px: f32| Run {
         font: &gill,
@@ -237,7 +237,8 @@ fn main() {
 
     // The GBA cart's grip, between the ridge and the label: GAME BOY ADVANCE, the ADVANCE wide
     // and spaced the way the logo sets it.
-    let mut gba = Canvas::new(slot_ui::CART_W, slot_ui::CART_H);
+    let (gba_w, gba_h) = slot_ui::seated_box(slot_store::Platform::Gba);
+    let mut gba = Canvas::new(gba_w, gba_h);
     gba.line(
         &[
             Run {

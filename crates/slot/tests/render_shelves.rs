@@ -179,8 +179,8 @@ fn alone_label() -> (usize, usize) {
 
 /// The two side slots of the carousel, at the same screen row so both read the same part of
 /// a side cart. A shelf of one leaves both bare.
-const SIDE_LEFT: (usize, usize) = (120, 250);
-const SIDE_RIGHT: (usize, usize) = (600, 250);
+const SIDE_LEFT: (usize, usize) = (90, 250);
+const SIDE_RIGHT: (usize, usize) = (630, 250);
 /// The middle slot, on the selection itself.
 const MIDDLE: (usize, usize) = (360, 250);
 /// The ground the carts stand on, which an empty place on the row leaves behind.

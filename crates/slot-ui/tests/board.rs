@@ -141,9 +141,9 @@ fn the_open_cart_starts_as_the_shelf_cart_and_lands_where_the_mockup_has_it() {
         shelf_cart(),
         Placed {
             x: 180.0,
-            y: 138.5,
+            y: 134.0,
             w: 360.0,
-            h: 203.0
+            h: 212.0
         }
     );
     assert_eq!(board_at(0.0), shelf_cart());

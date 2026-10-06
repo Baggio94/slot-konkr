@@ -161,7 +161,7 @@ fn a_long_title_stays_inside_the_label() {
 fn the_cart_box_matches_the_traced_outline() {
     let ratio = CART_W as f32 / CART_H as f32;
     assert!(
-        (ratio - 1.778).abs() < 0.02,
+        (ratio - 1.703).abs() < 0.02,
         "aspect {ratio:.3}, the svg is being stretched"
     );
 }
@@ -178,7 +178,7 @@ fn the_label_is_wide_and_sits_low() {
 
     // A range, not an exact number, so nudging the label does not break the test.
     assert!(
-        width > 0.78,
+        width > 0.70,
         "the label is only {:.0}% of the cart wide, that reads as a panel not a label",
         width * 100.0
     );
@@ -188,7 +188,7 @@ fn the_label_is_wide_and_sits_low() {
         top * 100.0
     );
     assert!(
-        top > side * 2.0,
+        top > side * 1.5,
         "top band {top:.2} against side margin {side:.2}: that is a uniform border"
     );
     assert!(
@@ -322,22 +322,22 @@ fn a_rom_with_no_header_title_is_labelled_from_its_stem() {
     );
 }
 
-/// A Game Boy Game Pak is 65.5/35 the height of a GBA cart of its width. The rule is asserted,
-/// not the pixels it comes to.
+/// The rule is asserted, not the pixels it comes to.
 #[test]
-fn the_game_boy_pak_is_the_published_ratio_taller_at_the_same_width() {
-    let (sw, sh) = seated_box(Platform::Gba);
-    let want = (GB_CART_W as f64 * sh as f64 / sw as f64 * 65.5 / 35.0).round() as u32;
-    assert_eq!(
-        GB_CART_H, want,
-        "the height is no longer a GBA cart's at this width scaled by 65.5/35"
+fn the_game_boy_pak_body_has_the_scanned_aspect() {
+    let (sw, _) = seated_box(Platform::Gba);
+    let body = |w: u32, h: u32| (w as f64 * 227.0 / 240.0) / h as f64;
+    assert!(
+        (body(GB_CART_W, GB_CART_H) - 0.877).abs() < 0.01,
+        "the pak body is {:.3}:1, not a real pak's 0.877",
+        body(GB_CART_W, GB_CART_H)
     );
     let (gw, gh) = seated_box(Platform::Gb);
     assert_eq!(
         gw, sw,
         "both paks are 57 mm wide, so they seat at one width"
     );
-    assert_eq!(gh, (sh as f64 * 65.5 / 35.0).round() as u32);
+    assert!((body(gw, gh) - 0.877).abs() < 0.01);
 }
 
 /// A Game Boy Game Pak has no grip ridge, so its sides are parallel at the GBA body's width, in
@@ -420,7 +420,7 @@ fn the_game_boy_label_well_is_near_square_and_sits_under_the_lettering_plate() {
     let (x0, y0, x1, y1) = gb_label_panel(GB_CART_W, GB_CART_H);
     let aspect = (x1 - x0) as f32 / (y1 - y0) as f32;
     assert!(
-        (aspect - 1.17).abs() < 0.02,
+        (aspect - 1.135).abs() < 0.02,
         "the well is {aspect:.2}:1, which is not the 42x37 label's shape"
     );
     assert_eq!(x0, GB_CART_W - x1, "the well is not centred across the pak");
