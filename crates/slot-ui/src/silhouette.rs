@@ -148,9 +148,11 @@ pub(crate) fn gb_detail_mask(shell: GbShell) -> &'static Detail {
         emboss(&mut detail, lettering, GB_CART_W, GB_CART_H);
         if shell == GbShell::Rounded {
             // The groove under GAME BOY COLOR: a cut, so shadow above and light below.
-            for x in 72..168 {
-                detail.shadow[(52 * GB_CART_W + x) as usize] = 200;
-                detail.highlight[(53 * GB_CART_W + x) as usize] = 160;
+            let at = |v: u32, of: u32, to: u32| (v * to + of / 2) / of;
+            let y = at(52, 253, GB_CART_H);
+            for x in at(72, 240, GB_CART_W)..at(168, 240, GB_CART_W) {
+                detail.shadow[(y * GB_CART_W + x) as usize] = 200;
+                detail.highlight[((y + 1) * GB_CART_W + x) as usize] = 160;
             }
         }
         detail
@@ -186,7 +188,7 @@ fn emboss(detail: &mut Detail, png: &[u8], w: u32, h: u32) {
     }
 }
 
-/// One grey byte per pixel, or `None` for a mask that is not the face's size.
+/// One grey byte per pixel.
 fn decode_mask(png: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
     let mut reader = png::Decoder::new(std::io::Cursor::new(png))
         .read_info()
@@ -195,7 +197,27 @@ fn decode_mask(png: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
     let info = reader.next_frame(&mut buf).ok()?;
     let grey =
         info.color_type == png::ColorType::Grayscale && info.bit_depth == png::BitDepth::Eight;
-    (grey && (info.width, info.height) == (w, h)).then(|| buf[..(w * h) as usize].to_vec())
+    if !grey {
+        return None;
+    }
+    let (sw, sh) = (info.width, info.height);
+    if (sw, sh) == (w, h) {
+        return Some(buf[..(w * h) as usize].to_vec());
+    }
+    let src = |x: u32, y: u32| buf[(y.min(sh - 1) * sw + x.min(sw - 1)) as usize] as f32;
+    let mut out = Vec::with_capacity((w * h) as usize);
+    for y in 0..h {
+        let fy = ((y as f32 + 0.5) * sh as f32 / h as f32 - 0.5).max(0.0);
+        let (y0, ty) = (fy as u32, fy.fract());
+        for x in 0..w {
+            let fx = ((x as f32 + 0.5) * sw as f32 / w as f32 - 0.5).max(0.0);
+            let (x0, tx) = (fx as u32, fx.fract());
+            let top = src(x0, y0) * (1.0 - tx) + src(x0 + 1, y0) * tx;
+            let bottom = src(x0, y0 + 1) * (1.0 - tx) + src(x0 + 1, y0 + 1) * tx;
+            out.push((top * (1.0 - ty) + bottom * ty).round() as u8);
+        }
+    }
+    Some(out)
 }
 
 fn rasterise(w: u32, h: u32) -> Option<Vec<u8>> {

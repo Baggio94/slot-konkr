@@ -276,11 +276,14 @@ pub fn lid_from(shelf: Placed, progress: f32) -> (Placed, f32) {
     (lerp(slid, LID_REST, lift), LID_TURN * lift)
 }
 
+const UNITS_W: f32 = 240.0;
+const UNITS_H: f32 = 135.0;
+
 /// A board unit on the panel, wherever the open cart currently is.
 pub fn on_board(board: Placed, u: f32, v: f32) -> (f32, f32) {
     (
-        board.x + u * board.w / CART_W as f32,
-        board.y + v * board.h / CART_H as f32,
+        board.x + u * board.w / UNITS_W,
+        board.y + v * board.h / UNITS_H,
     )
 }
 
