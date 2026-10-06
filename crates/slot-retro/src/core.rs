@@ -7,13 +7,13 @@ use crate::rumble::Rumble;
 pub const GBA_W: u32 = 240;
 pub const GBA_H: u32 = 160;
 
-/// libretro `RETRO_DEVICE_ID_JOYPAD` bit order. Y and X have no GBA equivalent, so bits 1
-/// and 9 are never set.
+/// libretro `RETRO_DEVICE_ID_JOYPAD` bit order.
 #[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
 pub struct ButtonMask(pub u16);
 
 impl ButtonMask {
     pub const B: u16 = 1 << 0;
+    pub const Y: u16 = 1 << 1;
     pub const SELECT: u16 = 1 << 2;
     pub const START: u16 = 1 << 3;
     pub const UP: u16 = 1 << 4;
@@ -21,8 +21,22 @@ impl ButtonMask {
     pub const LEFT: u16 = 1 << 6;
     pub const RIGHT: u16 = 1 << 7;
     pub const A: u16 = 1 << 8;
+    pub const X: u16 = 1 << 9;
     pub const L: u16 = 1 << 10;
     pub const R: u16 = 1 << 11;
+
+    pub fn turbo(self, frame: u32) -> ButtonMask {
+        let mut mask = self.0 & !(Self::X | Self::Y);
+        if frame / 3 % 2 == 0 {
+            if self.0 & Self::X != 0 {
+                mask |= Self::A;
+            }
+            if self.0 & Self::Y != 0 {
+                mask |= Self::B;
+            }
+        }
+        ButtonMask(mask)
+    }
 }
 
 #[derive(Copy, Clone, Debug)]

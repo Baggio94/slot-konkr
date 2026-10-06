@@ -619,6 +619,7 @@ impl Worker {
         let mut scale = 0.0f64;
         let mut rate = TickRate::new(Instant::now(), 0);
         let mut stalled = false;
+        let mut turbo_frame = 0u32;
         // `None` until a session begins. Owned by this loop, which alone drains and feeds it.
         let mut transport: Option<Box<dyn LinkChannel>> = None;
         // `Some` only on the emulated link route; netpacket sessions leave it `None`.
@@ -753,6 +754,8 @@ impl Worker {
                 loop {
                     ran += 1;
                     let last = ran >= ceiling || cost.last(began.elapsed(), budget);
+                    let input = input.turbo(turbo_frame);
+                    turbo_frame = turbo_frame.wrapping_add(1);
                     core.set_frame_skip(!last);
                     let frame_began = Instant::now();
                     match cable.as_mut() {

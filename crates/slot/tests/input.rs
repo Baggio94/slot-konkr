@@ -114,3 +114,16 @@ fn a_window_that_loses_focus_lets_go_of_the_keys_held_in_it() {
     h.on_window_event(&WindowEvent::Focused(true));
     assert!(h.poll(0).is_empty());
 }
+
+#[test]
+fn x_and_y_reach_the_pad_as_their_own_bits() {
+    use slot::input::Pad;
+    use slot_input::Action;
+    use slot_retro::ButtonMask;
+    let mut pad = Pad::default();
+    pad.apply(Action::GbaDown(Btn::X));
+    pad.apply(Action::GbaDown(Btn::Y));
+    assert_eq!(pad.mask().0, ButtonMask::X | ButtonMask::Y);
+    pad.apply(Action::GbaUp(Btn::X));
+    assert_eq!(pad.mask().0, ButtonMask::Y);
+}
