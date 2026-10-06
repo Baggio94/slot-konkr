@@ -222,7 +222,7 @@ fn at(percent: u8, charge: Charge) -> Battery {
 }
 
 /// A GBA save and a Game Boy save of the same stem are separate files: a 128 KB GBA save
-/// truncated into Game Boy SRAM is accepted by the core, then the shrink guard blocks saving.
+/// truncated into Game Boy SRAM is accepted by the core.
 #[test]
 fn one_stem_on_two_platforms_writes_two_saves() {
     let d = tempfile::tempdir().unwrap();

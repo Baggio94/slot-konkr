@@ -61,22 +61,11 @@ pub fn eject(
     write_slot_state(root, &slot)
 }
 
-/// Skips an unchanged save (up to 128 KB of card writes), and refuses to shrink one: a core
-/// whose save-ram size differs truncates silently and still returns `Ok`. Compares against
-/// `read_sav` so an existing `.srm` is guarded too; a smaller `.sav` would shadow it.
+/// Skips an unchanged save (up to 128 KB of card writes).
 pub fn write_sav(root: &Path, platform: Platform, stem: &str, sav: &[u8]) -> std::io::Result<bool> {
     let path = sav_path(root, platform, stem);
     if let Some(old) = read_sav(root, platform, stem) {
         if old == sav {
-            return Ok(false);
-        }
-        if sav.len() < old.len() {
-            eprintln!(
-                "slot: save ram: refusing to shrink {} from {} to {} bytes",
-                path.display(),
-                old.len(),
-                sav.len()
-            );
             return Ok(false);
         }
     }
