@@ -211,6 +211,18 @@ impl SlotChrome<'_> {
             });
         }
 
+        if chrome < 1.0 {
+            front_bands(|x, y, w, h, _| {
+                out.push(Draw::Rect {
+                    x,
+                    y,
+                    w,
+                    h,
+                    colour: [0.0, 0.0, 0.0, 1.0],
+                });
+            });
+        }
+
         // After the cart and before the housing: the panel is the device's front surface.
         if self.game && self.screen > 0.0 {
             out.push(Draw::Game);
@@ -247,40 +259,30 @@ fn draw_slot_back(alpha: f32, out: &mut Vec<Draw>) {
 /// The plastic, in pieces around the hole and never over it: the only thing that occludes the
 /// cart.
 fn draw_slot_front(alpha: f32, out: &mut Vec<Draw>) {
+    front_bands(|x, y, w, h, c| out.push(band(x, y, w, h, c, alpha)));
+}
+
+fn front_bands(mut band: impl FnMut(f32, f32, f32, f32, [f32; 4])) {
     let w = OUT_W as f32;
     let right = BAY_X + BAY_W;
     let floor = SCOOP_Y + SCOOP_D + RIM_W;
-    out.push(band(0.0, BAND_Y, BAY_X, MOUTH_H, housing(), alpha));
-    out.push(band(right, BAND_Y, w - right, MOUTH_H, housing(), alpha));
+    band(0.0, BAND_Y, BAY_X, MOUTH_H, housing());
+    band(right, BAND_Y, w - right, MOUTH_H, housing());
 
     // Beside the arc, where the bay is wider than the scoop.
     let near = CX - SCOOP_W / 2.0;
-    out.push(band(
-        BAY_X,
-        SCOOP_Y,
-        near - BAY_X,
-        floor - SCOOP_Y,
-        housing(),
-        alpha,
-    ));
+    band(BAY_X, SCOOP_Y, near - BAY_X, floor - SCOOP_Y, housing());
     let far = CX + SCOOP_W / 2.0;
-    out.push(band(
-        far,
-        SCOOP_Y,
-        right - far,
-        floor - SCOOP_Y,
-        housing(),
-        alpha,
-    ));
+    band(far, SCOOP_Y, right - far, floor - SCOOP_Y, housing());
 
     // The plastic under the cut, then its lit edge last so nothing is painted over it.
     for_each_scoop_span(|x, w, depth| {
         let top = SCOOP_Y + depth + RIM_W;
-        out.push(band(x, top, w, floor - top, housing(), alpha));
+        band(x, top, w, floor - top, housing());
     });
-    out.push(band(0.0, floor, w, OUT_H as f32 - floor, housing(), alpha));
+    band(0.0, floor, w, OUT_H as f32 - floor, housing());
     for_each_scoop_span(|x, w, depth| {
-        out.push(band(x, SCOOP_Y + depth, w, RIM_W, edge(), alpha));
+        band(x, SCOOP_Y + depth, w, RIM_W, edge());
     });
 }
 

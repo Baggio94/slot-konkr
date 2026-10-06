@@ -580,6 +580,36 @@ fn the_slot_is_solid_until_the_picture_is_behind_it() {
     );
 }
 
+#[test]
+fn the_seated_cart_never_shows_through_the_fading_housing() {
+    for t in [0.25, 0.5, 0.75] {
+        let mut out = Vec::new();
+        draw_powering_on(t, &mut out);
+        let at = cart_at(&out);
+        let cart = quad(&out[at]);
+        let overlaps = |q: Quad| {
+            q.x < cart.x + cart.w
+                && cart.x < q.x + q.w
+                && q.y < cart.y + cart.h
+                && cart.y < q.y + q.h
+        };
+        let black =
+            |d: &Draw| matches!(*d, Draw::Rect { colour, .. } if colour == [0.0, 0.0, 0.0, 1.0]);
+        for (i, d) in out.iter().enumerate().skip(at + 1) {
+            if !(is_housing(d) || is_lip(d)) || alpha(d) >= 1.0 || !overlaps(quad(d)) {
+                continue;
+            }
+            assert!(
+                out[at + 1..i]
+                    .iter()
+                    .any(|b| black(b) && quad(b) == quad(d)),
+                "at {t} the cart shows through {:?}",
+                quad(d)
+            );
+        }
+    }
+}
+
 /// The refusal symbol fits on a 240x135 face. Only the compositor can mint a `TexId`, so the
 /// size is what can be tested.
 #[test]
