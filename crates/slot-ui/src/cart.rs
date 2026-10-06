@@ -11,21 +11,20 @@ use crate::text;
 
 /// The traced outline's aspect, so `cart.svg` rasterises unstretched.
 pub const CART_W: u32 = 360;
-pub const CART_H: u32 = 203;
+pub const CART_H: u32 = (CART_W * SEATED_H + SEATED_W / 2) / SEATED_W;
 
 pub const GB_CART_W: u32 = 312;
 
-/// 65.5 mm against the GBA pak's 35 mm, rounded to the nearest pixel.
-pub const GB_CART_H: u32 = (GB_CART_W * SEATED_H * 655 + SEATED_W * 175) / (SEATED_W * 350);
+pub const GB_CART_H: u32 = (GB_CART_W * GB_SEATED_H + SEATED_W / 2) / SEATED_W;
 
-/// The paper label well: 9% to 91% across and 22.8% to 86.3% down. The band above is the
+/// The paper label well. The band above is the
 /// moulded grip, which is most of what makes the face read as a cartridge.
 pub const fn label_panel(w: u32, h: u32) -> (u32, u32, u32, u32) {
     (
-        (w * 90 + 500) / 1000,
-        (h * 228 + 500) / 1000,
-        (w * 910 + 500) / 1000,
-        (h * 863 + 500) / 1000,
+        (w * 135 + 500) / 1000,
+        (h * 231 + 500) / 1000,
+        (w * 875 + 500) / 1000,
+        (h * 882 + 500) / 1000,
     )
 }
 
@@ -34,14 +33,13 @@ pub const LABEL_Y: u32 = label_panel(CART_W, CART_H).1;
 pub const LABEL_W: u32 = label_panel(CART_W, CART_H).2 - LABEL_X;
 pub const LABEL_H: u32 = label_panel(CART_W, CART_H).3 - LABEL_Y;
 
-/// The Game Boy label well, measured off a square-on drawing. It sits at 27.7% down because
-/// the moulded lettering plate fills the shoulder above it.
+/// The Game Boy label well.
 pub const fn gb_label_panel(w: u32, h: u32) -> (u32, u32, u32, u32) {
     (
-        (w * 133 + 500) / 1000,
-        (h * 277 + 500) / 1000,
-        (w * 867 + 500) / 1000,
-        (h * 870 + 500) / 1000,
+        (w * 147 + 500) / 1000,
+        (h * 291 + 500) / 1000,
+        (w * 854 + 500) / 1000,
+        (h * 868 + 500) / 1000,
     )
 }
 
@@ -173,8 +171,8 @@ fn spec(shape: Shape) -> Spec {
 }
 
 pub const SEATED_W: u32 = 240;
-const SEATED_H: u32 = 135;
-const GB_SEATED_H: u32 = (SEATED_H * 655 + 175) / 350;
+const SEATED_H: u32 = 141;
+const GB_SEATED_H: u32 = 259;
 
 pub fn seated_box(platform: Platform) -> (u32, u32) {
     match platform {

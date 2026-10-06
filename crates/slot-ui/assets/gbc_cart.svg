@@ -28,6 +28,6 @@
   is the left corner that sits furthest into the distortion. The right corner is the one to
   trust.
 -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 253">
-  <path d="M 24.5 0 L 215.5 0 A 18 18 0 0 1 233.5 18 L 233.5 249.6 A 4.3 3.4 0 0 1 229.2 253 L 10.8 253 A 4.3 3.4 0 0 1 6.5 249.6 L 6.5 18 A 18 18 0 0 1 24.5 0 Z" fill="#fff"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 259">
+  <path d="M 24.5 0 L 215.5 0 A 18 18 0 0 1 233.5 18 L 233.5 255.6 A 4.3 3.4 0 0 1 229.2 259 L 10.8 259 A 4.3 3.4 0 0 1 6.5 255.6 L 6.5 18 A 18 18 0 0 1 24.5 0 Z" fill="#fff"/>
 </svg>

@@ -149,7 +149,7 @@ pub(crate) fn gb_detail_mask(shell: GbShell) -> &'static Detail {
         if shell == GbShell::Rounded {
             // The groove under GAME BOY COLOR: a cut, so shadow above and light below.
             let at = |v: u32, of: u32, to: u32| (v * to + of / 2) / of;
-            let y = at(52, 253, GB_CART_H);
+            let y = at(52, 259, GB_CART_H);
             for x in at(72, 240, GB_CART_W)..at(168, 240, GB_CART_W) {
                 detail.shadow[(y * GB_CART_W + x) as usize] = 200;
                 detail.highlight[((y + 1) * GB_CART_W + x) as usize] = 160;

@@ -27,7 +27,7 @@
   sides, the arrow, and the black-is-shadow white-is-light convention that
   `silhouette::rasterise_detail` splits the file on. See that file for the reasoning.
 -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 253">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 259">
   <defs>
     <!-- Standing proud of the shell: the lettering plate, and the five short edge ridges a side
          that are all a class C shoulder carries. They reach 7 px in from the body edge against
@@ -48,9 +48,9 @@
     <!-- Cut into the shell: the grooves down both sides, and the arrow that says which way up
          the pak goes in. Both moulds carry these. -->
     <g id="cuts">
-      <rect x="12.82" y="105.3" width="2.25" height="146.5" rx="1.12"/>
-      <rect x="224.93" y="105.3" width="2.25" height="146.5" rx="1.12"/>
-      <path fill-rule="evenodd" d="M 101.54 224.29 L 138.46 224.29 L 120 245.76 Z M 104.59 226.49 L 135.41 226.49 L 120 243.04 Z"/>
+      <rect x="12.82" y="111.3" width="2.25" height="146.5" rx="1.12"/>
+      <rect x="224.93" y="111.3" width="2.25" height="146.5" rx="1.12"/>
+      <path fill-rule="evenodd" d="M 101.54 230.29 L 138.46 230.29 L 120 251.76 Z M 104.59 232.49 L 135.41 232.49 L 120 249.04 Z"/>
     </g>
   </defs>
   <!--

@@ -16,7 +16,7 @@
   its lower right. Each lit edge is the same shape offset by half a line, drawn under the dark
   one so only the part that clears it shows.
 -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 253">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 259">
   <defs>
     <!-- Standing proud of the shell: five ribs a shoulder, their inner ends cut back to follow
          the curve of the lettering plate, and the plate itself. Both grips run out to the body
@@ -37,9 +37,9 @@
     <!-- Cut into the shell: the grooves down both sides, and the arrow that says which way up
          the pak goes in. -->
     <g id="cuts">
-      <rect x="12.82" y="105.3" width="2.25" height="146.5" rx="1.12"/>
-      <rect x="224.93" y="105.3" width="2.25" height="146.5" rx="1.12"/>
-      <path fill-rule="evenodd" d="M 101.54 224.29 L 138.46 224.29 L 120 245.76 Z M 104.59 226.49 L 135.41 226.49 L 120 243.04 Z"/>
+      <rect x="12.82" y="111.3" width="2.25" height="146.5" rx="1.12"/>
+      <rect x="224.93" y="111.3" width="2.25" height="146.5" rx="1.12"/>
+      <path fill-rule="evenodd" d="M 101.54 230.29 L 138.46 230.29 L 120 251.76 Z M 104.59 232.49 L 135.41 232.49 L 120 249.04 Z"/>
     </g>
   </defs>
   <g fill="#fff">
