@@ -1,5 +1,6 @@
 pub mod app;
 pub mod audio;
+pub mod bootlogo;
 pub mod build_info;
 pub mod cable;
 pub mod core;

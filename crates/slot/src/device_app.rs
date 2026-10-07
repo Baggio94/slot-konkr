@@ -87,6 +87,10 @@ pub fn run() {
     let mut frontend = Frontend::boot(Box::new(platform));
     frontend.upload_faces(&mut compositor);
     let mut input = DeviceInput::open(&root);
+    let card = root.clone();
+    let _ = std::thread::Builder::new()
+        .name("slot-bootlogo".into())
+        .spawn(move || slot::bootlogo::refresh(&card));
     let mut drawn = false;
     frontend.drive_emulator();
     let mut pacer = Pacer::new();
