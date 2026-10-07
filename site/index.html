@@ -16,7 +16,7 @@
 <body>
 
 <header class="mast">
-  <a class="mast-mark" href="#hero">slot.</a>
+  <a class="mast-mark" href="/">slot.</a>
 
   <button class="menu-btn" type="button" id="menu-btn" aria-expanded="false"
           aria-controls="section-tabs" aria-label="Sections">
@@ -88,35 +88,93 @@
 <section class="panel install" id="install" role="tabpanel" aria-labelledby="t-install" hidden>
   <div class="wrap">
     <h2>Installing</h2>
-    <ol class="install-steps">
-      <li>
-        <h3>Flash BaseOS to an SD Card</h3>
-        <p>Download the latest release of
-           <a href="https://github.com/pvaibhav/BaseOS/releases/latest">BaseOS</a> and write the <code>.img</code> to an SD card with
-           something like <a href="https://www.raspberrypi.com/software/">Raspberry Pi Imager</a>.</p>
-        <p>Insert this card into the SD card slot labeled <code>SD1</code>.</p>
-      </li>
-      <li>
-        <h3>Download the latest release</h3>
-        <p>Go fetch the <a href="https://github.com/BrandonKowalski/slot/releases/latest">latest slot release</a> from GitHub.</p>
-      </li>
-      <li>
-        <h3>Copy it onto SD2</h3>
-        <p>Prepare your second SD card by formatting it to <code>FAT32</code> or <code>exFAT</code> with a <code>Master Boot Record (MBR)</code> partition scheme.</p>
-        <p>Once formatted, unzip the release zip you downloaded and copy the contents to the second SD card.</p>
-      </li>
-      <li>
-        <h3>Add your games</h3>
-        <p>Drop your legally obtained ROM files into their corresponding platform's folder in <code>Games/</code>. You may optionally place labels into the matching platform folder found in
-           <code>Labels/</code>.</p>
-      </li>
-      <li>
-        <h3>Put the second card into <code>SD2</code> and boot!</h3>
-        <p>I hope you enjoy using slot!</p>
-      </li>
-    </ol>
-    <p class="install-note">To update, download a fresh release, unzip the archive, and replace the <code>System/</code>
-       folder on your second card.</p>
+    <nav class="subtabs" role="tablist" aria-label="Card setup">
+      <button class="subtab" role="tab" id="t-install-single" aria-controls="install-single" aria-selected="true">Single SD Card</button>
+      <button class="subtab" role="tab" id="t-install-dual" aria-controls="install-dual" aria-selected="false" tabindex="-1">Dual SD Cards</button>
+      <button class="subtab" role="tab" id="t-install-update" aria-controls="install-update" aria-selected="false" tabindex="-1">Updating</button>
+    </nav>
+
+    <div class="subpanel" id="install-single" role="tabpanel" aria-labelledby="t-install-single">
+      <ol class="install-steps">
+        <li>
+          <h3>Flash BaseOS to an SD Card</h3>
+          <p>Download the latest release of
+             <a href="https://github.com/pvaibhav/BaseOS/releases/latest">BaseOS</a> and write the <code>.img</code> to an SD card with
+             something like <a href="https://www.raspberrypi.com/software/">Raspberry Pi Imager</a>.</p>
+          <p>Insert this card into the SD card slot labeled <code>SD1</code>.</p>
+        </li>
+        <li>
+          <h3>Expand the storage</h3>
+          <p>After inserting the SD card, power on your device. You should see a BaseOS boot logo and a message saying that storage is being expanded.</p>
+          <p>Once the storage is expanded, a message will say that no frontend was found. Power off your device.</p>
+        </li>
+        <li>
+          <h3>Download the latest release</h3>
+          <p>Go fetch the <a href="https://github.com/BrandonKowalski/slot/releases/latest">latest slot release</a> from GitHub.</p>
+        </li>
+        <li>
+          <h3>Copy it onto your SD Card</h3>
+          <p>Eject the SD card from <code>SD1</code> and connect it back to your computer. Unzip the release zip you downloaded and copy the contents to the root of the SD card.</p>
+        </li>
+        <li>
+          <h3>Add your games</h3>
+          <p>Drop your legally obtained ROM files into their corresponding platform's folder in <code>Games/</code>. You may optionally place labels into the matching platform folder found in
+             <code>Labels/</code>.</p>
+        </li>
+        <li>
+          <h3>Re-insert the card into <code>SD1</code> and boot!</h3>
+          <p>I hope you enjoy using slot!</p>
+        </li>
+      </ol>
+    </div>
+
+    <div class="subpanel" id="install-dual" role="tabpanel" aria-labelledby="t-install-dual" hidden>
+      <ol class="install-steps">
+        <li>
+          <h3>Flash BaseOS to an SD Card</h3>
+          <p>Download the latest release of
+             <a href="https://github.com/pvaibhav/BaseOS/releases/latest">BaseOS</a> and write the <code>.img</code> to an SD card with
+             something like <a href="https://www.raspberrypi.com/software/">Raspberry Pi Imager</a>.</p>
+          <p>Insert this card into the SD card slot labeled <code>SD1</code>.</p>
+        </li>
+        <li>
+          <h3>Download the latest release</h3>
+          <p>Go fetch the <a href="https://github.com/BrandonKowalski/slot/releases/latest">latest slot release</a> from GitHub.</p>
+        </li>
+        <li>
+          <h3>Copy it onto SD2</h3>
+          <p>Prepare your second SD card by formatting it to <code>FAT32</code> or <code>exFAT</code> with a <code>Master Boot Record (MBR)</code> partition scheme.</p>
+          <p>Once formatted, unzip the release zip you downloaded and copy the contents to the second SD card.</p>
+        </li>
+        <li>
+          <h3>Add your games</h3>
+          <p>Drop your legally obtained ROM files into their corresponding platform's folder in <code>Games/</code>. You may optionally place labels into the matching platform folder found in
+             <code>Labels/</code>.</p>
+        </li>
+        <li>
+          <h3>Put the second card into <code>SD2</code> and boot!</h3>
+          <p>I hope you enjoy using slot!</p>
+        </li>
+      </ol>
+    </div>
+
+    <div class="subpanel" id="install-update" role="tabpanel" aria-labelledby="t-install-update" hidden>
+      <ol class="install-steps">
+        <li>
+          <h3>Download the latest release</h3>
+          <p>Go fetch the <a href="https://github.com/BrandonKowalski/slot/releases/latest">latest slot release</a> from GitHub and unzip it.</p>
+        </li>
+        <li>
+          <h3>Replace the <code>System/</code> folder</h3>
+          <p>Connect the card that holds slot to your computer. That is the card in <code>SD1</code> if you use a single card, or the card in <code>SD2</code> if you use two.</p>
+          <p>Delete the <code>System/</code> folder on the card and copy the new <code>System/</code> folder from the release in its place.
+             Your games, saves, save states, labels and wallpapers all live outside <code>System/</code> and are left alone.</p>
+        </li>
+        <li>
+          <h3>Put the card back and boot!</h3>
+        </li>
+      </ol>
+    </div>
   </div>
 </section>
 
