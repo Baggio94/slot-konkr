@@ -1,5 +1,3 @@
-/// Linear interpolation from the core rate to the device rate, bent by the DRC ratio. Position
-/// and the last frame carry across calls, so core frame boundaries are seamless.
 pub struct Resampler {
     step: f64,
     scaled: f64,
@@ -8,8 +6,6 @@ pub struct Resampler {
 }
 
 impl Resampler {
-    /// A zero, negative or NaN rate (from `retro_system_av_info`) would hang or silence
-    /// `process`, so it passes samples through at 1:1 instead.
     pub fn new(src_hz: f64, dst_hz: f64) -> Self {
         let usable = |hz: f64| hz.is_finite() && hz > 0.0;
         let step = if usable(src_hz) && usable(dst_hz) {
@@ -25,7 +21,6 @@ impl Resampler {
         }
     }
 
-    /// Above 1.0 produces more output from the same input, so a starved device catches up.
     pub fn set_ratio(&mut self, ratio: f64) {
         if ratio > 0.0 {
             self.scaled = self.step / ratio;
@@ -53,8 +48,6 @@ impl Resampler {
     }
 }
 
-/// Index 0 is the last frame of the previous call, so an output frame landing between two
-/// buffers still has both of its endpoints.
 fn tap(prev: &[i16; 2], src: &[i16], frame: usize, channel: usize) -> f64 {
     if frame == 0 {
         prev[channel] as f64

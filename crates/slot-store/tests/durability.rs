@@ -22,13 +22,11 @@ fn atomic_write_leaves_no_partial_file_and_no_temp_behind() {
     assert!(strays.is_empty(), "temp files left behind: {strays:?}");
 }
 
-/// Any name the filesystem accepts can be written, although the temp name is longer.
 #[test]
 fn a_name_the_card_accepts_is_a_name_that_can_be_written() {
     let d = tempdir().unwrap();
     for len in [8usize, 100, 200, 239, 240, 245, 250, 251] {
         let p = d.path().join(format!("{}.sav", "a".repeat(len)));
-        // Control: skip names the filesystem itself refuses.
         if std::fs::write(&p, b"control").is_err() {
             continue;
         }
@@ -38,8 +36,6 @@ fn a_name_the_card_accepts_is_a_name_that_can_be_written() {
     }
 }
 
-/// A long multi-byte name is cut on a character boundary. Three paddings put the cut inside a
-/// three-byte character at least once, whatever the pid's digit count.
 #[test]
 fn a_long_multibyte_name_is_written_rather_than_panicking() {
     let d = tempdir().unwrap();
@@ -134,7 +130,6 @@ fn slot_state_round_trips_a_negative_utc_offset() {
     assert_eq!(read_slot_state(d.path()).utc_offset_min, -450);
 }
 
-/// Unknown lines from a later build are skipped, not a reason to discard the file.
 #[test]
 fn a_line_the_reader_does_not_know_is_skipped() {
     let d = tmp_root();
@@ -172,7 +167,6 @@ fn a_first_boot_rumbles_and_fast_forwards_silently_at_the_default() {
     assert!(!s.colour_correction, "boots with the picture tinted");
 }
 
-/// A card with no quick menu lines keeps its values and gets defaults for the rest.
 #[test]
 fn a_card_from_before_the_settings_keeps_all_its_values() {
     let d = tmp_root();
@@ -185,7 +179,6 @@ fn a_card_from_before_the_settings_keeps_all_its_values() {
         read_slot_state(d.path()),
         SlotState {
             cart: Some("Emerald".into()),
-            // An absent line must not be read as `gba`.
             cart_platform: None,
             brightness: 3,
             blue_light: 1,
@@ -242,8 +235,6 @@ fn every_speed_the_row_offers_round_trips_as_its_own_number() {
     }
 }
 
-/// Older builds accept only 2..=4. Every speed above 4 must fall outside that range, so an older
-/// build reads it as its own default rather than as a speed nobody chose.
 #[test]
 fn an_older_build_reads_the_new_speed_as_its_own_default() {
     for speed in FF_SPEEDS.iter().filter(|&&n| n > 4) {
@@ -259,7 +250,6 @@ fn an_older_build_reads_the_new_speed_as_its_own_default() {
     );
 }
 
-/// An out-of-range quick menu setting falls back alone, without discarding the rest.
 #[test]
 fn an_out_of_range_setting_falls_back_to_its_default() {
     let d = tmp_root();
@@ -269,14 +259,11 @@ fn an_out_of_range_setting_falls_back_to_its_default() {
         "rumble=\nff_speed=1\nff_sound=on\n",
         "rumble=-1\nff_speed=0\nff_sound=-1\n",
         "ff_speed=x\n",
-        // `Auto` is what the row hands mGBA, but is not a value this line takes.
         "colour_correction=2\n",
         "colour_correction=\n",
         "colour_correction=Auto\n",
-        // Inside the row's ends but not on it.
         "ff_speed=5\n",
         "ff_speed=7\n",
-        // Values older cards may still hold.
         "ff_speed=8\n",
         "ff_speed=255\n",
     ] {
@@ -295,7 +282,6 @@ fn an_out_of_range_setting_falls_back_to_its_default() {
     }
 }
 
-/// Each platform round trips through the card, spelled as its folder name in lower case.
 #[test]
 fn every_platform_round_trips_as_its_own_line() {
     for platform in Platform::ALL {
@@ -318,7 +304,6 @@ fn every_platform_round_trips_as_its_own_line() {
     }
 }
 
-/// An empty slot writes an empty `cart_platform` line, so a stale platform cannot survive eject.
 #[test]
 fn an_empty_slot_writes_an_empty_platform() {
     let d = tmp_root();
@@ -335,7 +320,6 @@ fn an_empty_slot_writes_an_empty_platform() {
     assert_eq!(read_slot_state(d.path()).cart_platform, None);
 }
 
-/// An unreadable `cart_platform` reads as `None` without discarding the rest; case is ignored.
 #[test]
 fn an_unreadable_platform_reads_as_a_card_that_never_said() {
     let d = tmp_root();
@@ -345,7 +329,6 @@ fn an_unreadable_platform_reads_as_a_card_that_never_said() {
         ("cart_platform=nes\n", None),
         ("cart_platform=gameboy\n", None),
         ("cart_platform=0\n", None),
-        // A platform a later build added, which this one has never heard of.
         ("cart_platform=nds\n", None),
         ("cart_platform=GBA\n", Some(Platform::Gba)),
         ("cart_platform=Gbc\n", Some(Platform::Gbc)),

@@ -1,6 +1,3 @@
-//! A separate binary: `set_theme` is process wide and once only, so it cannot share a process
-//! with the default palette tests.
-
 use slot_store::Theme;
 use slot_ui::{draw_empty_slot, edge, housing, opening, recess, set_theme, Draw};
 

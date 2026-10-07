@@ -41,7 +41,6 @@ fn levels_work_on_the_shelf_not_only_in_game() {
     assert_eq!(read_slot_state(d.path()).blue_light, 1);
 }
 
-/// The bar is transient chrome over a live game; moving the phase would pause it.
 #[test]
 fn adjusting_a_level_in_game_leaves_the_game_running() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -85,7 +84,6 @@ fn adjusting_the_volume_unmutes() {
     assert_eq!(a.volume(), 75);
 }
 
-/// Unmuting through the chord also restores the level, or the pair would leave it audible.
 #[test]
 fn unmuting_with_the_chord_does_not_mute_again() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -98,7 +96,6 @@ fn unmuting_with_the_chord_does_not_mute_again() {
     assert_eq!(a.volume(), 70);
 }
 
-/// A device muted at bedtime is still muted in the morning.
 #[test]
 fn the_mute_survives_a_reboot() {
     let d = tmp_root_with_carts(&["Emerald"]);

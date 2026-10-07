@@ -1,6 +1,4 @@
 #!/bin/sh
-# Off-device test for card/System/slotlink.sh: fakes stand in for wpa_supplicant, wpa_cli, ip and
-# insmod, and record how they were called.  sh card/test-slotlink.sh
 set -eu
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -14,7 +12,6 @@ fail() {
 	FAILS=$((FAILS + 1))
 }
 
-# $1 name, $2 log, then extra body lines. Every fake logs its argv and succeeds.
 make_fake() {
 	name="$1"
 	out="$2"
@@ -28,7 +25,6 @@ make_fake() {
 	chmod 755 "$TMP/bin/$name"
 }
 
-# A fresh device: both interfaces present, driver loaded or not per $1 (yes/no).
 reset() {
 	rm -rf "$TMP/net" "$TMP/run" "$TMP/ctrl" "$TMP"/*.log "$TMP/bin"
 	mkdir -p "$TMP/net/wlan0" "$TMP/net/wlan1" "$TMP/run" "$TMP/ctrl" "$TMP/modules" "$TMP/bin"
@@ -45,7 +41,6 @@ reset() {
 	make_fake legacy "$TMP/legacy.log"
 }
 
-# $1 is ignored (kept so every call site reads the same); the rest go to the script.
 run() {
 	shift
 	PATH="$TMP/bin:$PATH" \
@@ -57,7 +52,6 @@ run() {
 		sh "$SCRIPT" "$@"
 }
 
-# host: an AP on the fixed channel, addressed only once it is up.
 reset yes
 run absent link host && rc=0 || rc=$?
 [ "$rc" = 0 ] || fail "host exited $rc"
@@ -67,7 +61,6 @@ grep -q 'mode=2' "$TMP/run/slotlink-ap.conf" || fail "host config is not an AP"
 grep -q 'addr add 10.42.0.1/24 dev wlan1' "$TMP/ip.log" || fail "host not addressed"
 [ -f "$TMP/run/slotlink.session" ] || fail "host left no session mark"
 
-# host: an AP that never completes is not addressed, and the radio is blamed.
 reset yes
 export FAKE_STATE=SCANNING
 run absent link host && rc=0 || rc=$?
@@ -75,14 +68,12 @@ unset FAKE_STATE
 [ "$rc" = 1 ] || fail "dead AP exited $rc, want 1"
 grep -q 'addr add' "$TMP/ip.log" 2>/dev/null && fail "dead AP was addressed"
 
-# join: pinned to the host's channel on the first attempt.
 reset yes
 run absent link join && rc=0 || rc=$?
 [ "$rc" = 0 ] || fail "join exited $rc"
 grep -q 'scan_freq=5745' "$TMP/run/slotlink-sta.conf" || fail "join not pinned"
 grep -q 'addr add 10.42.0.2/24 dev wlan0' "$TMP/ip.log" || fail "join not addressed"
 
-# join: nobody answers on either attempt, which is 3, not a radio failure.
 reset yes
 export FAKE_STATE=SCANNING
 run absent link join && rc=0 || rc=$?
@@ -90,7 +81,6 @@ unset FAKE_STATE
 [ "$rc" = 3 ] || fail "join with no host exited $rc, want 3"
 [ "$(grep -c -- '-i wlan0' "$TMP/sup.log")" = 2 ] || fail "join did not make two attempts"
 
-# down: nothing of the session is left.
 reset yes
 run absent link join >/dev/null
 run absent link down && rc=0 || rc=$?
@@ -99,19 +89,15 @@ for f in slotlink-ap.conf slotlink-sta.conf slotlink.session; do
 	[ -e "$TMP/run/$f" ] && fail "down left $f"
 done
 
-# cool: accepted, and touches nothing.
 reset yes
 run absent link cool && rc=0 || rc=$?
 [ "$rc" = 0 ] || fail "cool exited $rc"
 [ -e "$TMP/mod.log" ] && fail "cool touched the driver"
 
-# BaseOS owns the driver: slot never loads it, even when it is not loaded yet.
 reset no
 run absent link warm >/dev/null || true
 [ -e "$TMP/mod.log" ] && fail "insmod on BaseOS"
 
-# The waits are bounded in seconds, not in polls: a slow wpa_cli must not stretch a join that is
-# meant to give up after 2 s (1 pinned, 1 on every channel) into much more.
 reset yes
 make_fake wpa_cli "$TMP/cli.log" 'sleep 0.3' 'echo "wpa_state=SCANNING"'
 t0=$(date +%s)
@@ -120,7 +106,6 @@ t1=$(date +%s)
 [ "$rc" = 3 ] || fail "slow join exited $rc, want 3"
 [ $((t1 - t0)) -le 4 ] || fail "a 2 s join took $((t1 - t0)) s with a slow wpa_cli"
 
-# Anything else is a usage error.
 reset yes
 run absent link sideways 2>/dev/null && rc=0 || rc=$?
 [ "$rc" = 2 ] || fail "bad verb exited $rc, want 2"

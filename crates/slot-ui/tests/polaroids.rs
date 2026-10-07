@@ -14,7 +14,6 @@ fn entry(dir: &Path, stamp: &str) -> StateEntry {
     }
 }
 
-/// The entries do not matter to the top plate; the switcher just has to have some.
 fn switcher() -> Polaroids {
     Polaroids::new(Vec::new())
 }
@@ -53,7 +52,6 @@ fn relative_time_reads_off_the_stamp() {
     );
 }
 
-/// An hour-old save reads as an hour old across midnight.
 #[test]
 fn an_hour_before_midnight_is_not_yesterday() {
     assert_eq!(
@@ -62,7 +60,6 @@ fn an_hour_before_midnight_is_not_yesterday() {
     );
 }
 
-/// The device clock can be behind the card, and a save from the future is still a save.
 #[test]
 fn a_stamp_ahead_of_the_clock_does_not_read_as_a_lifetime_ago() {
     assert_eq!(
@@ -71,7 +68,6 @@ fn a_stamp_ahead_of_the_clock_does_not_read_as_a_lifetime_ago() {
     );
 }
 
-/// An entry with no thumbnail still fills the screen, or the paused game shows through.
 #[test]
 fn an_entry_whose_thumbnail_is_missing_still_has_a_face() {
     let face = photo_face(&entry(Path::new("/nonexistent"), "2026-08-09_14-32-05"));
@@ -82,7 +78,6 @@ fn an_entry_whose_thumbnail_is_missing_still_has_a_face() {
     );
 }
 
-/// The screenshot is the whole face, uninset and uncropped, with channels in order.
 #[test]
 fn the_photo_fills_the_face_and_keeps_its_colours() {
     let d = tempfile::tempdir().expect("tempdir");
@@ -98,7 +93,6 @@ fn the_photo_fills_the_face_and_keeps_its_colours() {
     }
 }
 
-/// The row is walked, not wrapped: a flick past the oldest must not load the newest.
 #[test]
 fn the_index_clamps_at_both_ends() {
     let d = Path::new("/nonexistent");
@@ -118,7 +112,6 @@ fn the_index_clamps_at_both_ends() {
     );
 }
 
-/// The title is a fixed 360px texture at 180..540; the left-margin gauge never reaches into it.
 #[test]
 fn the_gauge_stays_clear_of_the_title_on_the_left() {
     let p = switcher();
@@ -133,8 +126,6 @@ fn the_gauge_stays_clear_of_the_title_on_the_left() {
         Printed::default(),
         &mut out,
     );
-    // Excludes only the full-width plate background. Filtering by x would miss a gauge grown
-    // past the title's box.
     let gauge: Vec<_> = out
         .iter()
         .filter_map(|d| match *d {
@@ -156,7 +147,6 @@ fn the_gauge_stays_clear_of_the_title_on_the_left() {
     );
 }
 
-/// The clock stays right-aligned at the margin, past the title's box.
 #[test]
 fn the_clock_stays_clear_of_the_title_on_the_right() {
     let p = switcher();
@@ -187,7 +177,6 @@ fn the_clock_stays_clear_of_the_title_on_the_right() {
     assert_eq!(rightmost, OUT_W as f32 - 16.0, "the plate margin is 16");
 }
 
-/// No gauge draws no capsule, and the clock still lands.
 #[test]
 fn a_switcher_with_no_gauge_still_shows_its_clock() {
     let p = switcher();
@@ -206,7 +195,6 @@ fn a_switcher_with_no_gauge_still_shows_its_clock() {
     );
 }
 
-/// Through `Polaroids::draw`: plugging in a cable only adds the bolt.
 #[test]
 fn nothing_on_the_plate_moves_when_the_charge_state_changes() {
     let p = switcher();

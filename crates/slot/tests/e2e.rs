@@ -8,7 +8,6 @@ use slot::session::Session;
 use slot_input::{Btn, Millis, RawEvent};
 use slot_store::{read_slot_state, Core, Platform, StateRing};
 
-/// One simulated present. The gesture and animation clocks are one clock in the binary.
 const FRAME_MS: Millis = 16;
 const DT: f32 = 1.0 / 60.0;
 
@@ -44,7 +43,6 @@ impl Pass {
         self.event(RawEvent::Up(b));
     }
 
-    /// SELECT plus a face button inside the 120 ms chord window.
     fn chord(&mut self, b: Btn) {
         self.event(RawEvent::Down(Btn::Select));
         self.event(RawEvent::Down(b));
@@ -52,7 +50,6 @@ impl Pass {
         self.event(RawEvent::Up(Btn::Select));
     }
 
-    /// Steps until the condition holds, sleeping so the emulator thread makes progress.
     fn until(&mut self, what: &str, cond: impl Fn(&Session) -> bool) {
         let deadline = Instant::now() + Duration::from_secs(10);
         while !cond(&self.session) {
@@ -73,7 +70,6 @@ impl Pass {
         self.session.frame().map(|f| f.to_vec())
     }
 
-    /// The picture keeps changing: the most direct evidence a game is running.
     fn expect_running(&mut self) {
         self.until("a first frame", |s| s.frame().is_some());
         let held = self.frame();
@@ -87,13 +83,8 @@ impl Pass {
     }
 }
 
-/// The full pass against the vendored core: boot, flick, insert, play, levels, save, fast
-/// forward, rewind, switcher, load, eject, reinsert, sleep, reboot onto the seated cart.
-///
-/// One test because a libretro core lives in dylib globals: two sessions must never coexist.
 #[test]
 fn the_whole_pass_from_boot_to_resume() {
-    // The core search runs from the workspace root and a test does not; naming it avoids the mock.
     if let Some(dylib) = common::vendored_core() {
         std::env::set_var("SLOT_CORE", dylib);
     }
@@ -101,15 +92,12 @@ fn the_whole_pass_from_boot_to_resume() {
     let root = d.path();
     let mut p = Pass::boot(root);
 
-    // A fresh card asks for the clock once, before anything else.
     assert!(matches!(p.session.app().phase(), Phase::SetClock { .. }));
     p.tap(Btn::A);
 
-    // Boot with an empty slot is the shelf, and nothing is running behind it.
     assert!(matches!(p.session.app().phase(), Phase::Shelf));
     assert!(!p.session.has_core());
 
-    // Flick to the second cart and insert it. Which cart arrives shows how the flick was read.
     p.tap(Btn::Right);
     p.tap(Btn::A);
     assert!(matches!(p.session.app().phase(), Phase::Inserting { .. }));
@@ -120,9 +108,8 @@ fn the_whole_pass_from_boot_to_resume() {
     assert_eq!(read_slot_state(root).cart.as_deref(), Some("Emerald"));
     p.expect_running();
 
-    // The three levels: none stops the game, all reach the card.
-    p.chord(Btn::Up); // brightness
-    p.chord(Btn::Right); // blue light
+    p.chord(Btn::Up);
+    p.chord(Btn::Right);
     p.tap(Btn::VolUp);
     let levels = read_slot_state(root);
     assert_eq!(levels.brightness, 6);
@@ -135,7 +122,6 @@ fn the_whole_pass_from_boot_to_resume() {
         "a level adjustment paused the game"
     );
 
-    // SELECT+R1, the only thing that writes to the ring.
     p.chord(Btn::R1);
     let saved = p.ring("Emerald").list().expect("list the ring");
     assert_eq!(saved.len(), 1);
@@ -144,7 +130,6 @@ fn the_whole_pass_from_boot_to_resume() {
         "the polaroid has no picture"
     );
 
-    // Fast forward and rewind, held and released. Neither may wedge the game.
     p.event(RawEvent::Down(Btn::R2));
     p.expect_running();
     p.event(RawEvent::Up(Btn::R2));
@@ -156,7 +141,6 @@ fn the_whole_pass_from_boot_to_resume() {
     p.event(RawEvent::Up(Btn::L2));
     p.expect_running();
 
-    // MENU twice opens the switcher, which pauses the game; A loads and closes it.
     p.tap(Btn::Menu);
     p.event(RawEvent::Down(Btn::Menu));
     assert!(matches!(p.session.app().phase(), Phase::Polaroids { .. }));
@@ -164,9 +148,8 @@ fn the_whole_pass_from_boot_to_resume() {
     p.event(RawEvent::Up(Btn::Menu));
     p.tap(Btn::A);
     assert_eq!(p.playing(), Some("Emerald"));
-    p.expect_running(); // the switcher paused it, so this is also the unpause
+    p.expect_running();
 
-    // MENU held two seconds. The state is on the card before the cart is out.
     p.event(RawEvent::Down(Btn::Menu));
     p.until("the eject", |s| {
         !matches!(s.app().phase(), Phase::Playing { .. })
@@ -181,21 +164,18 @@ fn the_whole_pass_from_boot_to_resume() {
     p.until("the shelf", |s| matches!(s.app().phase(), Phase::Shelf));
     assert!(!p.session.has_core(), "the core outlived the cart");
 
-    // Straight back in: the second core this process opens.
     p.tap(Btn::A);
     p.until("the cart to seat again", |s| {
         matches!(s.app().phase(), Phase::Playing { .. })
     });
     assert_eq!(p.playing(), Some("Emerald"));
 
-    // POWER dozes and flushes; a second press wakes back into the game.
     p.tap(Btn::Power);
     assert!(matches!(p.session.app().phase(), Phase::Doze { .. }));
     assert!(!p.session.app().powering_off());
     p.tap(Btn::Power);
     assert_eq!(p.playing(), Some("Emerald"));
 
-    // Reboot. The cart never left the slot, so the shelf is not what comes back.
     p.tap(Btn::Power);
     drop(p);
     let mut p = Pass::boot(root);

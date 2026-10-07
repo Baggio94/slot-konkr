@@ -1,21 +1,3 @@
-//! Headless core benchmark: per-frame cost of a libretro core through `LibretroCore`, as slot's
-//! emulator thread pays it. For comparing builds on the SP; it never ships.
-//!
-//! Frames are grouped into presents of `--steps` like fast forward. Quote the median. The last
-//! frame's hash must match across builds of one core, or the emulation changed.
-//!
-//! Build it for the SP with `task bench:device`, then:
-//!
-//! ```text
-//! adb push target-device/device/examples/core_bench /tmp/core_bench
-//! adb shell '/tmp/core_bench /mnt/sdcard/System/gpsp_libretro.so /mnt/sdcard/Games/Apotris.gba \
-//!     --state /mnt/sdcard/States/gpsp/Apotris/resume.state --system /mnt/sdcard/BIOS \
-//!     --steps 4 --frameskip'
-//! ```
-//!
-//! `--serialize` instead times a save and a load after every frame, and what preemptive frames
-//! (save every frame; on an input change, load and re-run N frames) would cost per display frame.
-
 use std::error::Error;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -30,7 +12,6 @@ struct Args {
     core: PathBuf,
     rom: PathBuf,
     state: Option<PathBuf>,
-    /// Where the core looks for `gba_bios.bin`. slot hands it the content root's `BIOS`.
     system: Option<PathBuf>,
     steps: u32,
     frames: u32,
@@ -92,7 +73,6 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
     Ok(a)
 }
 
-/// FNV-1a: enough to tell two frames apart, and no dependency.
 fn fnv1a(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| {
         (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
@@ -119,7 +99,6 @@ fn run(a: &Args) -> Result<(), Box<dyn Error>> {
         core.set_option(k, v);
     }
     if a.frameskip {
-        // Both cores' keys, whichever this is: neither reads the other's prefix.
         let interval = (a.steps - 1).to_string();
         for prefix in ["mgba", "gpsp"] {
             core.set_option(&format!("{prefix}_frameskip"), "fixed_interval");
@@ -191,7 +170,6 @@ fn run(a: &Args) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Median, p95 and max of `ms`, sorted in place.
 fn spread(ms: &mut [f64]) -> (f64, f64, f64) {
     ms.sort_by(f64::total_cmp);
     (median(ms), ms[(ms.len() - 1) * 95 / 100], ms[ms.len() - 1])
@@ -225,8 +203,6 @@ fn serialize_cost(
         println!("{name:>5}: median {m:.3}  p95 {p:.3}  max {x:.3} ms");
     }
     for n in 1..=2 {
-        // A frame with no input change: run and save. One with a change: load, re-run the n
-        // frames it replaces plus the new one, and save. Both at p95.
         let steady = r.1 + s.1;
         let change = l.1 + f64::from(n + 1) * r.1 + s.1;
         println!(

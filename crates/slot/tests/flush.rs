@@ -11,7 +11,6 @@ use slot_input::{Action, Btn};
 use slot_power::{Battery, Charge, LedState};
 use slot_store::{read_slot_state, Core, Platform, StateRing};
 
-/// The pre-existing cases read as unknown, which must keep today's behaviour.
 fn unknown(percent: u8) -> Battery {
     Battery {
         percent,
@@ -65,7 +64,6 @@ fn battery_critical_flushes_and_powers_off() {
     assert!(a.powering_off());
 }
 
-/// POWER is the lid on a device whose hinge the frontend may never see.
 #[test]
 fn a_power_tap_dozes_and_a_second_one_wakes() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -76,9 +74,6 @@ fn a_power_tap_dozes_and_a_second_one_wakes() {
     assert!(matches!(a.phase(), Phase::Playing { .. }));
 }
 
-/// The flush lands when the menu opens, since the user may hold on to the PMIC's six second
-/// cutoff. Powering off from the menu goes through the OS: the hardware cut syncs nothing, and
-/// a shutdown that leaves the GPU module loaded hangs this board with the rails up.
 #[test]
 fn opening_the_menu_flushes_and_the_choice_powers_off() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -107,7 +102,6 @@ fn opening_the_menu_flushes_and_the_choice_powers_off() {
     );
 }
 
-/// The release commits nothing; the choice is made with A.
 #[test]
 fn a_release_after_the_hold_does_nothing_on_its_own() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -118,8 +112,6 @@ fn a_release_after_the_hold_does_nothing_on_its_own() {
     assert_eq!(a.power_menu(), Some(0), "and leaves the menu up");
 }
 
-/// A doze still draws 400-700 mA and the board cannot wake itself from sleep, so when the doze
-/// runs out the device powers off.
 #[test]
 fn an_idle_doze_times_out_into_a_power_off() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -137,7 +129,6 @@ fn an_idle_doze_times_out_into_a_power_off() {
     );
 }
 
-/// A gauge one point above the threshold is a warning, not a cutoff.
 #[test]
 fn a_battery_above_the_threshold_keeps_playing() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -165,8 +156,6 @@ fn the_autosave_repeats_rather_than_firing_once() {
     assert_eq!(flushes.load(Ordering::Relaxed), 2);
 }
 
-/// The invariant is 60 s since the state was last durable, not 60 s since the last
-/// autosave, so a lid close in between moves the deadline with it.
 #[test]
 fn a_flush_resets_the_autosave_clock() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -196,7 +185,6 @@ fn counting() -> (Box<dyn Snapshot>, Arc<AtomicUsize>) {
     )
 }
 
-/// Counts state requests, the only way to tell one flush from the next on the same file.
 struct CountingSnapshot {
     flushes: Arc<AtomicUsize>,
 }
@@ -221,8 +209,6 @@ fn at(percent: u8, charge: Charge) -> Battery {
     Battery { percent, charge }
 }
 
-/// A GBA save and a Game Boy save of the same stem are separate files: a 128 KB GBA save
-/// truncated into Game Boy SRAM is accepted by the core.
 #[test]
 fn one_stem_on_two_platforms_writes_two_saves() {
     let d = tempfile::tempdir().unwrap();
@@ -241,7 +227,6 @@ fn one_stem_on_two_platforms_writes_two_saves() {
     assert!(d.path().join("Saves/GB/Tetris.sav").is_file());
 }
 
-/// A flat device booted with the cable in does not flush and power off.
 #[test]
 fn a_critical_battery_on_a_charger_keeps_running() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -253,8 +238,6 @@ fn a_critical_battery_on_a_charger_keeps_running() {
     );
 }
 
-/// A full battery reading three percent is a gauge that has not caught up, not a device
-/// about to die.
 #[test]
 fn a_critical_battery_reading_full_keeps_running() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -277,8 +260,6 @@ fn a_critical_battery_that_is_discharging_still_powers_off() {
     );
 }
 
-/// THE INVARIANT. On this PMIC `current_now` reads empty and `status` may too; with every
-/// reading Unknown the device must still protect itself exactly as before.
 #[test]
 fn an_unknown_charge_state_powers_off_exactly_as_before() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -293,13 +274,10 @@ fn an_unknown_charge_state_powers_off_exactly_as_before() {
     );
 }
 
-/// The battery poll deadline resets at `set_power`, when a reading first becomes possible,
-/// so the case band is not blank for the first ten seconds of boot.
 #[test]
 fn the_battery_is_read_the_moment_power_is_attached_not_ten_seconds_later() {
     let d = tmp_root_with_carts(&["Emerald"]);
     let (mut a, _charge, _percent) = common::app_playing_with_charge(d.path(), "Emerald");
-    // The very next tick after `set_power`, nowhere near a full `BATTERY_POLL_MS` from boot.
     a.tick_ms(1);
     assert!(
         a.battery().is_some(),
@@ -307,7 +285,6 @@ fn the_battery_is_read_the_moment_power_is_attached_not_ten_seconds_later() {
     );
 }
 
-/// A cable going in shows on the fast tick, not ten seconds later.
 #[test]
 fn the_charge_state_is_picked_up_inside_a_second() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -323,8 +300,6 @@ fn the_charge_state_is_picked_up_inside_a_second() {
     );
 }
 
-/// The percent rides the slow tick. The gauge moves between ticks, so a fast tick re-reading
-/// the whole snapshot would be caught.
 #[test]
 fn the_percent_survives_a_fast_tick_that_only_moved_the_charge_state() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -345,8 +320,6 @@ fn the_percent_survives_a_fast_tick_that_only_moved_the_charge_state() {
     );
 }
 
-/// A cable in reads Charging even under the Low threshold. The percent is driven low so an
-/// inverted precedence fails.
 #[test]
 fn charging_outranks_low_so_a_flat_device_on_a_cable_is_not_red() {
     let d = tmp_root_with_carts(&["Emerald"]);

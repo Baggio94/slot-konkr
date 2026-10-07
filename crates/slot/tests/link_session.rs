@@ -17,7 +17,6 @@ use slot_retro::{LinkChannel, LoopbackLink, NETPACKET_RELIABLE};
 use slot_store::{write_slot_state, Core, Platform, SlotState, StateRing};
 use slot_ui::{LinkBadge, Toast};
 
-/// Both ends on loopback, proving the framing and the threading.
 #[test]
 fn a_packet_survives_the_wire_intact() {
     let port = common::free_port();
@@ -35,9 +34,6 @@ fn a_packet_survives_the_wire_intact() {
     assert_eq!(got.as_deref(), Some(&b"from the other side"[..]));
 }
 
-/// Two packets arriving in the same read are still delivered as two. Both frames go out in one
-/// `write_all` from a raw socket so they land together; two `send()` calls often arrive as
-/// separate reads on loopback and let an unframed implementation pass.
 #[test]
 fn batched_writes_keep_their_boundaries() {
     let port = common::free_port();
@@ -73,9 +69,6 @@ fn try_recv_never_blocks_on_an_idle_link() {
     );
 }
 
-/// The peer vanishing ends the reader thread quietly, and `try_recv` and `send` stay safe.
-/// The peer is a raw socket because a dropped `TcpLink`'s reader thread keeps a dup of the fd
-/// open, so it would not send a FIN.
 #[test]
 fn peer_disconnecting_does_not_panic_or_hang() {
     let port = common::free_port();
@@ -86,22 +79,16 @@ fn peer_disconnecting_does_not_panic_or_hang() {
 
     drop(host_raw);
 
-    // Give the reader thread a moment to notice EOF, then poll a few more times: none of
-    // this should panic, hang, or ever report a packet that didn't arrive.
     std::thread::sleep(std::time::Duration::from_millis(200));
     for _ in 0..10 {
         assert_eq!(client.try_recv(), None);
     }
-    // Writing to a gone peer must not panic. The first write after close can still succeed
-    // before the RST returns, so write several times.
     for _ in 0..20 {
         client.send(NETPACKET_RELIABLE, b"into the void");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
 
-/// Dropping a `TcpLink` must send a real FIN: silence is indistinguishable from a player still
-/// thinking. The read timeout makes a regression fail rather than hang.
 #[test]
 fn dropping_the_link_closes_the_wire() {
     let port = common::free_port();
@@ -123,22 +110,16 @@ fn dropping_the_link_closes_the_wire() {
     );
 }
 
-/// A peer that never reads must not block `send`: the worker calls it every present and
-/// `EmuHandle::drop` joins that thread, so a hang would hang eject and shutdown. Run on its own
-/// thread under `recv_timeout` so a regression fails instead of hanging the suite.
 #[test]
 fn send_never_blocks_on_a_peer_that_stopped_reading() {
     let port = common::free_port();
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind");
     let acceptor = std::thread::spawn(move || listener.accept().expect("accept").0);
     let mut client = TcpLink::join("127.0.0.1", port).expect("join");
-    // Accepted, held onto, and never read from again.
     let _peer = acceptor.join().expect("accept thread");
 
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        // Large packets, well past what macOS's auto-tuned loopback buffers absorb, which
-        // swallowed tens of thousands of small sends without blocking.
         let payload = vec![0u8; 60_000];
         for _ in 0..300 {
             client.send(NETPACKET_RELIABLE, &payload);
@@ -152,7 +133,6 @@ fn send_never_blocks_on_a_peer_that_stopped_reading() {
     );
 }
 
-/// `wrap` sets `set_nodelay(true)`.
 #[test]
 fn wrap_disables_nagle_on_both_sockets() {
     let port = common::free_port();
@@ -171,12 +151,8 @@ fn wrap_disables_nagle_on_both_sockets() {
     );
 }
 
-/// `host` binds the address it is given, not the wildcard. `203.0.113.1` (RFC 5737 TEST-NET-3)
-/// is on no interface, so binding it must fail.
 #[test]
 fn host_binds_the_address_it_is_given_not_every_interface() {
-    // On its own thread with a timeout: a wildcard bind would succeed and block in `accept()`
-    // forever.
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let kind = TcpLink::host("203.0.113.1", 0).err().map(|e| e.kind());
@@ -203,13 +179,6 @@ fn wait_for(link: &mut TcpLink) -> Option<Vec<u8>> {
     None
 }
 
-// --- the interlocks -----------------------------------------------------------------------
-//
-// libretro.h: "When two or more players are connected and this interface has been set, time
-// manipulation features (such as pausing, slow motion, fast forward, rewinding, save state
-// loading, etc.) are disabled to avoid interrupting communication." `begin_link`/`end_link`
-// are pure state, so these drive `App` with no core, device or transport.
-
 #[test]
 fn a_live_session_disables_rewind_and_state_loading() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -228,7 +197,6 @@ fn a_live_session_disables_rewind_and_state_loading() {
     );
 }
 
-/// A refused rewind shakes the screen rather than doing nothing.
 #[test]
 fn a_live_session_refuses_a_rewind_press_instead_of_dropping_it() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -242,7 +210,6 @@ fn a_live_session_refuses_a_rewind_press_instead_of_dropping_it() {
     );
 }
 
-/// Refused before checking for states, so a session with real saves in the ring still declines.
 #[test]
 fn a_live_session_refuses_a_state_load_even_when_one_exists() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -257,7 +224,6 @@ fn a_live_session_refuses_a_state_load_even_when_one_exists() {
     );
 }
 
-/// A pick from the open switcher (`load_selected`) is refused too: the guard is in `load_file`.
 #[test]
 fn a_live_session_refuses_a_switcher_pick_even_when_one_exists() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -272,15 +238,12 @@ fn a_live_session_refuses_a_switcher_pick_even_when_one_exists() {
         a.refusal_active(a.now()),
         "picking a state in the switcher must be refused during a session"
     );
-    // A refused pick must not close the switcher, which would read as accepted.
     assert!(
         matches!(a.phase(), Phase::Polaroids { .. }),
         "a refused pick must not also close the switcher"
     );
 }
 
-/// Undoing a load replays bytes in hand without calling `load_file`, so it needs its own
-/// check. The load is primed before the session starts.
 #[test]
 fn a_live_session_refuses_to_undo_a_load() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -290,9 +253,9 @@ fn a_live_session_refuses_to_undo_a_load() {
     let mut a = app_playing_with(d.path(), "Emerald", snapshot);
 
     a.apply(Action::Polaroids);
-    a.apply(Action::GbaDown(Btn::A)); // load_selected: primes a Load undo
+    a.apply(Action::GbaDown(Btn::A));
     assert!(a.undo_available(a.now()), "the load did not offer an undo");
-    *loaded.lock().unwrap() = None; // clear what that priming load itself recorded
+    *loaded.lock().unwrap() = None;
 
     a.begin_link(0);
     a.undo(a.now());
@@ -311,7 +274,6 @@ fn a_live_session_refuses_to_undo_a_load() {
     );
 }
 
-/// Opening the switcher pauses the core (`Session::sync_speed`), which netpacket forbids.
 #[test]
 fn a_live_session_refuses_to_open_the_switcher() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -331,7 +293,6 @@ fn a_live_session_refuses_to_open_the_switcher() {
     );
 }
 
-/// The power menu pauses the core too, so it is refused as the switcher is.
 #[test]
 fn a_live_session_refuses_to_open_the_power_menu() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -349,7 +310,6 @@ fn a_live_session_refuses_to_open_the_power_menu() {
     );
 }
 
-/// Ejecting ends the session, or both interlocks stay closed with no cart to carry it.
 #[test]
 fn ejecting_during_a_session_ends_it() {
     let d = tmp_root_with_carts(&["Emerald", "Ruby"]);
@@ -366,7 +326,6 @@ fn ejecting_during_a_session_ends_it() {
     assert!(a.may_load_state());
 }
 
-/// During a session a power press ends it, and does not also flush-and-continue.
 #[test]
 fn a_power_press_ends_a_live_session_instead_of_flushing_only() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -381,13 +340,10 @@ fn a_power_press_ends_a_live_session_instead_of_flushing_only() {
         "ending the session is not an eject or a doze"
     );
 
-    // A second press, with no session left, is an ordinary flush.
     a.apply(Action::PowerPress);
     assert!(!a.link_active());
 }
 
-/// `PowerTap` reaches `doze` via `power_press`, bypassing `PowerPress`'s guard. `doze` ends the
-/// session and still dozes, so one tap does both.
 #[test]
 fn a_power_tap_ends_a_live_session_and_dozes_in_the_same_tap() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -402,13 +358,10 @@ fn a_power_tap_ends_a_live_session_and_dozes_in_the_same_tap() {
         "ending the session must not leave the device awake behind the tap that closed it"
     );
 
-    // A second tap wakes, exactly as it does outside a session.
     a.apply(Action::PowerTap);
     assert!(matches!(a.phase(), Phase::Playing { .. }));
 }
 
-/// A lid close ends a session through `doze` and must still land in `Doze`: a real lid sends
-/// `LidClose` once, so there is no retry, and staying awake would draw 400-700 mA.
 #[test]
 fn a_lid_close_ends_a_live_session_and_dozes() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -423,13 +376,10 @@ fn a_lid_close_ends_a_live_session_and_dozes() {
         "ending the session must not leave the device awake behind a shut lid"
     );
 
-    // The lid opening, not a second close, is what hardware can actually deliver next.
     a.apply(Action::LidOpen);
     assert!(matches!(a.phase(), Phase::Playing { .. }));
 }
 
-/// A critical battery reading goes to `begin_power_off` with no doze upstream, so it must end
-/// the session itself rather than pause the core under it.
 #[test]
 fn a_critical_battery_reading_ends_a_live_session_instead_of_pausing_it() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -448,8 +398,6 @@ fn a_critical_battery_reading_ends_a_live_session_instead_of_pausing_it() {
     assert!(a.powering_off(), "the shutdown itself must still proceed");
 }
 
-/// The doze timeout, driven through `App::update`, must not drop a live session: the partner
-/// may be reading a menu. `on_doze_timeout` itself carries no guard.
 #[test]
 fn doze_never_expires_while_a_session_is_live() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -458,7 +406,6 @@ fn doze_never_expires_while_a_session_is_live() {
     a.apply(Action::LidClose);
     a.begin_link(0);
 
-    // Three seconds of updates against a two second timeout.
     for _ in 0..180 {
         a.update(1.0 / 60.0);
     }
@@ -492,11 +439,6 @@ fn link_client_id_reports_which_side_of_the_session_this_device_is() {
     assert_eq!(a.link_client_id(), Some(1));
 }
 
-// --- ending a session reaches the emulator thread, not just App's own bookkeeping ---------
-//
-// `App::end_link` never touches the core; `Session` bridges an ending onto
-// `EmuHandle::end_link`, so these drive a real `Session`.
-
 fn step(s: &mut Session, now: &mut Millis, ev: Option<RawEvent>) {
     *now += 16;
     s.feed(ev, *now);
@@ -516,7 +458,6 @@ fn wait_until(cond: impl Fn() -> bool) -> bool {
     }
 }
 
-/// A power press ends the core's session too, not only `App::link_active`.
 #[test]
 fn ending_a_session_reaches_the_emulator_thread_too() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -561,9 +502,6 @@ fn ending_a_session_reaches_the_emulator_thread_too() {
     );
 }
 
-/// A critical battery ending, reached through `update` rather than `apply`, also reaches the
-/// emulator thread. Driven through a real `Power` so it happens inside the `update` that
-/// `Session::bridge_link` wraps.
 #[test]
 fn a_critical_battery_reading_reaches_the_emulator_thread_too() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -597,7 +535,6 @@ fn a_critical_battery_reading_reaches_the_emulator_thread_too() {
     s.app_mut().begin_link(0);
     assert!(s.app().link_active());
 
-    // `set_power` primes `battery_at` to fire on the next poll, so one frame is enough.
     let (power, _) = panel_with_battery(d.path(), Duration::from_secs(300), 1, 3);
     s.app_mut().set_power(power);
     step(&mut s, &mut now, None);
@@ -612,7 +549,6 @@ fn a_critical_battery_reading_reaches_the_emulator_thread_too() {
     );
 }
 
-/// Holding R2 during a session does not fast forward. The gate is in `Session::sync_speed`.
 #[test]
 fn a_live_session_refuses_fast_forward() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -648,8 +584,6 @@ fn a_live_session_refuses_fast_forward() {
     );
 }
 
-/// The link screen over a live session leaves the core running: gpSP drops a peer after 240
-/// silent frames, so pausing would end the session about four seconds later.
 #[test]
 fn the_link_screen_over_a_session_leaves_the_core_running() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -689,7 +623,6 @@ fn the_link_screen_over_a_session_leaves_the_core_running() {
         "opening the screen ended the session"
     );
 
-    // The core runs on, but the buttons belong to the screen, not the game.
     step(&mut s, &mut now, Some(RawEvent::Down(Btn::A)));
     for _ in 0..3 {
         step(&mut s, &mut now, None);
@@ -700,7 +633,6 @@ fn the_link_screen_over_a_session_leaves_the_core_running() {
     );
 }
 
-/// The fast forward badge stays off during a session, since the speed is withheld under it.
 #[test]
 fn a_live_session_hides_the_fast_forward_badge() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -734,18 +666,10 @@ fn a_live_session_hides_the_fast_forward_badge() {
     );
 }
 
-// --- a bounded, cancellable accept ---------------------------------------------------------
-//
-// A deadline means nobody arrived, a cancel means the player changed their mind, and the
-// screen must tell them apart.
-
-/// Port 0 is "any free port", and nothing is told which, so nothing can connect. The bound
-/// must end this.
 #[test]
 fn a_host_that_nobody_joins_gives_up_instead_of_waiting_forever() {
     let cancel = Cancel::new();
     let started = Instant::now();
-    // `let Err(..) else` rather than `expect_err`, which would need `Debug` on `TcpLink`.
     let Err(err) = TcpLink::host_until("127.0.0.1", 0, Duration::from_millis(300), &cancel) else {
         panic!("nobody connected, so this must not succeed");
     };
@@ -769,16 +693,12 @@ fn a_host_can_be_cancelled_while_it_is_waiting() {
         panic!("cancelled, so this must not succeed");
     };
     assert_eq!(err.kind(), std::io::ErrorKind::Interrupted);
-    // The bound was a minute; cancellation is what ended this, not the deadline.
     assert!(
         started.elapsed() < Duration::from_secs(5),
         "cancel did not take effect"
     );
 }
 
-/// A peer that does arrive still gives a link that carries packets both ways. The accepted
-/// stream inherits non-blocking mode from `host_until`'s listener, so unless it is cleared the
-/// host's reader meets `WouldBlock` at once and gives up. Only the inbound half shows that.
 #[test]
 fn a_bounded_host_still_accepts_a_peer_that_does_arrive() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -810,8 +730,6 @@ fn a_bounded_host_still_accepts_a_peer_that_does_arrive() {
     );
 }
 
-/// The order the players press in must not matter: the host has a radio to bring up (one to
-/// five seconds on device) before it binds.
 #[test]
 fn a_joiner_waits_for_a_host_that_is_not_listening_yet() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -820,7 +738,6 @@ fn a_joiner_waits_for_a_host_that_is_not_listening_yet() {
 
     let cancel = Cancel::new();
     let started = Instant::now();
-    // The host arrives well after a one-shot connect would have failed.
     let host = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(400));
         TcpLink::host("127.0.0.1", port)
@@ -834,14 +751,12 @@ fn a_joiner_waits_for_a_host_that_is_not_listening_yet() {
         "connected before the host existed, so this proves nothing"
     );
 
-    // A real link, not merely a connect that returned: both directions, as with the host.
     joiner.send(0, b"up");
     assert_eq!(wait_for(&mut hosted), Some(b"up".to_vec()));
     hosted.send(0, b"down");
     assert_eq!(wait_for(&mut joiner), Some(b"down".to_vec()));
 }
 
-/// A host that never comes has to become an answer rather than a wait with no end.
 #[test]
 fn a_joiner_gives_up_when_no_host_ever_appears() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -864,7 +779,6 @@ fn a_joiner_gives_up_when_no_host_ever_appears() {
     );
 }
 
-/// The joiner spends its wait asleep between attempts, so B has to reach it there too.
 #[test]
 fn a_joiner_can_be_cancelled_while_it_is_retrying() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -888,7 +802,6 @@ fn a_joiner_can_be_cancelled_while_it_is_retrying() {
     );
 }
 
-/// A raw peer going away (a player switching off) is reported, not taken for a quiet peer.
 #[test]
 fn a_link_whose_peer_goes_away_reports_itself_closed() {
     let port = common::free_port();
@@ -920,14 +833,6 @@ fn a_quiet_link_is_not_closed() {
     assert!(!slot_retro::LoopbackLink::default().is_closed());
 }
 
-// --- the control channel ------------------------------------------------------------------
-//
-// A frame is a length and that many bytes. No core packet can be zero-length (`netpacket_send`
-// and `TcpLink::send` both drop them), so a zero-length frame is the control marker, followed
-// by a one-byte opcode that later builds can add to.
-
-/// The deliberate ending, on the wire, so the far end ends now rather than `LINK_LOST_MS`
-/// later. The control frame must not reach the core.
 #[test]
 fn ending_a_link_tells_the_peer_rather_than_only_dropping_the_socket() {
     let port = common::free_port();
@@ -954,9 +859,6 @@ fn ending_a_link_tells_the_peer_rather_than_only_dropping_the_socket() {
     );
 }
 
-/// A control frame with an unknown opcode is dropped, not acted on or passed to the core, and
-/// the stream stays in step so the next packet arrives intact. Raw bytes, since this build
-/// cannot produce a future opcode.
 #[test]
 fn an_unknown_control_frame_is_ignored_and_the_stream_stays_in_step() {
     let port = common::free_port();
@@ -966,7 +868,6 @@ fn an_unknown_control_frame_is_ignored_and_the_stream_stays_in_step() {
     let mut host = server.join().expect("host thread");
 
     let mut batch = Vec::new();
-    // All in one write, so the reader has to separate them itself.
     batch.extend_from_slice(&0u16.to_be_bytes());
     batch.extend_from_slice(&1u16.to_be_bytes());
     batch.push(0x7f);
@@ -986,8 +887,6 @@ fn an_unknown_control_frame_is_ignored_and_the_stream_stays_in_step() {
     );
 }
 
-/// An empty payload cannot be put on the wire, or it would be read as the control marker and
-/// end the session.
 #[test]
 fn an_empty_payload_is_refused_rather_than_framed_as_the_control_marker() {
     let port = common::free_port();
@@ -1011,8 +910,6 @@ fn an_empty_payload_is_refused_rather_than_framed_as_the_control_marker() {
     );
 }
 
-// --- the badge follows the session, and a lost peer breaks it then ends it ----------------
-
 #[test]
 fn a_live_session_shows_the_badge_for_its_role() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -1033,7 +930,7 @@ fn a_peer_that_leaves_breaks_the_badge_for_two_seconds_then_ends_the_session() {
     app.peer_lost();
     assert_eq!(app.link_badge(), LinkBadge::HostingLost);
     for _ in 0..114 {
-        app.update(1.0 / 60.0); // 1.9 s
+        app.update(1.0 / 60.0);
     }
     assert!(
         app.link_active(),
@@ -1057,8 +954,6 @@ fn a_session_ended_on_this_device_shows_no_broken_badge() {
     assert_eq!(app.link_badge(), LinkBadge::Off);
 }
 
-/// A peer that said it was going ends the session on this frame, with a banner saying so,
-/// rather than breaking the badge first.
 #[test]
 fn a_peer_that_ends_the_link_ends_the_session_at_once_and_says_so() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -1078,7 +973,6 @@ fn a_peer_that_ends_the_link_ends_the_session_at_once_and_says_so() {
     assert_eq!(app.toast(), Some(Toast::PeerEnded));
 }
 
-/// A host on another GBA BIOS ends the session here and says why.
 #[test]
 fn a_host_on_another_bios_ends_the_session_and_says_so() {
     let d = tmp_root_with_carts(&["Emerald"]);

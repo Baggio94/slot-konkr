@@ -1,8 +1,6 @@
 use crate::plate::UndoFace;
 use crate::text;
 
-/// What a held POWER offers. No Standby: the board suspends well but its RTC alarm never fires,
-/// so nothing could wake it. The lid and button run a timer and power off instead.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum PowerChoice {
     Restart,
@@ -10,10 +8,8 @@ pub enum PowerChoice {
 }
 
 impl PowerChoice {
-    /// Restart first: it costs nothing to pick by mistake.
     pub const ALL: [PowerChoice; 2] = [PowerChoice::Restart, PowerChoice::PowerOff];
 
-    /// Position in `ALL`, which is the order the faces are uploaded in.
     pub fn index(self) -> usize {
         self as usize
     }
@@ -26,16 +22,12 @@ impl PowerChoice {
     }
 }
 
-/// Set well above the chrome's caption size: read at arm's length before an irreversible
-/// choice. The shutdown line uses the same size.
 pub(crate) const MENU_PX: f32 = 30.0;
 const MENU_MIN_PX: f32 = 18.0;
 pub(crate) const MENU_H: u32 = 40;
-/// Padding either side of the ink, also used for the highlight bar so it hugs the words.
 pub const MENU_PAD: u32 = 18;
 pub(crate) const MENU_INK: [u8; 3] = [0xf6, 0xf4, 0xef];
 
-/// Sized to its own text so the highlight bar fits each word.
 pub fn menu_face(label: &str) -> UndoFace {
     let Some(font) = text::label_font() else {
         return UndoFace {

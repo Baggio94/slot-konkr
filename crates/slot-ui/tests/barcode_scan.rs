@@ -1,21 +1,15 @@
-//! Renders the encoder's output and scans it with a real reader, the only check that proves
-//! the Code 39 table. Needs `zbarimg` (`brew install zbar`); without it the test says so.
-
 use std::process::Command;
 
 use slot_ui::{code39, CODE39_NARROW, CODE39_WIDE};
 
-/// Puts the wide element at ten pixels, inside Code 39's 2:1 to 3:1 range.
 const SCALE: f32 = 4.0;
 
 fn render(payload: &str, to: &std::path::Path) {
     let run = code39(&format!("*{payload}*")).expect("payload is in the alphabet");
     let narrow = (CODE39_NARROW * SCALE) as usize;
     let wide = (CODE39_WIDE * SCALE) as usize;
-    // Code 39 needs a quiet zone of at least ten narrow elements either side.
     let quiet = narrow * 12;
     let elements: usize = run.iter().map(|w| if *w { wide } else { narrow }).sum();
-    // Code 39 requires one narrow space between characters.
     let gaps = (run.len() / 9) * narrow;
     let (w, h) = (quiet * 2 + elements + gaps, 120usize);
 
@@ -24,7 +18,6 @@ fn render(payload: &str, to: &std::path::Path) {
     for chunk in run.chunks_exact(9) {
         for (n, is_wide) in chunk.iter().enumerate() {
             let run_w = if *is_wide { wide } else { narrow };
-            // Even elements are bars, odd are spaces.
             if n.is_multiple_of(2) {
                 for row in 0..h {
                     px[row * w + x..row * w + x + run_w].fill(0);

@@ -1,12 +1,8 @@
-//! Everything the binary does with a compositor except own one. Host and device differ only in
-//! the window above this.
-
 use std::time::{Duration, Instant};
 
 use slot_gfx::{Compositor, Draw, TexId, OUT_H, OUT_W};
 use slot_input::{InputSource, Millis};
 use slot_power::{Platform, Power};
-// Aliased: `slot_power::Platform` is the machine slot runs on; this is a shelf's console.
 use slot_store::format_stamp;
 use slot_ui::{
     arrows_hint_face, badge_face, cart_face, cart_shadow, chip_face, chip_shadow_face,
@@ -26,11 +22,8 @@ use crate::link_start::{LinkFail, LinkStep};
 use crate::session::Session;
 use crate::wallpaper;
 
-/// How long a dark panel waits before powering off. The device still draws 400-700 mA while
-/// dark, and powers off rather than sleeps because the RTC alarm never fires on this board.
 const DOZE_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// Amber, the only warning colour, kept apart from the HUD ink so a refusal reads as one.
 const ALERT_INK: [u8; 3] = [0xf0, 0xb4, 0x3c];
 
 pub struct Frontend {
@@ -38,23 +31,15 @@ pub struct Frontend {
     start: Instant,
     last: Instant,
     draws: Vec<Draw>,
-    /// One texture per ring slot, reused every time the switcher opens.
     polaroid_texes: Vec<TexId>,
-    /// The top plate's line of type, re-rasterised whenever the selection moves.
     title_tex: Option<TexId>,
-    /// Builds the open cart's faces off the frame loop.
     faces: FaceBuilder,
-    /// Builds the link screen's artwork off the frame loop, once, at boot.
     link_art: LinkArtBuilder,
-    /// Whether the link art has been uploaded and handed to `App` already.
     link_art_done: bool,
-    /// The cart last asked for.
     core_asked: Option<String>,
-    /// The open cart and its lid, and which cart they were built for.
     core_board_tex: Option<TexId>,
     core_lid_tex: Option<TexId>,
     core_built: Option<String>,
-    /// The undo cap's label, which changes with what is on offer.
     undo_tex: Option<TexId>,
     switcher: Switcher,
     clocks: Clocks,
@@ -62,7 +47,6 @@ pub struct Frontend {
     quick_clock: QuickClock,
 }
 
-/// Date & Time's value in the quick menu, grey and lit, and the text they were built for.
 #[derive(Default)]
 struct QuickClock {
     dim: Option<TexId>,
@@ -70,33 +54,25 @@ struct QuickClock {
     shown: String,
 }
 
-/// The about label and the battery reading it was built for; the gauge is all that moves.
 #[derive(Default)]
 struct AboutFace {
     tex: Option<TexId>,
-    /// `None` is a board with no gauge, not an unbuilt label (`tex` says that).
     battery: Option<u8>,
 }
 
-/// The clock screen's two faces and the shelf's one, with what each was last built for.
 #[derive(Default)]
 struct Clocks {
     line: Option<TexId>,
-    /// Uploaded once, at boot.
     hint: Option<TexId>,
     shelf: Option<TexId>,
     picked: Option<String>,
     shown: String,
     battery: String,
     battery_tex: Option<TexId>,
-    /// The machine the band is naming, and its face. Re-made only when the shelf changes, since
-    /// rasterising must not happen on a frame.
     platform: String,
     platform_tex: Option<TexId>,
 }
 
-/// What the switcher's textures were built for: photos and undo cap per opening, title per
-/// selection.
 #[derive(Default)]
 struct Switcher {
     open: bool,
@@ -132,7 +108,6 @@ impl Frontend {
         }
     }
 
-    /// Everything that never changes. Needs a live context, so it runs after the compositor.
     pub fn upload_faces(&mut self, compositor: &mut Compositor) {
         let faces = self
             .session
@@ -164,12 +139,9 @@ impl Frontend {
             })
             .collect();
         self.session.app_mut().set_link_badge_faces(link_badges);
-        // Its own upload: drawn on a cart at its own size, in the warning colour.
         let alert = icon_face(Icon::Alert, ALERT_PX, ALERT_INK);
         let alert = compositor.create_texture(alert.w, alert.h, &alert.rgba);
         self.session.app_mut().set_alert_face(alert);
-        // At boot: a shutdown has no time to rasterise and is about to lose the GPU. In
-        // `PowerChoice::ALL` order.
         let lines = PowerChoice::ALL
             .iter()
             .map(|c| {
@@ -189,8 +161,6 @@ impl Frontend {
             })
             .collect();
         self.session.app_mut().set_power_menu_faces(menu);
-        // The quick menu's faces at boot, so the menu never waits on a font. Only Date & Time's
-        // value changes by itself; `sync_quick_clock` builds that.
         let mut up = |f: UndoFace| (compositor.create_texture(f.w, f.h, &f.rgba), f.w, f.h);
         let labels = QuickRow::ALL
             .iter()
@@ -211,8 +181,6 @@ impl Frontend {
             carets,
             legend,
         });
-        // The open cart's fixed parts, in `Core::ALL` order, so a lid coming off never waits on
-        // a rasteriser.
         let sockets = slot_store::Core::ALL
             .iter()
             .map(|c| {
@@ -234,7 +202,6 @@ impl Frontend {
         self.session
             .app_mut()
             .set_core_part_faces(sockets, chips, blank, shadow);
-        // Ordered like the switcher's legend: way out first, choice last.
         let legend = [
             hint_face("B", "Cancel"),
             arrows_hint_face("Swap"),
@@ -244,14 +211,11 @@ impl Frontend {
         .map(|f| (compositor.create_texture(f.w, f.h, &f.rgba), f.w))
         .collect();
         self.session.app_mut().set_core_legend_faces(legend);
-        // The in-game menu's faces, at boot: a failing link is the worst moment to wait on a
-        // font.
         let roles = menu_faces(compositor, LinkRow::ALL.iter().map(|r| r.text()));
         self.session.app_mut().set_link_menu_faces(roles);
         if let Some(linked) = menu_faces(compositor, ["Linked"].into_iter()).pop() {
             self.session.app_mut().set_link_linked_face(linked);
         }
-        // In `LinkLegend::ALL` order, which is how `App` finds each one.
         let legend = [
             hint_face("B", "Cancel"),
             hint_face("SELECT", "Mode"),
@@ -279,27 +243,22 @@ impl Frontend {
         self.session.app_mut().set_toast_faces(toasts);
         let legend = legend_faces(compositor, &LEGEND);
         self.session.app_mut().set_legend_faces(legend);
-        // Fixed text, so moving the caret rasterises only the line above it.
         let hint = set_clock_hint_face();
         self.clocks.hint = Some(compositor.create_texture(hint.w, hint.h, &hint.rgba));
         let shadow = cart_shadow();
         let id = compositor.create_texture(shadow.w, shadow.h, &shadow.rgba);
         self.session.app_mut().set_cart_shadow(id);
-        // One per Game Pak mould: the shells' corners differ, and a shared backing shows through
-        // a dimmed cart where they disagree.
         let notched = gb_cart_shadow(GbShell::Notched);
         let notched = compositor.create_texture(notched.w, notched.h, &notched.rgba);
         let rounded = gb_cart_shadow(GbShell::Rounded);
         let rounded = compositor.create_texture(rounded.w, rounded.h, &rounded.rgba);
         self.session.app_mut().set_gb_cart_shadows(notched, rounded);
-        // The bolt sits beside the capsule, not over the fill, so it takes the HUD ink.
         let bolt = icon_face(Icon::Charging, BOLT_PX, HUD_INK);
         let bolt_id = compositor.create_texture(bolt.w, bolt.h, &bolt.rgba);
         self.session.app_mut().set_bolt_face(bolt_id);
         self.upload_wallpaper(compositor);
     }
 
-    /// One decode, at boot. No usable picture leaves the plain ground.
     fn upload_wallpaper(&mut self, compositor: &mut Compositor) {
         let app = self.session.app();
         let seed = app.wall_secs().unsigned_abs();
@@ -314,20 +273,15 @@ impl Frontend {
         self.session.app_mut().set_wallpaper(id);
     }
 
-    /// One frame into the offscreen target and out to a `window`-sized surface. The caller swaps.
     pub fn render(&mut self, compositor: &mut Compositor, window: (u32, u32)) {
         self.compose(compositor);
         compositor.end_frame(window);
     }
 
-    /// One frame into the offscreen target only; tests read it back with
-    /// `Compositor::read_frame`.
     pub fn compose(&mut self, compositor: &mut Compositor) {
-        // Every frame: the grade is part of the final blit.
         compositor.set_blue_light(self.session.app().blue_light());
         compositor.set_shake(self.session.app().screen_shake());
         compositor.set_screen_power(self.session.app().screen_power());
-        // Every frame: the pass must be told what to draw whether or not anything changed.
         compositor.set_game_source_rect(self.session.app().source_rect());
         compositor.begin_frame();
         if let Some(frame) = self.session.frame() {
@@ -391,14 +345,10 @@ impl Frontend {
         compositor.draw_list(&self.draws);
     }
 
-    /// Input and time, after the frame is on screen. Called every frame since gesture windows
-    /// expire regardless of input.
-    /// See `Session::set_driven`.
     pub fn drive_emulator(&mut self) {
         self.session.set_driven(true);
     }
 
-    /// See `Session::step_emulator`.
     pub fn step_emulator(&self, present: Duration, timeout: Duration) -> bool {
         self.session.step_emulator(present, timeout)
     }
@@ -416,12 +366,10 @@ impl Frontend {
         self.session.app()
     }
 
-    /// See `Session::core_settling`.
     pub fn core_settling(&self) -> bool {
         self.session.core_settling()
     }
 
-    /// `advance` on a clock the caller keeps, for recording at an exact frame rate.
     pub fn advance_at(&mut self, input: &mut dyn InputSource, now: Millis, dt: f32) {
         let events = input.poll(now);
         self.session.feed(events, now);
@@ -444,13 +392,11 @@ impl Frontend {
         self.session.app_mut().restart();
     }
 
-    /// The state was already flushed on the edge that set `powering_off`.
     pub fn poweroff(&mut self) {
         self.session.app_mut().poweroff();
     }
 }
 
-/// A line of menu type per label, in order, with each face's size.
 fn menu_faces<'a>(
     compositor: &mut Compositor,
     labels: impl Iterator<Item = &'a str>,
@@ -463,7 +409,6 @@ fn menu_faces<'a>(
         .collect()
 }
 
-/// A screen's key caps in legend order, uploaded once since they never change.
 fn legend_faces(compositor: &mut Compositor, legend: &[(&str, &str)]) -> Vec<TexId> {
     legend
         .iter()
@@ -474,15 +419,12 @@ fn legend_faces(compositor: &mut Compositor, legend: &[(&str, &str)]) -> Vec<Tex
         .collect()
 }
 
-/// The switcher's textures, which outlive any one opening.
 struct Faces<'a> {
     pool: &'a mut Vec<TexId>,
     title: &'a mut Option<TexId>,
     undo: &'a mut Option<TexId>,
 }
 
-/// Photos and undo cap are rebuilt per opening, while paused, since the ring changes between
-/// openings. The title follows the selection.
 fn sync_switcher(app: &mut App, compositor: &mut Compositor, texes: Faces, state: &mut Switcher) {
     if !matches!(app.phase(), Phase::Polaroids { .. }) {
         state.open = false;
@@ -509,8 +451,6 @@ fn sync_switcher(app: &mut App, compositor: &mut Compositor, texes: Faces, state
             .collect();
         app.set_polaroid_faces(ids);
 
-        // An offer can expire but not change kind while the switcher is up, so rasterise on
-        // the way in only.
         let label = app
             .undo_label()
             .map(|l| upload(compositor, texes.undo, hint_face("X", l)));
@@ -524,12 +464,10 @@ fn sync_switcher(app: &mut App, compositor: &mut Compositor, texes: Faces, state
     }
 }
 
-/// The picker rebuilds per press; the shelf clock only when the minute turns.
 fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
     let picked = app.picker().map(|p| p.text());
     if picked != clocks.picked {
         clocks.picked = picked;
-        // Only the line; the fixed hint was uploaded at boot.
         if let (Some(face), Some(hint)) = (app.picker().map(|p| p.face()), clocks.hint) {
             let line = upload(compositor, &mut clocks.line, face);
             app.set_clock_faces(line, hint);
@@ -543,8 +481,6 @@ fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
         let id = upload(compositor, &mut clocks.shelf, face);
         app.set_shelf_clock_face(id, w);
     }
-    // The shelf's own name, shown faintly in the slot when the shelf changes. None on a card
-    // with one shelf.
     let platform_shown = app.slot_text().unwrap_or_default();
     if platform_shown != clocks.platform {
         clocks.platform = platform_shown.clone();
@@ -572,8 +508,6 @@ fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
     }
 }
 
-/// Date & Time's value in both inks. Built only while the quick menu is up, and only when the
-/// minute turns: each rasterisation costs on the H700.
 fn sync_quick_clock(app: &mut App, compositor: &mut Compositor, state: &mut QuickClock) {
     if app.quick_menu().is_none() {
         return;
@@ -593,7 +527,6 @@ fn sync_quick_clock(app: &mut App, compositor: &mut Compositor, state: &mut Quic
     state.shown = text;
 }
 
-/// Built only once the screen is up: a 660x228 rasterisation most sessions never need.
 fn sync_about(app: &mut App, compositor: &mut Compositor, state: &mut AboutFace) {
     if !matches!(app.phase(), Phase::About) {
         return;
@@ -613,8 +546,6 @@ fn sync_about(app: &mut App, compositor: &mut Compositor, state: &mut AboutFace)
     app.set_sticker_face(id);
 }
 
-/// The open cart's faces, requested when the caret lands and uploaded when the worker returns
-/// them, so they are normally ready before START. Never built on the frame loop (~0.5 s on H700).
 fn sync_core_picker(
     app: &mut App,
     compositor: &mut Compositor,
@@ -637,7 +568,6 @@ fn sync_core_picker(
     let Some(faces) = builder.take() else {
         return;
     };
-    // Drop a build for a cart the caret has left.
     if highlighted.as_deref() != Some(faces.stem.as_str()) || *built == highlighted {
         return;
     }
@@ -657,7 +587,6 @@ fn upload(compositor: &mut Compositor, slot: &mut Option<TexId>, face: slot_ui::
     upload_rgba(compositor, slot, face.w, face.h, &face.rgba)
 }
 
-/// Into the slot's existing texture if any, so the pool stops growing.
 fn upload_rgba(
     compositor: &mut Compositor,
     slot: &mut Option<TexId>,

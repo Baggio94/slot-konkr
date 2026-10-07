@@ -18,7 +18,6 @@ fn wait_ready(emu: &EmuHandle) {
     }
 }
 
-/// resume.state is read back when the core starts, before it reports ready.
 #[test]
 fn a_resume_state_is_restored_before_the_core_reports_ready() {
     let emu = EmuHandle::spawn(
@@ -52,8 +51,6 @@ fn read_resume_finds_what_a_flush_wrote() {
     );
 }
 
-/// `flush` writes the resume under whichever `Core` it is handed, with no ini read of its own.
-/// `gpsp.rs` covers `session.rs` resolving the ini once for every reader and writer.
 #[test]
 fn flush_routes_by_the_core_it_is_given() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -78,8 +75,6 @@ fn flush_routes_by_the_core_it_is_given() {
         .exists());
 }
 
-/// RetroArch's libretro cores write `.srm`; mGBA standalone writes `.sav`. A card carrying
-/// only the RetroArch file has a real save on it and must not boot as a new game.
 #[test]
 fn a_retroarch_srm_is_read_when_there_is_no_sav() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -91,7 +86,6 @@ fn a_retroarch_srm_is_read_when_there_is_no_sav() {
     );
 }
 
-/// The battery bytes reach the core's save ram through the same call the session makes.
 #[test]
 fn srm_bytes_on_disk_reach_the_cores_save_ram() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -123,8 +117,6 @@ fn a_sav_wins_over_an_srm_when_both_exist() {
     );
 }
 
-/// A mock core (no dylib) refuses a real 128 KB save and 256 KB resume at open, since it fixes
-/// its own sizes. `EmuSnapshot` must record the refusal, or the next flush overwrites both files.
 #[test]
 fn a_mismatched_save_ram_and_resume_are_flagged_untrusted_rather_than_silently_swapped_in() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -150,7 +142,6 @@ fn a_mismatched_save_ram_and_resume_are_flagged_untrusted_rather_than_silently_s
     );
 }
 
-/// A power tap, which flushes immediately, leaves the real files untouched after a refusal.
 #[test]
 fn a_power_press_does_not_let_a_refusing_mock_overwrite_a_real_save() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -168,8 +159,6 @@ fn a_power_press_does_not_let_a_refusing_mock_overwrite_a_real_save() {
     )
     .unwrap();
 
-    // Read back as `session.rs::spawn_core` does, and handed to the mock, which refuses both;
-    // this exercises the downstream guard, not `open_core_for`'s fallback.
     let sav = persist::read_sav(d.path(), Platform::Gba, "Emerald");
     let resume = persist::read_resume(d.path(), Platform::Gba, slot_store::Core::Mgba, "Emerald");
     let emu = EmuHandle::spawn(
@@ -196,7 +185,6 @@ fn a_power_press_does_not_let_a_refusing_mock_overwrite_a_real_save() {
     );
 }
 
-/// The same for `flush_eject`, a second independent call into `persist`.
 #[test]
 fn an_eject_does_not_let_a_refusing_mock_overwrite_a_real_save() {
     let d = common::tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -240,15 +228,12 @@ fn an_eject_does_not_let_a_refusing_mock_overwrite_a_real_save() {
     );
 }
 
-/// `SELECT+R1` after a refusal must not push onto the ring: on a full ring the push would evict
-/// the oldest genuine save to make room for the mock's placeholder.
 #[test]
 fn a_refusing_mock_does_not_evict_a_real_ring_entry_on_manual_save() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
     let real_sav = vec![0x5Au8; 131_072];
     let real_resume = vec![0xA5u8; 262_144];
 
-    // A full ring of genuine saves, ten deep, oldest to newest.
     let ring =
         slot_store::StateRing::new(d.path(), Platform::Gba, slot_store::Core::Mgba, "Emerald");
     for i in 0..slot_store::RING_MAX {
@@ -261,7 +246,6 @@ fn a_refusing_mock_does_not_evict_a_real_ring_entry_on_manual_save() {
     let oldest = before.last().expect("an oldest entry").stamp.clone();
     assert_eq!(oldest, "2026-01-01_00-00-00", "wrong entry called oldest");
 
-    // A mock handed a real resume it does not match.
     let emu = EmuHandle::spawn(
         Box::new(MockCore::new()),
         d.path().join("Games/GBA/Emerald.gba"),
@@ -294,8 +278,6 @@ fn a_refusing_mock_does_not_evict_a_real_ring_entry_on_manual_save() {
     );
 }
 
-/// `common::app_playing_with`, plus whether the opened emulator is the one the cart's states are
-/// filed under (`App::set_named_core`). `App` will not retire a refused state until it is told.
 fn seated_with_named_core(
     root: &Path,
     stem: &str,
@@ -315,8 +297,6 @@ fn seated_with_named_core(
     let mut a = App::boot(root);
     a.set_snapshot(snapshot);
     a.set_named_core(named);
-    // `on_core_ready` is where a refusal first becomes knowable. Then run past the insert floor
-    // so the cart is playing, not mid-animation.
     a.on_core_ready();
     for _ in 0..120 {
         a.update(1.0 / 60.0);
@@ -324,8 +304,6 @@ fn seated_with_named_core(
     a
 }
 
-/// A core opened on the cart's real resume, handed over as `session.rs::spawn_core` does.
-/// `MockCore::unserialize` takes only eight bytes, so the refusal is genuine.
 fn a_core_that_refuses(root: &Path, stem: &str) -> EmuHandle {
     let resume = persist::read_resume(root, Platform::Gba, slot_store::Core::Mgba, stem);
     assert!(
@@ -347,7 +325,6 @@ fn a_core_that_refuses(root: &Path, stem: &str) -> EmuHandle {
     emu
 }
 
-/// Every retired state in one cart's directory, by full path.
 fn retired_states(root: &Path, stem: &str) -> Vec<PathBuf> {
     let dir = root.join("States/GBA/mgba").join(stem);
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -365,8 +342,6 @@ fn retired_states(root: &Path, stem: &str) -> Vec<PathBuf> {
     found
 }
 
-/// A refused resume is moved aside so the next open does not hand it to the core again. Moved,
-/// not deleted: it is still a real session to the core that wrote it.
 #[test]
 fn a_refused_resume_is_not_offered_to_the_core_a_second_time() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -402,8 +377,6 @@ fn a_refused_resume_is_not_offered_to_the_core_a_second_time() {
         "the retired file is not the bytes that were refused"
     );
 
-    // The retired file must never be offered again: `list` feeds the switcher and
-    // `load_newest`, and `evict` only deletes what `list` returns.
     let ring =
         slot_store::StateRing::new(d.path(), Platform::Gba, slot_store::Core::Mgba, "Emerald");
     assert!(
@@ -412,8 +385,6 @@ fn a_refused_resume_is_not_offered_to_the_core_a_second_time() {
     );
 }
 
-/// A mock (missing dylib) refuses every state it did not write, so its refusal must not retire
-/// the resume: the guard is which core refused, not how many times.
 #[test]
 fn a_stand_in_core_refusing_a_resume_leaves_it_alone() {
     let d = common::tmp_root_with_carts(&["Emerald"]);

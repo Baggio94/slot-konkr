@@ -4,12 +4,10 @@ use slot_ui::{
     QuickValue, UndoFace, MENU_PAD,
 };
 
-/// Whether a face's pixel at a column and row carries much ink.
 fn inked(f: &UndoFace, x: u32, y: u32) -> bool {
     f.rgba[((y * f.w + x) * 4 + 3) as usize] > 128
 }
 
-/// The first and last columns with ink in them.
 fn ink_columns(f: &UndoFace) -> (u32, u32) {
     let cols: Vec<u32> = (0..f.w)
         .filter(|&x| (0..f.h).any(|y| inked(f, x, y)))
@@ -20,7 +18,6 @@ fn ink_columns(f: &UndoFace) -> (u32, u32) {
     )
 }
 
-/// The type sits exactly `MENU_PAD` in from both sides of its face, tracking included.
 #[test]
 fn the_type_sits_exactly_menu_pad_in_from_both_sides_of_its_face() {
     for f in [
@@ -45,7 +42,6 @@ fn the_type_sits_exactly_menu_pad_in_from_both_sides_of_its_face() {
     }
 }
 
-/// Every label is set at the menu's size, tracking included, without being shrunk to fit.
 #[test]
 fn a_long_label_is_set_as_large_as_a_short_one() {
     let tall = |f: &UndoFace| {
@@ -58,8 +54,6 @@ fn a_long_label_is_set_as_large_as_a_short_one() {
     assert!(long + 1 >= short, "{long} rows of ink against {short}");
 }
 
-/// `QuickValue::speed` names exactly the card's four ceilings, or a card's speed leaves the row
-/// blank.
 #[test]
 fn the_fast_forward_row_offers_the_four_ceilings_the_card_can_hold() {
     assert_eq!(FF_SPEEDS, [2, 3, 4, 6]);
@@ -72,7 +66,6 @@ fn the_fast_forward_row_offers_the_four_ceilings_the_card_can_hold() {
             Some(QuickValue::Speed6),
         ]
     );
-    // The gaps in the row, and numbers no row ever offered.
     for other in [1, 5, 7, 9, 16, 28, 255] {
         assert_eq!(
             QuickValue::speed(other),
@@ -82,7 +75,6 @@ fn the_fast_forward_row_offers_the_four_ceilings_the_card_can_hold() {
     }
 }
 
-/// The row order the user chose. `QuickRow::ALL` explains the position of Colour Correction.
 #[test]
 fn the_rows_run_in_the_order_the_user_chose() {
     let labels = QuickRow::ALL.map(QuickRow::label);
@@ -111,7 +103,6 @@ fn the_values_read_as_the_menu_prints_them() {
     assert_eq!(QuickValue::flag(false), QuickValue::Off);
 }
 
-/// The month by name, the day, and the carousel's 24 hour time.
 #[test]
 fn the_date_and_time_read_as_a_month_a_day_and_the_carousels_24_hour_clock() {
     let at = |stamp: &str| date_time_text(parse_stamp(stamp).expect("a stamp"));
@@ -119,8 +110,6 @@ fn the_date_and_time_read_as_a_month_a_day_and_the_carousels_24_hour_clock() {
     assert_eq!(at("2027-01-05_04-07-59"), "JAN 5 04:07");
 }
 
-/// Opened from the menu, the clock starts at the current time to the minute and the chosen
-/// offset.
 #[test]
 fn a_picker_for_a_set_clock_starts_at_the_local_time_and_its_offset() {
     let utc = parse_stamp("2026-09-15_21-35-42").expect("a stamp");
@@ -134,7 +123,6 @@ fn a_picker_for_a_set_clock_starts_at_the_local_time_and_its_offset() {
     assert!(p.text().starts_with("2026-09-15 16:35"), "{}", p.text());
 }
 
-/// Grey on every row but the one in hand, where a value is the type's own ink.
 #[test]
 fn a_value_is_grey_until_its_row_is_in_hand() {
     let inkiest = |lit| {
@@ -149,7 +137,6 @@ fn a_value_is_grey_until_its_row_is_in_hand() {
     assert_eq!(inkiest(false), [0x9a, 0x9a, 0xa4]);
 }
 
-/// The arrows share a line with the value they stand beside.
 #[test]
 fn the_arrows_are_faces_the_height_of_a_value() {
     for right in [false, true] {

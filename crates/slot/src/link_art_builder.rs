@@ -1,6 +1,3 @@
-//! The link screen's artwork, built once on its own thread: rasterising it on the H700 takes
-//! seconds.
-
 use std::sync::mpsc::{channel, Receiver};
 
 use slot_ui::{link_art, LinkArt};
@@ -17,14 +14,12 @@ impl LinkArtBuilder {
             .spawn(move || {
                 let _ = tx.send(link_art());
             });
-        // No art is a link screen with text and keys only, not a boot failure.
         if let Err(e) = spawned {
             eprintln!("slot: link art worker: {e}");
         }
         LinkArtBuilder { built }
     }
 
-    /// The art, the one time it is ready.
     pub fn take(&self) -> Option<LinkArt> {
         self.built.try_recv().ok()
     }

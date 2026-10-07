@@ -18,7 +18,6 @@ fn at(percent: u8, charge: Charge) -> Option<Battery> {
     Some(Battery { percent, charge })
 }
 
-/// Plugging in a cable only adds the bolt; nothing already drawn moves.
 #[test]
 fn nothing_moves_when_the_charge_state_changes() {
     let mut idle = Vec::new();
@@ -48,7 +47,6 @@ fn nothing_moves_when_the_charge_state_changes() {
     }
 }
 
-/// The bolt ends at or before the capsule's left wall, so it never holes the fill.
 #[test]
 fn the_bolt_never_reaches_the_capsule() {
     let mut out = Vec::new();
@@ -67,8 +65,6 @@ fn the_bolt_never_reaches_the_capsule() {
             _ => None,
         })
         .expect("the bolt did not draw while charging");
-    // The bolt is the only `Draw::Tex` and the percent sits well right, so the leftmost rect
-    // is the capsule's left wall.
     let capsule_left = out
         .iter()
         .filter_map(|d| match *d {
@@ -100,12 +96,9 @@ fn the_bolt_is_only_drawn_while_charging() {
     assert!(bolt(Charge::Charging));
     assert!(!bolt(Charge::Discharging));
     assert!(!bolt(Charge::Full));
-    // `status` reads empty on some hardware: a plain capsule.
     assert!(!bolt(Charge::Unknown));
 }
 
-/// The fill grows strictly with the percent (a constant bar would fail) and stays inside the
-/// capsule's inner wall (a formula overshooting 100% would fail).
 #[test]
 fn the_fill_tracks_the_percent_and_never_leaves_the_capsule() {
     let mut widths = Vec::new();
@@ -119,7 +112,6 @@ fn the_fill_tracks_the_percent_and_never_leaves_the_capsule() {
             None,
             &mut out,
         );
-        // The capsule's left wall is the leftmost `Rect`.
         let capsule_left = out
             .iter()
             .filter_map(|d| match *d {
@@ -128,7 +120,6 @@ fn the_fill_tracks_the_percent_and_never_leaves_the_capsule() {
             })
             .fold(f32::MAX, f32::min);
         let inner_right = capsule_left + GAUGE_W - 2.0 * WALL;
-        // The fill is the only `Rect` starting two wall widths in from the capsule's left edge.
         let fill = out.iter().find_map(|d| match *d {
             Draw::Rect { x, w, .. } if (x - (capsule_left + 2.0 * WALL)).abs() < 0.01 => Some(w),
             _ => None,
@@ -139,7 +130,6 @@ fn the_fill_tracks_the_percent_and_never_leaves_the_capsule() {
                 "a {percent}% fill burst through the capsule's own wall"
             );
         }
-        // 0% draws no fill rect at all.
         widths.push(fill.unwrap_or(0.0));
     }
     for pair in widths.windows(2) {
@@ -150,7 +140,6 @@ fn the_fill_tracks_the_percent_and_never_leaves_the_capsule() {
     }
 }
 
-/// No gauge draws no capsule, so an unported device still comes up.
 #[test]
 fn no_reading_draws_nothing() {
     let mut out = Vec::new();

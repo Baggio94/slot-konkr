@@ -19,7 +19,6 @@ use slot_ui::{
     SOCKET_H, SOCKET_U, SOCKET_V, SOCKET_W, TURN_PAD,
 };
 
-/// A tap of A. The press alone is not enough: held, it means start the cart clean.
 fn play(a: &mut App) {
     a.apply(Action::GbaDown(Btn::A));
     a.apply(Action::GbaUp(Btn::A));
@@ -42,7 +41,6 @@ fn app_with_carts(stems: &[&str]) -> App {
     )
 }
 
-/// By colour, not size, so reshaping the slot does not make it match nothing.
 fn is_mouth(d: &Draw) -> bool {
     match *d {
         Draw::Rect { colour, .. } => (0..3).all(|i| (colour[i] - opening()[i]).abs() < 0.001),
@@ -50,7 +48,6 @@ fn is_mouth(d: &Draw) -> bool {
     }
 }
 
-/// Two carts, because a lone cart is a dedicated device and has nowhere to eject to.
 fn playing(stem: &str) -> App {
     let mut a = app_with_carts(&[stem, "Zzz"]);
     a.apply(Action::Insert);
@@ -67,7 +64,7 @@ fn insert_waits_for_the_core_even_after_the_animation_floor() {
     a.apply(Action::Insert);
     for _ in 0..120 {
         a.update(1.0 / 60.0);
-    } // 2s, well past the floor
+    }
     assert!(
         matches!(a.phase(), Phase::Inserting { .. }),
         "advanced without the core"
@@ -86,7 +83,6 @@ fn insert_does_not_advance_before_the_animation_floor_even_if_the_core_is_instan
     assert!(matches!(a.phase(), Phase::Inserting { .. }));
 }
 
-/// Seconds of frames until the app gets where it is going, giving up rather than hanging.
 fn seconds_until(a: &mut App, done: fn(&App) -> bool) -> f32 {
     let mut t = 0.0;
     while !done(a) && t < 5.0 {
@@ -96,8 +92,6 @@ fn seconds_until(a: &mut App, done: fn(&App) -> bool) -> f32 {
     t
 }
 
-/// Long enough to read as a cart being pushed, and no longer than the recording: the travel
-/// is cut to fit the sound.
 #[test]
 fn the_insert_reads_as_a_push_and_the_eject_takes_the_same_time() {
     let mut a = app_with_carts(&["Emerald", "Zzz"]);
@@ -107,7 +101,6 @@ fn the_insert_reads_as_a_push_and_the_eject_takes_the_same_time() {
     a.apply(Action::Eject);
     let eject = seconds_until(&mut a, |a| matches!(a.phase(), Phase::Shelf));
     assert!(insert >= 0.4, "insert is {insert}s, still a wipe");
-    // Longer than the travel: the picture goes out first and the cart waits a beat after it.
     assert!(
         eject > EJECT_S,
         "the eject is {eject}s, so the cart moved before the picture was out"
@@ -126,7 +119,6 @@ fn the_game_does_not_appear_the_instant_the_cart_seats() {
         matches!(a.phase(), Phase::Inserting { .. }),
         "revealed on the same frame it seated"
     );
-    // The beat is set from the length of the landing sound, so a different recording moves it.
     let beat = ((INSERT_S - SEATED_AT) * 60.0).ceil() as u32 + 1;
     for _ in 0..beat {
         a.update(1.0 / 60.0);
@@ -134,8 +126,6 @@ fn the_game_does_not_appear_the_instant_the_cart_seats() {
     assert!(matches!(a.phase(), Phase::Playing { .. }));
 }
 
-/// The game is invisible for the whole insert, not merely dimmed. Two carts, so the cart
-/// actually travels rather than resuming straight into the slot.
 #[test]
 fn the_game_does_not_draw_during_the_insert() {
     let d = common::tmp_root_with_real_carts(&["Emerald", "Fusion"]);
@@ -177,7 +167,6 @@ fn the_reveal_waits_for_the_power_on_to_finish() {
     assert!((a.screen_power() - 1.0).abs() < 0.01);
 }
 
-/// The click comes from the contacts at the end of the travel, not from the button.
 #[test]
 fn the_cart_sounds_when_it_reaches_the_slot_and_not_when_it_starts_moving() {
     let mut a = app_with_carts(&["Emerald", "Zzz"]);
@@ -192,7 +181,6 @@ fn the_cart_sounds_when_it_reaches_the_slot_and_not_when_it_starts_moving() {
     assert_eq!(heard, Some(Sfx::Insert));
 }
 
-/// A cart already in the slot at boot never travelled, so it never touched the rails.
 #[test]
 fn a_resumed_cart_makes_no_sound() {
     let d = common::tmp_root_with_carts(&["Emerald", "Zzz"]);
@@ -213,8 +201,6 @@ fn a_resumed_cart_makes_no_sound() {
     assert_eq!(a.take_sfx(), None);
 }
 
-/// Not when the button was held: the contacts let go when the cart starts to move, after the
-/// picture has gone out.
 #[test]
 fn the_cart_sounds_as_it_comes_free_and_not_before_the_screen_is_out() {
     let mut a = playing("Emerald");
@@ -285,7 +271,6 @@ fn face_buttons_drive_the_shelf_only_while_it_is_showing() {
     for _ in 0..120 {
         a.update(1.0 / 60.0);
     }
-    // Left belongs to the game now and must not walk the shelf out from under it.
     a.apply(Action::GbaDown(Btn::Left));
     a.apply(Action::Eject);
     for _ in 0..120 {
@@ -298,8 +283,6 @@ fn face_buttons_drive_the_shelf_only_while_it_is_showing() {
     assert_eq!(cart, "Wars", "the game's d-pad moved the shelf behind it");
 }
 
-/// The repeat is the shelf's, but only the app sees the up edge, so a release must reach it or
-/// the row walks on by itself.
 #[test]
 fn a_held_direction_walks_the_shelf_and_a_release_stops_it() {
     let mut a = app_with_carts(&["A", "B", "C", "D", "E", "F", "G"]);
@@ -318,7 +301,6 @@ fn a_held_direction_walks_the_shelf_and_a_release_stops_it() {
     assert_eq!(cart, "C", "one press and one repeat, then nothing");
 }
 
-/// One cart per pair, filed under the platform named. The folder alone decides a cart's shelf.
 fn app_with_platforms(carts: &[(Platform, &str)]) -> App {
     App::new(
         carts
@@ -341,14 +323,11 @@ fn app_with_platforms(carts: &[(Platform, &str)]) -> App {
     )
 }
 
-/// One press and its release. The shelf moves on the press, so nothing here tests the repeat.
 fn tap(a: &mut App, btn: Btn) {
     a.apply(Action::GbaDown(btn));
     a.apply(Action::GbaUp(btn));
 }
 
-/// The shelves are a ring, so with two of them either shoulder reaches the other one and a
-/// second press comes back.
 #[test]
 fn the_shoulders_ring_over_the_shelves() {
     let mut a = app_with_platforms(&[(Platform::Gba, "Emerald"), (Platform::Gb, "Tetris")]);
@@ -373,7 +352,6 @@ fn the_shoulders_ring_over_the_shelves() {
     );
 }
 
-/// One shelf per platform, walked in the order named. A Colour cart has its own shelf.
 #[test]
 fn a_colour_cart_stands_on_a_shelf_of_its_own() {
     let mut a = app_with_platforms(&[
@@ -395,12 +373,10 @@ fn a_colour_cart_stands_on_a_shelf_of_its_own() {
         Some("Emerald"),
         "three shelves did not ring back round to the first"
     );
-    // And the other way, which with three shelves is a different route.
     tap(&mut a, Btn::L1);
     assert_eq!(a.selected_stem(), Some("Chromatic"));
 }
 
-/// Each shelf keeps its own place.
 #[test]
 fn every_shelf_keeps_the_cart_it_was_left_on() {
     let mut a = app_with_platforms(&[
@@ -430,8 +406,6 @@ fn every_shelf_keeps_the_cart_it_was_left_on() {
     );
 }
 
-/// A shelf keeps its spring as well as its place, read off the selected face since the scroll is
-/// continuous. Also proves the faces are split between the shelves.
 #[test]
 fn a_shelf_comes_back_settled_where_it_was_left() {
     let mut a = app_with_platforms(&[
@@ -469,7 +443,6 @@ fn a_shelf_comes_back_settled_where_it_was_left() {
     );
 }
 
-/// With one populated shelf the shoulders do nothing: no movement, no banner, no refusal.
 #[test]
 fn the_shoulders_do_nothing_when_there_is_one_shelf_to_be_on() {
     let mut a = app_with_platforms(&[(Platform::Gba, "Emerald"), (Platform::Gba, "Fusion")]);
@@ -493,8 +466,6 @@ fn the_shoulders_do_nothing_when_there_is_one_shelf_to_be_on() {
     }
 }
 
-/// The switch names its system with the mark in the top plate's corner, silently and without
-/// fading. Faces are pushed in `Platform::ALL` order, as the frontend does at boot.
 #[test]
 fn the_switch_changes_the_name_on_the_band_and_says_nothing() {
     let mut a = app_with_platforms(&[
@@ -521,7 +492,6 @@ fn the_switch_changes_the_name_on_the_band_and_says_nothing() {
         );
         assert_eq!(a.toast(), None, "{btn:?} put a banner up over the carts");
     }
-    // Still there long after any banner would have faded.
     a.update(5.0);
     assert_eq!(
         a.shelf_platform_name(),
@@ -530,8 +500,6 @@ fn the_switch_changes_the_name_on_the_band_and_says_nothing() {
     );
 }
 
-/// A card whose library is all on one shelf names no platform, the same rule the shoulders
-/// follow. Both cases are read, so a name that never appears cannot pass.
 #[test]
 fn a_card_on_one_shelf_names_nothing_because_there_is_nowhere_to_switch_to() {
     let mut alone = app_with_platforms(&[(Platform::Gba, "Emerald"), (Platform::Gba, "Fusion")]);
@@ -549,7 +517,6 @@ fn a_card_on_one_shelf_names_nothing_because_there_is_nowhere_to_switch_to() {
         );
     }
 
-    // Two shelves: the band does name one, or a band that never named anything would pass.
     let two = app_with_platforms(&[(Platform::Gba, "Emerald"), (Platform::Gb, "Tetris")]);
     assert_eq!(
         two.shelf_platform_name(),
@@ -558,14 +525,12 @@ fn a_card_on_one_shelf_names_nothing_because_there_is_nowhere_to_switch_to() {
     );
 }
 
-/// A card with no Game Boy Advance carts opens on the shelf that has some.
 #[test]
 fn the_carousel_opens_on_a_shelf_that_has_carts() {
     let a = app_with_platforms(&[(Platform::Gbc, "Chromatic")]);
     assert_eq!(a.selected_stem(), Some("Chromatic"));
 }
 
-/// The shoulders are the GBA's own buttons while playing, so the shelf must not move under one.
 #[test]
 fn the_shoulders_belong_to_the_game_while_one_is_playing() {
     let mut a = app_with_platforms(&[
@@ -587,8 +552,6 @@ fn the_shoulders_belong_to_the_game_while_one_is_playing() {
     );
 }
 
-/// A direction held as a shelf leaves the screen is not held when it comes back, or its stale
-/// repeat would start the moment the row returns.
 #[test]
 fn a_held_direction_does_not_follow_the_shelf_it_was_pressed_on() {
     let mut a = app_with_platforms(&[
@@ -635,7 +598,6 @@ fn a_cart_in_flight_is_not_also_left_standing_on_the_shelf() {
     );
 }
 
-/// The slot is part of the device, so it is on screen before anything is pushed into it.
 #[test]
 fn the_shelf_shows_the_empty_slot() {
     let a = app_with_carts(&["Emerald", "Zzz"]);
@@ -665,7 +627,6 @@ fn eject_returns_to_the_shelf_only_once_the_cart_is_out() {
     let mut a = playing("Emerald");
     a.apply(Action::Eject);
     dark(&mut a);
-    // The shelf may not return while any part of the cart is still in the slot.
     while a.seat() > 0.0 {
         assert!(
             matches!(a.phase(), Phase::Ejecting { .. }),
@@ -678,8 +639,6 @@ fn eject_returns_to_the_shelf_only_once_the_cart_is_out() {
     assert!(matches!(a.phase(), Phase::Shelf));
 }
 
-/// Frames until the panel is out, giving up rather than hanging. The cart's movement is the
-/// second of the eject's two.
 fn dark(a: &mut App) {
     for _ in 0..300 {
         if a.screen_power() == 0.0 {
@@ -696,8 +655,6 @@ fn lists_game(a: &App) -> bool {
     out.iter().any(|d| matches!(d, Draw::Game))
 }
 
-/// The picture is an item in the draw list, in front of the cart, so the list is also where a
-/// screen that never came up would show.
 #[test]
 fn the_game_layer_is_listed_only_once_the_screen_is_up() {
     let mut a = app_with_carts(&["Emerald", "Zzz"]);
@@ -717,7 +674,6 @@ fn the_game_layer_is_listed_only_once_the_screen_is_up() {
     assert!(lists_game(&a), "the game never reached the draw list");
 }
 
-/// Quitting runs the insert backwards, with the picture in front of the cart.
 #[test]
 fn the_cart_waits_for_the_screen_to_go_dark() {
     let d = common::tmp_root_with_carts(&["Emerald", "Zzz"]);
@@ -751,10 +707,8 @@ fn eject_is_the_insert_backwards() {
     assert!(a.screen_power() < first, "the screen is not closing");
 }
 
-/// The quick menu and its about screen belong to the shelf. With a cart in, MENU means eject.
 #[test]
 fn the_quick_menu_opens_from_the_shelf_and_nowhere_else() {
-    // Two carts, or `single_cart` seats one at boot and the shelf is never on screen.
     let d = common::tmp_root_with_carts(&["Emerald", "Fusion"]);
     let (mut s, _motor) = common::session_with_platform(d.path());
 
@@ -769,7 +723,6 @@ fn the_quick_menu_opens_from_the_shelf_and_nowhere_else() {
         slot::app::Phase::QuickMenu { .. }
     ));
 
-    // A seated cart has no quick menu.
     s.app_mut()
         .apply(slot_input::Action::GbaDown(slot_input::Btn::B));
     s.app_mut().apply(slot_input::Action::Insert);
@@ -780,7 +733,6 @@ fn the_quick_menu_opens_from_the_shelf_and_nowhere_else() {
     );
 }
 
-/// MENU and B both leave the label for the quick menu, on its About row.
 #[test]
 fn both_b_and_menu_take_the_about_screen_back_to_the_quick_menu() {
     let d = common::tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -806,14 +758,10 @@ fn both_b_and_menu_take_the_about_screen_back_to_the_quick_menu() {
     }
 }
 
-/// A booted app on the shelf beside its card. Two carts at least, since `App::boot` seats a
-/// lone cart. `clock_set` because an unset clock opens on the clock screen, which owns every
-/// button.
 fn on_shelf(stems: &[&str]) -> (tempfile::TempDir, App) {
     booted_on_shelf(common::tmp_root_with_carts(stems))
 }
 
-/// The same shelf holding Game Boy carts: the folder gives a cart its platform.
 fn on_shelf_gb(stems: &[&str]) -> (tempfile::TempDir, App) {
     booted_on_shelf(common::tmp_root_with_gb_carts(stems))
 }
@@ -831,18 +779,14 @@ fn booted_on_shelf(d: tempfile::TempDir) -> (tempfile::TempDir, App) {
     (d, app)
 }
 
-/// Long enough for the close to put the lid back, with room to spare.
 fn let_it_close(app: &mut App) {
     app.update(0.4);
 }
 
-/// Long enough for a hop to land.
 fn let_it_hop(app: &mut App) {
     app.update(0.25);
 }
 
-/// What START left behind: the picker, the shake, and whether the shelf moved. "Nothing moved"
-/// is measured against a twin booted beside it, since the row is a spring.
 fn start_on(mut pressed: App, mut untouched: App) -> (Option<Core>, f32, bool) {
     fake_picker_faces(&mut pressed);
     fake_picker_faces(&mut untouched);
@@ -853,8 +797,6 @@ fn start_on(mut pressed: App, mut untouched: App) -> (Option<Core>, f32, bool) {
     (pressed.core_picker(), pressed.shelf_shake(), moved)
 }
 
-/// The picker's board is a GBA PCB and mGBA is the only core for a Game Boy cart, so START does
-/// nothing on one: no picker and no shake.
 #[test]
 fn start_opens_no_picker_on_a_game_boy_cart() {
     let (_d, gb) = on_shelf_gb(&["Tetris", "Zzz"]);
@@ -867,7 +809,6 @@ fn start_opens_no_picker_on_a_game_boy_cart() {
     );
     assert!(!moved, "START changed what the shelf draws");
 
-    // The control: the same press on a GBA cart opens the picker and moves the shelf.
     let (_d, gba) = on_shelf(&["Emerald", "Zzz"]);
     let (_twin, gba_twin) = on_shelf(&["Emerald", "Zzz"]);
     let (picker, _, moved) = start_on(gba, gba_twin);
@@ -875,7 +816,6 @@ fn start_opens_no_picker_on_a_game_boy_cart() {
     assert!(moved, "the picker opened and the shelf drew the same frame");
 }
 
-/// The picker opens on the cart's own core, not always mGBA.
 #[test]
 fn start_on_the_shelf_opens_the_core_picker_on_the_carts_current_core() {
     let (d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -899,7 +839,6 @@ fn start_on_the_shelf_opens_the_core_picker_on_the_carts_current_core() {
     );
 }
 
-/// The write happens on the press, and the lid then takes its time going back on.
 #[test]
 fn choosing_a_core_writes_it_and_closes() {
     let (d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -939,8 +878,6 @@ fn b_closes_the_picker_without_writing() {
     );
 }
 
-/// The arrows point at the sockets, left and right, with no wrapping. Toward the socket the
-/// chip is already in, only the chip shakes.
 #[test]
 fn the_chip_goes_where_the_arrow_points_and_does_not_wrap() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -975,8 +912,6 @@ fn the_chip_goes_where_the_arrow_points_and_does_not_wrap() {
     );
 }
 
-/// `shelf_shake` does not shake the shelf while the picker is up. Arming a real refusal first
-/// is what makes a missing guard show.
 #[test]
 fn a_shelf_refusal_does_not_shake_once_the_picker_takes_over() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -1024,8 +959,6 @@ fn a_mid_hop_writes_where_the_chip_is_heading() {
     assert_eq!(slot_store::core_for(d.path(), "Emerald"), Core::Gpsp);
 }
 
-/// The press that saved went to the picker, so its release, however late, must not start the
-/// cart.
 #[test]
 fn the_a_that_saved_does_not_start_the_cart() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -1069,7 +1002,6 @@ fn presses_during_the_close_and_keys_the_picker_does_not_use_do_nothing() {
     );
 }
 
-/// A shut lid closes the picker at once without writing, so waking lands on a plain shelf.
 #[test]
 fn shutting_the_lid_closes_the_picker_without_writing() {
     let (d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -1081,7 +1013,6 @@ fn shutting_the_lid_closes_the_picker_without_writing() {
     assert_eq!(slot_store::core_for(d.path(), "Emerald"), Core::Mgba);
 }
 
-/// The shelf behind the picker must not move, or the menu would act on a different cart.
 #[test]
 fn the_picker_swallows_the_shelf_arrows() {
     let (_d, mut app) = on_shelf(&["Emerald", "Metroid Fusion"]);
@@ -1095,8 +1026,6 @@ fn the_picker_swallows_the_shelf_arrows() {
     );
 }
 
-/// Opening the picker drops an A pressed just before START, or its 500 ms hold would insert
-/// the cart clean underneath, skipping the resume.
 #[test]
 fn opening_the_picker_lets_go_of_a_play_hold_already_armed() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -1111,7 +1040,6 @@ fn opening_the_picker_lets_go_of_a_play_hold_already_armed() {
     );
 }
 
-/// A direction repeating when START goes down stops, or the row moves under the open cart.
 #[test]
 fn opening_the_picker_lets_go_of_a_direction_still_held() {
     let (_d, mut app) = on_shelf(&["Emerald", "Metroid Fusion", "Zzz"]);
@@ -1125,7 +1053,6 @@ fn opening_the_picker_lets_go_of_a_direction_still_held() {
     );
 }
 
-/// No picker with no cart under the highlight, or it would write a line for a missing cart.
 #[test]
 fn the_picker_does_not_open_on_an_empty_shelf() {
     let (_d, mut app) = on_shelf(&[]);
@@ -1133,8 +1060,6 @@ fn the_picker_does_not_open_on_an_empty_shelf() {
     assert_eq!(app.core_picker(), None);
 }
 
-/// The picker is on START because SELECT is the chord key (brightness, blue light), and a
-/// picker on SELECT would either eat chords or sit behind the 600 ms chord window.
 #[test]
 fn select_on_the_shelf_leaves_the_picker_shut_so_it_can_still_chord() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -1145,13 +1070,8 @@ fn select_on_the_shelf_leaves_the_picker_shut_so_it_can_still_chord() {
         None,
         "SELECT must stay free for brightness and blue light on the shelf"
     );
-
-    // SELECT+Up yielding BrightnessUp is proved in slot-input/tests/gesture.rs. This layer
-    // only owes not intercepting SELECT.
 }
 
-/// Stand-ins for everything the frontend uploads for the picker, so the draw can be read back
-/// without a compositor. Every id distinct.
 struct PickerFaces {
     board: TexId,
     lid: TexId,
@@ -1162,8 +1082,6 @@ struct PickerFaces {
     legend: [(TexId, u32); 3],
 }
 
-/// Only the faces the frontend uploads at boot: the sockets, the chips and the legend. The board
-/// and the lid are the highlighted cart's, and are not set.
 fn fake_boot_faces(app: &mut App) -> PickerFaces {
     let id = TexId::from_raw;
     let f = PickerFaces {
@@ -1180,15 +1098,12 @@ fn fake_boot_faces(app: &mut App) -> PickerFaces {
     f
 }
 
-/// Everything the picker draws, including this cart's board and lid, so START opens at once.
 fn fake_picker_faces(app: &mut App) -> PickerFaces {
     let f = fake_boot_faces(app);
     app.set_core_board_faces(f.board, f.lid);
     f
 }
 
-/// Where the row stands the selected cart, read off the frame: a two-cart shelf centres the
-/// pair, not the selection.
 fn resting_cart(out: &[Draw]) -> f32 {
     out.iter()
         .filter_map(|d| match *d {
@@ -1206,7 +1121,6 @@ fn frame(app: &App) -> Vec<Draw> {
     out
 }
 
-/// Where a plain face landed: its place in the frame, and its rect.
 fn tex_at(out: &[Draw], want: TexId) -> Option<(usize, [f32; 4])> {
     out.iter().enumerate().find_map(|(i, d)| match *d {
         Draw::Tex {
@@ -1216,8 +1130,6 @@ fn tex_at(out: &[Draw], want: TexId) -> Option<(usize, [f32; 4])> {
     })
 }
 
-/// Every place one face landed, in frame order. The chip's shadow is drawn twice while the
-/// chip is in the air: once under the lid, once under the chip.
 fn tex_all(out: &[Draw], want: TexId) -> Vec<(usize, [f32; 4])> {
     out.iter()
         .enumerate()
@@ -1230,7 +1142,6 @@ fn tex_all(out: &[Draw], want: TexId) -> Vec<(usize, [f32; 4])> {
         .collect()
 }
 
-/// Where a turned face landed, and its turn.
 fn turned_at(out: &[Draw], want: TexId) -> Option<(usize, [f32; 4], f32)> {
     out.iter().enumerate().find_map(|(i, d)| match *d {
         Draw::Turned {
@@ -1250,7 +1161,6 @@ fn near(a: [f32; 4], b: [f32; 4]) -> bool {
     a.iter().zip(b).all(|(p, q)| (p - q).abs() < 0.01)
 }
 
-/// How opaque a plain face was drawn.
 fn alpha_of(out: &[Draw], want: TexId) -> Option<f32> {
     out.iter().find_map(|d| match *d {
         Draw::Tex { tex, alpha, .. } if tex == want => Some(alpha),
@@ -1258,8 +1168,6 @@ fn alpha_of(out: &[Draw], want: TexId) -> Option<f32> {
     })
 }
 
-/// The sockets and the chip seated in mGBA ride `board` at whatever place and size, so a
-/// missing `* zoom` shows before the movement settles.
 fn assert_parts_on_board(out: &[Draw], f: &PickerFaces, board: Placed, when: &str) {
     let zoom = board.w / BOARD_W as f32;
     for (i, socket) in f.sockets.iter().enumerate() {
@@ -1304,8 +1212,6 @@ fn assert_parts_on_board(out: &[Draw], f: &PickerFaces, board: Placed, when: &st
     );
 }
 
-/// Quads a shelf cart's width other than the open cart's board: the highlighted cart standing in
-/// the row. Its neighbours are drawn smaller.
 fn carts_standing(out: &[Draw], board: TexId) -> usize {
     out.iter()
         .filter(|d| match **d {
@@ -1316,8 +1222,6 @@ fn carts_standing(out: &[Draw], board: TexId) -> usize {
         .count()
 }
 
-/// A picker still waiting on its cart's faces draws nothing of its own: the shelf is the shelf,
-/// with the highlighted cart standing in the row.
 fn assert_plain_shelf(out: &[Draw], f: &PickerFaces, when: &str) {
     assert!(
         !out.iter().any(|d| matches!(d, Draw::Turned { .. })),
@@ -1351,13 +1255,10 @@ fn assert_plain_shelf(out: &[Draw], f: &PickerFaces, when: &str) {
     );
 }
 
-/// Long enough for the lid to come off.
 fn let_it_open(app: &mut App) {
     app.update(0.5);
 }
 
-/// At rest: the board where the mockup has it, both sockets, the chip in the cart's own core,
-/// the lid lifted and turned, and the legend, all drawn after the shelf's slot.
 #[test]
 fn the_open_cart_rests_over_the_shelf_with_its_lid_turned() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -1424,7 +1325,6 @@ fn the_open_cart_rests_over_the_shelf_with_its_lid_turned() {
     assert_eq!((lid_turn, turn), (LID_TURN, LID_TURN));
     assert!(lid_i > chip_i, "the chip is drawn over the lid");
 
-    // The shadow under the lid, centred on (360, 140) as in the mockup. A seated chip casts none.
     let shadows = tex_all(&out, f.shadow);
     assert_eq!(
         shadows.len(),
@@ -1438,8 +1338,6 @@ fn the_open_cart_rests_over_the_shelf_with_its_lid_turned() {
     );
     assert!(shadow_i < lid_i, "the lid's shadow is drawn over the lid");
 
-    // Cancel under the cart's left edge, Swap centred, Choose ending under the right edge. A
-    // hint face's last HINT_EDGE pixels are transparent and do not count.
     let [cancel, swap, choose] = f.legend;
     let at = |tex| tex_at(&out, tex).expect("a legend hint is missing").1;
     let seen = |w: u32| (w - HINT_EDGE) as f32;
@@ -1457,7 +1355,6 @@ fn the_open_cart_rests_over_the_shelf_with_its_lid_turned() {
     assert_eq!((at(swap.0)[1], at(choose.0)[1]), (386.0, 386.0));
 }
 
-/// Faces drawn at their own size sit on whole pixels, or the linear filter halves 1 px lines.
 #[test]
 fn the_sockets_and_the_seated_chip_rest_on_whole_pixels() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -1478,7 +1375,6 @@ fn the_sockets_and_the_seated_chip_rest_on_whole_pixels() {
     );
 }
 
-/// The row parts to where the mockup stands the neighbours and dims them to a quarter.
 #[test]
 fn the_neighbours_dim_to_a_quarter_while_a_cart_is_open() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -1502,7 +1398,6 @@ fn the_neighbours_dim_to_a_quarter_while_a_cart_is_open() {
     );
 }
 
-/// The chip lands in the socket the arrow points at, not merely somewhere on the board.
 #[test]
 fn the_seated_chip_moves_to_the_socket_it_hopped_to() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -1534,8 +1429,6 @@ fn the_seated_chip_moves_to_the_socket_it_hopped_to() {
     );
 }
 
-/// The lid is the highlighted cart. On the first frame it stands exactly where the shelf stood
-/// it, and the row does not draw a second copy underneath.
 #[test]
 fn the_highlighted_cart_becomes_the_lid_rather_than_a_second_cart() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -1565,8 +1458,6 @@ fn the_highlighted_cart_becomes_the_lid_rather_than_a_second_cart() {
     );
     assert_eq!(turn, 0.0);
 
-    // Halfway through the slide: front half up half its travel, back half where the shelf stood
-    // the cart with sockets and chip on it. 80.5 ms because the clock counts whole milliseconds.
     app.update(0.0805);
     let slid = frame(&app);
     let (_, lid, turn) = turned_at(&slid, f.lid).expect("the lid vanished mid-slide");
@@ -1596,8 +1487,6 @@ fn the_highlighted_cart_becomes_the_lid_rather_than_a_second_cart() {
     );
     assert_parts_on_board(&slid, &f, shelf, "mid-slide");
 
-    // Halfway through the lift, the lid is on its way up and turning, over a back half that is
-    // part grown and still opaque.
     app.update(0.21);
     let lifting = frame(&app);
     let (_, lid, turn) = turned_at(&lifting, f.lid).expect("the lid vanished mid-lift");
@@ -1646,7 +1535,6 @@ fn mid_hop_the_chip_is_blank_tipped_and_off_the_board() {
     let (_, flying, tip) = turned_at(&out, f.blank).expect("no chip in flight");
     assert!(tip > 0.0, "a chip heading right does not lean right");
     assert!(flying[1] < seated[1], "the chip is not off the board");
-    // Between the two sockets, which an inverted `across` would miss.
     let board = board_at(1.0);
     let left = on_board(board, CHIP_U[0], CHIP_V).0 + CHIP_W as f32 / 2.0;
     let right = on_board(board, CHIP_U[1], CHIP_V).0 + CHIP_W as f32 / 2.0;
@@ -1669,7 +1557,6 @@ fn mid_hop_the_chip_is_blank_tipped_and_off_the_board() {
     }
 }
 
-/// A refusal moves the chip and nothing else on the panel.
 #[test]
 fn the_chip_alone_shakes_when_refused() {
     let (_d, mut app) = on_shelf(&["Emerald", "Metroid Fusion", "Zzz"]);
@@ -1696,8 +1583,6 @@ fn the_chip_alone_shakes_when_refused() {
     );
 }
 
-/// Backing out puts the lid back on (turning level while the board shrinks), then hands the
-/// cart back to the row.
 #[test]
 fn closing_puts_the_cart_back_on_the_shelf() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -1725,7 +1610,6 @@ fn closing_puts_the_cart_back_on_the_shelf() {
         "the back half faded mid-close"
     );
 
-    // The sockets and the seated chip shrink with the board.
     assert_parts_on_board(
         &partway,
         &f,
@@ -1759,8 +1643,6 @@ fn closing_puts_the_cart_back_on_the_shelf() {
     assert_eq!(standing, 1, "the cart did not go back on the shelf");
 }
 
-/// Pressed before the cart's faces are up, the cart stands on the shelf until they arrive and
-/// opens from there.
 #[test]
 fn the_open_waits_on_the_shelf_for_its_faces() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -1795,7 +1677,6 @@ fn the_open_waits_on_the_shelf_for_its_faces() {
     );
 }
 
-/// Past `FACES_WAIT_MS` the cart opens anyway, and never wears the other cart's faces.
 #[test]
 fn the_open_starts_anyway_when_the_faces_never_come() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -1836,7 +1717,6 @@ fn the_open_starts_anyway_when_the_faces_never_come() {
     }
 }
 
-/// Past the cap, the fallback lid is the shelf's own face for this cart.
 #[test]
 fn the_fallback_open_lifts_the_shelfs_own_face_for_the_lid() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -1856,7 +1736,6 @@ fn the_fallback_open_lifts_the_shelfs_own_face_for_the_lid() {
     assert_eq!(turn, LID_TURN, "the fallback lid is not turned");
 }
 
-/// This cart's own faces landing mid-open are drawn on the very next frame.
 #[test]
 fn the_real_faces_replace_the_fallback_once_they_arrive() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -1880,8 +1759,6 @@ fn the_real_faces_replace_the_fallback_once_they_arrive() {
     );
 }
 
-/// Arrows pressed while the cart waits on the shelf move nothing, so A writes only a choice the
-/// player saw.
 #[test]
 fn arrows_pressed_while_the_cart_waits_move_nothing() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
@@ -1908,11 +1785,9 @@ fn arrows_pressed_while_the_cart_waits_move_nothing() {
     );
 }
 
-/// From the shelf to a cart playing, over whatever `open_core` finds (the mock without a dylib).
 fn session_playing(root: &Path) -> Session {
     common::clocked(root);
     let mut s = Session::boot(root.to_path_buf());
-    // A tap of A. A resumed cart is already on its way in and the press lands on nothing.
     s.feed([RawEvent::Down(Btn::A)], 16);
     s.feed([RawEvent::Up(Btn::A)], 32);
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -1924,17 +1799,12 @@ fn session_playing(root: &Path) -> Session {
     s
 }
 
-/// What `video_refresh` leaves a Game Boy picture occupying inside the 240x160 buffer, as the
-/// game pass takes it: x 40..200 and y 8..152, in texture coordinates.
 const GB_WINDOW: [f32; 4] = [40.0 / 240.0, 8.0 / 160.0, 160.0 / 240.0, 144.0 / 160.0];
 
-/// What the pad is holding right now, as the core would be polled for it.
 fn pad(s: &Session) -> u16 {
     s.emu().expect("no core in the slot").input().0
 }
 
-/// Game Boy carts had no shoulders, so slot takes L and R for the picture there. On a GBA cart
-/// they are the game's own and must reach the pad untouched.
 #[test]
 fn l_and_r_change_the_mode_on_a_game_boy_cart_and_not_on_a_gba_one() {
     let d = common::tmp_root_with_gb_carts(&["Tetris", "Zzz"]);
@@ -1963,7 +1833,6 @@ fn l_and_r_change_the_mode_on_a_game_boy_cart_and_not_on_a_gba_one() {
     assert_eq!(pad(&s) & ButtonMask::R, 0, "R reached the game as well");
     s.feed([RawEvent::Up(Btn::R1)], 220);
 
-    // The control: without it, a build that stopped sending shoulders to any core would pass.
     let d = common::tmp_root_with_carts(&["Emerald", "Zzz"]);
     let mut s = session_playing(d.path());
     s.feed([RawEvent::Down(Btn::L1)], 100);
@@ -1977,16 +1846,12 @@ fn l_and_r_change_the_mode_on_a_game_boy_cart_and_not_on_a_gba_one() {
     );
 }
 
-/// L pressed on the shelf and released once a Game Boy cart is playing must still release on
-/// the pad, or the core holds L for the rest of the session.
 #[test]
 fn a_shoulder_held_across_the_insert_does_not_stick_on_the_pad() {
     let d = common::tmp_root_with_gb_carts(&["Tetris", "Zzz"]);
     common::clocked(d.path());
     let mut s = Session::boot(d.path().to_path_buf());
-    // Down on the shelf, where nothing has taken it, putting the bit on the pad.
     s.feed([RawEvent::Down(Btn::L1)], 16);
-    // In it goes, with L still held.
     s.feed([RawEvent::Down(Btn::A)], 32);
     s.feed([RawEvent::Up(Btn::A)], 48);
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -1995,7 +1860,6 @@ fn a_shoulder_held_across_the_insert_does_not_stick_on_the_pad() {
         s.update(1.0 / 60.0);
         std::thread::sleep(Duration::from_millis(1));
     }
-    // And the finger comes off, now that slot owns the shoulders.
     s.feed([RawEvent::Up(Btn::L1)], 1000);
     assert_eq!(
         pad(&s) & ButtonMask::L,
@@ -2004,8 +1868,6 @@ fn a_shoulder_held_across_the_insert_does_not_stick_on_the_pad() {
     );
 }
 
-/// L held on the shelf and never released: once a Game Boy cart seats, the pad must drop it,
-/// since a phase change is not a button edge. On a GBA cart the held L must reach the game.
 #[test]
 fn a_shoulder_still_held_when_the_cart_seats_never_reaches_a_game_boy_core() {
     for (label, root, want_held) in [
@@ -2022,11 +1884,9 @@ fn a_shoulder_still_held_when_the_cart_seats_never_reaches_a_game_boy_core() {
     ] {
         common::clocked(root.path());
         let mut s = Session::boot(root.path().to_path_buf());
-        // Down on the shelf, where nothing has taken it, and never let go of.
         s.feed([RawEvent::Down(Btn::L1)], 16);
         s.feed([RawEvent::Down(Btn::A)], 32);
         s.feed([RawEvent::Up(Btn::A)], 48);
-        // Fed and updated every frame, in `Frontend::advance` order: a held thumb sends no events.
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut now = 48;
         while !matches!(s.app().phase(), Phase::Playing { .. }) {
@@ -2049,8 +1909,6 @@ fn a_shoulder_still_held_when_the_cart_seats_never_reaches_a_game_boy_core() {
     }
 }
 
-/// A display preference is remembered per cart on the card, so the second half boots a fresh
-/// session to read it back.
 #[test]
 fn the_picture_mode_is_remembered_per_cart() {
     let d = common::tmp_root_with_gb_carts(&["Tetris", "Zzz"]);
@@ -2076,7 +1934,6 @@ fn the_picture_mode_is_remembered_per_cart() {
     assert_eq!(s.app().source_rect(), WHOLE_TEXTURE);
 }
 
-/// A cart with no choice gets the integer-scaled, mask-aligned look.
 #[test]
 fn a_cart_with_no_line_reads_as_actual_size() {
     let d = common::tmp_root_with_gb_carts(&["Tetris", "Zzz"]);
@@ -2094,13 +1951,10 @@ fn a_cart_with_no_line_reads_as_actual_size() {
     );
 }
 
-/// Presses spent on the power menu, including the B that dismisses it, must not reach the pad:
-/// the core unpauses on that frame and would hold a B it never saw pressed.
 #[test]
 fn the_power_menus_own_buttons_never_reach_the_game() {
     let d = common::tmp_root_with_carts(&["Emerald", "Zzz"]);
     let mut s = session_playing(d.path());
-    // POWER held past the threshold is what raises the menu.
     s.feed([RawEvent::Down(Btn::Power)], 1000);
     s.feed([], 2100);
     assert!(
@@ -2108,14 +1962,12 @@ fn the_power_menus_own_buttons_never_reach_the_game() {
         "the power menu never opened"
     );
     s.feed([RawEvent::Up(Btn::Power)], 2110);
-    // Moving the bar is a press the menu answers and the game must not also get.
     s.feed([RawEvent::Down(Btn::Down)], 2200);
     assert_eq!(
         pad(&s) & ButtonMask::DOWN,
         0,
         "the press that moved the power menu's bar reached the game"
     );
-    // And the one that dismisses it, which is the frame the core comes back.
     s.feed([RawEvent::Down(Btn::B)], 2300);
     assert!(s.app().power_menu().is_none(), "B did not dismiss the menu");
     assert_eq!(
@@ -2125,13 +1977,10 @@ fn the_power_menus_own_buttons_never_reach_the_game() {
     );
 }
 
-/// A SELECT that becomes a chord never reaches the core, and the chord still works. Read at
-/// `EmuHandle::input`, the mask the core polls.
 #[test]
 fn a_chorded_select_never_reaches_the_pad() {
     let d = common::tmp_root_with_carts(&["Emerald", "Zzz"]);
     let mut s = session_playing(d.path());
-    // A panel, so the chord's outcome is read past `Platform`, not from the action.
     let (power, backlight) = common::panel(d.path(), Duration::from_secs(180));
     s.app_mut().set_power(power);
     let lit = backlight.load(Ordering::Relaxed);
@@ -2144,7 +1993,6 @@ fn a_chorded_select_never_reaches_the_pad() {
         "the game got a SELECT that may yet be a chord"
     );
 
-    // Inside the window, so the chord still arms off that same hold.
     s.feed([RawEvent::Down(Btn::Up)], 1120);
     assert_eq!(
         backlight.load(Ordering::Relaxed),
@@ -2171,13 +2019,10 @@ fn a_chorded_select_never_reaches_the_pad() {
     );
 }
 
-/// A latched fast forward must not outlive the cart, or the next game runs at speed with
-/// nobody on R2. A thumb still holding R2 through an eject keeps asking, as before.
 #[test]
 fn a_latched_fast_forward_does_not_outlive_the_cart() {
     let d = common::tmp_root_with_carts(&["Emerald", "Zzz"]);
     let mut s = session_playing(d.path());
-    // Two taps of R2 inside the double tap window is the latch.
     s.feed([RawEvent::Down(Btn::R2)], 1000);
     s.feed([RawEvent::Up(Btn::R2)], 1050);
     s.feed([RawEvent::Down(Btn::R2)], 1150);
@@ -2188,13 +2033,11 @@ fn a_latched_fast_forward_does_not_outlive_the_cart() {
         Some(Icon::FastForwardLatched),
         "the latch never took"
     );
-    // Waited for, since `observed_speed` reports the worker's last pass through its loop.
     let deadline = Instant::now() + Duration::from_secs(10);
     while s.emu().map(EmuHandle::observed_speed) != Some(Speed::Fast) {
         assert!(Instant::now() < deadline, "the worker never ran fast");
         now = run(&mut s, now, 1);
     }
-    // MENU held past the eject threshold, and the cart comes out.
     s.feed([RawEvent::Down(Btn::Menu)], now + 16);
     now = run(&mut s, now + 1100, 250);
     s.feed([RawEvent::Up(Btn::Menu)], now + 16);
@@ -2203,7 +2046,6 @@ fn a_latched_fast_forward_does_not_outlive_the_cart() {
         matches!(s.app().phase(), Phase::Shelf),
         "the cart never came out"
     );
-    // And in goes the next one, with nobody near R2.
     s.feed([RawEvent::Down(Btn::A)], now);
     s.feed([RawEvent::Up(Btn::A)], now + 16);
     now += 32;
@@ -2215,7 +2057,6 @@ fn a_latched_fast_forward_does_not_outlive_the_cart() {
         s.update(1.0 / 60.0);
         std::thread::sleep(Duration::from_millis(1));
     }
-    // Long enough for the worker to report its speed, so a negative here means something.
     run(&mut s, now, 60);
     assert_eq!(
         s.app().ff_badge(),
@@ -2229,7 +2070,6 @@ fn a_latched_fast_forward_does_not_outlive_the_cart() {
     );
 }
 
-/// Frames fed and updated in the order `Frontend::advance` does them, with no events.
 fn run(s: &mut Session, from: u64, frames: u64) -> u64 {
     let mut now = from;
     for _ in 0..frames {
@@ -2241,8 +2081,6 @@ fn run(s: &mut Session, from: u64, frames: u64) -> u64 {
     now
 }
 
-/// TEMPORARY, with `Action::ColourCorrectionToggle`. With a cart seated, the toggle flips the
-/// setting and queues it for the running core rather than the next insert.
 #[test]
 fn the_colour_shortcut_reaches_the_core_already_running() {
     let d = common::tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -2266,8 +2104,6 @@ fn the_colour_shortcut_reaches_the_core_already_running() {
     );
 }
 
-/// TEMPORARY, with `Action::ColourCorrectionToggle`. The banner names the state arrived at, not
-/// the one left. Both directions, since an inversion reads correct in either one alone.
 #[test]
 fn the_colour_shortcut_names_the_state_it_arrived_at() {
     let d = common::tmp_root_with_carts(&["Emerald", "Fusion"]);

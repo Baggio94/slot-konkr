@@ -1,7 +1,5 @@
 use slot_ui::{badge_face, icon_box, icon_face, Badge, Icon, HUD_ICON_PX, LINK_HOST_INK};
 
-/// Faces are uploaded in `ALL` order and looked up by `index`, the discriminant. Reordering
-/// `ALL` alone would put the wrong glyph on the HUD.
 #[test]
 fn icons_are_indexed_in_declaration_order() {
     for (i, icon) in Icon::ALL.iter().enumerate() {
@@ -27,8 +25,6 @@ fn every_icon_rasterises_to_something_visible() {
     }
 }
 
-/// Catches a codepoint the font lacks: missing glyphs come back as the same box, so every pair
-/// must differ.
 #[test]
 fn icons_are_distinguishable_from_each_other() {
     let faces: Vec<_> = Icon::ALL
@@ -42,7 +38,6 @@ fn icons_are_distinguishable_from_each_other() {
     }
 }
 
-/// The Mono variant exists so a HUD row does not reflow as its glyph changes.
 #[test]
 fn all_icons_share_one_box() {
     let first = icon_face(Icon::Volume, 18.0, [255, 255, 255]);
@@ -58,13 +53,10 @@ fn all_icons_share_one_box() {
     }
 }
 
-/// The raster is cached and the tint is not, so a second colour must not come back wearing
-/// the first one's.
 #[test]
 fn the_icon_is_tinted_with_the_colour_asked_for() {
     icon_face(Icon::Volume, 18.0, [255, 255, 255]);
     let f = icon_face(Icon::Volume, 18.0, [200, 30, 10]);
-    // Halo edges blend, so only fully covered pixels are exactly one colour or the other.
     let opaque: Vec<_> = f.rgba.chunks(4).filter(|p| p[3] == 255).collect();
     assert!(
         opaque.iter().any(|p| p[..3] == [200, 30, 10]),
@@ -95,7 +87,6 @@ fn a_bigger_size_gives_a_bigger_face() {
     );
 }
 
-/// The fast forward badge has no plate, so its dark halo must hold up on a white frame.
 #[test]
 fn icons_carry_a_halo_so_they_read_without_a_plate() {
     let f = icon_face(Icon::FastForward, 18.0, [255, 255, 255]);
@@ -109,11 +100,8 @@ fn icons_carry_a_halo_so_they_read_without_a_plate() {
     );
 }
 
-/// The frame is the union of every glyph's extent, so a new icon must not grow it and shift
-/// the HUD row.
 #[test]
 fn a_new_icon_does_not_resize_the_box_the_others_share() {
-    // The union at HUD_ICON_PX = 24. A change without the size changing means a glyph grew it.
     assert_eq!(
         icon_box(HUD_ICON_PX),
         (26, 27),
@@ -121,7 +109,6 @@ fn a_new_icon_does_not_resize_the_box_the_others_share() {
     );
 }
 
-/// Callers lay out against `icon_box` before knowing the glyph, so it must include the halo.
 #[test]
 fn icon_box_accounts_for_the_halo() {
     let (bw, bh) = icon_box(18.0);

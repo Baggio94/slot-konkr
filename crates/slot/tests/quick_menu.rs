@@ -13,8 +13,6 @@ use slot_ui::{
 };
 use tempfile::TempDir;
 
-/// On the carousel, with a platform clock that reads like a real date. Two carts, because one
-/// is a dedicated device that never shows the carousel.
 fn on_carousel_with(state: SlotState) -> (TempDir, App, Clock) {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
     write_slot_state(
@@ -38,13 +36,11 @@ fn on_carousel() -> (TempDir, App, Clock) {
     on_carousel_with(SlotState::default())
 }
 
-/// A press and its release, as the gesture layer delivers them.
 fn press(a: &mut App, btn: Btn) {
     a.apply(Action::GbaDown(btn));
     a.apply(Action::GbaUp(btn));
 }
 
-/// MENU on the carousel, then the bar walked down to `row`.
 fn open_at(a: &mut App, row: QuickRow) {
     a.apply(Action::QuickMenu);
     for _ in 0..row.index() {
@@ -68,7 +64,6 @@ fn menu_opens_the_quick_menu_with_its_top_row_selected_every_time() {
     );
 }
 
-/// Both ways out land on the carousel, on the cart that was under the highlight.
 #[test]
 fn menu_or_b_closes_it_back_onto_the_carousel_where_you_were() {
     for close in [Action::QuickMenu, Action::GbaDown(Btn::B)] {
@@ -90,7 +85,6 @@ fn menu_or_b_closes_it_back_onto_the_carousel_where_you_were() {
     }
 }
 
-/// In game MENU keeps its hold to eject and its double tap, and a tap of it is not a menu.
 #[test]
 fn the_quick_menu_is_only_on_the_carousel() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -127,23 +121,18 @@ fn up_and_down_move_the_bar_and_stop_at_the_ends() {
     }
 }
 
-/// Left is slower and Right is faster, stopping at each end, and every step is on the card at
-/// once: there is no save.
 #[test]
 fn fast_forward_steps_through_its_speeds_and_saves_each_one() {
     let (d, mut a, _) = on_carousel();
     open_at(&mut a, QuickRow::FastForward);
     for (btn, want) in [
-        // The row opens on the default, 6x, so Left walks down through the slow end first.
         (Btn::Left, 4),
         (Btn::Left, 3),
         (Btn::Left, 2),
         (Btn::Left, 2),
         (Btn::Right, 3),
         (Btn::Right, 4),
-        // The row skips 5: past four, one skipped frame is not a visible speed.
         (Btn::Right, 6),
-        // Six is the top of the row as well as its default.
         (Btn::Right, 6),
         (Btn::Left, 4),
     ] {
@@ -173,7 +162,6 @@ fn rumble_and_fast_forward_sound_flip_on_either_arrow_and_save() {
     );
     press(&mut a, Btn::Right);
     assert_eq!(card(&d), (false, true));
-    // Two rows down: Colour Correction sits between the Fast Forward pair and Rumble.
     press(&mut a, Btn::Down);
     press(&mut a, Btn::Down);
     press(&mut a, Btn::Right);
@@ -184,8 +172,6 @@ fn rumble_and_fast_forward_sound_flip_on_either_arrow_and_save() {
     assert_eq!(card(&d), (false, true));
 }
 
-/// Colour Correction is a two-value row: either arrow flips it, and every press is on the card
-/// before the menu closes, since the next cart in is what reads it.
 #[test]
 fn colour_correction_flips_on_either_arrow_and_saves() {
     let (d, mut a, _) = on_carousel();
@@ -218,8 +204,6 @@ fn colour_correction_flips_on_either_arrow_and_saves() {
     }
 }
 
-/// The row changes the picture and nothing else, least of all its neighbours, which share its
-/// arrows.
 #[test]
 fn colour_correction_leaves_the_settings_around_it_alone() {
     let (d, mut a, _) = on_carousel();
@@ -266,7 +250,6 @@ fn a_on_about_opens_the_label_and_b_comes_back_to_the_menu() {
     assert_eq!(a.quick_menu(), Some(QuickRow::About));
 }
 
-/// The clock screen from first boot, starting at the current wall time and chosen offset.
 #[test]
 fn a_on_date_and_time_opens_the_clock_at_the_time_it_already_has() {
     let (_d, mut a, _) = on_carousel_with(SlotState {
@@ -292,12 +275,11 @@ fn confirming_the_clock_from_the_menu_sets_it_and_comes_back_to_the_menu() {
     });
     open_at(&mut a, QuickRow::DateTime);
     press(&mut a, Btn::A);
-    press(&mut a, Btn::Up); // a year on
+    press(&mut a, Btn::Up);
     for _ in 0..5 {
         press(&mut a, Btn::Right);
     }
-    press(&mut a, Btn::Down); // half an hour further west
-                              // The picker opened on the clock's minute and cannot show seconds.
+    press(&mut a, Btn::Down);
     let changed = a.picker().expect("not on the clock").secs() - (CLOCK_IS_SET - CLOCK_IS_SET % 60);
     press(&mut a, Btn::A);
     assert_eq!(a.quick_menu(), Some(QuickRow::DateTime), "{:?}", a.phase());
@@ -334,7 +316,6 @@ fn b_on_the_clock_from_the_menu_comes_back_without_changing_anything() {
     );
 }
 
-/// At first boot there is nothing behind the clock to go back to.
 #[test]
 fn the_first_boot_clock_still_has_no_way_back() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -348,7 +329,6 @@ fn the_first_boot_clock_still_has_no_way_back() {
     );
 }
 
-/// Ruling S4: the device's own keys keep working with the menu up, and their bar draws over it.
 #[test]
 fn brightness_and_volume_still_answer_over_the_quick_menu() {
     let (d, mut a, _) = on_carousel();
@@ -378,8 +358,6 @@ fn brightness_and_volume_still_answer_over_the_quick_menu() {
     );
 }
 
-/// Stand-ins for every face the frontend uploads for the menu, so the draw can be read back
-/// without a compositor. Every id distinct.
 fn fake_faces(a: &mut App) {
     let id = TexId::from_raw;
     a.set_quick_menu_faces(QuickMenuFaces {
@@ -395,7 +373,6 @@ fn fake_faces(a: &mut App) {
     a.set_quick_clock_faces((id(500), 150, 40), (id(501), 150, 40));
 }
 
-/// The id `fake_faces` gave a value, grey or lit.
 fn value(v: QuickValue, lit: bool) -> usize {
     if lit {
         210 + v.index()
@@ -410,7 +387,6 @@ fn frame(a: &App) -> Vec<Draw> {
     out
 }
 
-/// Where a face landed, if it did.
 fn placed(out: &[Draw], id: usize) -> Option<[f32; 4]> {
     out.iter().find_map(|d| match *d {
         Draw::Tex {
@@ -501,8 +477,6 @@ fn the_bar_runs_edge_to_edge_behind_the_selected_row() {
     }
 }
 
-/// Labels start 32 px in and values end 32 px from the right. Every face is padded by
-/// `MENU_PAD` either side, so that is taken back off.
 #[test]
 fn labels_start_and_values_end_thirty_two_pixels_in() {
     let (_d, mut a, _) = on_carousel();
@@ -520,8 +494,6 @@ fn labels_start_and_values_end_thirty_two_pixels_in() {
     assert_eq!(x + w, right, "the arrow around the selected value");
 }
 
-/// Ruling S6: from the menu the clock offers B BACK beside its own key; at first boot it does
-/// not.
 #[test]
 fn only_the_clock_from_the_menu_offers_b_back() {
     let (_d, mut a, _) = on_carousel();

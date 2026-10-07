@@ -2,20 +2,16 @@ mod common;
 
 use tempfile::tempdir;
 
-/// `task dist` and `task sdcard` build the layout with `--init-root`, so `root::ensure` is the
-/// only implementation of it.
 #[test]
 fn ensure_creates_every_folder_dirs_names_and_nothing_else() {
     let d = tempdir().unwrap();
     let out = d.path().join("dist");
     slot::root::ensure(&out);
 
-    // `join` and `is_dir` follow a `/`, so nested `DIRS` entries like `Games/GBA` work.
     for name in slot::root::DIRS {
         assert!(out.join(name).is_dir(), "{name} was not created");
     }
 
-    // Some `DIRS` entries are nested, so a flat `read_dir` sees each entry's first segment.
     let mut got: Vec<String> = std::fs::read_dir(&out)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -30,7 +26,6 @@ fn ensure_creates_every_folder_dirs_names_and_nothing_else() {
     assert_eq!(got, want);
 }
 
-/// `task sdcard` points at a directory the caller already keeps roms in.
 #[test]
 fn ensure_leaves_existing_content_alone() {
     let d = tempdir().unwrap();
@@ -44,7 +39,6 @@ fn ensure_leaves_existing_content_alone() {
     );
 }
 
-/// No count in the name: the assertion reads it off `DIRS`.
 #[test]
 fn a_booted_app_root_has_the_same_folders() {
     let d = common::tmp_root_with_carts(&["Emerald"]);

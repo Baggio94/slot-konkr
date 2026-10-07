@@ -20,7 +20,6 @@ fn a_broken_line_leaves_that_colour_alone_and_the_rest_applies() {
     assert_eq!(t.edge, d.edge, "a line with no value was taken anyway");
 }
 
-/// `#` opens a comment only at line start, because it also starts a colour.
 #[test]
 fn a_leading_hash_is_a_comment_and_a_value_hash_is_not() {
     let t = Theme::parse("# housing #ffffff\nhousing #102030\n");

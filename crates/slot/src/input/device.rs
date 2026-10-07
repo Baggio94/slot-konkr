@@ -13,30 +13,22 @@ use super::trace;
 
 const DEV: &str = "/dev/input";
 const SYS: &str = "/sys/class/input";
-/// Where this board keeps its lid sensor.
 const PSY: &str = "/sys/class/power_supply";
 
-/// The lid is not an input device here, so it is polled. Each read is an i2c transaction to the
-/// PMIC, and 150 ms of hinge latency is imperceptible.
 const LID_POLL_MS: Millis = 150;
 
-/// Every node worth reading, each on a thread blocked in `read`, so there is no poll latency.
 pub struct DeviceInput {
     pending: Arc<Mutex<Vec<RawEvent>>>,
-    /// The PMIC hall sensor attribute. `None` means a board without a lid.
     hall: Option<PathBuf>,
-    /// `None` until the first read, so a device that booted with the lid shut reports it.
     lid_shut: Option<bool>,
     next_lid_poll: Millis,
 }
 
 impl DeviceInput {
-    /// `root` is the card, used only for the trace file.
     pub fn open(root: &Path) -> Self {
         DeviceInput::open_in(Path::new(DEV), Path::new(SYS), root, trace::enabled())
     }
 
-    /// `trace` is a parameter so tests need not race on a shared environment variable.
     pub fn open_in(dev: &Path, sys: &Path, root: &Path, trace: bool) -> Self {
         let trace = trace.then(|| Trace::start(root, dev, sys)).flatten();
         DeviceInput::open_traced(dev, sys, trace)
@@ -70,14 +62,8 @@ impl DeviceInput {
     }
 }
 
-/// The SP's key devices are polled, 20 ms by default, and a press waits for the next poll. The
-/// kernel ticks at 100 Hz and the driver schedules in whole ticks, so 10 ms is the fastest poll
-/// there is: asking for less rounds up to it, and 0 would re-poll without pause and spin a core.
-/// Measured on the SP: no bounces at 10 ms, and no CPU cost above the noise.
 const POLL_MS: u32 = 10;
 
-/// Poll `node` every `POLL_MS` if it is polled more slowly. Best effort: an unpolled device has no
-/// attribute, and a refused write leaves the old rate.
 fn quicken_poll(sys: &Path, node: &Path) {
     let Some(name) = node.file_name() else {
         return;
@@ -100,13 +86,11 @@ fn quicken_poll(sys: &Path, node: &Path) {
     }
 }
 
-/// Runs until the node goes away. Never joined: the process ends by powering off.
 fn read_node(node: &Path, queue: &Mutex<Vec<RawEvent>>, trace: Option<&Trace>) {
     let label = node
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| node.display().to_string());
-    // One per node: the axes are that node's.
     let mut hat = Hat::default();
     let mut file = match File::open(node) {
         Ok(f) => f,
@@ -115,7 +99,6 @@ fn read_node(node: &Path, queue: &Mutex<Vec<RawEvent>>, trace: Option<&Trace>) {
             return;
         }
     };
-    // Whole events only: the driver never splits them.
     let mut buf = [0u8; EVENT_BYTES * 16];
     loop {
         let read = match file.read(&mut buf) {
@@ -127,7 +110,6 @@ fn read_node(node: &Path, queue: &Mutex<Vec<RawEvent>>, trace: Option<&Trace>) {
                 return;
             }
         };
-        // Traced before mapping: the interesting codes are the ones `to_raw` drops.
         let mut events = Vec::new();
         for ev in buf[..read].chunks_exact(EVENT_BYTES).filter_map(decode) {
             if let Some(trace) = trace {
@@ -137,7 +119,6 @@ fn read_node(node: &Path, queue: &Mutex<Vec<RawEvent>>, trace: Option<&Trace>) {
                 crate::latency::read();
             }
             match ev.kind {
-                // The d-pad needs its axis state to know what it released.
                 EV_ABS => events.extend(hat.feed(ev)),
                 _ => events.extend(to_raw(ev)),
             }
@@ -152,15 +133,12 @@ fn read_node(node: &Path, queue: &Mutex<Vec<RawEvent>>, trace: Option<&Trace>) {
     }
 }
 
-/// Shared by every reader thread so lines interleave in kernel order.
 struct Trace {
     out: Mutex<File>,
     began: Instant,
 }
 
 impl Trace {
-    /// `None` unless asked for or if the card refuses the file; not a boot failure. The node
-    /// survey goes first, since a skipped node explains a missing button.
     fn start(root: &Path, dev: &Path, sys: &Path) -> Option<Arc<Trace>> {
         let path = root.join(trace::TRACE_FILE);
         let mut file = match File::create(&path) {
@@ -181,9 +159,7 @@ impl Trace {
         }))
     }
 
-    /// Flushed per line: power-off does not unwind, so a buffered edge would be lost.
     fn event(&self, node: &str, ev: Ev) {
-        // SYN follows every edge and would be most of the file.
         if ev.kind == EV_SYN {
             return;
         }
@@ -195,8 +171,6 @@ impl Trace {
 }
 
 impl DeviceInput {
-    /// `1` open, `0` shut, measured on an RG SP. `None` on a missing or unparseable attribute,
-    /// which keeps the last lid state.
     fn read_lid(&self) -> Option<bool> {
         let raw = std::fs::read_to_string(self.hall.as_ref()?).ok()?;
         match raw.trim() {
@@ -215,7 +189,6 @@ impl InputSource for DeviceInput {
             if let Some(shut) = self.read_lid() {
                 if self.lid_shut != Some(shut) {
                     self.lid_shut = Some(shut);
-                    // The same events an `SW_LID` node would produce.
                     out.push(if shut {
                         RawEvent::Down(Btn::Lid)
                     } else {
@@ -228,8 +201,6 @@ impl InputSource for DeviceInput {
     }
 }
 
-/// The hinge is reported as `hallkey` on the PMIC's battery node. Searched for rather than
-/// hardcoded, so a board naming it differently reads as having no lid.
 fn find_hall(psy: &Path) -> Option<PathBuf> {
     let mut supplies: Vec<PathBuf> = std::fs::read_dir(psy)
         .ok()?

@@ -6,7 +6,6 @@ fn saving_and_loading_say_which_one_happened() {
     assert_eq!(Toast::StateLoaded.text(), "State Loaded");
 }
 
-/// The link shortcut on a core that cannot link says which one can, in the same banner.
 #[test]
 fn the_link_shortcut_on_the_wrong_core_says_to_switch() {
     assert_eq!(Toast::NeedsGpsp.text(), "Please switch to gpSP");
@@ -14,7 +13,6 @@ fn the_link_shortcut_on_the_wrong_core_says_to_switch() {
     assert!(f.rgba.chunks(4).any(|p| p[3] > 0), "the banner is blank");
 }
 
-/// gpSP only fakes named protocols, so on any other cart the shortcut says there is no link.
 #[test]
 fn a_cart_gpsp_cannot_link_says_there_is_no_link() {
     assert_eq!(Toast::NoLink.text(), "No link support");
@@ -22,8 +20,6 @@ fn a_cart_gpsp_cannot_link_says_there_is_no_link() {
     assert!(f.rgba.chunks(4).any(|p| p[3] > 0), "the banner is blank");
 }
 
-/// Every banner answers something the user just did, never what is already on screen. Held
-/// by name. The last two are TEMPORARY, with `Action::ColourCorrectionToggle`.
 #[test]
 fn the_banner_says_what_happened_and_never_what_is_on_screen() {
     assert_eq!(
@@ -51,8 +47,6 @@ fn the_banner_says_what_happened_and_never_what_is_on_screen() {
     }
 }
 
-/// Every banner's ink covers the same rows, to within one (round capitals overshoot flat ones;
-/// a shrunk line is four rows out).
 #[test]
 fn no_toast_is_shrunk_to_fit_its_box() {
     let rows = |t: Toast| {
@@ -82,18 +76,15 @@ fn a_toast_fades_on_the_same_curve_as_the_bar() {
     assert!(!h.toast_visible(2_500));
 }
 
-/// A repeated toast re-stamps the one clock rather than queueing a second banner.
 #[test]
 fn saying_the_same_thing_twice_re_shows_it_rather_than_stacking() {
     let mut h = Hud::new();
     h.toast(Toast::StateSaved, 1_000);
     h.toast(Toast::StateSaved, 2_400);
-    // Past the first stamp's fade and short of the second's.
     assert_eq!(h.said(3_400), Some(Toast::StateSaved), "it did not re-show");
     assert_eq!(h.said(3_900), None, "it never faded");
 }
 
-/// A different banner replaces the one showing rather than waiting behind it.
 #[test]
 fn a_second_banner_replaces_the_first() {
     let mut h = Hud::new();
@@ -108,7 +99,6 @@ fn a_toast_is_centred() {
     assert_eq!(x + w / 2.0, OUT_W as f32 / 2.0);
 }
 
-/// The type carries its own halo, like the badge, or it vanishes on a white frame.
 #[test]
 fn a_toast_carries_its_own_halo() {
     let f = toast_face(Toast::StateSaved);
@@ -119,7 +109,6 @@ fn a_toast_carries_its_own_halo() {
     assert!(dark, "there is nothing dark behind the type");
 }
 
-/// The toast reads against the same plate as the level bar, in the same place.
 #[test]
 fn a_toast_sits_in_the_plate_band_and_is_backed_by_it() {
     let mut h = Hud::new();
@@ -144,7 +133,6 @@ fn a_toast_sits_in_the_plate_band_and_is_backed_by_it() {
     );
 }
 
-/// They share one strip, and a toast outranks a level bar.
 #[test]
 fn a_toast_takes_the_band_from_the_bar() {
     let mut h = Hud::new();

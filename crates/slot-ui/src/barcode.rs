@@ -1,13 +1,6 @@
-//! Code 39 encoding for the label's barcode. Every symbol is nine elements, five bars and four
-//! spaces, exactly three wide. `$ / + %` have no wide bars and three wide spaces; the rest,
-//! including the `*` sentinel, have two wide bars and one wide space. The table is derived, and
-//! was checked against `zbarimg`.
-
-/// Element widths in draw units. Code 39 wants wide at 2 to 3 times narrow; 2.5 is the middle.
 pub const CODE39_NARROW: f32 = 1.0;
 pub const CODE39_WIDE: f32 = 2.5;
 
-/// Readers refuse a ratio outside 2:1 to 3:1, and the barcode silently fails to scan.
 const _: () = assert!(CODE39_WIDE >= CODE39_NARROW * 2.0);
 const _: () = assert!(CODE39_WIDE <= CODE39_NARROW * 3.0);
 
@@ -62,8 +55,6 @@ fn pattern(c: char) -> Option<[bool; 9]> {
     Some(bits.map(|b| b == 1))
 }
 
-/// The element run for `text`, `true` where wide. `None` if anything is outside the alphabet,
-/// rather than a barcode that reads back short.
 pub fn code39(text: &str) -> Option<Vec<bool>> {
     let mut out = Vec::with_capacity(text.len() * 9);
     for c in text.chars() {

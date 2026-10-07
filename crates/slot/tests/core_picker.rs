@@ -2,14 +2,12 @@ use slot::core_picker::{CorePicker, Outcome, Press, CLOSE_MS, HOP_MS, LIFT_MS, O
 use slot_store::Core;
 use slot_ui::Millis;
 
-/// A picker whose faces were ready the moment it opened.
 fn opened(seat: Core, at: Millis) -> CorePicker {
     let mut p = CorePicker::open(seat, at);
     p.start(at);
     p
 }
 
-/// Linear, checked a quarter of the way in: smootherstep also passes a half at the midpoint.
 #[test]
 fn it_opens_over_the_open_time_and_then_rests() {
     let p = opened(Core::Mgba, 1000);
@@ -19,7 +17,6 @@ fn it_opens_over_the_open_time_and_then_rests() {
     assert_eq!(p.openness(1000 + 10 * OPEN_MS), 1.0);
 }
 
-/// The chip starts in the socket the cart already runs on.
 #[test]
 fn the_chip_starts_seated_in_the_carts_own_core() {
     let chip = opened(Core::Gpsp, 0).chip(0);
@@ -44,7 +41,6 @@ fn right_from_mgba_hops_blank_and_lands_named_in_gpsp() {
     assert_eq!((landed.across, landed.lift), (1.0, 0.0));
 }
 
-/// Toward the socket it is already in, the chip shakes and nothing else changes.
 #[test]
 fn toward_the_socket_it_is_in_is_refused_and_only_shakes() {
     let mut p = opened(Core::Gpsp, 0);
@@ -55,7 +51,6 @@ fn toward_the_socket_it_is_in_is_refused_and_only_shakes() {
     assert_eq!(p.chip(700).shake, 0.0, "the shake outlived its 300 ms");
 }
 
-/// Reversing mid hop retraces the arc from where the chip is, not from a new start.
 #[test]
 fn back_mid_hop_turns_the_chip_round_from_where_it_is() {
     let mut p = opened(Core::Mgba, 0);
@@ -99,7 +94,6 @@ fn back_closes_without_a_write() {
     assert!(p.finished(400 + CLOSE_MS));
 }
 
-/// A close during the lid lift starts from where the lid is, not from rest.
 #[test]
 fn a_close_during_the_lift_reverses_from_where_the_lid_had_got_to() {
     let mut p = opened(Core::Mgba, 0);
@@ -116,7 +110,6 @@ fn a_close_during_the_lift_reverses_from_where_the_lid_had_got_to() {
     );
 }
 
-/// A refusal shake must not survive into a real hop: two shakes read as two failures.
 #[test]
 fn a_hop_started_soon_after_a_refusal_does_not_carry_its_shake() {
     let mut p = opened(Core::Gpsp, 0);
@@ -141,7 +134,6 @@ fn the_open_is_a_slide_then_a_lift_and_the_board_agrees() {
     assert!((slot_ui::SLIDE_SHARE - SLIDE_MS as f32 / OPEN_MS as f32).abs() < 1e-6);
 }
 
-/// Opened before its faces are uploaded, the cart stands on the shelf until it is started.
 #[test]
 fn a_picker_waits_until_it_is_started() {
     let mut p = CorePicker::open(Core::Mgba, 100);
@@ -162,7 +154,6 @@ fn a_second_start_keeps_the_first() {
     assert_eq!(p.openness(300 + OPEN_MS), 1.0);
 }
 
-/// Backing out before anything moved has nothing to put back.
 #[test]
 fn backing_out_while_waiting_finishes_at_once() {
     let mut p = CorePicker::open(Core::Mgba, 0);
@@ -170,8 +161,6 @@ fn backing_out_while_waiting_finishes_at_once() {
     assert!(p.finished(50));
 }
 
-/// The close runs progress backwards linearly from wherever it was: a quarter of the close in,
-/// a quarter is gone. Checked off the midpoint, where an eased close would also read a half.
 #[test]
 fn a_close_from_rest_takes_the_close_time() {
     let mut p = opened(Core::Mgba, 0);
@@ -180,8 +169,6 @@ fn a_close_from_rest_takes_the_close_time() {
     assert!(p.finished(OPEN_MS + CLOSE_MS));
 }
 
-/// Until the cart opens the chip is off screen, so the arrows do nothing: an unseen hop would
-/// change the core an `A` writes.
 #[test]
 fn the_arrows_do_nothing_while_the_picker_waits() {
     let mut p = CorePicker::open(Core::Mgba, 0);

@@ -5,8 +5,6 @@ const REFUSAL_MS: Millis = 300;
 const SHAKE_PX: f32 = 6.0;
 const SHAKE_HZ: f32 = 14.0;
 
-/// The whole error UI (spec section 12): a shake, no words, the same for every refusal. The
-/// caller decides what moves.
 #[derive(Copy, Clone)]
 pub struct Refusal {
     started: Millis,
@@ -21,8 +19,6 @@ impl Refusal {
         now.saturating_sub(self.started) < REFUSAL_MS
     }
 
-    /// Horizontal pixels off centre, decaying to zero. Cosine, so the refused frame itself
-    /// is already at full throw.
     pub fn offset(&self, now: Millis) -> f32 {
         let age = now.saturating_sub(self.started);
         if age >= REFUSAL_MS {

@@ -3,8 +3,8 @@ use slot_gfx::{blit_rect, blit_rect_fit, fit_rect, fit_scale};
 #[test]
 fn integer_scale_never_fractional() {
     assert_eq!(fit_scale(1440, 960), 2);
-    assert_eq!(fit_scale(1500, 1000), 2); // rounds down, never 2.08
-    assert_eq!(fit_scale(700, 400), 1); // clamps to 1 below native
+    assert_eq!(fit_scale(1500, 1000), 2);
+    assert_eq!(fit_scale(700, 400), 1);
     assert_eq!(fit_scale(2160, 1440), 3);
 }
 

@@ -25,7 +25,6 @@ fn write_rom_with_code(d: &TempDir, name: &str, title: &str, code: &str) {
 fn an_unknown_game_gets_the_default_grey() {
     assert_eq!(gba_shell_for("ZZZZ").colour, DEFAULT_SHELL.colour);
     assert_eq!(gba_shell_for("").colour, DEFAULT_SHELL.colour);
-    // Metroid Fusion, verified as AMTE: an ordinary cart gets the default.
     assert_eq!(gba_shell_for("AMTE").colour, DEFAULT_SHELL.colour);
 }
 
@@ -41,7 +40,6 @@ fn leafgreen_is_green_whatever_region_it_came_from() {
     }
 }
 
-/// Verified from a real header: Shrek GBA Video is MSKE.
 #[test]
 fn gba_video_carts_are_light_grey() {
     let v = gba_shell_for("MSKE");
@@ -57,16 +55,12 @@ fn gba_video_carts_are_light_grey() {
     assert_eq!(gba_shell_for("MPOE").colour, v.colour);
 }
 
-/// An explicit row has to beat the family letter.
 #[test]
 fn an_exact_entry_outranks_the_family_letter() {
     assert_eq!(gba_shell_for("MSKE").colour, gba_shell_for("MSKJ").colour);
-    // The shipping table has no conflicting row, so check the order directly.
     assert!(lookup_order_is_exact_then_family_then_default());
 }
 
-/// The Pokemon, Boktai and WarioWare carts outside Japan are clear plastic; the rest, and the GBA Video
-/// family, are solid, so finish is per row, not per colour.
 #[test]
 fn the_clear_carts_are_clear_and_the_rest_are_solid() {
     for code in table_keys() {
@@ -121,8 +115,6 @@ fn no_two_table_entries_share_a_key() {
     );
 }
 
-/// One game, two plastics: smoke clear in the US, milky white in Japan. The region's own code
-/// outranks the prefix the rest of the world shares.
 #[test]
 fn a_region_that_shipped_other_plastic_gets_its_own() {
     let us = gba_shell_for("RZWE");
@@ -143,7 +135,6 @@ fn boktai_is_clear_everywhere_and_drill_dozer_is_red() {
     assert_eq!(dozer.colour, gba_shell_for("V49J").colour);
 }
 
-/// The shell of a Game Boy pak with these header fields.
 fn gb_shell(title: &[u8], code: &[u8], cgb: u8, japan: bool) -> slot_ui::Shell {
     let d = tempfile::tempdir().expect("tempdir");
     let games = d.path().join("Games/GB");
@@ -157,8 +148,6 @@ fn gb_shell(title: &[u8], code: &[u8], cgb: u8, japan: bool) -> slot_ui::Shell {
     shell_for(&scan(d.path()).expect("scan")[0])
 }
 
-/// Red and Blue were grey in Japan and red and blue everywhere else. They predate the code
-/// field, so the title and the destination byte are all there is to tell them by.
 #[test]
 fn red_and_blue_are_coloured_outside_japan_only() {
     let red = gb_shell(b"POKEMON RED", b"", 0x00, false);
@@ -172,8 +161,6 @@ fn red_and_blue_are_coloured_outside_japan_only() {
     );
 }
 
-/// Gold and Silver outside Japan are gold and silver; Japan's are the black pak their flag
-/// already gives them.
 #[test]
 fn gold_is_gold_except_in_japan() {
     let gold = gb_shell(b"POKEMON_GLD", b"AAUE", 0x80, false);
@@ -186,7 +173,6 @@ fn gold_is_gold_except_in_japan() {
     assert_ne!(gb_shell(b"POKEMON_SLV", b"AAXE", 0x80, false), gold);
 }
 
-/// Crystal is aqua clear with glitter in every region, under two codes.
 #[test]
 fn crystal_is_aqua_under_both_its_codes() {
     let en = gb_shell(b"PM_CRYSTAL", b"BYTE", 0xc0, false);
@@ -200,7 +186,6 @@ fn crystal_is_aqua_under_both_its_codes() {
     assert!(en.colour[2] > en.colour[0], "Crystal is aqua");
 }
 
-/// Metal Gear Solid is Colour-only but shipped in black, not the clear plastic its flag gives.
 #[test]
 fn metal_gear_solid_is_black_not_clear() {
     assert_eq!(
@@ -209,7 +194,6 @@ fn metal_gear_solid_is_black_not_clear() {
     );
 }
 
-/// Pinball was yellow only in Japan; the US and EU carts are the black pak.
 #[test]
 fn pinball_is_yellow_in_japan_only() {
     let jp = gb_shell(b"POKEPINBALL", b"VPHJ", 0x80, true);
@@ -231,8 +215,6 @@ fn an_unlisted_pak_keeps_its_flags_plastic() {
 
 #[test]
 fn the_label_does_not_cover_the_whole_shell() {
-    // Solid plastic, so the shell above the label is exactly its colour: a clear one shows the
-    // back of the shell through it.
     let d = tmp_root();
     write_rom_with_code(&d, "Drill Dozer.gba", "DRILL DOZER", "V49E");
     let cart = &scan(d.path()).unwrap()[0];
@@ -254,7 +236,6 @@ fn the_label_does_not_cover_the_whole_shell() {
     );
 }
 
-/// A cart on its own card, with `line` in cart_shell.ini when given.
 fn chosen(dir: &str, cgb: u8, code: &str, line: Option<&str>) -> (TempDir, slot_store::Cart) {
     let d = tempfile::tempdir().expect("tempdir");
     for sub in [format!("Games/{dir}"), "System".to_string()] {
@@ -344,7 +325,6 @@ fn the_presets_are_the_tables_plastics_each_once() {
     assert_eq!(find("Pokémon Emerald"), gba_shell_for("BPEE"));
 }
 
-/// How many of a face's pixels lean green, the board's colour under plastic.
 fn greenish(face: &slot_ui::CartFace) -> usize {
     face.rgba
         .chunks_exact(4)
@@ -368,10 +348,7 @@ fn a_clear_gba_cart_shows_its_board_through_the_plastic() {
     );
 }
 
-/// How far a clear face's plastic sits from grey, on average, against a solid face of the same
-/// colour: only the pixels where the two differ count, so the label they share does not.
 fn richness(clear: &slot_ui::CartFace, solid: &slot_ui::CartFace) -> (f32, f32) {
-    // As a share of the pixel's brightness: a deeper colour is not a weaker one.
     let spread = |p: &[u8]| {
         let (hi, lo) = (*p[..3].iter().max().unwrap(), *p[..3].iter().min().unwrap());
         if hi == 0 {
@@ -393,8 +370,6 @@ fn richness(clear: &slot_ui::CartFace, solid: &slot_ui::CartFace) -> (f32, f32) 
 
 #[test]
 fn clear_coloured_plastic_stays_as_rich_as_the_solid_kind() {
-    // Real Ruby and Emerald carts are deep, saturated plastic with the board a shadow behind it,
-    // not a pale wash of their colour.
     for colour in ["c2332e", "249c60"] {
         let (_d, clear) = chosen("GBA", 0, "BPEE", Some(&format!("auto {colour} clear")));
         let (_d2, solid) = chosen("GBA", 0, "BPEE", Some(&format!("auto {colour} solid")));
@@ -411,9 +386,6 @@ fn clear_coloured_plastic_stays_as_rich_as_the_solid_kind() {
     }
 }
 
-/// Mean brightness along a row above the board, across the middle of the cart, clear against
-/// solid. Nothing is behind the front there but the back half of the shell, the same plastic, so
-/// clear plastic is its colour seen through twice: darker than one layer of it.
 fn depth(clear: &slot_ui::CartFace, solid: &slot_ui::CartFace) -> (f32, f32) {
     let y = (clear.h as f32 * 0.06) as u32;
     let lum = |f: &slot_ui::CartFace| {

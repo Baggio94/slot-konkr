@@ -2,7 +2,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const DAY: i64 = 86_400;
 
-/// `%Y-%m-%d_%H-%M-%S` in UTC, so a timezone change cannot reorder a ring already on the card.
 pub fn stamp_now() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -22,7 +21,6 @@ pub fn format_stamp(secs: i64) -> String {
     )
 }
 
-/// Seconds since the epoch, or `None` for anything that is not a stamp.
 pub fn parse_stamp(s: &str) -> Option<i64> {
     let b = s.as_bytes();
     if b.len() != 19
@@ -47,7 +45,6 @@ pub fn parse_stamp(s: &str) -> Option<i64> {
     Some(days_from_civil(y, m, d) * DAY + hh * 3600 + mm * 60 + ss)
 }
 
-/// Howard Hinnant's civil calendar algorithm, with the era shifted so day 0 is 1970-01-01.
 pub fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = y - (m <= 2) as i64;
     let era = y.div_euclid(400);

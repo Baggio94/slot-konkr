@@ -6,30 +6,17 @@ use slot::input::DeviceInput;
 use slot_gfx::{Compositor, FbdevSurface, Surface};
 use slot_power::{trace_first_frame, DevicePlatform};
 
-/// Where BaseOS mounts the card slot has never been checked against a running device, so
-/// `launch.sh` exports `SLOT_ROOT` and this is only what is left if it did not.
 const CARD: &str = "/mnt/sdcard";
 
-/// The loop never runs faster than this, for a driver whose swap returns at once.
 const MIN_FRAME: Duration = Duration::from_millis(12);
 
-/// The longest the display waits for the emulator's frame before drawing the last one again.
 const STEP_TIMEOUT: Duration = Duration::from_millis(12);
 
-/// Kept between the frame's work finishing and the latch, against the work running long.
 const MARGIN: Duration = Duration::from_micros(1500);
 
-/// The SP's Mali swap returns at the display engine's latch, 1.45 ms before each vsync, whenever it
-/// is called: a frame submitted before the latch is on the panel at the next vsync, one submitted
-/// after it waits a whole frame. So the loop paces on the swap, then sleeps through most of the
-/// frame and does its work (input, drawing, the swap) just before the next latch. A fixed 16.667 ms
-/// timer instead walked against the 16.76 ms panel and averaged half a frame of extra wait.
 struct Pacer {
     last_return: Option<Instant>,
-    /// The panel's frame, learned from the swap: 16.76 ms on the SP.
     period: Duration,
-    /// The worst input, drawing and submitting of the last `WORK_WINDOW` frames. A window rather
-    /// than a slow decay, so one long frame (a core loading) costs half a second, not fifteen.
     work: Duration,
     works: [Duration; WORK_WINDOW],
     next: usize,
@@ -48,7 +35,6 @@ impl Pacer {
         }
     }
 
-    /// Sleep until the work will just fit before the next latch.
     fn wait(&self) {
         let Some(last) = self.last_return else {
             return;
@@ -59,15 +45,12 @@ impl Pacer {
         }
     }
 
-    /// `work` is how long the frame took before its swap; `blocked` is whether the swap waited.
-    /// Returns whether a latch went by with no new frame.
     fn swapped(&mut self, work: Duration, blocked: bool) -> bool {
         let now = Instant::now();
         let mut missed = false;
         if let Some(last) = self.last_return {
             let seen = now - last;
             missed = seen > self.period.mul_f64(1.5);
-            // One frame apart, not a missed latch or a stall.
             if blocked && seen > Duration::from_millis(12) && seen < Duration::from_millis(22) {
                 self.period = self.period.mul_f64(0.95) + seen.mul_f64(0.05);
             }
@@ -104,16 +87,9 @@ pub fn run() {
     let mut frontend = Frontend::boot(Box::new(platform));
     frontend.upload_faces(&mut compositor);
     let mut input = DeviceInput::open(&root);
-    // The boot budget stopped at frontend-exec, which is the exec and not the picture on
-    // the panel. Stamped after the swap rather than before it: the frame is only up once
-    // EGL has taken it, and a number recorded earlier would flatter every measurement.
     let mut drawn = false;
-    // The emulator runs its frame inside the display's, between reading input and drawing, so
-    // the frame on the panel is the one run for the input just read.
     frontend.drive_emulator();
     let mut pacer = Pacer::new();
-    // Trace only: latches that went by with no new frame, and frames drawn early enough to wait
-    // more than half a frame for theirs.
     let (mut frames, mut missed, mut early) = (0u32, 0u32, 0u32);
     loop {
         pacer.wait();

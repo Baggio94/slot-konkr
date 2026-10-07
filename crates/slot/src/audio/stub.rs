@@ -3,8 +3,6 @@ use std::sync::Arc;
 use super::ring::{ring_capacity, Ring};
 use super::sink::{AudioError, AudioSink};
 
-/// Sink with no device behind it. `device_read` stands in for the hardware callback, so pacing
-/// can be tested without cpal.
 #[derive(Clone)]
 pub struct StubSink {
     ring: Arc<Ring>,
@@ -17,7 +15,6 @@ impl StubSink {
         }
     }
 
-    /// Drains itself on a thread, like a device with room to spare.
     pub fn draining() -> Self {
         let sink = StubSink::new();
         let ring = sink.ring.clone();
@@ -39,7 +36,6 @@ impl StubSink {
         out
     }
 
-    /// Takes exactly what is queued, like a device with room to spare.
     pub fn device_drain(&self) -> usize {
         let frames = self.ring.queued_frames();
         self.ring.fill(&mut vec![0i16; frames * 2]);

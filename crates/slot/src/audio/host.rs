@@ -12,7 +12,6 @@ pub struct HostAudio {
     device: Option<Device>,
 }
 
-/// A cpal stream is not `Send` on every backend, so it lives on its own thread.
 struct Device {
     stop: mpsc::Sender<()>,
     join: JoinHandle<()>,
@@ -96,7 +95,6 @@ fn open_stream(ring: &Arc<Ring>, sample_rate: u32) -> Result<cpal::Stream, Audio
         .default_output_config()
         .map_err(|e| AudioError::Device(e.to_string()))?;
     let mut last = None;
-    // Prefer the core's rate; otherwise DRC resamples to whatever the device accepts.
     for config in [exact_rate(&device, sample_rate), Some(fallback)]
         .into_iter()
         .flatten()
@@ -120,7 +118,6 @@ fn exact_rate(device: &cpal::Device, sample_rate: u32) -> Option<cpal::Supported
     })
 }
 
-/// A fixed period keeps the ring's occupancy target known. About 11 ms at 48 kHz.
 const PERIOD_FRAMES: u32 = 512;
 
 fn build(
@@ -142,7 +139,6 @@ fn build(
         cpal::SupportedBufferSize::Unknown => None,
     };
     let mut last = None;
-    // A device that will not take the size it advertised is still a device worth having.
     for size in [
         fixed.map(cpal::BufferSize::Fixed),
         Some(cpal::BufferSize::Default),

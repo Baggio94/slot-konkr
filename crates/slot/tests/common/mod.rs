@@ -10,22 +10,17 @@ use slot::persist::Snapshot;
 use slot::session::Session;
 use slot_power::{Battery, Charge, LedState, Motor, Platform, Power, SimPlatform};
 use slot_retro::{ButtonMask, MockCore, RetroCore};
-// Aliased: `slot_power::Platform` (the device) is already in scope; this is a cart's console.
 use slot_store::{write_slot_state, Platform as CartPlatform, SlotState};
 use tempfile::TempDir;
 
-/// What the emulator was last told to load. `None` until something loads.
 pub type Loaded = Arc<Mutex<Option<Vec<u8>>>>;
 
-/// Libretro cores keep their machine in dylib globals, so only one may be live. Every test that
-/// opens a real dylib takes `core_lock()` first, or a second open silently falls back to the mock.
 static CORE_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn core_lock() -> MutexGuard<'static, ()> {
     CORE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// A free loopback TCP port from the OS, so concurrent test runs never collide on a fixed number.
 pub fn free_port() -> u16 {
     std::net::TcpListener::bind(("127.0.0.1", 0))
         .expect("loopback would not give out a port")
@@ -34,9 +29,6 @@ pub fn free_port() -> u16 {
         .port()
 }
 
-/// One live link session at a time per test binary. The product uses a single port, so a host
-/// in one test and a joiner in another would connect. Hold it for the whole test: the worker
-/// keeps the port until the `App` is dropped.
 static LINK_PORT_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn link_port_lock() -> MutexGuard<'static, ()> {
@@ -54,8 +46,6 @@ pub fn tmp_root_with_carts(stems: &[&str]) -> TempDir {
     d
 }
 
-/// The same card, holding Game Boy carts. The folder and `.gb` extension alone make the scan read
-/// `Platform::Gb`; the stem is truncated to the header's eleven-byte title.
 pub fn tmp_root_with_gb_carts(stems: &[&str]) -> TempDir {
     let d = tmp_root();
     for stem in stems {
@@ -65,8 +55,6 @@ pub fn tmp_root_with_gb_carts(stems: &[&str]) -> TempDir {
     d
 }
 
-/// A Game Boy cart with a chosen title, since the link refusal keys on the title. The title goes
-/// at 0x134, and the rom runs past 0x14F so the whole header is in the file.
 pub fn write_gb_cart(d: &TempDir, stem: &str, title: &str) {
     assert!(
         title.len() <= 11,
@@ -77,8 +65,6 @@ pub fn write_gb_cart(d: &TempDir, stem: &str, title: &str) {
     std::fs::write(cart_path(d, CartPlatform::Gb, stem), rom).expect("write rom");
 }
 
-/// The headers `tmp_root_with_carts` writes are not roms, and a real core refuses them.
-/// Anything that puts a cart in the slot for real needs these instead.
 pub fn tmp_root_with_real_carts(stems: &[&str]) -> TempDir {
     let d = tmp_root();
     for stem in stems {
@@ -99,7 +85,6 @@ fn rom_path(d: &TempDir, stem: &str) -> PathBuf {
     cart_path(d, CartPlatform::Gba, stem)
 }
 
-/// Builds a rom path from `Platform` itself, so a fixture cannot land in a folder the scan skips.
 fn cart_path(d: &TempDir, platform: CartPlatform, stem: &str) -> PathBuf {
     d.path()
         .join("Games")
@@ -107,7 +92,6 @@ fn cart_path(d: &TempDir, platform: CartPlatform, stem: &str) -> PathBuf {
         .join(format!("{stem}.{}", platform.extensions()[0]))
 }
 
-/// A header gpSP takes at its word: title, code, the entry branch's 0xEA and the fixed 0x96.
 pub fn write_retail_header(d: &TempDir, stem: &str, title: &str, code: &str) {
     let mut rom = vec![0u8; 0x100];
     rom[3] = 0xEA;
@@ -121,7 +105,6 @@ pub fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// The core `scripts/fetch-core.sh` pulls down, or `None` if it has not been run.
 pub fn vendored_core() -> Option<PathBuf> {
     let p = repo_root().join(format!(
         "vendor/mgba_libretro.{}",
@@ -130,14 +113,11 @@ pub fn vendored_core() -> Option<PathBuf> {
     p.exists().then_some(p)
 }
 
-/// The user's own BIOS, if present. Never checked in (it is Nintendo's); tests needing it skip.
 pub fn real_bios() -> Option<PathBuf> {
     let p = repo_root().join("sdcard/BIOS/gba_bios.bin");
     p.exists().then_some(p)
 }
 
-/// `gba_rom` with a real cart's Nintendo logo, lifted from a cart on the card (not checked in).
-/// The BIOS will not play its splash without it. `None` when there is no cart to lift it from.
 pub fn logo_rom() -> Option<Vec<u8>> {
     let logo = std::fs::read_dir(repo_root().join("sdcard/Games/GBA"))
         .ok()?
@@ -147,12 +127,10 @@ pub fn logo_rom() -> Option<Vec<u8>> {
             (rom.get(4..8)? == [0x24, 0xff, 0xae, 0x51]).then(|| rom[4..0xa0].to_vec())
         })?;
     let mut rom = gba_rom();
-    // Before the header checksum range (0xa0..0xbd), so `gba_rom`'s checksum still holds.
     rom[4..0xa0].copy_from_slice(&logo);
     Some(rom)
 }
 
-/// Whether a frame is the white BIOS boot screen rather than `gba_rom`'s black one.
 pub fn mostly_lit(frame: &[u8]) -> bool {
     let lit = frame
         .chunks(4)
@@ -161,32 +139,18 @@ pub fn mostly_lit(frame: &[u8]) -> bool {
     lit * 2 > (slot_retro::GBA_W * slot_retro::GBA_H) as usize
 }
 
-/// Sets mode 3 and writes a frame counter into the first pixel once per vblank, so
-/// consecutive frames differ and a savestate has both registers and VRAM worth restoring.
 pub fn gba_rom() -> Vec<u8> {
     const CODE: [u32; 15] = [
-        0xe3a00404, // mov  r0, #0x04000000
-        0xe3a01c04, // mov  r1, #0x400
-        0xe3811003, // orr  r1, r1, #3
-        0xe5801000, // str  r1, [r0]          DISPCNT: mode 3, BG2 on
-        0xe3a02406, // mov  r2, #0x06000000
-        0xe3a03000, // mov  r3, #0
-        0xe1d040b6, // vb:  ldrh r4, [r0, #6] VCOUNT
-        0xe35400a0, //      cmp  r4, #160
-        0x1afffffc, //      bne  vb
-        0xe2833001, //      add  r3, r3, #1
-        0xe1c230b0, //      strh r3, [r2]
-        0xe1d040b6, // dr:  ldrh r4, [r0, #6]
-        0xe35400a0, //      cmp  r4, #160
-        0x0afffffc, //      beq  dr
-        0xeafffff6, //      b    vb
+        0xe3a00404, 0xe3a01c04, 0xe3811003, 0xe5801000, 0xe3a02406, 0xe3a03000, 0xe1d040b6,
+        0xe35400a0, 0x1afffffc, 0xe2833001, 0xe1c230b0, 0xe1d040b6, 0xe35400a0, 0x0afffffc,
+        0xeafffff6,
     ];
     let mut rom = vec![0u8; 0x8000];
-    rom[0..4].copy_from_slice(&0xea00002eu32.to_le_bytes()); // b 0xc0
+    rom[0..4].copy_from_slice(&0xea00002eu32.to_le_bytes());
     rom[0xa0..0xac].copy_from_slice(b"SLOT TEST\0\0\0");
     rom[0xac..0xb0].copy_from_slice(b"SLTE");
     rom[0xb0..0xb2].copy_from_slice(b"00");
-    rom[0xb2] = 0x96; // fixed header byte, cores sniff it to identify a GBA rom
+    rom[0xb2] = 0x96;
     let sum = rom[0xa0..0xbd].iter().fold(0u8, |a, b| a.wrapping_add(*b));
     rom[0xbd] = 0u8.wrapping_sub(sum).wrapping_sub(0x19);
     for (i, w) in CODE.iter().enumerate() {
@@ -196,8 +160,6 @@ pub fn gba_rom() -> Vec<u8> {
     rom
 }
 
-/// `gba_rom` with a different title and code and a fixed checksum: a loadable ROM with a chosen
-/// identity, unlike `write_retail_header`'s bare header.
 pub fn write_real_cart_as(d: &TempDir, stem: &str, title: &str, code: &str) {
     let mut rom = gba_rom();
     rom[0xa0..0xac].fill(0);
@@ -208,7 +170,6 @@ pub fn write_real_cart_as(d: &TempDir, stem: &str, title: &str, code: &str) {
     std::fs::write(rom_path(d, stem), rom).expect("write rom");
 }
 
-/// Stands in for the emulator worker at a flush point.
 pub struct StubSnapshot {
     pub state: Vec<u8>,
     pub sav: Option<Vec<u8>>,
@@ -251,7 +212,6 @@ impl Snapshot for StubSnapshot {
     }
 }
 
-/// A snapshot backed by a real core, so a load can be undone and read back.
 #[derive(Clone, Default)]
 pub struct CoreSnapshot(Arc<Mutex<MockCore>>);
 
@@ -270,7 +230,6 @@ impl CoreSnapshot {
         self.with(|c| c.run_frame(ButtonMask::default()));
     }
 
-    /// Where the core actually is, as opposed to what the app last asked it for.
     pub fn bytes(&self) -> Vec<u8> {
         self.with(|c| c.serialize().expect("serialize"))
     }
@@ -298,7 +257,6 @@ impl Snapshot for CoreSnapshot {
     }
 }
 
-/// The stub device's hardware clock. It only moves when a test advances it.
 #[derive(Clone, Default)]
 pub struct Clock(Arc<AtomicI64>);
 
@@ -316,22 +274,16 @@ impl Clock {
     }
 }
 
-/// Stands in for the device the power path acts on.
 pub struct StubPlatform {
     backlight: Arc<AtomicU8>,
     root: PathBuf,
     clock: Clock,
-    /// 0 = Unknown, 1 = Discharging, 2 = Charging, 3 = Full. Shared so a test can move it mid-run.
     charge: Arc<AtomicU8>,
-    /// The gauge reading `battery()` returns, movable independently of `charge`.
     percent: Arc<AtomicU8>,
-    /// What `set_led` last wrote, coded by `led_code`, so a test sees what reached the platform.
     led: Arc<AtomicU8>,
-    /// How many times `set_led` was called, to catch a write repeated every tick.
     led_writes: Arc<AtomicUsize>,
 }
 
-/// Integer coding of `LedState` so the stub can carry it through an `AtomicU8`.
 pub fn led_code(state: LedState) -> u8 {
     match state {
         LedState::Off => 0,
@@ -342,8 +294,6 @@ pub fn led_code(state: LedState) -> u8 {
     }
 }
 
-/// A clock that reads like a real date. At the epoch `set_power` would send the app to the
-/// clock screen, since that means the RTC never came up.
 pub const CLOCK_IS_SET: i64 = 1_786_568_000;
 
 pub fn panel(root: &Path, timeout: Duration) -> (Power, Arc<AtomicU8>) {
@@ -351,7 +301,6 @@ pub fn panel(root: &Path, timeout: Duration) -> (Power, Arc<AtomicU8>) {
     (power, backlight)
 }
 
-/// `panel` with a chosen charge state and percent.
 pub fn panel_with_battery(
     root: &Path,
     timeout: Duration,
@@ -399,7 +348,6 @@ fn rig_with_led(
     let clock = Clock::at(secs);
     let charge = Arc::new(AtomicU8::new(charge));
     let percent = Arc::new(AtomicU8::new(percent));
-    // u8::MAX is never produced by `led_code`, so "never written" differs from `LedState::Off`.
     let led = Arc::new(AtomicU8::new(u8::MAX));
     let led_writes = Arc::new(AtomicUsize::new(0));
     let platform = StubPlatform {
@@ -422,7 +370,6 @@ fn rig_with_led(
     )
 }
 
-/// A whole session over `SimPlatform`, which records the motor. `StubPlatform` has none.
 pub fn session_with_platform(root: &Path) -> (Session, Motor) {
     clocked(root);
     let platform = SimPlatform::at(root.to_path_buf());
@@ -434,7 +381,6 @@ pub fn session_with_platform(root: &Path) -> (Session, Motor) {
     (session, motor)
 }
 
-/// Booted onto the clock screen with a platform whose clock can be read back.
 pub fn app_booting_with_clock(root: &Path) -> (App, Clock) {
     app_booting_at(root, 0)
 }
@@ -495,7 +441,6 @@ impl Platform for StubPlatform {
     fn set_rumble(&mut self, _strength: u16) {}
 }
 
-/// Marks the clock as confirmed, so boot does not stop on the clock screen.
 pub fn clocked(root: &Path) {
     let mut s = slot_store::read_slot_state(root);
     s.clock_set = true;
@@ -507,12 +452,10 @@ pub fn boot(root: &Path) -> App {
     App::boot(root)
 }
 
-/// Booted onto a seated cart and run past the insert floor.
 pub fn app_playing_in(root: &Path, stem: &str) -> App {
     app_playing_with(root, stem, StubSnapshot::boxed())
 }
 
-/// `app_playing_in` with charge (Discharging) and percent (50) a test can move independently.
 pub fn app_playing_with_charge(root: &Path, stem: &str) -> (App, Arc<AtomicU8>, Arc<AtomicU8>) {
     let mut a = app_playing_with(root, stem, StubSnapshot::boxed());
     let (power, _backlight, _clock, charge, percent) =
@@ -521,7 +464,6 @@ pub fn app_playing_with_charge(root: &Path, stem: &str) -> (App, Arc<AtomicU8>, 
     (a, charge, percent)
 }
 
-/// `app_playing_in` with the platform's LED record, to watch what reaches `Platform::set_led`.
 pub fn app_playing_with_led(
     root: &Path,
     stem: &str,
@@ -539,14 +481,12 @@ pub fn app_playing_with_led(
     (a, charge, percent, led, led_writes)
 }
 
-/// The same, with the state switcher open. The ring must already hold an entry.
 pub fn app_in_switcher(root: &Path, stem: &str) -> App {
     let mut a = app_playing_in(root, stem);
     a.apply(slot_input::Action::Polaroids);
     a
 }
 
-/// The same, with the mixer at a given level, written to the card.
 pub fn app_playing_with_volume(root: &Path, volume: u8) -> App {
     seated(
         root,

@@ -3,12 +3,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{Battery, Charge, LedState, Motor, Platform};
 
-/// Host stand-in for the device's power hardware, driven from the keyboard.
 pub struct SimPlatform {
     root: PathBuf,
-    /// What `set_clock` moved the clock by. The host's own clock is never written.
     offset: i64,
-    /// A clock that does not move, for recordings that must match from end to start.
     stopped: Option<i64>,
     motor: Motor,
     relinks: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -29,7 +26,6 @@ impl SimPlatform {
         }
     }
 
-    /// The clock reads `secs` and stays there.
     pub fn stopped_at(mut self, secs: i64) -> Self {
         self.stopped = Some(secs);
         self
@@ -39,7 +35,6 @@ impl SimPlatform {
         self.relinks.clone()
     }
 
-    /// Outlives the move into `Power`, so tests can read what reached the motor.
     pub fn motor(&self) -> Motor {
         self.motor.clone()
     }
@@ -54,8 +49,6 @@ impl Default for SimPlatform {
 impl Platform for SimPlatform {
     fn set_backlight(&mut self, _step: u8) {}
 
-    /// Full and charging: shows the gauge in captures without arming any low-battery path.
-    /// Never the laptop's own gauge.
     fn battery(&self) -> Option<Battery> {
         Some(Battery {
             percent: 100,

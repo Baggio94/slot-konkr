@@ -1,6 +1,5 @@
 use slot_ui::Refusal;
 
-/// Peak over a window, so the assertion does not depend on the phase at one millisecond.
 fn peak(r: &Refusal, from: u64, to: u64) -> f32 {
     (from..to).map(|t| r.offset(t).abs()).fold(0.0, f32::max)
 }

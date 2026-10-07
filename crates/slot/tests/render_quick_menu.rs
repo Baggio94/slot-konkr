@@ -1,8 +1,3 @@
-//! The quick menu through the real frontend: faces uploaded at boot, MENU pressed through the
-//! gesture layer, and the frame composited on the GPU and read back.
-//!
-//! `SCRATCH_PNG_DIR=/tmp cargo test -p slot --test render_quick_menu -- --nocapture`
-
 #![cfg(target_os = "macos")]
 
 mod common;
@@ -16,7 +11,6 @@ use slot_input::{Btn, InputSource, Millis, RawEvent};
 use slot_power::SimPlatform;
 use slot_ui::{QuickRow, QUICK_PITCH, QUICK_TOP};
 
-/// One batch of events per poll, and nothing once they run out.
 struct Script(VecDeque<Vec<RawEvent>>);
 
 impl InputSource for Script {
@@ -25,7 +19,6 @@ impl InputSource for Script {
     }
 }
 
-/// A tap: down on one frame, up on the next.
 fn tap(f: &mut Frontend, input: &mut Script, btn: Btn) {
     input.0.push_back(vec![RawEvent::Down(btn)]);
     f.advance(input);
@@ -38,7 +31,6 @@ fn at(px: &[u8], x: usize, y: usize) -> [u8; 3] {
     [px[o], px[o + 1], px[o + 2]]
 }
 
-/// The columns in `xs` with type anywhere across a row's bar: brighter than both ground and bar.
 fn inked(px: &[u8], xs: std::ops::Range<usize>, top: usize) -> Vec<usize> {
     xs.filter(|&x| (top + 8..top + 44).any(|y| at(px, x, y)[0] > 0x80))
         .collect()
@@ -79,7 +71,6 @@ fn the_quick_menu_renders_full_screen() {
 
     let bar = [0x4d, 0x4d, 0x57];
     let ground = [0x05, 0x05, 0x08];
-    // Counted off the rows' own indices, so an added row still moves the bar the right distance.
     let mut bar_on = QuickRow::ALL[0];
     for (name, selected) in [
         ("fast-forward", QuickRow::FastForward),
@@ -97,7 +88,6 @@ fn the_quick_menu_renders_full_screen() {
         for x in [1, OUT_W as usize - 2] {
             assert_eq!(at(&px, x, top + 26), bar, "{name}: no bar at x {x}");
         }
-        // Unbroken edge to edge. Ink over the bar is lighter than it, so only ground is a break.
         assert!(
             (0..OUT_W as usize).all(|x| at(&px, x, top + 26) != ground),
             "{name}: the bar breaks somewhere across the row"
@@ -113,8 +103,6 @@ fn the_quick_menu_renders_full_screen() {
             "{name}: not on the ground"
         );
 
-        // Labels start 32 px in and values end 32 px from the right, measured by line, not ink.
-        // Side bearings are the only slack: a capital stem sits 1-3 px in, a tabular 1 about 7.
         for row in QuickRow::ALL {
             let top = (QUICK_TOP + QUICK_PITCH * row.index() as f32) as usize;
             let label = inked(&px, 0..360, top);
@@ -135,8 +123,6 @@ fn the_quick_menu_renders_full_screen() {
         }
     }
 
-    // Ruling S6: Date & Time opens the clock with B BACK beside its key. B's cap spans about
-    // x 225 to 244; the first boot's lone key starts near x 279, so ink left of x 270 is B BACK.
     tap(&mut f, &mut input, Btn::Up);
     tap(&mut f, &mut input, Btn::A);
     let px = composed(&mut f, &mut c, "clock");
@@ -146,8 +132,6 @@ fn the_quick_menu_renders_full_screen() {
     );
 }
 
-/// Every Fast Forward value, read off the rendered panel: each must end on the same right edge,
-/// arrows included, and leave the label its side of the row.
 #[test]
 fn every_fast_forward_speed_sits_on_the_rows_right_edge_and_clears_the_label() {
     let Ok(surface) = HeadlessSurface::new() else {
@@ -162,7 +146,6 @@ fn every_fast_forward_speed_sits_on_the_rows_right_edge_and_clears_the_label() {
     f.upload_faces(&mut c);
     let mut input = Script(VecDeque::new());
     tap(&mut f, &mut input, Btn::Menu);
-    // The menu opens on Fast Forward at 4×. Two presses left is the bottom of the row.
     tap(&mut f, &mut input, Btn::Left);
     tap(&mut f, &mut input, Btn::Left);
 
@@ -177,7 +160,6 @@ fn every_fast_forward_speed_sits_on_the_rows_right_edge_and_clears_the_label() {
             (679..=688).contains(&last),
             "{name} ends at x {last}, off the edge every other value keeps"
         );
-        // Arrows flank the value, so nothing may be inked across the middle where the label is.
         assert!(
             inked(&px, 350..370, top).is_empty(),
             "{name} and its arrows reach the middle of the row"

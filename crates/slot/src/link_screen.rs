@@ -1,5 +1,3 @@
-//! The link screen: its sprites, motion and drawing.
-
 use slot_ui::{
     ease, Draw, Millis, TexId, ADAPTER_BASE_X, ADAPTER_BASE_Y, ARCS, ARROW_LEFT_X, ARROW_RIGHT_X,
     ARROW_Y, CLICKS_X, CLICKS_Y, OUT_W, PLUG_H, PLUG_TIP_X, PORT_Y,
@@ -36,7 +34,6 @@ const FAILED_ALPHA: f32 = 0.45;
 const DROP_MS: Millis = 200;
 const SEAT_MS: Millis = 160;
 const LIFT_MS: Millis = 250;
-/// The plug coming out when a link ends: the seating motion reversed.
 const UNPLUG_MS: Millis = 260;
 const PICK_BASE: f32 = 336.0;
 const ARC_MS: f32 = 1200.0;
@@ -51,7 +48,6 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
     }
 }
 
-/// Eased progress through a move of `ms` that began at `since`.
 fn eased(now: Millis, since: Millis, ms: Millis) -> f32 {
     ease((now.saturating_sub(since) as f32 / ms as f32).clamp(0.0, 1.0))
 }
@@ -94,7 +90,6 @@ pub fn plug_tip(menu: GameMenu, now: Millis) -> f32 {
             FAILED_TIP,
             eased(now, since, LIFT_MS),
         ),
-        // Only reachable from `Linked`, so it always starts seated.
         GameMenu::Unplug { since, .. } => lerp(SEATED_TIP, PICK_TIP, eased(now, since, UNPLUG_MS)),
     }
 }
@@ -145,7 +140,6 @@ pub fn arc_alphas(menu: GameMenu, now: Millis) -> [f32; 3] {
             let fade = 1.0 - eased(now, since, LIFT_MS);
             [from[0] * fade, from[1] * fade, from[2] * fade]
         }
-        // Arcs die back from full as the adapter lifts.
         GameMenu::Unplug { since, .. } => {
             let fade = 1.0 - eased(now, since, UNPLUG_MS);
             [fade; 3]
@@ -181,8 +175,6 @@ fn tex(out: &mut Vec<Draw>, s: Sprite, x: f32, y: f32, alpha: f32) {
     });
 }
 
-/// The art between the scrim and the text: the plug or the adapter, the port over it, then the
-/// arcs, click marks and swap arrows.
 pub fn draw_link_art(
     menu: GameMenu,
     kind: LinkKind,

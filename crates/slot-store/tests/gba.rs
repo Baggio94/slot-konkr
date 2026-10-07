@@ -1,5 +1,3 @@
-//! `header_clean`, tested against files because it reads the file's length as well as bytes.
-
 use std::fs::File;
 use std::path::PathBuf;
 
@@ -44,7 +42,6 @@ fn a_wrong_fixed_byte_is_not_clean() {
     assert!(!header_clean(&rom));
 }
 
-/// `set_len` past 16 MiB makes a cheap sparse file.
 #[test]
 fn a_clean_header_over_16mb_is_not_clean() {
     let d = tempfile::tempdir().expect("tempdir");

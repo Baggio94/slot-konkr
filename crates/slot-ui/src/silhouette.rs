@@ -9,23 +9,16 @@ const GBC_CART_SVG: &str = include_str!("../assets/gbc_cart.svg");
 const GB_DETAIL_SVG: &str = include_str!("../assets/gb_cart_detail.svg");
 const GBC_DETAIL_SVG: &str = include_str!("../assets/gbc_cart_detail.svg");
 
-/// The Game Pak shell mould. A grey 0x00 pak and a black 0x80 pak share one mould; a clear
-/// 0xc0 pak has its own.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum GbShell {
-    /// Classes A and B: the power-switch notch cut out of the top right corner.
     Notched,
-    /// Class C: no notch, and the top corners rounded rather than stepped.
     Rounded,
 }
 
-/// Coverage of the cart outline, one byte per pixel, row major.
 pub fn silhouette(w: u32, h: u32) -> Vec<u8> {
     rasterise(w, h).unwrap_or_else(|| vec![255; (w * h) as usize])
 }
 
-/// The same, for the Game Boy Game Pak. Its own outline, because the pak's sides are parallel
-/// where the GBA cart's taper into a grip ridge.
 pub fn gb_silhouette(shell: GbShell, w: u32, h: u32) -> Vec<u8> {
     let svg = match shell {
         GbShell::Notched => GB_CART_SVG,
@@ -34,13 +27,11 @@ pub fn gb_silhouette(shell: GbShell, w: u32, h: u32) -> Vec<u8> {
     rasterise_svg(svg, w, h).unwrap_or_else(|| vec![255; (w * h) as usize])
 }
 
-/// Every cart is the same shape, so the mask is rasterised once and multiplied into faces.
 pub(crate) fn cart_mask() -> &'static [u8] {
     static MASK: OnceLock<Vec<u8>> = OnceLock::new();
     MASK.get_or_init(|| silhouette(CART_W, CART_H))
 }
 
-/// One cached mask per shell mould.
 pub(crate) fn gb_cart_mask(shell: GbShell) -> &'static [u8] {
     static NOTCHED: OnceLock<Vec<u8>> = OnceLock::new();
     static ROUNDED: OnceLock<Vec<u8>> = OnceLock::new();
@@ -51,8 +42,6 @@ pub(crate) fn gb_cart_mask(shell: GbShell) -> &'static [u8] {
     lock.get_or_init(|| gb_silhouette(shell, GB_CART_W, GB_CART_H))
 }
 
-/// How far inside the outline each pixel sits, in city block steps, saturating at 255. A
-/// translucent shell fades from its edge inward.
 pub(crate) fn cart_depth() -> &'static [u8] {
     static DEPTH: OnceLock<Vec<u8>> = OnceLock::new();
     DEPTH.get_or_init(|| depth_map(cart_mask(), CART_W as usize, CART_H as usize))
@@ -68,8 +57,6 @@ pub(crate) fn gb_cart_depth(shell: GbShell) -> &'static [u8] {
     lock.get_or_init(|| depth_map(gb_cart_mask(shell), GB_CART_W as usize, GB_CART_H as usize))
 }
 
-/// Two pass chamfer. Everything off the edge of the buffer counts as outside, so a pixel on
-/// the top row is one step in rather than unreachable.
 fn depth_map(mask: &[u8], w: usize, h: usize) -> Vec<u8> {
     let mut d: Vec<u8> = mask
         .iter()
@@ -102,8 +89,6 @@ fn depth_map(mask: &[u8], w: usize, h: usize) -> Vec<u8> {
     d
 }
 
-/// A moulded feature's shadow and lit side. Drawing only the shadow looks drawn on, not moulded.
-/// Both are coverage masks that never overlap: their sum is the asset pixel's coverage.
 pub(crate) struct Detail {
     pub shadow: Vec<u8>,
     pub highlight: Vec<u8>,
@@ -118,7 +103,6 @@ impl Detail {
     }
 }
 
-/// The grip ridge above the label and the thumb notch. Shaded into the shell, not a fixed colour.
 pub(crate) fn detail_mask() -> &'static Detail {
     static MASK: OnceLock<Detail> = OnceLock::new();
     MASK.get_or_init(|| {
@@ -129,8 +113,6 @@ pub(crate) fn detail_mask() -> &'static Detail {
     })
 }
 
-/// The Game Boy pak's moulding: shoulder ribs, lettering plate, side grooves and arrow. One per
-/// shell, because the class C shoulder is smooth (see `gbc_cart_detail.svg`).
 pub(crate) fn gb_detail_mask(shell: GbShell) -> &'static Detail {
     static NOTCHED: OnceLock<Detail> = OnceLock::new();
     static ROUNDED: OnceLock<Detail> = OnceLock::new();
@@ -147,7 +129,6 @@ pub(crate) fn gb_detail_mask(shell: GbShell) -> &'static Detail {
         };
         emboss(&mut detail, lettering, GB_CART_W, GB_CART_H);
         if shell == GbShell::Rounded {
-            // The groove under GAME BOY COLOR: a cut, so shadow above and light below.
             let at = |v: u32, of: u32, to: u32| (v * to + of / 2) / of;
             let y = at(52, 259, GB_CART_H);
             for x in at(72, 240, GB_CART_W)..at(168, 240, GB_CART_W) {
@@ -159,14 +140,10 @@ pub(crate) fn gb_detail_mask(shell: GbShell) -> &'static Detail {
     })
 }
 
-/// The platform name moulded into the shell, set by `examples/lettering.rs` in Nintendo's own
-/// faces and kept as a coverage mask the size of the face.
 const GB_LETTERING: &[u8] = include_bytes!("../assets/lettering_gb.png");
 const GBC_LETTERING: &[u8] = include_bytes!("../assets/lettering_gbc.png");
 const GBA_LETTERING: &[u8] = include_bytes!("../assets/lettering_gba.png");
 
-/// Raises the lettering in `png` on the shell, lit from the upper left like the rest of the
-/// moulding: an edge facing the light is highlight, the plastic just past a far edge is shadow.
 fn emboss(detail: &mut Detail, png: &[u8], w: u32, h: u32) {
     let Some(mask) = decode_mask(png, w, h) else {
         return;
@@ -188,7 +165,6 @@ fn emboss(detail: &mut Detail, png: &[u8], w: u32, h: u32) {
     }
 }
 
-/// One grey byte per pixel.
 fn decode_mask(png: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
     let mut reader = png::Decoder::new(std::io::Cursor::new(png))
         .read_info()
@@ -224,15 +200,11 @@ fn rasterise(w: u32, h: u32) -> Option<Vec<u8>> {
     rasterise_svg(CART_SVG, w, h)
 }
 
-/// Splits one asset by luminance: black is shadow, white is light. One file keeps the two edges
-/// from drifting apart.
 fn rasterise_detail(svg: &str, w: u32, h: u32) -> Option<Detail> {
     let px = render(svg, w, h)?;
     let mut shadow = Vec::with_capacity((w * h) as usize);
     let mut highlight = Vec::with_capacity((w * h) as usize);
     for p in px.data().chunks_exact(4) {
-        // Premultiplied, so a white pixel's luminance is its alpha. Weights are Rec. 709 over
-        // 256; `min` guards against rounding pushing light past cover.
         let lit = ((p[0] as u32 * 54 + p[1] as u32 * 183 + p[2] as u32 * 19) / 256) as u8;
         let lit = lit.min(p[3]);
         highlight.push(lit);

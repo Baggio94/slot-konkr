@@ -10,7 +10,6 @@ fn distance(a: [u8; 3], b: [f32; 4]) -> u32 {
         .sum()
 }
 
-/// Shells and backdrop live in different crates, so only this test sees them together.
 #[test]
 fn every_shell_is_visible_against_the_backdrop() {
     let codes = ["", "AMTE", "MSKE"].into_iter().chain(table_keys());
@@ -24,7 +23,6 @@ fn every_shell_is_visible_against_the_backdrop() {
         );
     }
     assert!(distance(DEFAULT_SHELL.colour, BACKDROP) > 60);
-    // Game Boy paks are keyed on more than a game code, so they are named here.
     let paks = [
         ("the grey pak", DMG_SHELL),
         ("the black pak", DUAL_MODE_SHELL),
@@ -49,7 +47,6 @@ fn every_shell_is_visible_against_the_backdrop() {
     }
 }
 
-/// Each band must clear the one behind it as well as the backdrop, or the slot is not a hole.
 #[test]
 fn every_chrome_band_is_visible_against_its_neighbour() {
     let d = |a: [f32; 4], b: [f32; 4]| -> f32 {

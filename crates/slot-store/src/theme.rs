@@ -1,20 +1,12 @@
 use std::path::Path;
 
-/// `System/theme.txt`: one `name #rrggbb` per line. A leading `#` is a comment; there are no
-/// trailing comments because `#` also starts a colour. A bad line leaves that colour at its
-/// default and never stops the device booting.
 pub const THEME_FILE: &str = "theme.txt";
 
-/// Colours of the case around the slot, outside in. Field names are the theme file's keys.
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub struct Theme {
-    /// The outer plastic.
     pub housing: [u8; 3],
-    /// The floor of the bay, stepped down from the shell.
     pub recess: [u8; 3],
-    /// The opening itself, and the inside of the thumb scoop.
     pub opening: [u8; 3],
-    /// The lit edge of the plastic: the top of the slot and the rim of the scoop.
     pub edge: [u8; 3],
 }
 
@@ -30,7 +22,6 @@ impl Default for Theme {
 }
 
 impl Theme {
-    /// Best effort. A missing file is the default theme, not an error.
     pub fn read(root: &Path) -> Self {
         match std::fs::read_to_string(root.join("System").join(THEME_FILE)) {
             Ok(text) => Self::parse(&text),
@@ -49,7 +40,6 @@ impl Theme {
             let (Some(name), Some(value)) = (parts.next(), parts.next()) else {
                 continue;
             };
-            // A third word means a malformed line; skip rather than guess.
             if parts.next().is_some() {
                 continue;
             }
@@ -68,7 +58,6 @@ impl Theme {
     }
 }
 
-/// `rrggbb`, with or without the leading hash.
 fn hex(value: &str) -> Option<[u8; 3]> {
     let digits = value.strip_prefix('#').unwrap_or(value);
     if digits.len() != 6 || !digits.chars().all(|c| c.is_ascii_hexdigit()) {

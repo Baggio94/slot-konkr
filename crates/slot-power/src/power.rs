@@ -2,10 +2,8 @@ use std::time::Duration;
 
 use crate::{Battery, Charge, LedState, LidPolicy, Platform};
 
-/// The lid policy and the panel it acts on.
 pub struct Power {
     platform: Box<dyn Platform>,
-    /// What the panel goes back to on open. The platform has no getter.
     level: u8,
     closed: bool,
     timeout: Duration,
@@ -21,8 +19,6 @@ impl Power {
         }
     }
 
-    /// A level set while the lid is shut is remembered, not lit: the keyboard still reaches a
-    /// dozing host.
     pub fn set_backlight(&mut self, step: u8) {
         self.level = step;
         if !self.closed {
@@ -42,7 +38,6 @@ impl Power {
         self.platform.set_led(state)
     }
 
-    /// Not gated on the lid: whatever stopped the motor for the doze must restart it.
     pub fn set_rumble(&mut self, strength: u16) {
         self.platform.set_rumble(strength);
     }
@@ -70,7 +65,6 @@ impl Power {
 
 impl LidPolicy for Power {
     fn on_close(&mut self) {
-        // A hall sensor bounces: a second close must not save the dark panel as the level.
         if self.closed {
             return;
         }

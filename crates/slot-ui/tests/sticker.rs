@@ -8,7 +8,6 @@ fn fields() -> StickerFields<'static> {
     }
 }
 
-/// The headline rows read as a real device's plate; only the gauge moves.
 #[test]
 fn the_headline_rows_read_as_a_device_plate() {
     let all = sticker_lines(&fields()).join("\n");
@@ -16,11 +15,9 @@ fn the_headline_rows_read_as_a_device_plate() {
     assert!(all.contains("5V"), "{all}");
     assert!(all.contains("1.5A"), "{all}");
     assert!(all.contains("87"), "the gauge reading is missing: {all}");
-    // The build is named by its serial, which the barcode beside it encodes.
     assert!(all.contains("0473885"), "the serial went missing: {all}");
 }
 
-/// The rating row keeps the real direct current codepoint; the renderer draws the glyph.
 #[test]
 fn the_input_row_carries_the_real_dc_symbol() {
     let all = sticker_lines(&fields()).join("\n");
@@ -28,7 +25,6 @@ fn the_input_row_carries_the_real_dc_symbol() {
     assert_eq!(slot_ui::DC, '\u{2393}');
 }
 
-/// No gauge is shown as absent, not as zero percent.
 #[test]
 fn a_missing_gauge_is_not_drawn_as_empty() {
     let mut f = fields();
@@ -44,12 +40,9 @@ fn a_missing_gauge_is_not_drawn_as_empty() {
     );
 }
 
-/// The compliance block carries every credit the README owes.
 #[test]
 fn the_compliance_block_is_the_credits() {
     let all = sticker_lines(&fields()).join("\n").to_uppercase();
-    // README.md's credits, minus what the label has no room for, plus the OS underneath. The
-    // cartridge sounds are the author's own recording.
     for owed in [
         "MGBA",
         "GPSP",
@@ -63,14 +56,12 @@ fn the_compliance_block_is_the_credits() {
     }
 }
 
-/// The serial reads back what the barcode encodes.
 #[test]
 fn the_serial_row_matches_the_encoded_hash() {
     let all = sticker_lines(&fields()).join("\n");
     assert!(all.contains("0473885"), "{all}");
 }
 
-/// Upper case throughout: `fit` uppercases when laying out, so lower case would measure wrong.
 #[test]
 fn every_line_is_already_upper_case() {
     for line in sticker_lines(&fields()) {
@@ -78,8 +69,6 @@ fn every_line_is_already_upper_case() {
     }
 }
 
-/// `render_svg` returns straight alpha, so `Canvas::blit` must scale by it. A premultiplied
-/// blend would turn the wordmark's antialiased top edge into a hard step.
 #[test]
 fn the_wordmarks_top_edge_is_antialiased_not_a_hard_step() {
     use slot_ui::sticker_face;

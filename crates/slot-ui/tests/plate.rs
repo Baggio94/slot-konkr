@@ -12,7 +12,6 @@ fn ink(face: &UndoFace, x: u32, y: u32) -> bool {
     face.rgba[i] > 128 && face.rgba[i + 3] > 128
 }
 
-/// Plates are translucent, so a hint must have no filled background.
 #[test]
 fn the_hint_is_a_key_cap_and_type_on_nothing_else() {
     let face = hint_face("B", "Back");
@@ -24,7 +23,6 @@ fn the_hint_is_a_key_cap_and_type_on_nothing_else() {
     );
 }
 
-/// Ink in the last column means the label overran.
 #[test]
 fn the_label_is_drawn_and_stays_inside_the_hint() {
     for label in ["Back", "Undo save", "Undo an interminable action"] {
@@ -59,10 +57,8 @@ fn the_title_is_drawn_and_stays_inside_its_face() {
     }
 }
 
-/// The gap inside a pair must stay clearly smaller than the gap between pairs.
 #[test]
 fn grouping_reads_as_pairs() {
-    // `black_box` stops clippy flagging a comparison of two constants.
     let inside = std::hint::black_box(CAP_GAP) as f32;
     let between = std::hint::black_box(HINT_GAP);
     assert!(
@@ -83,7 +79,6 @@ fn cap_pixels(face: &UndoFace, cap_x: u32) -> Vec<u8> {
         .collect()
 }
 
-/// A codepoint the symbols font lacks rasterises to nothing, leaving a blank cap.
 #[test]
 fn both_arrow_caps_carry_a_glyph() {
     let face = arrows_hint_face("Swap");

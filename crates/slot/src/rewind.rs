@@ -1,13 +1,9 @@
 use std::collections::VecDeque;
 
-/// The whole rewind history, per spec section 5.
 pub const REWIND_BYTES: usize = 20 * 1024 * 1024;
 
-/// Chained from the newest state backwards: `cur` is held whole and each entry is
-/// `lz4(state XOR previous_state)`. So a pop is one decompress, and evicting the oldest is free.
 pub struct Rewind {
     budget: usize,
-    /// The state the next `pop` returns, and what the entries behind it are relative to.
     cur: Option<Vec<u8>>,
     deltas: VecDeque<Vec<u8>>,
     bytes: usize,
@@ -29,7 +25,6 @@ impl Rewind {
         let Some(prev) = self.cur.replace(state.to_vec()) else {
             return;
         };
-        // A resized state cannot be XORed against the old one, so older history is unreachable.
         if prev.len() != state.len() {
             self.deltas.clear();
             self.bytes = 0;
@@ -63,7 +58,6 @@ impl Rewind {
                 }
                 self.cur = Some(prev);
             }
-            // An undecompressable delta ends the history rather than feeding the core noise.
             Err(e) => {
                 eprintln!("slot: rewind: {e}");
                 self.deltas.clear();
@@ -73,17 +67,14 @@ impl Rewind {
         Some(cur)
     }
 
-    /// Compressed history only, not `cur`.
     pub fn bytes_used(&self) -> usize {
         self.bytes
     }
 
-    /// States `pop` can still hand back.
     pub fn depth(&self) -> usize {
         self.deltas.len() + usize::from(self.cur.is_some())
     }
 
-    /// History held, 0 to 100, against the byte budget (`depth` is unbounded).
     pub fn fill(&self) -> u8 {
         if self.budget == 0 {
             return 0;
@@ -92,10 +83,6 @@ impl Rewind {
     }
 }
 
-/// `Rewind` on its own thread. XOR and LZ4 are 2.6 ms of a 9.2 ms snapshot on the H700 and do
-/// not touch the core, so they leave the emu thread.
-///
-/// The channel is FIFO, so a `pop` is served after every `push` sent before it.
 pub struct RewindThread {
     tx: std::sync::mpsc::SyncSender<Msg>,
     fill: std::sync::Arc<std::sync::atomic::AtomicU8>,
@@ -108,8 +95,6 @@ enum Msg {
 
 impl RewindThread {
     pub fn spawn(budget_bytes: usize) -> Self {
-        // Four deep, blocking when full (~130 ms slack). Dropping instead silently coarsens
-        // history; blocking only bites on a machine already missing 60 fps, and self-limits.
         let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(4);
         let fill = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
         let published = fill.clone();
@@ -126,7 +111,6 @@ impl RewindThread {
                         Msg::Pop(reply) => {
                             let out = rewind.pop();
                             published.store(rewind.fill(), std::sync::atomic::Ordering::Relaxed);
-                            // The caller may have gone if the session ended mid rewind.
                             let _ = reply.send(out);
                         }
                     }
@@ -136,12 +120,10 @@ impl RewindThread {
         RewindThread { tx, fill }
     }
 
-    /// Returns immediately unless the compressor is four snapshots behind.
     pub fn push(&self, state: Vec<u8>) {
         let _ = self.tx.send(Msg::Push(state));
     }
 
-    /// Blocks until every push queued ahead of it has been applied, then returns the state.
     pub fn pop(&self) -> Option<Vec<u8>> {
         let (tx, rx) = std::sync::mpsc::sync_channel(0);
         if self.tx.send(Msg::Pop(tx)).is_err() {
@@ -150,7 +132,6 @@ impl RewindThread {
         rx.recv().ok().flatten()
     }
 
-    /// Last published fill, without a round trip; the HUD reads it every frame.
     pub fn fill(&self) -> u8 {
         self.fill.load(std::sync::atomic::Ordering::Relaxed)
     }

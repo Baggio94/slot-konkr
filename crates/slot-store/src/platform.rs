@@ -1,7 +1,5 @@
 use std::path::Path;
 
-/// Which console a cart is for: its card directory, and its shelf on the carousel. A file's
-/// platform is where it is, so the scan never opens the file.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Platform {
     #[default]
@@ -11,10 +9,8 @@ pub enum Platform {
 }
 
 impl Platform {
-    /// In shelf order.
     pub const ALL: [Platform; 3] = [Platform::Gba, Platform::Gb, Platform::Gbc];
 
-    /// The machine's name as printed on the case band. `dir_name` is the folder's spelling.
     pub fn name(self) -> &'static str {
         match self {
             Platform::Gba => "Game Boy Advance",
@@ -23,7 +19,6 @@ impl Platform {
         }
     }
 
-    /// The card directory under `Games/`, `Saves/`, `States/` and `Labels/`.
     pub fn dir_name(self) -> &'static str {
         match self {
             Platform::Gba => "GBA",
@@ -32,7 +27,6 @@ impl Platform {
         }
     }
 
-    /// The ROM extensions this folder holds. A `.gba` in `GB/` is not scanned.
     pub fn extensions(self) -> &'static [&'static str] {
         match self {
             Platform::Gba => &["gba"],
@@ -40,8 +34,6 @@ impl Platform {
         }
     }
 
-    /// The picture size in pixels. A Game Boy's is centred inside the GBA-sized frame buffer by
-    /// `video_refresh`, so this also says how much of the buffer is margin.
     pub fn picture(self) -> (u32, u32) {
         match self {
             Platform::Gba => (240, 160),

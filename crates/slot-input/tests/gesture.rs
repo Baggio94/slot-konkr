@@ -4,8 +4,6 @@ use slot_input::{
     SELECT_TAP_MS, VOLUME_REPEAT_DELAY_MS, VOLUME_REPEAT_MS,
 };
 
-/// A SELECT that becomes a chord never reaches the game, so a save state never catches the
-/// game reacting to it (Recharged Yellow opened its item wheel on every save).
 #[test]
 fn a_select_that_becomes_a_chord_never_reaches_the_game() {
     let mut g = Gestures::new();
@@ -16,7 +14,6 @@ fn a_select_that_becomes_a_chord_never_reaches_the_game() {
     assert!(g.tick(5_000).is_empty());
 }
 
-/// A chord takes both keys on both edges.
 #[test]
 fn a_chord_keeps_both_keys_from_the_game() {
     let mut g = Gestures::new();
@@ -32,7 +29,6 @@ fn a_chord_keeps_both_keys_from_the_game() {
     );
 }
 
-/// Held past the chord window, SELECT is the game's, from the moment the window closes.
 #[test]
 fn a_select_held_past_the_window_reaches_the_game_then() {
     let mut g = Gestures::new();
@@ -43,8 +39,6 @@ fn a_select_held_past_the_window_reaches_the_game_then() {
     assert_eq!(g.feed(Up(Select), 2_000), vec![GbaUp(Select)]);
 }
 
-/// A game button under a SELECT still in its window hands SELECT over first, so a game's own
-/// SELECT combination still works.
 #[test]
 fn a_game_button_under_select_hands_select_over_first() {
     let mut g = Gestures::new();
@@ -58,7 +52,6 @@ fn a_game_button_under_select_hands_select_over_first() {
     assert_eq!(g.feed(Up(Select), 900), vec![GbaUp(Select)]);
 }
 
-/// A chord already fired under this hold keeps the window open for the rest of it.
 #[test]
 fn a_held_select_keeps_chording_long_past_the_window() {
     let mut g = Gestures::new();
@@ -86,8 +79,6 @@ fn select_chords_map_to_all_four_axes() {
     }
 }
 
-/// A tap inside the chord window reaches the game whole on its release, held long enough to
-/// be polled.
 #[test]
 fn a_select_tap_reaches_the_game_on_its_release() {
     let mut g = Gestures::new();
@@ -98,8 +89,6 @@ fn a_select_tap_reaches_the_game_on_its_release() {
     assert!(g.tick(5_000).is_empty());
 }
 
-/// A bounced press inside the tap window hands back the owed release: SELECT goes down
-/// exactly as often as it comes up.
 #[test]
 fn a_select_press_inside_the_tap_window_hands_back_the_release_it_interrupted() {
     let mut g = Gestures::new();
@@ -132,7 +121,6 @@ fn a_select_press_inside_the_tap_window_hands_back_the_release_it_interrupted() 
     );
 }
 
-/// A tap of MENU opens the quick menu, on the release.
 #[test]
 fn menu_single_tap_opens_the_quick_menu() {
     let mut g = Gestures::new();
@@ -141,7 +129,6 @@ fn menu_single_tap_opens_the_quick_menu() {
     assert!(g.tick(451).is_empty(), "fired a second time on the timer");
 }
 
-/// A press long enough to eject is not also a tap.
 #[test]
 fn a_menu_hold_is_not_also_a_tap() {
     let mut g = Gestures::new();
@@ -185,14 +172,13 @@ fn r2_hold_is_momentary() {
 fn r2_double_tap_latches_and_single_press_clears() {
     let mut g = Gestures::new();
     g.feed(Down(R2), 0);
-    g.feed(Up(R2), 50); // tap 1
+    g.feed(Up(R2), 50);
     g.feed(Down(R2), 100);
-    assert!(g.feed(Up(R2), 150).is_empty()); // latched, FF stays on
+    assert!(g.feed(Up(R2), 150).is_empty());
     g.feed(Down(R2), 5000);
     assert_eq!(g.feed(Up(R2), 5050), vec![FfStop]);
 }
 
-/// POWER flushes on the press and locks on the release.
 #[test]
 fn power_flushes_on_the_press_and_locks_on_the_release() {
     let mut g = Gestures::new();
@@ -200,7 +186,6 @@ fn power_flushes_on_the_press_and_locks_on_the_release() {
     assert_eq!(g.feed(Up(Btn::Power), 80), vec![PowerTap]);
 }
 
-/// The hold arms while the button is down, once, and the release commits.
 #[test]
 fn power_held_past_the_threshold_raises_the_menu_and_the_release_does_nothing() {
     let mut g = Gestures::new();
@@ -211,7 +196,6 @@ fn power_held_past_the_threshold_raises_the_menu_and_the_release_does_nothing() 
     assert_eq!(g.feed(Up(Btn::Power), 4500), vec![PowerOff]);
 }
 
-/// A release short of the threshold is a lock, never a shutdown.
 #[test]
 fn a_press_just_short_of_the_threshold_is_a_lock() {
     let mut g = Gestures::new();
@@ -220,7 +204,6 @@ fn a_press_just_short_of_the_threshold_is_a_lock() {
     assert_eq!(g.feed(Up(Btn::Power), POWER_HOLD_MS - 1), vec![PowerTap]);
 }
 
-/// An R2 press refused during rewind is not the first half of a latching double tap.
 #[test]
 fn a_press_the_rewind_turned_away_is_not_half_of_a_latch() {
     let mut g = Gestures::new();
@@ -246,11 +229,10 @@ fn rewind_beats_latched_fast_forward() {
     g.feed(Down(R2), 0);
     g.feed(Up(R2), 50);
     g.feed(Down(R2), 100);
-    g.feed(Up(R2), 150); // latched
+    g.feed(Up(R2), 150);
     assert_eq!(g.feed(Down(L2), 200), vec![FfStop, RewindStart]);
 }
 
-/// The window's expiry hands SELECT to the game, after which a direction is the game's too.
 #[test]
 fn past_the_window_select_and_the_next_key_are_the_games() {
     let mut g = Gestures::new();
@@ -278,7 +260,6 @@ fn a_chord_landing_late_is_still_a_chord() {
     );
 }
 
-/// However short the tap, the game gets SELECT for `SELECT_TAP_MS`, so the core can poll it.
 #[test]
 fn a_select_tap_too_short_to_be_polled_is_held_on_to() {
     let mut g = Gestures::new();
@@ -292,7 +273,6 @@ fn a_select_tap_too_short_to_be_polled_is_held_on_to() {
     );
 }
 
-/// A SELECT the game already has ends on its own release once it has been seen.
 #[test]
 fn a_select_the_game_has_seen_ends_on_its_own_release() {
     let mut g = Gestures::new();
@@ -325,7 +305,6 @@ fn volume_keys_far_apart_are_not_a_chord() {
     assert!(!out.contains(&MuteToggle), "two separate presses muted");
 }
 
-/// The app rolls the chord's presses back, so it must see them before the chord.
 #[test]
 fn the_chord_arrives_behind_the_press_that_completed_it() {
     let mut g = Gestures::new();
@@ -333,7 +312,6 @@ fn the_chord_arrives_behind_the_press_that_completed_it() {
     assert_eq!(g.feed(Down(VolDown), 80), vec![VolumeDown, MuteToggle]);
 }
 
-/// Unmuting is the same gesture, so releasing both keys must rearm it.
 #[test]
 fn releasing_both_rearms_the_chord() {
     let mut g = Gestures::new();
@@ -345,7 +323,6 @@ fn releasing_both_rearms_the_chord() {
     assert!(g.feed(Down(VolDown), 1_050).contains(&MuteToggle));
 }
 
-/// A held volume key repeats after the delay, then at the repeat interval.
 #[test]
 fn a_held_volume_key_repeats() {
     let mut g = Gestures::new();
@@ -374,7 +351,6 @@ fn a_released_volume_key_stops_repeating() {
     );
 }
 
-/// Both keys held is the mute chord and does not ramp.
 #[test]
 fn the_mute_chord_does_not_ramp() {
     let mut g = Gestures::new();
@@ -386,7 +362,6 @@ fn the_mute_chord_does_not_ramp() {
     );
 }
 
-/// Each press starts its own ramp from the full delay.
 #[test]
 fn each_press_starts_its_own_ramp() {
     let mut g = Gestures::new();
@@ -401,7 +376,6 @@ fn each_press_starts_its_own_ramp() {
     assert_eq!(g.tick(5_000 + VOLUME_REPEAT_DELAY_MS), vec![VolumeUp]);
 }
 
-/// A chord key is only a chord while SELECT is down.
 #[test]
 fn x_without_select_is_still_the_games_x() {
     let mut g = Gestures::new();
@@ -409,7 +383,6 @@ fn x_without_select_is_still_the_games_x() {
     assert_eq!(g.feed(Up(X), 40), vec![GbaUp(Btn::X)]);
 }
 
-/// SELECT+MENU opens the in-game menu on the press; the MENU release emits nothing.
 #[test]
 fn select_and_menu_open_the_in_game_menu() {
     let mut g = Gestures::new();
@@ -419,11 +392,9 @@ fn select_and_menu_open_the_in_game_menu() {
         g.feed(Up(Menu), 150).is_empty(),
         "the release landed as a second gesture on top of the menu"
     );
-    // The game never got this SELECT, so it is owed nothing.
     assert!(g.feed(Up(Select), 200).is_empty());
 }
 
-/// The chorded MENU press must not also arm the eject hold.
 #[test]
 fn a_chorded_menu_never_arms_the_eject_hold() {
     let mut g = Gestures::new();
@@ -435,7 +406,6 @@ fn a_chorded_menu_never_arms_the_eject_hold() {
     );
 }
 
-/// Guards the order in `menu_down`: the chord is checked before the double tap.
 #[test]
 fn a_chord_after_a_recent_menu_tap_is_still_the_menu() {
     let mut g = Gestures::new();
@@ -449,7 +419,6 @@ fn a_chord_after_a_recent_menu_tap_is_still_the_menu() {
     );
 }
 
-/// MENU under a SELECT past its chord window is an ordinary MENU.
 #[test]
 fn menu_under_a_select_the_game_already_has_is_not_the_menu() {
     let mut g = Gestures::new();
@@ -462,7 +431,6 @@ fn menu_under_a_select_the_game_already_has_is_not_the_menu() {
     assert_eq!(g.feed(Up(Menu), 800), vec![QuickMenu]);
 }
 
-/// The chord clears MENU's tap and double tap windows, so the next tap is a plain tap.
 #[test]
 fn the_menu_button_still_works_after_a_chord() {
     let mut g = Gestures::new();
@@ -483,7 +451,6 @@ fn the_menu_button_still_works_after_a_chord() {
     );
 }
 
-/// TEMPORARY, with `Action::ColourCorrectionToggle`.
 #[test]
 fn select_and_y_toggles_colour_correction_and_costs_the_game_nothing() {
     let mut g = Gestures::new();
@@ -493,7 +460,6 @@ fn select_and_y_toggles_colour_correction_and_costs_the_game_nothing() {
     assert!(g.feed(Up(Select), 200).is_empty());
 }
 
-/// A bare Y is still the switcher's own button.
 #[test]
 fn y_on_its_own_is_untouched_by_the_colour_chord() {
     let mut g = Gestures::new();

@@ -94,7 +94,6 @@ fn read_pairs_the_state_with_its_thumbnail() {
     assert_eq!(thumb, b"first");
 }
 
-/// A push cut between halves leaves a state with no picture, which must still read.
 #[test]
 fn read_of_an_entry_with_no_thumbnail_is_the_state_and_nothing_else() {
     let d = tempdir().unwrap();
@@ -110,7 +109,6 @@ fn read_of_an_entry_with_no_thumbnail_is_the_state_and_nothing_else() {
     assert!(thumb.is_empty());
 }
 
-/// A stray thumbnail would become the picture of the next save in the same second.
 #[test]
 fn remove_takes_the_thumbnail_with_the_state() {
     let d = tempdir().unwrap();
@@ -126,7 +124,6 @@ fn remove_takes_the_thumbnail_with_the_state() {
     );
 }
 
-/// `remove` takes a caller's name, so it must refuse anything but a stamp.
 #[test]
 fn remove_refuses_anything_that_is_not_a_stamp() {
     let d = tempdir().unwrap();
@@ -137,7 +134,6 @@ fn remove_refuses_anything_that_is_not_a_stamp() {
     assert_eq!(r.read_resume().unwrap().unwrap(), [7u8; 8]);
 }
 
-/// Cards are loaded from Macs, so AppleDouble sidecars must never list as states.
 #[test]
 fn a_sidecar_is_not_listed_as_a_state() {
     let d = tempdir().unwrap();
@@ -183,7 +179,6 @@ fn resume_is_core_private_too() {
     );
 }
 
-/// A `.gb` and a `.gba` cart of the same stem do not share states.
 #[test]
 fn each_platform_keeps_its_own_states() {
     let d = tempdir().unwrap();
@@ -202,7 +197,6 @@ fn each_platform_keeps_its_own_states() {
     assert!(!d.path().join("States/GB/mgba/Tetris").exists());
 }
 
-/// After retiring, `read_resume` returns nothing, but the refused bytes remain on the card.
 #[test]
 fn a_retired_resume_stops_being_read_back_but_is_still_there() {
     let d = tempdir().unwrap();
@@ -234,7 +228,6 @@ fn retiring_a_cart_with_no_resume_does_nothing() {
     assert!(r.retire_resume("2026-09-16_23-30-00").unwrap().is_none());
 }
 
-/// The retired file is never listed, so it can never be offered or evicted.
 #[test]
 fn a_retired_resume_is_not_a_ring_entry() {
     let d = tempdir().unwrap();

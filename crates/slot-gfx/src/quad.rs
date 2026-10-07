@@ -1,5 +1,3 @@
-/// A unit quad every pass transforms in its vertex shader. GL 3.3 core needs a VAO and
-/// ES 2.0 has none, so on ES the binding is set up on every draw.
 pub struct Quad {
     vao: gl::types::GLuint,
     vbo: gl::types::GLuint,
@@ -7,7 +5,6 @@ pub struct Quad {
 
 const VERTS: [f32; 8] = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
 
-/// Location of `a_pos`, bound at link time since ES 1.00 has no layout qualifiers.
 pub const POS_LOCATION: gl::types::GLuint = 0;
 
 impl Quad {

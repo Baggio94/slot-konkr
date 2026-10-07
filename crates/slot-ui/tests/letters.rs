@@ -1,8 +1,5 @@
-//! Crossing the row a letter at a time, and the order the row is in.
-
 use slot_store::{initial, sort_key};
 
-/// Digits before letters, case ignored across the whole title, not just the first letter.
 #[test]
 fn titles_file_digits_first_then_a_to_z_whatever_their_case() {
     let mut names = vec![
@@ -36,7 +33,6 @@ fn a_title_led_by_punctuation_files_last() {
     assert_eq!(names, vec!["1943", "Apotris", "[BIOS] Test"]);
 }
 
-/// Separate stops per digit would just step by one cart, which the shoulders already do.
 #[test]
 fn digits_and_punctuation_share_one_stop() {
     assert_eq!(initial("1943"), '#');
@@ -80,7 +76,7 @@ const ROW: [&str; 7] = [
 #[test]
 fn down_crosses_to_the_next_letter() {
     let mut s = shelf_of(&ROW);
-    assert_eq!(s.index, 0); // 1943, the digit stop
+    assert_eq!(s.index, 0);
     s.jump_next_letter();
     assert_eq!(s.carts[s.index].stem, "Apotris");
     s.jump_next_letter();
@@ -89,11 +85,10 @@ fn down_crosses_to_the_next_letter() {
     assert_eq!(s.carts[s.index].stem, "Zelda");
 }
 
-/// Pressed again from the start, Up reaches the previous letter.
 #[test]
 fn up_lands_on_the_start_of_the_letter_before_leaving_it() {
     let mut s = shelf_of(&ROW);
-    s.select(4); // Mario Kart, the second M
+    s.select(4);
     s.jump_prev_letter();
     assert_eq!(s.carts[s.index].stem, "Metroid", "it left the Ms too early");
     s.jump_prev_letter();
@@ -103,14 +98,14 @@ fn up_lands_on_the_start_of_the_letter_before_leaving_it() {
 #[test]
 fn the_letters_wrap_at_both_ends() {
     let mut s = shelf_of(&ROW);
-    s.select(5); // Zelda, the last letter
+    s.select(5);
     s.jump_next_letter();
     assert_eq!(
         s.carts[s.index].stem, "1943",
         "the end did not loop forward"
     );
 
-    s.select(0); // the digit stop, the first
+    s.select(0);
     s.jump_prev_letter();
     assert_eq!(
         s.carts[s.index].stem, "Zelda",
@@ -118,7 +113,6 @@ fn the_letters_wrap_at_both_ends() {
     );
 }
 
-/// Not the short way round, or the row would move against the press.
 #[test]
 fn a_wrap_travels_the_way_the_press_asked() {
     let mut s = shelf_of(&ROW);

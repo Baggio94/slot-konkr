@@ -1,24 +1,15 @@
 use crate::{Btn, Millis, RawEvent};
 
-/// How long a held SELECT may still arm a chord with a second key. 120 ms was too short to land
-/// the second key. SELECT is withheld from the game during it.
 pub const SELECT_CHORD_MS: Millis = 600;
 
-/// The least time SELECT stays down on the pad, measured from the press. The core reads the
-/// mask once a frame, so a press and release drained in one batch would never be seen.
 pub const SELECT_TAP_MS: Millis = 50;
 pub const MENU_TAP_MS: Millis = 250;
 pub const MENU_DOUBLE_TAP_MS: Millis = 350;
 pub const MENU_HOLD_MS: Millis = 1000;
 pub const FF_DOUBLE_TAP_MS: Millis = 250;
-/// How far apart the two volume keys may go down and still read as the mute chord. Neither
-/// press is deferred for it.
 pub const MUTE_CHORD_MS: Millis = 200;
-/// Well short of the PMIC's six second cutoff (`pmu_powkey_off_time` in the device tree), so
-/// slot powers off gracefully before the hardware cuts the rails.
 pub const POWER_HOLD_MS: Millis = 1000;
 
-/// How long a volume key is held before it repeats, and the repeat interval after that.
 pub const VOLUME_REPEAT_DELAY_MS: Millis = 400;
 pub const VOLUME_REPEAT_MS: Millis = 120;
 
@@ -43,23 +34,13 @@ pub enum Action {
     BlueLightDown,
     VolumeUp,
     VolumeDown,
-    /// A tap of MENU.
     QuickMenu,
-    /// The in-game menu, off SELECT+MENU. Emitted on every screen; the app decides where it
-    /// lands.
     GameMenu,
     MuteToggle,
-    /// TEMPORARY. SELECT+Y, for judging colour correction in a game. Remove with its `chord`
-    /// entry and the branch in `App::adjust`.
     ColourCorrectionToggle,
-    /// The press itself, so the save state is flushed before a hold can reach the PMIC's
-    /// cutoff.
     PowerPress,
-    /// A short press, delivered on release so a press becoming a hold does not lock first.
     PowerTap,
-    /// The hold threshold, while still down. Arms the shutdown; `PowerOff` commits it.
     PowerHold,
-    /// Released after a hold. The graceful shutdown starts here.
     PowerOff,
     LidClose,
     LidOpen,
@@ -69,21 +50,17 @@ pub enum Action {
 enum Select {
     #[default]
     Idle,
-    /// Down. `chorded` means a chord already fired under this hold, which keeps the window open
-    /// for the rest of it. `sent` is when the core was handed it, if it has been.
     Held {
         since: Millis,
         chorded: bool,
         sent: Option<Millis>,
     },
-    /// Up, with the release held back until `due` so a very short tap is still polled.
     ReleaseDue(Millis),
 }
 
 #[derive(Default)]
 pub struct Gestures {
     select: Select,
-    /// Buttons swallowed by a chord, so their release is swallowed too.
     chord_held: u8,
     menu_down_at: Option<Millis>,
     menu_last_tap: Option<Millis>,
@@ -92,23 +69,17 @@ pub struct Gestures {
     power_hold_fired: bool,
     vol_up_at: Option<Millis>,
     vol_down_at: Option<Millis>,
-    /// When the ramp last emitted. Cleared by both edges, so every press starts its own ramp.
     vol_up_ramp: Option<Millis>,
     vol_down_ramp: Option<Millis>,
-    /// The pair has already fired. Cleared only once both keys are up, so a key tapped again
-    /// under a held one is not a second chord.
     mute_fired: bool,
     ff_on: bool,
     ff_latched: bool,
-    /// The press that established the latch, whose release must not clear it.
     ff_latching_press: bool,
-    /// A press `ff_down` refused because L2 was rewinding. Its release must not count as one.
     r2_refused: bool,
     r2_last_release: Option<Millis>,
     rewinding: bool,
 }
 
-/// Whether a held key owes a repeat step at `now`.
 fn ramp_due(down: Option<Millis>, last: Option<Millis>, now: Millis) -> bool {
     let Some(down) = down else {
         return false;
@@ -124,14 +95,10 @@ impl Gestures {
         Self::default()
     }
 
-    /// Whether fast forward is latched rather than held. The latch is set by a release that
-    /// emits nothing, so this is the only way to see it.
     pub fn ff_latched(&self) -> bool {
         self.ff_latched
     }
 
-    /// Drops a latched fast forward, for callers that know the slot is empty. The latch is the
-    /// only hold with no finger on it. A held fast forward is left alone.
     pub fn drop_ff_latch(&mut self) -> Vec<Action> {
         if !self.ff_latched {
             return Vec::new();
@@ -148,14 +115,12 @@ impl Gestures {
 
     pub fn tick(&mut self, now: Millis) -> Vec<Action> {
         let mut out = Vec::new();
-        // The release of a SELECT tap too short to have been polled.
         if let Select::ReleaseDue(due) = self.select {
             if now >= due {
                 self.select = Select::Idle;
                 out.push(Action::GbaUp(Btn::Select));
             }
         }
-        // Held past the window with no chord: it is the game's SELECT after all.
         if let Select::Held {
             since,
             chorded: false,
@@ -178,7 +143,6 @@ impl Gestures {
                 out.push(Action::PowerHold);
             }
         }
-        // No ramp under a fired mute chord: it would move the level the mute remembered.
         if !self.mute_fired {
             if ramp_due(self.vol_up_at, self.vol_up_ramp, now) {
                 self.vol_up_ramp = Some(now);
@@ -196,7 +160,6 @@ impl Gestures {
         match b {
             Btn::Select => self.select_down(now),
             Btn::Menu => self.menu_down(now),
-            // Flush on the press: a held POWER may be cut by the PMIC before any release.
             Btn::Power => {
                 self.power_down_at = Some(now);
                 self.power_hold_fired = false;
@@ -212,7 +175,6 @@ impl Gestures {
                     self.chord_held |= bit;
                     return vec![action];
                 }
-                // A game's own SELECT combination: SELECT goes first.
                 let mut out = self.hand_over_select(now);
                 out.push(Action::GbaDown(b));
                 out
@@ -241,9 +203,6 @@ impl Gestures {
         }
     }
 
-    /// Whether a key at `now` is the second half of a chord: SELECT is down and either the
-    /// window is open or a chord already fired under this hold (so held SELECT can ramp).
-    /// Read from the clock, not tick state, so a batch drained after a stall is judged right.
     fn chording(&self, now: Millis) -> bool {
         match self.select {
             Select::Held { since, chorded, .. } => {
@@ -259,16 +218,11 @@ impl Gestures {
         }
     }
 
-    /// Withheld until it cannot be a chord, so a chord never presses SELECT in the game.
-    ///
-    /// A press inside a pending `SELECT_TAP_MS` release (a bounce) sends that owed release
-    /// first, or the core would hold SELECT forever.
     fn select_down(&mut self, now: Millis) -> Vec<Action> {
         let mut out = Vec::new();
         if matches!(self.select, Select::ReleaseDue(_)) {
             out.push(Action::GbaUp(Btn::Select));
         }
-        // Never press a held button again, or presses and releases stop balancing.
         if !matches!(self.select, Select::Held { .. }) {
             self.select = Select::Held {
                 since: now,
@@ -279,7 +233,6 @@ impl Gestures {
         out
     }
 
-    /// Hands a withheld, unchorded SELECT to the game. Nothing when it has it, or a chord took it.
     fn hand_over_select(&mut self, now: Millis) -> Vec<Action> {
         match &mut self.select {
             Select::Held {
@@ -294,9 +247,6 @@ impl Gestures {
         }
     }
 
-    /// A SELECT the game has gets its release, held to `SELECT_TAP_MS` so the core polls it. One
-    /// still withheld was a tap: it is handed over whole now. One a chord took is the game's
-    /// business no further.
     fn select_up(&mut self, now: Millis) -> Vec<Action> {
         let Select::Held { chorded, sent, .. } = std::mem::take(&mut self.select) else {
             return Vec::new();
@@ -317,13 +267,9 @@ impl Gestures {
         }
     }
 
-    /// MENU never reaches the `chord` table, so its chord lives here. The chord check must stay
-    /// ahead of the double tap check, or SELECT+MENU after a recent tap opens the switcher.
     fn menu_down(&mut self, now: Millis) -> Vec<Action> {
         if self.chording(now) {
             self.mark_chorded();
-            // Clearing these stops the press arming an eject, makes its release silent in
-            // `menu_up`, and keeps it out of any double tap.
             self.menu_down_at = None;
             self.menu_last_tap = None;
             return vec![Action::GameMenu];
@@ -331,7 +277,6 @@ impl Gestures {
         if let Some(tap) = self.menu_last_tap {
             if now.saturating_sub(tap) <= MENU_DOUBLE_TAP_MS {
                 self.menu_last_tap = None;
-                // A double tap acts on the second press, so that press cannot also arm an eject.
                 self.menu_down_at = None;
                 return vec![Action::Polaroids];
             }
@@ -342,7 +287,6 @@ impl Gestures {
     }
 
     fn menu_up(&mut self, now: Millis) -> Vec<Action> {
-        // `menu_down` already spent this press on a double tap or the SELECT+MENU chord.
         let Some(d) = self.menu_down_at.take() else {
             return Vec::new();
         };
@@ -350,7 +294,6 @@ impl Gestures {
         self.menu_eject_fired = false;
         let tapped = !ejected && now.saturating_sub(d) < MENU_TAP_MS;
         self.menu_last_tap = tapped.then_some(now);
-        // Fire on the release rather than waiting out the double tap window, to avoid the lag.
         match tapped {
             true => vec![Action::QuickMenu],
             false => Vec::new(),
@@ -368,8 +311,6 @@ impl Gestures {
         }]
     }
 
-    /// The press always lands; a chord window would make volume feel slow. The mute pair is
-    /// recognised after its presses and the app undoes them.
     fn volume_press(&mut self, b: Btn, now: Millis) -> Vec<Action> {
         let (mine, other, action) = match b {
             Btn::VolUp => (&mut self.vol_up_at, self.vol_down_at, Action::VolumeUp),
@@ -421,12 +362,10 @@ impl Gestures {
 
     fn ff_down(&mut self, now: Millis) -> Vec<Action> {
         if self.rewinding {
-            // Remembered as refused, so its release is not half of a double tap.
             self.r2_refused = true;
             return Vec::new();
         }
         if self.ff_latched {
-            // Any further press is the one whose release clears the latch.
             self.ff_latching_press = false;
         } else {
             let double = self
@@ -443,8 +382,6 @@ impl Gestures {
     }
 
     fn ff_up(&mut self, now: Millis) -> Vec<Action> {
-        // A refused press must not be recorded as a release, or the next single R2 press
-        // latches fast forward as if it were a double tap.
         if std::mem::take(&mut self.r2_refused) {
             return Vec::new();
         }
@@ -475,7 +412,6 @@ fn chord(b: Btn) -> Option<(u8, Action)> {
         Btn::Right => (8, Action::BlueLightUp),
         Btn::L1 => (16, Action::LoadState),
         Btn::R1 => (32, Action::SaveState),
-        // TEMPORARY. See `Action::ColourCorrectionToggle`.
         Btn::Y => (64, Action::ColourCorrectionToggle),
         _ => return None,
     })

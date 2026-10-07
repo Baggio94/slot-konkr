@@ -5,13 +5,11 @@ use fontdue::{Font, FontSettings};
 
 use crate::CartFace;
 
-/// The Mono variant, whose fixed advance keeps a HUD row from reflowing when the glyph changes.
 const SYMBOLS_TTF: &[u8] = include_bytes!("../assets/SymbolsNerdFontMono-Regular.ttf");
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Icon {
     Volume,
-    /// Turned all the way down, as distinct from muted.
     VolumeZero,
     VolumeMuted,
     Brightness,
@@ -37,8 +35,6 @@ impl Icon {
         Icon::Charging,
     ];
 
-    /// Position in `ALL`, the upload order. Sound only while `ALL` is in declaration order
-    /// (`icons_are_indexed_in_declaration_order`).
     pub fn index(self) -> usize {
         self as usize
     }
@@ -46,12 +42,10 @@ impl Icon {
     pub fn glyph(self) -> char {
         match self {
             Icon::Volume => '\u{f028}',
-            // A bare cone for zero and a struck one for muted: the bar is empty in both.
             Icon::VolumeZero => '\u{f026}',
             Icon::VolumeMuted => '\u{f075f}',
             Icon::Brightness => '\u{f185}',
             Icon::BlueLight => '\u{f186}',
-            // Same silhouette and width: hollow while held, solid once latched.
             Icon::FastForward => '\u{f06d2}',
             Icon::FastForwardLatched => '\u{f0211}',
             Icon::Rewind => '\u{f04a}',
@@ -61,12 +55,9 @@ impl Icon {
     }
 }
 
-/// A one pixel dark halo dilated from the coverage, so glyphs and toasts read over a live frame.
 const HALO: [u8; 3] = [0x08, 0x08, 0x0a];
 pub const HALO_PX: u32 = 1;
 
-/// Tints a coverage map and puts the halo behind it. The result is `HALO_PX` larger on every
-/// side.
 pub fn haloed(cov: &[u8], cw: u32, ch: u32, colour: [u8; 3]) -> CartFace {
     let pad = HALO_PX as usize;
     let (cw, ch) = (cw as usize, ch as usize);
@@ -112,7 +103,6 @@ pub fn haloed(cov: &[u8], cw: u32, ch: u32, colour: [u8; 3]) -> CartFace {
     }
 }
 
-/// Rasterised RGBA at `px` tall, with room for the halo.
 pub fn icon_face(icon: Icon, px: f32, colour: [u8; 3]) -> CartFace {
     let Some(r) = raster(icon, px) else {
         return CartFace {
@@ -124,7 +114,6 @@ pub fn icon_face(icon: Icon, px: f32, colour: [u8; 3]) -> CartFace {
     haloed(&r.cov, r.w, r.h, colour)
 }
 
-/// The box every icon at this size is rastered into. Zero when the font is missing.
 pub fn icon_box(px: f32) -> (u32, u32) {
     match raster(Icon::Volume, px) {
         Some(r) => (r.w + 2 * HALO_PX, r.h + 2 * HALO_PX),
@@ -132,8 +121,6 @@ pub fn icon_box(px: f32) -> (u32, u32) {
     }
 }
 
-/// Badges in the fast-forward badge's place, kept out of `Icon::ALL`: their glyphs sit a hair
-/// outside the shared frame, so they are clipped to it rather than widening it for everyone.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Badge {
     Link,
@@ -149,7 +136,6 @@ impl Badge {
     }
 }
 
-/// The badge at `px`, tinted, haloed, in exactly `icon_box(px)`.
 pub fn badge_face(badge: Badge, px: f32, colour: [u8; 3]) -> CartFace {
     let Some(font) = symbols_font() else {
         return CartFace {
@@ -175,7 +161,6 @@ pub fn badge_face(badge: Badge, px: f32, colour: [u8; 3]) -> CartFace {
     haloed(&out, f.w, f.h, colour)
 }
 
-/// Coverage only, so two colours of one icon share a raster.
 struct Raster {
     cov: Vec<u8>,
     w: u32,
@@ -204,8 +189,6 @@ fn rasterise(icon: Icon, px: f32) -> Option<Raster> {
     let x0 = m.xmin - f.left;
     let y0 = f.top - (m.ymin + m.height as i32);
 
-    // Unclipped: the frame holds every icon, so a glyph outside it panics rather than losing a
-    // row.
     let mut out = vec![0u8; (f.w * f.h) as usize];
     for gy in 0..m.height {
         for gx in 0..m.width {
@@ -227,8 +210,6 @@ struct Frame {
     top: i32,
 }
 
-/// The union of every icon's extent, so swapping glyphs moves nothing. Not the line box: these
-/// glyphs overshoot ascent and descent by a row.
 fn frame(font: &Font, px: f32) -> Frame {
     let (mut left, mut right, mut top, mut bottom) = (i32::MAX, i32::MIN, i32::MIN, i32::MAX);
     for icon in Icon::ALL {

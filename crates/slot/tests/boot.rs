@@ -1,6 +1,3 @@
-//! Anything that has to reach the shelf carries a second cart: one cart on the card is a
-//! dedicated device and boots past the shelf entirely.
-
 mod common;
 
 use common::{boot, tmp_root_with_carts};
@@ -43,7 +40,6 @@ fn boot_with_a_cart_that_no_longer_exists_falls_back_to_the_shelf() {
     assert!(matches!(a.phase(), Phase::Shelf));
 }
 
-/// Ejecting a resumed cart has to land on it, not on the first cart in the library.
 #[test]
 fn boot_leaves_the_shelf_sitting_on_the_resumed_cart() {
     let d = tmp_root_with_carts(&["Advance Wars", "Emerald", "Fire Emblem"]);
@@ -83,8 +79,6 @@ fn a_seated_cart_is_recorded_so_the_next_boot_can_resume_it() {
     assert_eq!(read_slot_state(d.path()).cart, Some("Emerald".into()));
 }
 
-/// The stem and the shelf are one fact, so a boot that gives up on the stem gives up the shelf
-/// too, or the next settings write pairs `cart=` with a stale `cart_platform=`.
 #[test]
 fn a_cart_that_is_gone_takes_its_shelf_out_of_the_slot_with_it() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -99,7 +93,6 @@ fn a_cart_that_is_gone_takes_its_shelf_out_of_the_slot_with_it() {
     )
     .unwrap();
     let mut a = App::boot(d.path());
-    // Any setting, because every one writes the whole file back.
     a.apply(Action::MuteToggle);
     let s = read_slot_state(d.path());
     assert_eq!(s.cart, None);
@@ -109,7 +102,6 @@ fn a_cart_that_is_gone_takes_its_shelf_out_of_the_slot_with_it() {
     );
 }
 
-/// A refusal must not leave the slot claiming a cart that never went in.
 #[test]
 fn a_cart_that_fails_to_load_leaves_the_slot_empty() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -123,7 +115,6 @@ fn a_cart_that_fails_to_load_leaves_the_slot_empty() {
     assert_eq!(read_slot_state(d.path()).cart, None);
 }
 
-/// Recording a cart must not reset the levels stored in the same file.
 #[test]
 fn seating_a_cart_preserves_the_levels_already_in_the_file() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -151,8 +142,6 @@ fn seating_a_cart_preserves_the_levels_already_in_the_file() {
     assert_eq!((s.brightness, s.blue_light, s.volume), (2, 7, 35));
 }
 
-/// A cart already in the slot shows no shelf, not even for one frame. Counted against a chosen
-/// insert because without a compositor carts and chrome are both plain rects.
 #[test]
 fn a_resume_draws_no_shelf_but_a_chosen_insert_does() {
     let seated = || {
@@ -193,7 +182,6 @@ fn a_resume_draws_no_shelf_but_a_chosen_insert_does() {
         "a resume drew {r} and a chosen insert {p}: the shelf is on screen for both"
     );
 
-    // And it stays absent for the whole insert, not just the first frame.
     let (mut resume, _d3) = seated();
     for frame in 0..90 {
         assert!(
@@ -210,7 +198,6 @@ fn draw_count(a: &App) -> usize {
     out.len()
 }
 
-/// A loose card is an empty shelf, and boot leaves every file exactly where the player put it.
 #[test]
 fn a_loose_card_shows_an_empty_shelf_and_nothing_on_it_is_moved() {
     let d = tempfile::tempdir().unwrap();
@@ -257,7 +244,6 @@ fn a_loose_card_shows_an_empty_shelf_and_nothing_on_it_is_moved() {
     );
 }
 
-/// A bare card gets every platform folder, since they are the only guide to organising it.
 #[test]
 fn boot_creates_the_folders_a_person_has_to_file_into() {
     let d = tempfile::tempdir().unwrap();
@@ -272,8 +258,6 @@ fn boot_creates_the_folders_a_person_has_to_file_into() {
     }
 }
 
-/// A card holding both `Games/GBA/Tetris.gba` and `Games/GB/Tetris.gb`. `Emerald` keeps the
-/// GBA shelf from being a single cart library, which boots past the shelf.
 fn two_tetrises() -> tempfile::TempDir {
     let d = tmp_root_with_carts(&["Tetris", "Emerald"]);
     common::write_gb_cart(&d, "Tetris", "TETRIS");
@@ -295,7 +279,6 @@ fn resumed(d: &tempfile::TempDir, platform: Option<Platform>) -> App {
     App::boot(d.path())
 }
 
-/// `cart=Tetris` names two cartridges on such a card; the platform line says which was seated.
 #[test]
 fn the_platform_on_the_card_decides_which_tetris_comes_back() {
     let d = two_tetrises();
@@ -319,7 +302,6 @@ fn the_platform_on_the_card_decides_which_tetris_comes_back() {
     }
 }
 
-/// A card with no platform line holds GBA carts.
 #[test]
 fn a_card_that_never_said_resumes_the_gba_cart() {
     let d = two_tetrises();
@@ -330,8 +312,6 @@ fn a_card_that_never_said_resumes_the_gba_cart() {
     );
 }
 
-/// A named shelf is the only shelf asked: the same name on another shelf is a different game
-/// with a different save, so the slot boots empty.
 #[test]
 fn a_named_shelf_that_no_longer_has_the_cart_is_an_empty_slot() {
     let d = two_tetrises();
@@ -343,8 +323,6 @@ fn a_named_shelf_that_no_longer_has_the_cart_is_an_empty_slot() {
     );
 }
 
-/// Seating a cart on the Game Boy shelf records that shelf, or the next boot resolves the
-/// ambiguous stem to the GBA cart.
 #[test]
 fn seating_a_cart_records_the_shelf_it_came_off() {
     let d = two_tetrises();
@@ -368,7 +346,6 @@ fn seating_a_cart_records_the_shelf_it_came_off() {
         "the card does not say which Tetris is in the slot"
     );
 
-    // And the next boot comes back to it rather than to the GBA cart of the same name.
     let again = App::boot(d.path());
     assert_eq!(
         again.seated_cart().expect("nothing seated").platform,
@@ -376,7 +353,6 @@ fn seating_a_cart_records_the_shelf_it_came_off() {
     );
 }
 
-/// An empty slot writes no platform, or next boot would read one beside an empty `cart` line.
 #[test]
 fn an_eject_forgets_the_platform_with_the_cart() {
     let d = two_tetrises();
@@ -394,7 +370,6 @@ fn an_eject_forgets_the_platform_with_the_cart() {
     assert_eq!((s.cart, s.cart_platform), (None, None));
 }
 
-/// And it is already home rather than travelling there.
 #[test]
 fn a_resumed_cart_starts_seated() {
     let d = common::tmp_root_with_carts(&["Emerald", "Fusion"]);

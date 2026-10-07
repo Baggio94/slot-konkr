@@ -1,7 +1,6 @@
 use slot_input::{Action, Btn};
 use slot_retro::ButtonMask;
 
-/// The buttons passed through to the game, held as a level-state libretro mask.
 #[derive(Default)]
 pub struct Pad {
     mask: u16,
@@ -28,7 +27,6 @@ impl Pad {
         ButtonMask(self.mask)
     }
 
-    /// Without this the game resumes holding whatever was down when the switcher took input.
     pub fn clear(&mut self) {
         self.mask = 0;
     }

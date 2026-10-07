@@ -34,7 +34,6 @@ fn an_unlisted_stem_defaults_to_mgba() {
     assert_eq!(core_for(d.path(), "Metroid Fusion"), Core::Mgba);
 }
 
-/// Hand-edit typos cost only their own line, never the shelf.
 #[test]
 fn malformed_lines_are_ignored_rather_than_fatal() {
     let d = root_with(Some(concat!(
@@ -69,8 +68,6 @@ fn a_later_duplicate_wins() {
     assert_eq!(core_for(d.path(), "Emerald"), Core::Gpsp);
 }
 
-/// The last line for a key wins even when it is unparseable, so the cart gets the default.
-/// Checked in both orders and through both readers, which must agree.
 #[test]
 fn the_last_line_for_a_cart_wins_even_when_it_is_the_typo() {
     let d = root_with(Some("Emerald = gpsp\nEmerald = notacore\n"));
@@ -152,7 +149,6 @@ fn writing_a_core_appends_a_cart_the_file_has_never_seen() {
 
 #[test]
 fn writing_the_default_still_records_it() {
-    // Must write a line, not just remove the gpsp one.
     let d = root_with(Some("Emerald = gpsp\n"));
     slot_store::write_selected_core(d.path(), "Emerald", Core::Mgba).unwrap();
     assert_eq!(core_for(d.path(), "Emerald"), Core::Mgba);
@@ -177,7 +173,6 @@ fn every_platform_defaults_to_mgba() {
     );
 }
 
-/// A cart naming a core other than its platform's default gets the one it asked for.
 #[test]
 fn a_cart_can_ask_for_a_non_default_core_by_hand() {
     let d = tempfile::tempdir().unwrap();
@@ -191,7 +186,6 @@ fn a_cart_can_ask_for_a_non_default_core_by_hand() {
 
 #[test]
 fn a_line_naming_a_core_the_platform_cannot_run_is_dropped() {
-    // gpSP does not run Game Boy games, so the line is dropped for the platform default.
     let d = tempfile::tempdir().unwrap();
     write_selected_core(d.path(), "Tetris", Core::Gpsp).unwrap();
     assert_eq!(
@@ -206,6 +200,5 @@ fn a_line_naming_a_core_the_platform_cannot_run_is_dropped() {
 
 #[test]
 fn the_picker_board_has_exactly_two_sockets() {
-    // The picker is a two-socket PCB drawing.
     assert_eq!(Core::ALL.len(), 2);
 }

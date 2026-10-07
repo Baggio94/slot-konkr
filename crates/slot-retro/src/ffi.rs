@@ -1,5 +1,3 @@
-//! Raw libretro ABI. Nothing here knows what a GBA is.
-
 use std::ffi::{c_char, c_int, c_uint, c_void};
 
 use libloading::Library;
@@ -8,8 +6,6 @@ use crate::core::CoreError;
 
 pub const API_VERSION: c_uint = 1;
 
-/// `RETRO_ENVIRONMENT_GET_CAN_DUPE`: whether the frontend accepts a NULL frame to mean "repeat
-/// the last". Gambatte refuses to load content if told no.
 pub const GET_CAN_DUPE: c_uint = 3;
 pub const GET_SYSTEM_DIRECTORY: c_uint = 9;
 pub const SET_PIXEL_FORMAT: c_uint = 10;
@@ -19,8 +15,6 @@ pub const GET_VARIABLE_UPDATE: c_uint = 17;
 pub const GET_RUMBLE_INTERFACE: c_uint = 23;
 pub const GET_LOG_INTERFACE: c_uint = 27;
 pub const GET_SAVE_DIRECTORY: c_uint = 31;
-/// `RETRO_ENVIRONMENT_SET_AUDIO_BUFFER_STATUS_CALLBACK`. In an *auto* frameskip mode the core
-/// asks this each frame before deciding whether to draw, so it is the per-frame skip lever.
 pub const SET_AUDIO_BUFFER_STATUS_CALLBACK: c_uint = 62;
 pub const SET_NETPACKET_INTERFACE: c_uint = 78;
 
@@ -31,14 +25,12 @@ pub const PIXEL_FORMAT_XRGB8888: c_uint = 1;
 pub const PIXEL_FORMAT_RGB565: c_uint = 2;
 pub const DEVICE_JOYPAD: c_uint = 1;
 pub const MEMORY_SAVE_RAM: c_uint = 0;
-/// `RETRO_DEVICE_ID_JOYPAD_MASK`, a query for every button at once.
 pub const JOYPAD_MASK: c_uint = 256;
 
 pub const NETPACKET_UNRELIABLE: i32 = 0;
 pub const NETPACKET_RELIABLE: i32 = 1 << 0;
 pub const NETPACKET_UNSEQUENCED: i32 = 1 << 1;
 pub const NETPACKET_FLUSH_HINT: i32 = 1 << 2;
-/// Not a flag: passed as `client_id` to address every connected peer at once.
 pub const NETPACKET_BROADCAST: u16 = 0xFFFF;
 
 #[repr(C)]
@@ -91,18 +83,14 @@ pub struct RumbleInterface {
     pub set_rumble_state: SetRumbleStateFn,
 }
 
-/// Frontend reports its audio buffer through this. `occupancy` is a percentage;
-/// `underrun_likely` is what the cores' plain *auto* frameskip reads.
 pub type AudioBufferStatusFn =
     unsafe extern "C" fn(active: bool, occupancy: c_uint, underrun_likely: bool);
 
-/// Read as an `Option` so a core that passes null cannot be called through; same layout.
 #[repr(C)]
 pub struct AudioBufferStatusCallback {
     pub callback: Option<AudioBufferStatusFn>,
 }
 
-// The frontend hands these two to the core's `start`.
 pub type NetpacketSend =
     unsafe extern "C" fn(flags: c_int, buf: *const c_void, len: usize, client_id: u16);
 pub type NetpacketPollReceive = unsafe extern "C" fn();
@@ -115,8 +103,6 @@ pub type NetpacketPoll = unsafe extern "C" fn();
 pub type NetpacketConnected = unsafe extern "C" fn(client_id: u16) -> bool;
 pub type NetpacketDisconnected = unsafe extern "C" fn(client_id: u16);
 
-/// Only `start` and `receive` are guaranteed by libretro. Everything from `stop` on is
-/// optional and arrives NULL from some cores, so check before calling.
 #[repr(C)]
 pub struct NetpacketCallback {
     pub start: Option<NetpacketStart>,
@@ -129,7 +115,6 @@ pub struct NetpacketCallback {
 }
 
 // SAFETY: besides function pointers, `protocol_version` points at a string literal in the
-// dylib, fixed for the life of the load and never written, so moving threads is sound.
 unsafe impl Send for NetpacketCallback {}
 
 pub type EnvironmentFn = unsafe extern "C" fn(c_uint, *mut c_void) -> bool;
@@ -162,8 +147,6 @@ pub struct Api {
 }
 
 impl Api {
-    /// # Safety
-    /// `lib` must be a libretro core built for this platform.
     pub unsafe fn load(lib: &Library) -> Result<Self, CoreError> {
         macro_rules! get {
             ($name:literal) => {

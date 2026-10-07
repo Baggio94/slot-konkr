@@ -1,6 +1,5 @@
 use slot::audio::volume;
 
-/// Full volume leaves samples bit identical.
 #[test]
 fn full_volume_is_bit_identical() {
     let mut s = [i16::MIN, -1234, 0, 1234, i16::MAX];
@@ -32,7 +31,6 @@ fn a_middle_level_attenuates_without_clipping_or_inverting() {
     assert_eq!(s[1], -s[2], "the curve is not symmetric");
 }
 
-/// Every step has to change the sound, or the bar moves without it.
 #[test]
 fn each_step_of_five_is_audible_movement() {
     let mut last = gain_at(0);

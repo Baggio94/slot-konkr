@@ -4,15 +4,12 @@ use slot_gfx::{Draw, TexId, OUT_H, OUT_W};
 
 use crate::art;
 
-/// Black over the wallpaper, so the dark shelf and flat case still read over a photograph.
 const SCRIM: f32 = 0.62;
 
-/// Covers the whole panel, centre cropped. PNG only.
 pub fn wallpaper_face(path: &Path) -> Option<Vec<u8>> {
     art::cover(path, OUT_W, OUT_H)
 }
 
-/// Must be drawn first. Draws nothing without a wallpaper: the clear colour is the ground.
 pub fn draw_backdrop(face: Option<TexId>, out: &mut Vec<Draw>) {
     let Some(tex) = face else {
         return;

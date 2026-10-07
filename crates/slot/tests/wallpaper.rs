@@ -22,8 +22,6 @@ fn a_card_with_no_wallpapers_picks_nothing() {
     assert!(pick(d.path(), 7).is_none(), "an empty folder picked a file");
 }
 
-/// The seed is the wall clock at boot, so the picture changes between boots. Two seeds landing
-/// on the same file is fine.
 #[test]
 fn the_seed_chooses_between_the_files_present() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -48,8 +46,6 @@ fn the_seed_chooses_between_the_files_present() {
     );
 }
 
-/// macOS leaves `._` sidecars beside copied files. They carry the shadowed extension and decode
-/// as nothing.
 #[test]
 fn a_sidecar_is_never_the_wallpaper() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -67,7 +63,6 @@ fn a_sidecar_is_never_the_wallpaper() {
     }
 }
 
-/// The folder is the user's and they will put other things in it.
 #[test]
 fn only_pngs_are_picked() {
     let d = common::tmp_root_with_carts(&["Emerald"]);

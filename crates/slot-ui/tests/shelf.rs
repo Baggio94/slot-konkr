@@ -47,7 +47,6 @@ fn settle(s: &mut Shelf) {
     }
 }
 
-/// Which cart each quad in the row belongs to, by label colour (no faces are uploaded).
 fn drawn_cart_indices(out: &[Draw]) -> Vec<usize> {
     let keys: Vec<[u8; 3]> = (0..16)
         .map(|i| label_colour(&format!("Game {i}")))
@@ -80,7 +79,6 @@ fn the_shelf_wraps_at_both_ends() {
     );
 }
 
-/// The spring chases `scroll`. If wrapping is a bare index change it unwinds the whole row.
 #[test]
 fn wrapping_animates_one_step_not_the_long_way_back() {
     let mut s = shelf_with(8);
@@ -121,7 +119,6 @@ fn the_neighbour_of_the_last_cart_is_the_first() {
     assert_eq!(s.cart_at_offset(1), Some(1));
 }
 
-/// A settled row of three or more shows each cart once. Only a ring of two repeats at rest.
 #[test]
 fn no_cart_is_drawn_twice_in_a_settled_row_of_three_or_more() {
     for n in [3usize, 4, 7] {
@@ -136,7 +133,6 @@ fn no_cart_is_drawn_twice_in_a_settled_row_of_three_or_more() {
     }
 }
 
-/// One cart stands dead centre alone, without repeating like a row of two.
 #[test]
 fn one_cart_stands_alone_in_the_middle() {
     let s = shelf_with(1);
@@ -151,7 +147,6 @@ fn one_cart_stands_alone_in_the_middle() {
     );
 }
 
-/// Two carts fill all three slots, the unselected one on both sides.
 #[test]
 fn two_carts_repeat_around_the_ring() {
     let mut s = shelf_with(2);
@@ -185,11 +180,8 @@ fn two_carts_repeat_around_the_ring() {
     );
 }
 
-/// At every length, no cart changes offset across a press: the row slides a pitch rather than
-/// a cart blinking out at one edge and in at the other.
 #[test]
 fn a_press_slides_the_row_rather_than_redrawing_it() {
-    // Each drawn cart as (index, pitches from the middle), rounded, to compare as sets.
     let occupied = |s: &Shelf| {
         let mut out = Vec::new();
         s.draw_row(None, 0.0, 0.0, 1.0, &mut out);
@@ -223,7 +215,6 @@ fn a_press_slides_the_row_rather_than_redrawing_it() {
     }
 }
 
-/// The row moves the way the button was pressed, even on a wrap with the spring still lagging.
 #[test]
 fn a_row_travels_the_way_it_was_pressed() {
     for n in [2usize, 3, 4, 5, 10] {
@@ -250,7 +241,6 @@ fn a_row_travels_the_way_it_was_pressed() {
                     "{n} carts, tap {tap} {name}: the row is travelling the other way"
                 );
                 aim = sent;
-                // Part way there, so the next press lands with the spring still moving.
                 for _ in 0..4 {
                     s.update(1.0 / 60.0);
                 }
@@ -264,8 +254,6 @@ fn a_row_travels_the_way_it_was_pressed() {
     }
 }
 
-/// A held direction never runs the row backwards. Driven like `App::update`, `tick` then
-/// `update` each frame, for five laps of a three cart row.
 #[test]
 fn a_held_scroll_never_travels_against_the_button() {
     for n in [2usize, 3, 4, 5, 10] {
@@ -287,7 +275,6 @@ fn a_held_scroll_never_travels_against_the_button() {
                 );
                 was = s.scroll;
             }
-            // Fifteen repeats plus the press itself, one pitch each.
             let gone = (s.scroll - (if way > 0.0 { n - 1 } else { 0 }) as f32) * way;
             assert!(
                 gone > 14.0,
@@ -297,8 +284,6 @@ fn a_held_scroll_never_travels_against_the_button() {
     }
 }
 
-/// `selected_at` matches the quad the row actually draws for the selection, settled and on every
-/// frame of travel, measured as the row with and without the selection hidden.
 #[test]
 fn the_shelf_says_where_its_selected_cart_stands() {
     for n in [1usize, 2, 3, 5] {
@@ -319,7 +304,6 @@ fn the_shelf_says_where_its_selected_cart_stands() {
                 .map(xw)
                 .filter(|q| !without.iter().map(xw).any(|k| k == *q))
                 .collect();
-            // One image, except on a ring of two while travelling, where it is at both edges.
             if n != 2 || frames == 400 {
                 assert_eq!(
                     dropped.len(),
@@ -341,7 +325,6 @@ fn the_shelf_says_where_its_selected_cart_stands() {
     }
 }
 
-/// Three or more: the selection dead centre with a neighbour peeking in either side.
 #[test]
 fn a_row_of_three_or_more_is_centred_on_its_selection() {
     for n in [3usize, 4, 7] {
@@ -427,14 +410,12 @@ fn holding_a_direction_repeats_after_a_delay() {
     assert_eq!(s.index, 3, "it kept repeating after release");
 }
 
-/// A held direction speeds up: 110, 85, 65 then 50 ms, and 50 is a floor.
 #[test]
 fn a_held_direction_winds_down_to_a_floor() {
     let mut s = shelf_with(40);
     s.hold_right(0);
     assert_eq!(s.index, 1, "the first press did not move");
 
-    // Each tick is 1 ms before the repeat is due and then exactly on it.
     let mut at = 400;
     for (rate, want) in [(110, 2), (85, 3), (65, 4), (50, 5)] {
         s.tick(at - 1);
@@ -444,7 +425,6 @@ fn a_held_direction_winds_down_to_a_floor() {
         at += rate;
     }
 
-    // Held on, the floor holds: four more repeats at 50 ms.
     for want in 6..=9 {
         s.tick(at - 1);
         assert_eq!(s.index, want - 1, "the floor gave way before {want}");
@@ -454,7 +434,6 @@ fn a_held_direction_winds_down_to_a_floor() {
     }
 }
 
-/// Acceleration belongs to one hold: separate presses are not accelerated.
 #[test]
 fn a_new_press_starts_the_repeat_over_at_the_slow_rate() {
     let mut s = shelf_with(40);
@@ -466,7 +445,6 @@ fn a_new_press_starts_the_repeat_over_at_the_slow_rate() {
     }
     assert_eq!(s.index, 4, "the hold did not wind down as expected");
 
-    // Let go and press again: the long delay and the first rate again.
     s.release_right();
     s.hold_right(at);
     assert_eq!(s.index, 5, "the fresh press did not move");
@@ -478,7 +456,6 @@ fn a_new_press_starts_the_repeat_over_at_the_slow_rate() {
     assert_eq!(s.index, 6, "the fresh press kept the old hold's fast rate");
 }
 
-/// Letting go of one direction while the other is held is a change of direction, not a stop.
 #[test]
 fn the_other_direction_letting_go_does_not_stop_the_repeat() {
     let mut s = shelf_with(6);
@@ -488,8 +465,6 @@ fn the_other_direction_letting_go_does_not_stop_the_repeat() {
     assert_eq!(s.index, 2, "releasing left stopped a held right");
 }
 
-/// The charge starts on the left case margin. Charging, so the bolt's reserved slot, the gauge's
-/// leftmost piece, is filled.
 #[test]
 fn the_gauge_starts_at_the_case_margin() {
     let mut out = Vec::new();
@@ -513,8 +488,6 @@ fn the_gauge_starts_at_the_case_margin() {
     assert_eq!(leftmost, 24.0, "the case margin is the case margin");
 }
 
-/// The band prints only at its two ends, since the cart bay runs through its middle: the charge
-/// at the left, the clock at the right.
 #[test]
 fn the_band_prints_the_charge_at_one_margin_and_the_clock_at_the_other() {
     let mut out = Vec::new();
@@ -562,8 +535,6 @@ fn the_band_prints_the_charge_at_one_margin_and_the_clock_at_the_other() {
     }
 }
 
-/// The discharging path through `draw_footer`: at the same percent, charging or not, everything
-/// but the bolt comes back identical.
 #[test]
 fn the_footer_does_not_move_the_gauge_when_the_charge_state_changes() {
     let mut idle = Vec::new();
@@ -596,7 +567,6 @@ fn the_footer_does_not_move_the_gauge_when_the_charge_state_changes() {
     }
 }
 
-/// The clock keeps its place at its end of the band.
 #[test]
 fn the_clock_stays_at_the_right_margin() {
     let mut out = Vec::new();
@@ -617,7 +587,6 @@ fn the_clock_stays_at_the_right_margin() {
     assert_eq!(rightmost, OUT_W as f32 - 24.0);
 }
 
-/// No gauge: a band with a clock, not a hole.
 #[test]
 fn a_band_with_no_gauge_still_draws_its_clock() {
     let mut out = Vec::new();
@@ -631,7 +600,6 @@ fn a_band_with_no_gauge_still_draws_its_clock() {
     assert_eq!(out.len(), 1);
 }
 
-/// Refusal shakes only the carts, not the slot or the legend.
 #[test]
 fn a_refusal_moves_the_carts_and_leaves_the_device_where_it_is() {
     let s = shelf_with(3);
@@ -639,7 +607,6 @@ fn a_refusal_moves_the_carts_and_leaves_the_device_where_it_is() {
     s.draw(0.0, &mut still);
     s.draw(9.0, &mut shaken);
     assert_eq!(still.len(), shaken.len(), "the shake changed the row");
-    // The row draws first. Sizes cannot tell them apart since side carts are scaled down.
     let mut row = Vec::new();
     s.draw_row(None, 0.0, 0.0, 1.0, &mut row);
     let carts = row.len();
@@ -693,7 +660,6 @@ fn the_neighbours_peek_in_from_both_edges() {
     );
 }
 
-/// Carts only. Legend plates are short, so height separates them.
 fn cart_spans(out: &[Draw]) -> Vec<(f32, f32)> {
     out.iter()
         .filter_map(|d| match *d {
@@ -706,7 +672,6 @@ fn cart_spans(out: &[Draw]) -> Vec<(f32, f32)> {
         .collect()
 }
 
-/// The row parts outwards for the cart going into the slot, gone by the time it is seated.
 #[test]
 fn the_row_parts_for_the_cart_going_in() {
     let s = shelf_with(5);
@@ -736,7 +701,6 @@ fn the_row_parts_for_the_cart_going_in() {
     );
 }
 
-/// Dimming darkens a side cart's face but leaves the black under it as the recede has it.
 #[test]
 fn dim_darkens_a_side_carts_face_and_not_the_black_under_it() {
     let mut s = shelf_with(3);
@@ -793,7 +757,6 @@ fn gb_shelf_with(n: usize) -> Shelf {
     )
 }
 
-/// A Game Boy Game Pak is drawn at its own size.
 #[test]
 fn the_row_draws_a_game_boy_pak_at_its_own_height() {
     let mut s = gb_shelf_with(3);
@@ -816,8 +779,6 @@ fn the_row_draws_a_game_boy_pak_at_its_own_height() {
     );
 }
 
-/// A Game Boy shelf with only the GBA silhouette uploaded draws no backing rather than a
-/// stretched tapered one.
 #[test]
 fn a_game_boy_row_backs_its_carts_with_the_game_boy_shadow() {
     let mut s = gb_shelf_with(3);
@@ -846,8 +807,6 @@ fn a_game_boy_row_backs_its_carts_with_the_game_boy_shadow() {
     );
 }
 
-/// The backing is one per mould, picked by the rom's CGB flag, read when the row is built
-/// rather than while drawing.
 #[test]
 fn a_colour_pak_and_a_grey_one_are_backed_by_their_own_shells() {
     let d = tempfile::tempdir().expect("tempdir");
@@ -874,8 +833,6 @@ fn a_colour_pak_and_a_grey_one_are_backed_by_their_own_shells() {
 
     let notched = TexId::from_raw(90);
     let rounded = TexId::from_raw(91);
-    // Only a dimmed cart is backed, so the backing belongs to the neighbour, which a row of two
-    // shows on both sides.
     for (selected, neighbour_shell) in [(0usize, rounded), (1, notched)] {
         let mut s = Shelf::new(carts.clone());
         s.select(selected);
@@ -901,8 +858,6 @@ fn a_colour_pak_and_a_grey_one_are_backed_by_their_own_shells() {
     }
 }
 
-/// A cart pushed onto the public `carts` without a `shells` entry is still drawn, backed with
-/// the GBA silhouette, rather than panicking in the draw loop.
 #[test]
 fn a_cart_pushed_onto_the_row_draws_rather_than_stopping_the_device() {
     let mut s = gb_shelf_with(2);
@@ -918,10 +873,8 @@ fn a_cart_pushed_onto_the_row_draws_rather_than_stopping_the_device() {
             .filter(|d| matches!(**d, Draw::Tex { tex, .. } if tex == gb || tex == gba))
             .count()
     };
-    // Twice: a row of two shows its one neighbour on both sides.
     assert_eq!(backed(&s), 2, "the neighbour was not backed to begin with");
 
-    // Straight onto the public field, as a neighbour, so it is dimmed and its mould is looked up.
     s.carts.push(Cart {
         platform: Platform::Gb,
         stem: "Pushed".into(),

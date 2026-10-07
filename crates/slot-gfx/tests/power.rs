@@ -22,7 +22,6 @@ fn the_brightness_overshoots_before_it_settles() {
     );
 }
 
-/// Width only collapses over the last of the travel.
 #[test]
 fn the_line_closes_to_a_dot_at_the_very_end() {
     assert!(screen_width(0.0) < 0.02, "the line never closes to a dot");

@@ -2,17 +2,12 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-/// GBA cartridge header: a 12 byte ASCII game title, NUL padded on the right.
 const TITLE_OFF: u64 = 0xa0;
 const TITLE_LEN: usize = 12;
 
-/// The four character game code, immediately after the title. The fourth character is the
-/// region, so callers keying on the game itself want the first three.
 const CODE_OFF: u64 = 0xac;
 const CODE_LEN: usize = 4;
 
-/// Seeks rather than reading the file, because a commercial rom is up to 32 MB and the
-/// shelf reads this for every cart at boot.
 pub fn header_title(rom: &Path) -> Option<String> {
     field(rom, TITLE_OFF, &mut [0u8; TITLE_LEN])
 }
@@ -21,8 +16,6 @@ pub fn header_code(rom: &Path) -> Option<String> {
     field(rom, CODE_OFF, &mut [0u8; CODE_LEN])
 }
 
-/// Whether the header looks like an unmodified cart: entry branch opcode 0xEA, fixed byte 0x96,
-/// and at most 16 MB. ROM hacks usually fail one, and gpSP's Pokémon link needs a clean header.
 pub fn header_clean(rom: &Path) -> bool {
     let Ok(mut f) = File::open(rom) else {
         return false;

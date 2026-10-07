@@ -267,8 +267,6 @@ fn unplug_lifts_the_adapter_off_the_port_and_dies_its_arcs() {
     );
 }
 
-/// The unplug is the seating motion reversed: it begins where seating ended and ends where it
-/// began.
 #[test]
 fn the_unplug_is_the_seating_motion_run_backwards() {
     let out = GameMenu::Unplug {
@@ -285,7 +283,6 @@ fn the_unplug_is_the_seating_motion_run_backwards() {
     );
 }
 
-/// The Wireless Adapter calls out with its signal arcs while it waits.
 #[test]
 fn the_adapter_calls_out_with_its_arcs_while_working() {
     let s = sprites();

@@ -1,5 +1,3 @@
-//! The untyped `<stem> = <value>` layer under `System/`.
-
 use slot_store::ini;
 use tempfile::tempdir;
 
@@ -21,7 +19,6 @@ fn an_absent_file_is_an_empty_map_rather_than_an_error() {
     assert_eq!(ini::value(d.path(), FILE, "Emerald"), None);
 }
 
-/// Typos cost only their own line. Empty values are kept for the typed layer to interpret.
 #[test]
 fn malformed_lines_are_skipped_rather_than_fatal() {
     let d = root_with(Some(concat!(
@@ -59,7 +56,6 @@ fn writing_creates_the_file_when_it_is_absent() {
     );
 }
 
-/// Comments, blank lines and unparsed lines survive a write.
 #[test]
 fn writing_replaces_one_line_and_leaves_the_rest_of_the_file_alone() {
     let d = root_with(Some(concat!(
@@ -97,8 +93,6 @@ fn writing_appends_a_key_the_file_has_never_seen() {
     );
 }
 
-/// Real filenames that would not read back as themselves (trimmed, cut at `=`, or parsed as a
-/// comment or section) are refused and the file is left untouched.
 const UNSAYABLE: [&str; 7] = [
     " Tetris",
     "Tetris ",
@@ -137,8 +131,6 @@ fn a_refused_key_cannot_grow_the_file_a_line_at_a_time() {
     );
 }
 
-/// `Cheats = On = x` reads as key `Cheats`, so writing it would clobber another cart's line.
-/// A hand-typed ambiguous line gets `read`'s interpretation.
 #[test]
 fn neither_cart_can_write_the_line_the_other_would_claim() {
     let d = root_with(None);
@@ -151,7 +143,6 @@ fn neither_cart_can_write_the_line_the_other_would_claim() {
     );
 }
 
-/// A write touches only the line `read` attributes to this key.
 #[test]
 fn a_write_leaves_every_line_that_is_not_this_keys_alone() {
     let d = root_with(Some(concat!(
@@ -177,7 +168,6 @@ fn a_write_leaves_every_line_that_is_not_this_keys_alone() {
     assert!(!text.contains("Emerald = actual"));
 }
 
-/// Any key `write` accepts reads back, across punctuation real rom filenames carry.
 #[test]
 fn every_key_a_write_accepts_reads_back_as_itself() {
     for key in [
@@ -197,7 +187,6 @@ fn every_key_a_write_accepts_reads_back_as_itself() {
             Some("stretch"),
             "{key:?} did not come back"
         );
-        // The second write must find the first one's line.
         ini::write(d.path(), FILE, key, "actual").expect(key);
         assert_eq!(ini::value(d.path(), FILE, key).as_deref(), Some("actual"));
         let text = std::fs::read_to_string(d.path().join(FILE)).unwrap();
@@ -205,8 +194,6 @@ fn every_key_a_write_accepts_reads_back_as_itself() {
     }
 }
 
-/// A non-UTF-8 file is an error, not an empty file to overwrite. The bytes are `Pokémon` in
-/// cp1252, Notepad's ANSI default.
 #[test]
 fn a_file_that_will_not_read_as_text_is_left_alone_rather_than_replaced() {
     let d = root_with(None);

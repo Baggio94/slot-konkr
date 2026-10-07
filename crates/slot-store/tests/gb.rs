@@ -8,7 +8,6 @@ fn card_rom(rel: &str) -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
-/// A plain Game Boy cart: CGB flag 0x00, and a title in the old 11-byte field.
 #[test]
 fn a_dmg_cart_reads_its_title_and_flag() {
     let Some(rom) = card_rom("GB/Tetris Rosy Retrospection.gb") else {
@@ -20,7 +19,6 @@ fn a_dmg_cart_reads_its_title_and_flag() {
     assert_eq!(slot_store::gb::class(&rom), Class::Original);
 }
 
-/// A Colour-only cart: flag 0xc0, and an all-zero title, which is not a malformed ROM.
 #[test]
 fn a_colour_only_cart_has_no_title_and_that_is_fine() {
     let Some(rom) = card_rom("GBC/Tetris Chromatic.gbc") else {
@@ -36,7 +34,6 @@ fn a_colour_only_cart_has_no_title_and_that_is_fine() {
     assert_eq!(slot_store::gb::class(&rom), Class::ColourOnly);
 }
 
-/// A synthesised 0x80 cart is `DualMode`, not collapsed into Colour-only.
 #[test]
 fn a_colour_enhanced_cart_is_its_own_class_and_not_a_colour_only_one() {
     let d = tempfile::tempdir().unwrap();
@@ -52,14 +49,13 @@ fn a_colour_enhanced_cart_is_its_own_class_and_not_a_colour_only_one() {
     assert_ne!(slot_store::gb::class(&rom), Class::ColourOnly);
 }
 
-/// The title is 11 bytes; reading 16 from 0x134 would swallow the manufacturer code and flag.
 #[test]
 fn the_title_read_does_not_swallow_the_manufacturer_code_or_the_flag() {
     let d = tempfile::tempdir().unwrap();
     let rom = d.path().join("Long.gbc");
     let mut bytes = vec![0u8; 0x150];
     bytes[0x134..0x134 + 11].copy_from_slice(b"ABCDEFGHIJK");
-    bytes[0x13f..0x143].copy_from_slice(b"WXYZ"); // manufacturer code
+    bytes[0x13f..0x143].copy_from_slice(b"WXYZ");
     bytes[0x143] = 0xc0;
     std::fs::write(&rom, bytes).unwrap();
 
@@ -76,7 +72,6 @@ fn a_truncated_rom_is_not_a_panic() {
     assert_eq!(slot_store::gb::cgb_flag(&rom), None);
 }
 
-/// Any flag besides 00H, 80H and C0H is an original pak.
 #[test]
 fn a_flag_the_manual_never_named_falls_back_to_the_original_pak() {
     let d = tempfile::tempdir().unwrap();
@@ -87,7 +82,6 @@ fn a_flag_the_manual_never_named_falls_back_to_the_original_pak() {
         std::fs::write(&rom, bytes).unwrap();
         assert_eq!(slot_store::gb::class(&rom), Class::Original, "{name}");
     }
-    // And a rom with no header at all is still a cart the shelf can draw.
     let short = d.path().join("Short.gb");
     std::fs::write(&short, [0u8; 0x50]).unwrap();
     assert_eq!(slot_store::gb::class(&short), Class::Original);
@@ -102,7 +96,6 @@ fn header_rom(title: &[u8], code: &[u8], cgb: u8, dest: u8) -> Vec<u8> {
     bytes
 }
 
-/// Gold's header, as pret builds it: an 11-byte title, then the code the label carries.
 #[test]
 fn the_header_reads_the_manufacturer_code_and_the_destination() {
     let h = slot_store::gb::Header::parse(&header_rom(b"POKEMON_GLD", b"AAUE", 0x80, 0x01))
@@ -117,7 +110,6 @@ fn the_header_reads_the_manufacturer_code_and_the_destination() {
     assert_eq!(jp.code, "");
 }
 
-/// A 16-byte title runs through 0x13F, so what sits there is only a code if it looks like one.
 #[test]
 fn the_tail_of_a_long_title_is_not_a_code() {
     let h = slot_store::gb::Header::parse(&header_rom(b"POKEMON YELLOW", b"", 0x80, 0x01)).unwrap();

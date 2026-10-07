@@ -1,10 +1,3 @@
-//! Writes the sticker out, and a magnified crop for judging one row at a time.
-//!
-//! Does nothing unless `SCRATCH_PNG` names an output file. `SCRATCH_CROP` and `SCRATCH_BOX`
-//! ask for the magnified crop:
-//!
-//! `SCRATCH_PNG=/tmp/sticker.png cargo test -p slot-ui --test render_sticker -- --nocapture`
-
 use slot_ui::{sticker_face, StickerFields, STICKER_H, STICKER_W};
 
 fn write(path: &str, px: &[u8], w: usize, h: usize) {

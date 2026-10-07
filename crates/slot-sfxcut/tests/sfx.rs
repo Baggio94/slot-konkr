@@ -1,8 +1,5 @@
-//! The cutting tool. The committed assets themselves are checked in the frontend's tests.
-
 use slot_sfxcut::{cut, takes, CutError, HZ, INSERT_LEAD, INSERT_LEN, INSERT_PEAK};
 
-/// Room tone with a hard transient at each of `events`.
 fn recording(seconds: f32, events: &[f32]) -> Vec<f32> {
     let n = (seconds * HZ) as usize;
     let mut s = 0x1234_5678u32;
@@ -14,7 +11,6 @@ fn recording(seconds: f32, events: &[f32]) -> Vec<f32> {
         .collect();
     for &at in events {
         let i = (at * HZ) as usize;
-        // A 40 ms decaying click, above the detector's floor.
         for k in 0..(0.040 * HZ) as usize {
             if i + k >= n {
                 break;
@@ -41,7 +37,6 @@ fn every_event_is_found_once_and_in_time_order() {
     }
 }
 
-/// The onset is refined below the 5 ms hop grid, to the sample.
 #[test]
 fn the_onset_is_accurate_to_better_than_a_hop() {
     for at in [0.5001, 0.5033, 0.5067, 0.5099] {
@@ -56,7 +51,6 @@ fn the_onset_is_accurate_to_better_than_a_hop() {
     }
 }
 
-/// The transient comes out exactly `lead` into the clip.
 #[test]
 fn the_cut_puts_the_transient_exactly_on_the_lead() {
     let pcm = recording(4.0, &[1.500]);
@@ -90,7 +84,6 @@ fn a_cut_is_normalised_and_faded_so_it_neither_clips_nor_clicks() {
     let peak = clip.iter().map(|s| s.unsigned_abs()).max().unwrap();
     assert_eq!(peak, INSERT_PEAK as u16);
     assert!(clip.iter().all(|&s| s != i16::MIN && s != i16::MAX));
-    // The same bound the frontend's own step test uses.
     assert!(clip[..8].iter().all(|s| s.abs() < 400), "starts on a step");
     assert!(
         clip[clip.len() - 200..].iter().all(|s| s.abs() < 400),
@@ -98,7 +91,6 @@ fn a_cut_is_normalised_and_faded_so_it_neither_clips_nor_clicks() {
     );
 }
 
-/// A take too near the start cannot be cut, and the error says which side ran out.
 #[test]
 fn a_take_without_room_around_it_is_refused_by_name() {
     let pcm = recording(4.0, &[0.020]);

@@ -4,12 +4,10 @@ use crate::quad::Quad;
 use crate::shaders::{GAME_FRAG, RECT_VERT};
 use crate::surface::{GfxError, OUT_H, OUT_W};
 
-/// 240x160 to 720x480, nearest. Exactly 3x is what collapses LCD3x to a tiled 3x3 mask.
 pub const SCALE: u32 = 3;
 pub const SRC_W: u32 = OUT_W / SCALE;
 pub const SRC_H: u32 = OUT_H / SCALE;
 
-/// The whole texture as origin then size, in texture coordinates. Used for GBA and for stills.
 pub const WHOLE_TEXTURE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
 pub struct GamePass {
@@ -19,9 +17,7 @@ pub struct GamePass {
     u_rect: gl::types::GLint,
     u_bright: gl::types::GLint,
     u_uv: gl::types::GLint,
-    /// A compositor with nobody driving it is a screen that is on.
     power: f32,
-    /// The part of the live game's texture the panel shows. Stills never read it.
     src: [f32; 4],
 }
 
@@ -39,7 +35,6 @@ impl GamePass {
         );
         let (u_rect, u_bright, u_uv);
         unsafe {
-            // Source and target sizes are fixed for the life of the program.
             gl::UseProgram(prog);
             gl::Uniform1i(crate::gl::uniform_location(prog, "u_game"), 0);
             gl::Uniform1i(crate::gl::uniform_location(prog, "u_mask"), 1);
@@ -73,8 +68,6 @@ impl GamePass {
         self.power = t.clamp(0.0, 1.0);
     }
 
-    /// Which part of the live game's texture fills the panel, as origin then size in texture
-    /// coordinates. Fullscreen Game Boy asks for its 160x144 window. Stills do not take it.
     pub fn set_source_rect(&mut self, rect: [f32; 4]) {
         self.src = rect;
     }
@@ -104,11 +97,6 @@ impl GamePass {
         self.draw_source(self.game, quad, self.src);
     }
 
-    /// The same pass over a still, so it wears the same mask as the game.
-    ///
-    /// Always `WHOLE_TEXTURE`, never `self.src`: a still stores the whole 240x160 buffer, so it
-    /// must not change shape with the current picture mode. Do not "fix" the mismatch with a
-    /// stretched game behind the switcher.
     pub fn draw_still(&self, tex: gl::types::GLuint, quad: &Quad) {
         self.draw_source(tex, quad, WHOLE_TEXTURE);
     }
@@ -118,8 +106,6 @@ impl GamePass {
         unsafe {
             gl::UseProgram(self.prog);
             gl::Uniform4f(self.u_rect, x, y, w, h);
-            // Set per draw, like `u_rect` and `u_bright`, since game and still want different
-            // values.
             gl::Uniform4f(self.u_uv, src[0], src[1], src[2], src[3]);
             gl::Uniform1f(self.u_bright, screen_brightness(self.power));
             gl::ActiveTexture(gl::TEXTURE0);

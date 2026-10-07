@@ -2,15 +2,12 @@ mod common;
 
 use slot_store::{Core, Platform};
 
-/// The device carries both cores in `System/`; a host build carries whichever were fetched.
-/// Absent means this host cannot run the test, not that the test failed.
 fn dylib_for(core: Core) -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../vendor")
         .join(slot::core::dylib_name(core))
 }
 
-/// Uses the real `dylib_name`, which `open_core` builds its search list from.
 #[test]
 fn each_core_resolves_to_its_own_dylib() {
     assert_ne!(
@@ -35,12 +32,10 @@ fn gpsp_loads_and_runs_a_frame() {
     }
     let _g = common::core_lock();
     let mut core = slot_retro::LibretroCore::open(&path).expect("open gpsp");
-    // gpSP reads options during retro_load_game, so this must be set before load.
     core.set_option("gpsp_serial", "rfu");
     assert_eq!(core.option("gpsp_serial"), Some("rfu".to_string()));
 }
 
-/// `auto` resolves the serial protocol from the ROM, so two devices agree without being told.
 #[test]
 fn gpsp_is_told_its_serial_mode_before_load() {
     let path = dylib_for(Core::Gpsp);
@@ -58,7 +53,6 @@ fn gpsp_is_told_its_serial_mode_before_load() {
     );
 }
 
-/// The mode the link screen asks for is the value the core is handed, never `auto`.
 #[test]
 fn gpsp_is_told_the_serial_mode_it_is_handed() {
     let path = dylib_for(Core::Gpsp);
@@ -78,9 +72,6 @@ fn gpsp_is_told_the_serial_mode_it_is_handed() {
     }
 }
 
-/// A real BIOS sets `gpsp_boot_mode` so the logo plays; gpSP's own default skips it.
-/// `gpsp_bios` stays unset: its `auto` default already loads the card's BIOS, and `official`
-/// would only add an OSD warning over slot's chrome on failure.
 #[test]
 fn gpsp_boots_through_the_bios_when_the_card_carries_one() {
     let path = dylib_for(Core::Gpsp);
@@ -109,8 +100,6 @@ fn gpsp_boots_through_the_bios_when_the_card_carries_one() {
     );
 }
 
-/// gpSP's built-in BIOS has no logo, so booting through it is a blank screen that reads as a
-/// hang. Without the file the option stays unset.
 #[test]
 fn gpsp_is_left_on_its_own_boot_default_when_the_card_has_no_bios() {
     let path = dylib_for(Core::Gpsp);
@@ -129,9 +118,6 @@ fn gpsp_is_left_on_its_own_boot_default_when_the_card_has_no_bios() {
     );
 }
 
-/// mGBA gets none of gpSP's options, including its BIOS switch, whatever the mode.
-/// Its own frameskip key is pinned because a misspelling leaves the audio buffer status
-/// callback unregistered and `set_frame_skip` a silent no-op.
 #[test]
 fn mgba_is_given_its_own_frameskip_and_none_of_gpsps() {
     let path = dylib_for(Core::Mgba);
@@ -164,9 +150,6 @@ fn mgba_is_given_its_own_frameskip_and_none_of_gpsps() {
     );
 }
 
-/// The quick menu's Colour Correction, on both cores, in each core's own spelling. `slot-retro`
-/// discards the declared values, so a typo would be accepted silently; these were read off the
-/// vendored dylibs. mGBA declares `OFF|GBA|GBC|Auto`, gpSP `disabled|enabled`, under other keys.
 #[test]
 fn both_cores_are_told_about_colour_correction_in_their_own_words() {
     for (which, key, on, off) in [
@@ -181,7 +164,6 @@ fn both_cores_are_told_about_colour_correction_in_their_own_words() {
         let _g = common::core_lock();
         let mut core = slot_retro::LibretroCore::open(&path).expect("open the core");
         for (colour, want) in [(true, on), (false, off)] {
-            // Set when off too: unset would leave the core's own default, which is not "off".
             slot::core::apply_core_options(&mut core, which, "auto", false, colour);
             assert_eq!(
                 core.option(key).as_deref(),
@@ -203,7 +185,6 @@ fn both_cores_are_told_about_colour_correction_in_their_own_words() {
     }
 }
 
-/// gpSP gets its own frameskip key, and none of mGBA's.
 #[test]
 fn gpsp_is_put_on_auto_frameskip() {
     let path = dylib_for(Core::Gpsp);
@@ -226,8 +207,6 @@ fn gpsp_is_put_on_auto_frameskip() {
     );
 }
 
-/// A content root holding the user's BIOS and a logo cart from the ignored `/sdcard`, or
-/// `None` when absent, so these tests skip on a fresh clone and in CI. Never check them in.
 fn root_with_bios_and_logo_cart() -> Option<(tempfile::TempDir, std::path::PathBuf)> {
     let (bios, rom_bytes) = (common::real_bios()?, common::logo_rom()?);
     let d = common::tmp_root_with_carts(&[]);
@@ -237,7 +216,6 @@ fn root_with_bios_and_logo_cart() -> Option<(tempfile::TempDir, std::path::PathB
     Some((d, rom))
 }
 
-/// Whether the BIOS boot animation shows anywhere in its ~2 s window, via `open_core_for`.
 fn splash_plays(root: &std::path::Path, rom: &std::path::Path) -> bool {
     use slot_retro::ButtonMask;
     let mut core =
@@ -249,8 +227,6 @@ fn splash_plays(root: &std::path::Path, rom: &std::path::Path) -> bool {
     })
 }
 
-/// A real BIOS on the card boots the cart through the logo, checked in pixels: gpSP silently
-/// falls back to a splashless built-in BIOS if its own first-byte test rejects the image.
 #[test]
 fn a_cart_boots_through_a_real_bios_and_the_splash_reaches_the_screen() {
     if !dylib_for(Core::Gpsp).exists() {
@@ -268,7 +244,6 @@ fn a_cart_boots_through_a_real_bios_and_the_splash_reaches_the_screen() {
     );
 }
 
-/// With no BIOS on the card the cart goes straight to the game.
 #[test]
 fn a_cart_goes_straight_to_the_game_when_the_card_has_no_bios() {
     if !dylib_for(Core::Gpsp).exists() {
@@ -287,7 +262,6 @@ fn a_cart_goes_straight_to_the_game_when_the_card_has_no_bios() {
     );
 }
 
-/// Whether any frame published through `EmuHandle::spawn` is the boot screen.
 fn a_published_frame_is_the_splash(
     root: &std::path::Path,
     rom: &std::path::Path,
@@ -299,7 +273,6 @@ fn a_published_frame_is_the_splash(
 
     let mut sink = StubSink::new();
     sink.open(32_768).expect("the stub refused to open");
-    // The worker waits for the device to make room, so the sink must be drained.
     let drain = sink.clone();
     std::thread::spawn(move || loop {
         drain.device_drain();
@@ -313,7 +286,6 @@ fn a_published_frame_is_the_splash(
         None,
         resume,
     );
-    // A worker starts paused.
     emu.set_speed(Speed::Normal);
     let deadline = Instant::now() + Duration::from_secs(10);
     while emu.state() == CoreState::Loading {
@@ -322,7 +294,6 @@ fn a_published_frame_is_the_splash(
     }
     assert_eq!(emu.state(), CoreState::Ready, "the core refused the cart");
 
-    // Longer than the animation, so a splash that plays at all is a splash this sees.
     let watch = Instant::now() + Duration::from_secs(3);
     while Instant::now() < watch {
         if emu.latest_frame().is_some_and(|f| common::mostly_lit(&f)) {
@@ -333,9 +304,6 @@ fn a_published_frame_is_the_splash(
     false
 }
 
-/// A cart resumed from a save state must not replay the splash; a fresh boot must.
-/// This holds because `emu::Worker::run` restores the state after `load` and before it
-/// publishes a frame.
 #[test]
 fn the_splash_plays_on_a_fresh_start_and_never_over_a_resume() {
     if !dylib_for(Core::Gpsp).exists() {
@@ -348,8 +316,6 @@ fn the_splash_plays_on_a_fresh_start_and_never_over_a_resume() {
     };
     let _g = common::core_lock();
 
-    // A gpSP state from past the boot: measured, the BIOS screen lasts to frame 269, and a
-    // state taken earlier would replay the splash itself. libretro allows one live core.
     let state = {
         use slot_retro::ButtonMask;
         let mut core = slot::core::open_core_for(
@@ -381,8 +347,6 @@ fn the_splash_plays_on_a_fresh_start_and_never_over_a_resume() {
     );
 }
 
-/// A `gpsp` cart reads only the resume state under its own core's directory, through the
-/// real `Session`. `each_core_resolves_to_its_own_dylib` pins the dylib half.
 #[test]
 fn a_gpsp_carts_resume_is_read_from_its_own_core_directory_through_the_session() {
     use slot::app::Phase;
@@ -395,9 +359,6 @@ fn a_gpsp_carts_resume_is_read_from_its_own_core_directory_through_the_session()
     let d = common::tmp_root_with_carts(&["Emerald", "Fusion"]);
     std::fs::write(d.path().join(SELECTED_CORE_FILE), "Emerald = gpsp\n").unwrap();
 
-    // Distinguishable resume states in both directories. If `spawn_core` ever resolved the
-    // core twice and the two calls disagreed, or fell back to the default, this is what
-    // would catch it: the counter would come back from the wrong file.
     StateRing::new(d.path(), Platform::Gba, Core::Gpsp, "Emerald")
         .write_resume(&700_000u64.to_le_bytes())
         .unwrap();
@@ -420,7 +381,6 @@ fn a_gpsp_carts_resume_is_read_from_its_own_core_directory_through_the_session()
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
 
-    // Past the autosave deadline, so the core's counter is written back.
     s.app_mut().tick_ms(60_000);
 
     let state = persist::read_resume(d.path(), Platform::Gba, Core::Gpsp, "Emerald")
@@ -432,8 +392,6 @@ fn a_gpsp_carts_resume_is_read_from_its_own_core_directory_through_the_session()
     );
 }
 
-/// A `gpsp` cart opens gpSP's dylib through a full `Session`, not just its state directory.
-/// mGBA's build is planted under gpSP's filename, since the mock would pass either way.
 #[test]
 fn a_gpsp_cart_runs_the_dylib_planted_under_its_own_name_through_the_session() {
     use slot::app::Phase;
@@ -472,7 +430,6 @@ fn a_gpsp_cart_runs_the_dylib_planted_under_its_own_name_through_the_session() {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
 
-    // Past the autosave deadline, so the planted core's real state is written back.
     s.app_mut().tick_ms(60_000);
 
     let state = persist::read_resume(d.path(), Platform::Gba, Core::Gpsp, "Emerald")
@@ -484,8 +441,6 @@ fn a_gpsp_cart_runs_the_dylib_planted_under_its_own_name_through_the_session() {
     );
 }
 
-/// The ini vanishing mid-play (a removable card) must not move the autosave to mGBA's
-/// directory: `App` keeps the core resolved at insert.
 #[test]
 fn changing_the_ini_mid_session_does_not_move_a_seated_carts_autosave() {
     use slot::app::Phase;
@@ -512,7 +467,6 @@ fn changing_the_ini_mid_session_does_not_move_a_seated_carts_autosave() {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
 
-    // `read_selected_cores` treats this the same as a transient read failure: an empty map.
     std::fs::remove_file(d.path().join(SELECTED_CORE_FILE)).unwrap();
 
     s.app_mut().tick_ms(60_000);
@@ -534,7 +488,6 @@ fn changing_the_ini_mid_session_does_not_move_a_seated_carts_autosave() {
     );
 }
 
-/// The manual save's `App::ring()` also uses the core resolved at insert, not the ini.
 #[test]
 fn changing_the_ini_mid_session_does_not_move_a_manual_save_state() {
     use slot::app::Phase;
@@ -582,7 +535,6 @@ fn changing_the_ini_mid_session_does_not_move_a_manual_save_state() {
     );
 }
 
-/// `flush_eject` also uses the core resolved at insert, not the ini.
 #[test]
 fn changing_the_ini_mid_session_does_not_move_an_ejected_carts_resume() {
     use slot::app::Phase;
@@ -591,7 +543,6 @@ fn changing_the_ini_mid_session_does_not_move_an_ejected_carts_resume() {
     use slot_store::{StateRing, SELECTED_CORE_FILE};
     use std::time::{Duration, Instant};
 
-    // A lone cart has nowhere to eject to, so `eject()` refuses.
     let d = common::tmp_root_with_carts(&["Emerald", "Fusion"]);
     std::fs::write(d.path().join(SELECTED_CORE_FILE), "Emerald = gpsp\n").unwrap();
 
@@ -631,8 +582,6 @@ fn changing_the_ini_mid_session_does_not_move_an_ejected_carts_resume() {
     );
 }
 
-/// `open_core` searches `root/System` for the dylib `Core::Gpsp` names. mGBA's build is
-/// planted under gpSP's filename so the mock would show if the wrong name was searched.
 #[test]
 fn open_core_reaches_a_gpsp_named_dylib_under_the_content_roots_system_directory() {
     use slot_retro::ButtonMask;
@@ -659,9 +608,6 @@ fn open_core_reaches_a_gpsp_named_dylib_under_the_content_roots_system_directory
     );
 }
 
-/// gpSP cannot run Game Boy games, so an ini line naming it for a Game Boy cart is dropped and the
-/// cart runs on its platform's default. The seeded counter (700_000) must come back moved, which
-/// only a run that read and wrote `States/GB/<default>/` can produce.
 #[test]
 fn a_game_boy_carts_gpsp_line_is_dropped_and_it_runs_on_the_platform_default() {
     let default = Core::default_for(Platform::Gb);
@@ -693,14 +639,11 @@ fn a_game_boy_carts_gpsp_line_is_dropped_and_it_runs_on_the_platform_default() {
         std::thread::sleep(Duration::from_millis(1));
     }
 
-    // The counter each core directory holds, or `None` where nothing was filed under that core.
     let counter = |core| {
         persist::read_resume(d.path(), Platform::Gb, core, "Tetris")
             .map(|b| u64::from_le_bytes(b.try_into().expect("the mock's state is 8 bytes")))
     };
 
-    // Run until the resumed counter moves; an unmoved counter is also what a run resuming from
-    // elsewhere leaves behind.
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if counter(default).is_some_and(|n| n > 700_000) {

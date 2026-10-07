@@ -15,7 +15,6 @@ fn stamps_round_trip_across_leap_days() {
     }
 }
 
-/// The ring relies on string order being time order, which zero padding provides.
 #[test]
 fn stamps_sort_lexicographically_in_time_order() {
     let secs = [

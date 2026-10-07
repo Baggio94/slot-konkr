@@ -51,7 +51,6 @@ fn the_core_is_told_the_bios_folder_not_the_dylib_folder() {
     );
 }
 
-/// Pointing the save directory at the dylib would put `.sav` files next to the core.
 #[test]
 fn the_core_is_told_the_saves_folder_too() {
     let _g = core_lock();
@@ -67,11 +66,6 @@ fn the_core_is_told_the_saves_folder_too() {
     assert_eq!(core.reported_save_dir(), saves.to_string_lossy());
 }
 
-/// gpSP reads exactly 16 KB of BIOS without a length check and rejects only on the first byte,
-/// silently falling back to its built-in BIOS (no logo, no chime).
-///
-/// The "real" image is 16 KB of zeros with the first byte every dump has: nothing copyrighted
-/// may be checked in.
 #[test]
 fn only_a_real_bios_image_turns_the_boot_splash_on() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -107,7 +101,6 @@ fn only_a_real_bios_image_turns_the_boot_splash_on() {
     );
 }
 
-/// A card pulled mid-session or mounted read only may have no BIOS folder.
 #[test]
 fn a_missing_bios_folder_turns_the_boot_splash_off() {
     let d = common::tmp_root_with_carts(&["Emerald"]);
@@ -118,8 +111,6 @@ fn a_missing_bios_folder_turns_the_boot_splash_off() {
     );
 }
 
-/// `App::boot` creates every folder on a bare card. Read off `DIRS` so a new entry cannot be
-/// missed.
 #[test]
 fn boot_creates_every_content_folder() {
     let d = tempdir().unwrap();

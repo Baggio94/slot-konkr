@@ -26,7 +26,6 @@ fn every_face_is_the_size_the_layout_expects() {
     assert_eq!((a.arrow_left.w, a.arrow_left.h), (ARROW_W, ARROW_H));
 }
 
-/// The host's plug is purple and a joiner's gray, as on the real cable.
 #[test]
 fn the_host_plug_is_purple_and_the_joiners_gray() {
     let a = link_art();

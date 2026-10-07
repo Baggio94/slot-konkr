@@ -1,7 +1,3 @@
-//! The core picker's open cart: the back half of the shell with the board in it, rasterised per
-//! cart for its plastic and ROM name. Drawn from `board.svg`, since the notch, legs, contacts and
-//! 45° traces are drawings, not a layout.
-
 use slot_gfx::OUT_W;
 use slot_store::{Cart, Core};
 
@@ -14,32 +10,25 @@ use crate::text;
 
 const BOARD_SVG: &str = include_str!("../assets/board.svg");
 
-/// The cart's 240×135 at 1.55×, the size the open cart is shown at. Sharp only at its own size.
 pub const BOARD_W: u32 = 372;
 pub const BOARD_H: u32 = 209;
 
-/// The ROM's body inside the board face: board units (43, 31) to (89, 89).
 pub const ROM_X: u32 = 67;
 pub const ROM_Y: u32 = 48;
 pub const ROM_W: u32 = 71;
 pub const ROM_H: u32 = 90;
 
-/// The placeholders `board.svg` paints its shell parts in.
 const PLASTIC: &str = "#ff00ff";
 const FLOOR: &str = "#800080";
 const DEEP: &str = "#400040";
 
-/// Words to a line on the ROM, and lines to the chip. Counted in characters so the split is
-/// testable; the fitter shrinks any line still too wide.
 const MARK_LINE_CHARS: usize = 10;
 const MARK_LINES: usize = 3;
 const MARK_PAD: u32 = 4;
 const MARK_PX: f32 = 10.0;
 const MARK_MIN_PX: f32 = 6.0;
-/// Grey on black, as a mask ROM is marked, so it does not compete with the socket names.
 const MARK_INK: [u8; 3] = [0xbd, 0xbd, 0xbd];
 
-/// The game's title, a few words to a line, without the dump's bracketed tags.
 pub fn rom_marking(stem: &str) -> Vec<String> {
     let mut title: Vec<String> = Vec::new();
     for word in clean_label(stem).to_uppercase().split_whitespace() {
@@ -58,7 +47,6 @@ pub fn rom_marking(stem: &str) -> Vec<String> {
     title
 }
 
-/// The marking alone, on nothing, the size of the ROM's body.
 pub fn rom_marking_face(stem: &str) -> CartFace {
     let title = rom_marking(stem);
     let mut face = CartFace {
@@ -82,8 +70,6 @@ pub fn rom_marking_face(stem: &str) -> CartFace {
 
 pub fn board_face(cart: &Cart) -> CartFace {
     let shell = shell_for(cart);
-    // Deepest placeholder first: once replaced, a shell colour matching a later placeholder
-    // cannot be replaced again.
     let svg = BOARD_SVG
         .replace(DEEP, &hex(shade(shell.colour, 0.35)))
         .replace(FLOOR, &hex(shade(shell.colour, 0.62)))
@@ -99,9 +85,6 @@ pub fn board_face(cart: &Cart) -> CartFace {
     face
 }
 
-/// One line of type, centred across the face in `band` rows from `top`, coverage scaled by
-/// `strength`. Composited over what is there, so on the opaque chip body the antialiased edge
-/// blends instead of snapping to full ink.
 fn ink_band(
     face: &mut CartFace,
     top: u32,
@@ -128,7 +111,6 @@ fn ink_band(
     }
 }
 
-/// Straight alpha over an opaque face.
 fn over(dst: &mut CartFace, src: &CartFace, x: u32, y: u32) {
     for row in 0..src.h {
         for col in 0..src.w {
@@ -159,44 +141,31 @@ fn shade(c: [u8; 3], f: f32) -> [u8; 3] {
 const SOCKET_SVG: &str = include_str!("../assets/socket.svg");
 const CHIP_SVG: &str = include_str!("../assets/chip.svg");
 
-/// Where the open cart rests.
 pub const BOARD_X: f32 = 174.0;
 pub const BOARD_Y: f32 = 150.0;
 
-/// Transparent border on every face that is drawn turned. A turned quad's own edge is not
-/// antialiased; inside the texture, the linear filter softens it.
 pub const TURN_PAD: u32 = 2;
 
-/// The lid's tilt at rest, and the most the chip tips in flight.
 pub const LID_TURN: f32 = -5.0 * std::f32::consts::PI / 180.0;
 pub const CHIP_TIP: f32 = 4.0 * std::f32::consts::PI / 180.0;
-/// How far the chip rises at mid-flight, in board units.
 pub const HOP_LIFT: f32 = 10.0;
 
-/// The slide's share of the open: 160 ms of the 420 ms in `slot::core_picker`, which a test
-/// there holds.
 pub const SLIDE_SHARE: f32 = 160.0 / 420.0;
-/// How far the front half slides off the back before it lifts: a third of the cart, the travel
-/// that unhooks a real shell.
 pub const SLIDE_UP: f32 = CART_H as f32 / 3.0;
 
-/// The slide, eased on its own share of the progress: 0.0 closed, 1.0 unhooked.
 pub fn slide_of(progress: f32) -> f32 {
     ease((progress / SLIDE_SHARE).clamp(0.0, 1.0))
 }
 
-/// The lift, eased on the rest of the progress: 0.0 still over the back, 1.0 at rest.
 pub fn lift_of(progress: f32) -> f32 {
     ease(((progress - SLIDE_SHARE) / (1.0 - SLIDE_SHARE)).clamp(0.0, 1.0))
 }
 
-/// Each socket's face, in `Core::ALL` order: board units of its top left, and its size.
 pub const SOCKET_U: [f32; 2] = [99.5, 171.5];
 pub const SOCKET_V: f32 = 59.1;
 pub const SOCKET_W: u32 = 64;
 pub const SOCKET_H: u32 = 46;
 
-/// The chip seated in each socket, unpadded: board units of its top left, and its size.
 pub const CHIP_U: [f32; 2] = [101.0, 173.0];
 pub const CHIP_V: f32 = 60.6;
 pub const CHIP_W: u32 = 59;
@@ -205,7 +174,6 @@ pub const CHIP_H: u32 = 41;
 pub const SHADOW_W: u32 = 66;
 pub const SHADOW_H: u32 = 12;
 
-/// 11 board units, the socket names' size in the mockup.
 const NAME_PX: f32 = 17.0;
 const NAME_MIN_PX: f32 = 8.0;
 const SOCKET_INK: [u8; 3] = [0xee, 0xf5, 0xe6];
@@ -218,7 +186,6 @@ const LID_REST: Placed = Placed {
     h: 81.0,
 };
 
-/// A rect on the panel.
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub struct Placed {
     pub x: f32,
@@ -227,14 +194,10 @@ pub struct Placed {
     pub h: f32,
 }
 
-/// The highlighted cart where a settled shelf stands it.
 pub fn shelf_cart() -> Placed {
     shelf_cart_at((OUT_W - CART_W) as f32 / 2.0, 1.0)
 }
 
-/// The same, off a row that is still moving, from `Shelf::selected_at`, so the opened cart
-/// grows out of the quad the row had it in. Only GBA carts open here, hence `CART_W`/`CART_H`
-/// rather than `cart_box`.
 pub fn shelf_cart_at(x: f32, scale: f32) -> Placed {
     let (w, h) = (CART_W as f32 * scale, CART_H as f32 * scale);
     Placed {
@@ -245,12 +208,10 @@ pub fn shelf_cart_at(x: f32, scale: f32) -> Placed {
     }
 }
 
-/// The back half: standing where the shelf stood it through the slide, then growing to its rest.
 pub fn board_at(progress: f32) -> Placed {
     board_from(shelf_cart(), progress)
 }
 
-/// The same, growing out of wherever the row was standing the cart.
 pub fn board_from(shelf: Placed, progress: f32) -> Placed {
     let rest = Placed {
         x: BOARD_X,
@@ -261,12 +222,10 @@ pub fn board_from(shelf: Placed, progress: f32) -> Placed {
     lerp(shelf, rest, lift_of(progress))
 }
 
-/// The front half and its turn: slid up off the back, then lifted from there to its rest.
 pub fn lid_at(progress: f32) -> (Placed, f32) {
     lid_from(shelf_cart(), progress)
 }
 
-/// The same, off a cart the row was standing somewhere other than the middle.
 pub fn lid_from(shelf: Placed, progress: f32) -> (Placed, f32) {
     let slid = Placed {
         y: shelf.y - SLIDE_UP * slide_of(progress),
@@ -279,7 +238,6 @@ pub fn lid_from(shelf: Placed, progress: f32) -> (Placed, f32) {
 const UNITS_W: f32 = 240.0;
 const UNITS_H: f32 = 135.0;
 
-/// A board unit on the panel, wherever the open cart currently is.
 pub fn on_board(board: Placed, u: f32, v: f32) -> (f32, f32) {
     (
         board.x + u * board.w / UNITS_W,
@@ -287,12 +245,10 @@ pub fn on_board(board: Placed, u: f32, v: f32) -> (f32, f32) {
     )
 }
 
-/// How much bigger or smaller than its own size a board face is drawn right now.
 pub fn board_zoom(board: Placed) -> f32 {
     board.w / BOARD_W as f32
 }
 
-/// `p` with `by` more on every side.
 pub fn grown(p: Placed, by: f32) -> Placed {
     Placed {
         x: p.x - by,
@@ -311,7 +267,6 @@ fn lerp(a: Placed, b: Placed, t: f32) -> Placed {
     }
 }
 
-/// A copy with `pad` transparent pixels on every side.
 pub fn padded(face: &CartFace, pad: u32) -> CartFace {
     let (w, h) = (face.w + 2 * pad, face.h + 2 * pad);
     let mut rgba = vec![0u8; (w * h * 4) as usize];
@@ -324,7 +279,6 @@ pub fn padded(face: &CartFace, pad: u32) -> CartFace {
     CartFace { rgba, w, h }
 }
 
-/// An empty socket: pads, outline, and the name of the core it is for at half strength.
 pub fn socket_face(core: Core) -> CartFace {
     let rgba = art::render_svg(SOCKET_SVG, SOCKET_W, SOCKET_H)
         .unwrap_or_else(|| vec![0; (SOCKET_W * SOCKET_H * 4) as usize]);
@@ -334,13 +288,11 @@ pub fn socket_face(core: Core) -> CartFace {
         h: SOCKET_H,
     };
     if let Some(layout) = name_layout(core, (SOCKET_W - 12) as f32) {
-        // Inside the outline, which runs from 2.9 to 26.9 units down the face.
         ink_band(&mut face, 4, 37, &layout, SOCKET_INK, 0.5);
     }
     face
 }
 
-/// The chip, named for the socket it is seated in, or blank in flight. Padded, since it tips.
 pub fn chip_face(core: Option<Core>) -> CartFace {
     let rgba = art::render_svg(CHIP_SVG, CHIP_W, CHIP_H)
         .unwrap_or_else(|| vec![0; (CHIP_W * CHIP_H * 4) as usize]);
@@ -350,13 +302,11 @@ pub fn chip_face(core: Option<Core>) -> CartFace {
         h: CHIP_H,
     };
     if let Some(layout) = core.and_then(|c| name_layout(c, (CHIP_W - 8) as f32)) {
-        // The body, between the two rows of legs.
         ink_band(&mut face, 4, 34, &layout, CHIP_INK, 1.0);
     }
     padded(&face, TURN_PAD)
 }
 
-/// A soft dark oval, for under the chip while it is off the board.
 pub fn chip_shadow_face() -> CartFace {
     let (w, h) = (SHADOW_W, SHADOW_H);
     let mut rgba = Vec::with_capacity((w * h * 4) as usize);
@@ -371,8 +321,6 @@ pub fn chip_shadow_face() -> CartFace {
     CartFace { rgba, w, h }
 }
 
-/// A core's name as the player reads it (`mGBA`, not `MGBA`). `text::fit` capitalises, so this
-/// builds the layout itself.
 fn name_layout(core: Core, max_w: f32) -> Option<text::Layout> {
     let font = text::label_font()?;
     let tracking = |px: f32| (px * 0.10).round();

@@ -1,5 +1,3 @@
-/// 0 to 100, as an ALSA mixer takes it. Squared because a linear ramp spends most of its travel
-/// in a range that already sounds like full volume.
 pub fn gain(volume: u8) -> f32 {
     let v = volume.min(100) as f32 / 100.0;
     v * v

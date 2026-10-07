@@ -3,11 +3,7 @@ version: '3'
 vars:
   CORE: vendor/mgba_libretro.dylib
   GPSP_HOST: vendor/gpsp_libretro.dylib
-  # mGBA is built from libretro/mgba at this commit with cores/mgba's patches: the link mode
-  # patch is slot's own, and the fork lacks upstream's NES Classics audio fix (685023e05).
   MGBA_COMMIT: e31759b24e7a4e3899285ff720d7b573ac328ae7
-  # The device's gpSP is built from this pinned commit, whose archive ships beside it on the
-  # card. The Mac's gpSP (core:gpsp:host) comes from the buildbot.
   GPSP_COMMIT: 7b2dd37394e2822110cacef321e9bb291a305b77
 
 tasks:
@@ -57,7 +53,6 @@ tasks:
   lint:device:
     desc: Clippy the device build, which the host lint never compiles
     cmds:
-      # No --all-targets: the tests need the host backends.
       - cargo clippy -p slot --no-default-features --features device -- -D warnings
 
   check:
@@ -86,7 +81,6 @@ tasks:
 
   core:mgba:host:
     desc: Build mgba_libretro for this host from the pinned libretro/mgba commit and cores/mgba's patches
-    # `status` compares the .meta, so a changed pin or patch rebuilds.
     status:
       - test -f {{.CORE}}
       - test "$(cat {{.CORE}}.meta 2>/dev/null)" = "$(sh cores/mgba/build.sh stamp {{.MGBA_COMMIT}})"
@@ -97,8 +91,6 @@ tasks:
 
   core:gpsp:host:
     desc: Fetch the host gpSP core from the libretro buildbot
-    # No source archive needed: this binary never leaves the machine (GPL-2.0 3(a) applies only
-    # to what ships).
     status:
       - test -f {{.GPSP_HOST}}
     cmds:
@@ -159,7 +151,6 @@ tasks:
     env:
       SLOT_ROOT: '{{.SLOT_ROOT | default "./sdcard"}}'
     cmds:
-      # Release: a debug build spends 8.43 ms of a 16.67 ms frame in one rewind snapshot.
       - cargo run --release -p slot
 
   run:bare:
@@ -169,7 +160,6 @@ tasks:
       SLOT_ROOT: '{{.SLOT_ROOT | default "./sdcard"}}'
       SLOT_BARE: '1'
     cmds:
-      # Undecorated, so quit with Cmd+Q.
       - cargo run --release -p slot
 
   run:debug:
@@ -194,8 +184,6 @@ tasks:
 
   core:device:
     desc: Build the aarch64 linux mgba core for the device bundle, in the box the device build uses
-    # Built in the device box so it links against slot's glibc 2.31. Separate work dir: a cmake
-    # tree cannot be shared between toolchains.
     status:
       - test -f vendor/mgba_libretro.so
       - test "$(cat vendor/mgba_libretro.so.meta 2>/dev/null)" = "$(sh cores/mgba/build.sh stamp {{.MGBA_COMMIT}})"
@@ -210,8 +198,6 @@ tasks:
     desc: >-
       Build the aarch64 linux gpSP core from its pinned source archive, which ships beside it
       as its GPL-2.0 section 3(a) corresponding source
-    # Archive, sha, core and both .meta files are one set, checked together so the binary and
-    # its shipped source cannot drift apart.
     status:
       - test -f vendor/gpsp_libretro.so
       - test -f vendor/gpsp-src.tar.gz
@@ -222,22 +208,17 @@ tasks:
       - |
         set -euo pipefail
         mkdir -p vendor
-        # Clear the whole set so a partial leftover is never reused.
         rm -f vendor/gpsp_libretro.so vendor/gpsp_libretro.so.meta \
               vendor/gpsp-src.tar.gz vendor/gpsp-src.sha vendor/gpsp-src.meta
         curl -fsSL -o vendor/gpsp-src.tar.gz \
           "https://github.com/libretro/gpsp/archive/{{.GPSP_COMMIT}}.tar.gz"
-        # A real gpSP checkout, not just a valid tarball.
-        # Not `grep -q`: it would stop reading, and pipefail counts tar's SIGPIPE.
         tar -tzf vendor/gpsp-src.tar.gz | grep "^gpsp-{{.GPSP_COMMIT}}/Makefile$" > /dev/null
-      # Built from that archive in the device box (glibc 2.31). Recipe in cores/gpsp/build.sh.
       - task: device:sh
         vars:
           CMD: >-
             sh cores/gpsp/build.sh build {{.GPSP_COMMIT}} vendor/gpsp-src.tar.gz
             target-device/gpsp vendor/gpsp_libretro.so
       - file vendor/gpsp_libretro.so | grep -q aarch64
-      # Written only once the core exists.
       - echo "{{.GPSP_COMMIT}}" > vendor/gpsp-src.sha
       - cp vendor/gpsp_libretro.so.meta vendor/gpsp-src.meta
       - 'echo "built vendor/gpsp_libretro.so from vendor/gpsp-src.tar.gz @ {{.GPSP_COMMIT}}"'
@@ -252,8 +233,6 @@ tasks:
 
   core:gpsp:test:
     desc: Prove gpSP's Advance Wars session-flip patch still fixes what it was written for
-    # Builds the serial HLE unpatched (must fail) and patched (must pass). Not in `check`,
-    # which has to work with nothing fetched.
     deps: [core:gpsp]
     cmds:
       - sh cores/gpsp/test/run.sh vendor/gpsp-src.tar.gz
@@ -266,8 +245,6 @@ tasks:
     cmds:
       - |
         set -eu
-        # Bullseye's glibc 2.31 on purpose: older is forward compatible with BaseOS's 2.35.
-        # On an arm64 Linux host (CI) build directly; elsewhere in an arm64 container.
         if [ "$(uname -s)-$(uname -m)" = "Linux-aarch64" ]; then
           sh -c '{{.CMD}}'
         else
@@ -277,8 +254,6 @@ tasks:
   build:device:
     desc: Build for the H700, in an arm64 container unless this is already one
     cmds:
-      # Relative paths only, valid from the repo root and from /src. The `device` profile is
-      # release plus fat LTO, built into target-device/device/.
       - task: device:sh
         vars:
           CMD: >-
@@ -290,7 +265,6 @@ tasks:
   bench:device:
     desc: Build core_bench, slot-retro's headless core benchmark, for the H700. It never ships
     cmds:
-      # Same box, target dir and profile as build:device.
       - task: device:sh
         vars:
           CMD: >-
@@ -306,21 +280,16 @@ tasks:
       OUT: '{{.OUT | default "dist-device"}}'
     cmds:
       - rm -rf {{.OUT}}
-      # Scaffolded by the device binary, so no host toolchain (X11, ALSA, udev) is needed.
       - task: device:sh
         vars:
           CMD: ./target-device/device/slot --init-root {{.OUT}}
       - cp target-device/device/slot {{.OUT}}/System/slot
-      # The scripts BaseOS runs or slot calls, from card/System.
       - cp card/System/* {{.OUT}}/System/
-      # Re-checked here: the core tasks skip their own arch check when already up to date.
       - file vendor/mgba_libretro.so | grep -q aarch64
       - file vendor/gpsp_libretro.so | grep -q aarch64
       - cp vendor/mgba_libretro.so {{.OUT}}/System/
       - cp vendor/gpsp_libretro.so {{.OUT}}/System/
       - cp -r licenses {{.OUT}}/System/licenses
-      # GPL-2.0 3(a): gpSP's source, its .meta and its patches ship beside the binary, named
-      # for the commit.
       - |
         set -euo pipefail
         sha="$(cat vendor/gpsp-src.sha)"
@@ -329,7 +298,6 @@ tasks:
         for p in cores/gpsp/*.patch; do
           cp "$p" "{{.OUT}}/System/licenses/gpsp-$(basename "$p")"
         done
-      # MPL-2.0: mGBA's patches ship with the .meta naming the libretro/mgba commit they apply to.
       - |
         set -euo pipefail
         commit="$(grep '^commit=' vendor/mgba_libretro.so.meta | cut -d= -f2)"
@@ -346,17 +314,13 @@ tasks:
       SD: '{{.SD | default "/mnt/sdcard"}}'
     cmds:
       - adb wait-for-device
-      # Same arch re-check as dist:device.
       - file vendor/mgba_libretro.so | grep -q aarch64
       - file vendor/gpsp_libretro.so | grep -q aarch64
-      # Replaces the binary under the running process, hence the reboot at the end.
       - adb push target-device/device/slot '{{.SD}}/System/slot'
       - for f in card/System/*; do adb push "$f" '{{.SD}}/System/'; done
       - adb push vendor/mgba_libretro.so '{{.SD}}/System/mgba_libretro.so'
       - adb push vendor/gpsp_libretro.so '{{.SD}}/System/gpsp_libretro.so'
-      # Into System/, not System/licenses: adb would nest a copy inside an existing folder.
       - adb push licenses '{{.SD}}/System/'
-      # Licence material, as in dist:device.
       - |
         set -euo pipefail
         sha="$(cat vendor/gpsp-src.sha)"
@@ -382,7 +346,6 @@ tasks:
     vars:
       SD: '{{.SD | default "/mnt/sdcard"}}'
     cmds:
-      # The device has no console. `SLOT_TRACE=1` adds frame and audio lines.
       - adb shell 'cat {{.SD}}/slot.log'
 
   clean:

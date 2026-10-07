@@ -5,16 +5,11 @@ use crate::icon::icon_box;
 use crate::toast::toast_rect;
 use crate::{Badge, Icon, Toast};
 
-/// Milliseconds on the gesture machines' monotonic clock. Redeclared because `slot-ui` must not
-/// depend on `slot-input`.
 pub type Millis = u64;
 
 pub const HUD_MS: Millis = 1500;
-/// The tail of that window, spent fading out. A hard cut reads as a glitch.
 const FADE_MS: Millis = 250;
 
-/// The backing that keeps the bar legible over a bright frame. Shared with the refusal and the
-/// switcher's plates.
 pub const PLATE_H: f32 = 40.0;
 pub(crate) const PLATE: [f32; 4] = [0.0, 0.0, 0.0, 0.72];
 
@@ -24,7 +19,6 @@ const ICON_GAP: f32 = 10.0;
 
 const BADGE_MARGIN: f32 = 12.0;
 
-/// Where a badge of this size goes: hard against the right margin, centred in the plate.
 pub fn badge_at(w: f32, h: f32) -> (f32, f32) {
     (OUT_W as f32 - BADGE_MARGIN - w, (PLATE_H - h) / 2.0)
 }
@@ -46,12 +40,10 @@ pub enum HudKind {
     Brightness,
     BlueLight,
     Volume,
-    /// Not a level: the value is the percentage of rewind history left.
     Rewind,
 }
 
 impl HudKind {
-    /// A bar at zero cannot show silence, so the glyph has to.
     pub fn icon(self, value: u8, muted: bool) -> Icon {
         match self {
             HudKind::Brightness => Icon::Brightness,
@@ -73,7 +65,6 @@ impl HudKind {
     }
 }
 
-/// A held state the HUD is told, not a timed flash.
 #[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
 pub enum FfState {
     #[default]
@@ -82,7 +73,6 @@ pub enum FfState {
     Latched,
 }
 
-/// The outline and solid variants share a width, so latching neither widens nor moves the badge.
 pub fn ff_badge(state: FfState) -> Option<Icon> {
     match state {
         FfState::Off => None,
@@ -91,11 +81,9 @@ pub fn ff_badge(state: FfState) -> Option<Icon> {
     }
 }
 
-/// The link badge's two colours: the host's plug is purple, a joiner's gray.
 pub const LINK_HOST_INK: [u8; 3] = [0x8a, 0x74, 0xcf];
 pub const LINK_JOIN_INK: [u8; 3] = [0xb2, 0xb2, 0xb8];
 
-/// A live link, by role, and the same link once its other end has gone.
 #[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
 pub enum LinkBadge {
     #[default]
@@ -135,26 +123,18 @@ impl LinkBadge {
     }
 }
 
-/// One bar drawn identically for all three levels.
 #[derive(Default)]
 pub struct Hud {
     pub kind: HudKind,
     pub value: u8,
-    /// `None` until the first adjustment; zero would show a bar for the first 1.5 s of boot.
     pub shown_at: Option<Millis>,
-    /// While set the fade never starts: the rewind bar follows the button, not the clock.
     held: bool,
     muted: bool,
     ff: FfState,
-    /// The last toast and when, on its own clock: either it or the bar can outlive the other.
     said: Option<(Toast, Millis)>,
-    /// One face per icon, in `Icon::ALL` order. Empty until the binary uploads them, since
-    /// only the compositor can mint a `TexId`.
     icons: Vec<TexId>,
-    /// One face per toast, in `Toast::ALL` order.
     toasts: Vec<TexId>,
     link: LinkBadge,
-    /// One face per `LinkBadge::FACES` entry, in that order.
     link_faces: Vec<TexId>,
 }
 
@@ -167,7 +147,6 @@ impl Hud {
         self.icons = icons;
     }
 
-    /// In `Toast::ALL` order.
     pub fn set_toasts(&mut self, toasts: Vec<TexId>) {
         self.toasts = toasts;
     }
@@ -180,7 +159,6 @@ impl Hud {
         self.toast_alpha(now) > 0.0
     }
 
-    /// The toast showing, if any, so the app need not track the grace period itself.
     pub fn said(&self, now: Millis) -> Option<Toast> {
         self.toast_visible(now)
             .then(|| self.said.map(|(t, _)| t))
@@ -195,7 +173,6 @@ impl Hud {
         self.held = kind == HudKind::Rewind;
     }
 
-    /// L2 released. A level bar shown during the rewind keeps its own timer.
     pub fn release_rewind(&mut self) {
         if self.kind == HudKind::Rewind {
             self.shown_at = None;
@@ -203,17 +180,14 @@ impl Hud {
         self.held = false;
     }
 
-    /// The glyph on the bar, whether or not a face for it has been uploaded.
     pub fn glyph(&self) -> Icon {
         self.kind.icon(self.value, self.muted)
     }
 
-    /// The fast-forward glyph, not what the badge shows: `draw` lets a live link outrank it.
     pub fn badge(&self) -> Option<Icon> {
         ff_badge(self.ff)
     }
 
-    /// Pushed in because the badge follows the gesture machine's latch, invisible from here.
     pub fn set_ff(&mut self, ff: FfState) {
         self.ff = ff;
     }
@@ -226,7 +200,6 @@ impl Hud {
         self.link
     }
 
-    /// In `LinkBadge::FACES` order, tinted by the binary.
     pub fn set_link_faces(&mut self, faces: Vec<TexId>) {
         self.link_faces = faces;
     }
@@ -238,8 +211,6 @@ impl Hud {
     pub fn draw(&self, now: Millis, out: &mut Vec<Draw>) {
         let alpha = self.alpha(now);
         let toast = self.toast_alpha(now);
-        // The badge never gets a plate: fast forward can be latched for minutes, and a full
-        // width plate over the game that long is worse than the badge's halo.
         if alpha > 0.0 || toast > 0.0 {
             out.push(Draw::Rect {
                 x: 0.0,
@@ -249,13 +220,11 @@ impl Hud {
                 colour: faded(PLATE, alpha.max(toast)),
             });
         }
-        // They share the band, so only one at a time; a toast outranks a level bar.
         if toast > 0.0 {
             self.draw_toast(now, out);
         } else if alpha > 0.0 {
             self.draw_bar(alpha, out);
         }
-        // A link outranks fast forward, though a session refuses fast forward anyway.
         let link = self
             .link
             .face_index()
@@ -309,7 +278,6 @@ impl Hud {
         });
     }
 
-    /// No placeholder: a toast without its face draws nothing.
     fn draw_toast(&self, now: Millis, out: &mut Vec<Draw>) {
         let alpha = self.toast_alpha(now);
         if alpha <= 0.0 {
@@ -363,7 +331,6 @@ impl Hud {
     }
 }
 
-/// One curve for everything, so a bar and toast that arrived together leave together.
 fn fade(shown: Millis, now: Millis) -> f32 {
     let age = now.saturating_sub(shown);
     if age >= HUD_MS {

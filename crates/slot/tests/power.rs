@@ -59,7 +59,6 @@ fn doze_timeout_powers_off_with_the_cart_still_seated() {
     );
 }
 
-/// Closing the lid on an empty slot is still a doze, with nothing to flush.
 #[test]
 fn lid_close_on_the_shelf_wakes_back_to_the_shelf() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -77,7 +76,6 @@ fn lid_close_on_the_shelf_wakes_back_to_the_shelf() {
     assert!(matches!(a.phase(), Phase::Shelf));
 }
 
-/// The switcher is a pause over the game, so lid close and open land back in the game.
 #[test]
 fn lid_close_over_the_switcher_wakes_into_the_game() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -97,8 +95,6 @@ fn lid_close_over_the_switcher_wakes_into_the_game() {
     );
 }
 
-/// The doze timeout runs off the app's own ticks. The panel still draws 400-700 mA while dozing,
-/// and this board cannot wake itself from sleep, so the timeout is a real power off.
 #[test]
 fn a_doze_that_outlasts_the_timeout_powers_off_by_itself() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -124,7 +120,6 @@ fn a_stray_doze_timeout_does_not_power_off_a_running_game() {
     assert!(matches!(a.phase(), Phase::Playing { .. }));
 }
 
-/// The panel comes up at the level the card remembers, not at whatever the kernel left it.
 #[test]
 fn the_backlight_follows_brightness_from_boot() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -146,7 +141,6 @@ fn the_backlight_follows_brightness_from_boot() {
     assert_eq!(step.load(Ordering::Relaxed), 4);
 }
 
-/// The menu covers the screen in the case's own materials rather than tinting the game.
 #[test]
 fn the_menu_covers_the_screen_in_the_case_materials() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -167,8 +161,6 @@ fn the_menu_covers_the_screen_in_the_case_materials() {
         }
         other => panic!("the menu drew {other:?} rather than a ground"),
     }
-    // Only the ground is testable: the plate is sized from uploaded row faces, which need a
-    // compositor.
     assert_eq!(
         out.len(),
         1,
@@ -176,8 +168,6 @@ fn the_menu_covers_the_screen_in_the_case_materials() {
     );
 }
 
-/// rcK takes about five seconds to stop the frontend and unload the GPU module, and a black
-/// panel for that long reads as hung, so the shutdown draws a screen over everything.
 #[test]
 fn a_power_off_draws_a_shutdown_screen_over_everything() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -196,7 +186,6 @@ fn a_power_off_draws_a_shutdown_screen_over_everything() {
         }
         other => panic!("the shutdown drew {other:?} rather than a panel of black"),
     }
-    // One draw: the line itself is a texture the binary uploads at boot.
     assert_eq!(
         out.len(),
         1,
@@ -204,7 +193,6 @@ fn a_power_off_draws_a_shutdown_screen_over_everything() {
     );
 }
 
-/// A held POWER opens a menu and commits to nothing until A.
 #[test]
 fn a_hold_opens_the_menu_and_commits_nothing() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -274,8 +262,6 @@ fn each_row_commits_to_its_own_outcome() {
     }
 }
 
-/// The binary may not power off until the ordinary loop has drawn the shutdown screen. Drawing
-/// it out of band hung the device on a GPU that was being torn down.
 #[test]
 fn the_shutdown_screen_is_up_before_the_machine_may_stop() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -297,13 +283,10 @@ fn the_shutdown_screen_is_up_before_the_machine_may_stop() {
         "and the screen is what the loop is drawing in the meantime"
     );
 
-    // Absolute, not a delta: `tick_ms` takes the later of the two clocks.
     a.tick_ms(600_000);
     assert!(a.ready_to_power_off(), "then it may stop");
 }
 
-/// A lid closed past the doze timeout powers off by itself. `doze_expired` is a level and the
-/// phase stays `Doze`, so re-arming the shutdown every frame would push `act_at` out forever.
 #[test]
 fn a_dozing_device_powers_off_by_itself_rather_than_waiting_for_the_lid() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -323,7 +306,6 @@ fn a_dozing_device_powers_off_by_itself_rather_than_waiting_for_the_lid() {
     );
 }
 
-/// The menu is an overlay, so the phase stays `Playing`; the core must still pause behind it.
 #[test]
 fn the_power_menu_holds_the_core_still() {
     let d = tmp_root_with_real_carts(&["Advance Wars", "Emerald"]);
@@ -341,7 +323,6 @@ fn the_power_menu_holds_the_core_still() {
     await_paused(&mut s);
 }
 
-/// The same for the shutdown screen after the choice.
 #[test]
 fn a_committed_shutdown_holds_the_core_still() {
     let d = tmp_root_with_real_carts(&["Advance Wars", "Emerald"]);
@@ -357,9 +338,6 @@ fn a_committed_shutdown_holds_the_core_still() {
     await_paused(&mut s);
 }
 
-/// POWER pressed while dozing lights the panel on the press, before the hold raises the menu.
-/// Otherwise the menu is drawn on a dark panel and the user holds on to the PMIC's six second
-/// cutoff, which cuts the rails with no sync. Checked at `Platform`, where the panel is real.
 #[test]
 fn power_pressed_while_dozing_lights_the_panel_before_the_menu_is_raised() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -386,7 +364,6 @@ fn power_pressed_while_dozing_lights_the_panel_before_the_menu_is_raised() {
         "the doze left the panel lit"
     );
 
-    // POWER again: the panel lights on the press, not the release.
     event(&mut s, RawEvent::Down(Btn::Power), &mut now);
     assert_eq!(
         backlight.load(Ordering::Relaxed),
@@ -398,7 +375,6 @@ fn power_pressed_while_dozing_lights_the_panel_before_the_menu_is_raised() {
         "the panel came on over a device still dozing behind it"
     );
 
-    // Held on, it still raises the power menu.
     let pressed = now;
     while now < pressed + POWER_HOLD_MS + FRAME_MS {
         step(&mut s, &mut now);
@@ -415,7 +391,6 @@ fn power_pressed_while_dozing_lights_the_panel_before_the_menu_is_raised() {
     );
 }
 
-/// The release of the press that woke the panel does not doze again; the next tap still does.
 #[test]
 fn the_press_that_woke_the_panel_does_not_doze_again_when_it_is_let_go() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -447,8 +422,6 @@ fn the_press_that_woke_the_panel_does_not_doze_again_when_it_is_let_go() {
     assert_eq!(backlight.load(Ordering::Relaxed), 0);
 }
 
-/// Waits for the worker to report `Paused`: a descheduled worker and a stopped one have the same
-/// frame count.
 fn await_paused(s: &mut Session) {
     let deadline = Instant::now() + Duration::from_secs(2);
     while s.observed_speed() != Some(Speed::Paused) {
@@ -460,7 +433,6 @@ fn await_paused(s: &mut Session) {
     }
 }
 
-/// POWER down, then frames until the gesture layer's own tick raises the menu.
 fn hold_power(s: &mut Session, now: &mut Millis) {
     let pressed = *now;
     event(s, RawEvent::Down(Btn::Power), now);
@@ -481,7 +453,6 @@ fn event(s: &mut Session, ev: RawEvent, now: &mut Millis) {
     s.update(DT);
 }
 
-/// Puts the selected cart in and waits out the load, which happens on its own thread.
 fn play(s: &mut Session, now: &mut Millis) {
     event(s, RawEvent::Down(Btn::A), now);
     event(s, RawEvent::Up(Btn::A), now);
@@ -491,7 +462,6 @@ fn play(s: &mut Session, now: &mut Millis) {
         step(s, now);
         std::thread::sleep(Duration::from_millis(1));
     }
-    // The worker must have run at Normal before a test may claim it stopped.
     let deadline = Instant::now() + Duration::from_secs(5);
     while s.observed_speed() != Some(Speed::Normal) {
         assert!(Instant::now() < deadline, "the core never started");
@@ -499,7 +469,6 @@ fn play(s: &mut Session, now: &mut Millis) {
     }
 }
 
-/// What the radio was asked to do, in order.
 #[derive(Clone, Default)]
 struct RadioLog(std::sync::Arc<std::sync::Mutex<Vec<RadioJob>>>);
 
@@ -519,7 +488,6 @@ impl RadioJobs for RadioLog {
     }
 }
 
-/// A doze ends at a power off, so a shut lid must not leave the radio driver loaded.
 #[test]
 fn a_shut_lid_cools_the_radio() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -533,7 +501,6 @@ fn a_shut_lid_cools_the_radio() {
     );
 }
 
-/// A lid shut over a live session drops the session's network before cooling the driver.
 #[test]
 fn a_shut_lid_over_a_session_takes_its_network_down_too() {
     let d = tmp_root_with_carts(&["Emerald"]);

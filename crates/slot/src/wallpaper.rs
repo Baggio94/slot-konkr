@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-/// A random PNG from `Wallpapers`, chosen by `seed` (the wall clock at boot).
 pub fn pick(root: &Path, seed: u64) -> Option<PathBuf> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(root.join("Wallpapers"))
         .ok()?
@@ -12,7 +11,6 @@ pub fn pick(root: &Path, seed: u64) -> Option<PathBuf> {
     if files.is_empty() {
         return None;
     }
-    // Sorted, since directory order is arbitrary and the same seed should pick the same picture.
     files.sort();
     let i = (seed % files.len() as u64) as usize;
     Some(files.swap_remove(i))

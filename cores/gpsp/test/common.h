@@ -1,5 +1,3 @@
-/* Minimal stand-in for gpSP's common.h, just enough to compile serial_proto.c unmodified
- * into a host test under ASan/UBSan. Register numbers are gpSP's own (gba_memory.h). */
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>

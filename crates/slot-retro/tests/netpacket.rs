@@ -29,10 +29,6 @@ fn flag_values_match_libretro() {
     assert_eq!(NETPACKET_BROADCAST, 0xFFFF);
 }
 
-// --- Link ----------------------------------------------------------------------------
-//
-// The private ABI half of the seam is tested in `libretro.rs`'s own test module.
-
 #[test]
 fn link_hands_back_inbound_packets_in_the_order_they_arrived() {
     let link = Link::default();
@@ -98,7 +94,6 @@ fn a_clone_shares_the_same_queues_as_the_original() {
 
 #[test]
 fn a_core_that_never_registers_netpacket_hands_back_an_inert_link() {
-    // `MockCore` never overrides `RetroCore::net`, so this exercises the trait's default.
     let core: Box<dyn RetroCore> = Box::new(MockCore::new());
     let link = core.net();
     assert!(!link.is_active());
@@ -106,11 +101,6 @@ fn a_core_that_never_registers_netpacket_hands_back_an_inert_link() {
     assert_eq!(link.take_outbound(), None);
 }
 
-// --- LibretroCore::net / pump_link, against the real vendored core -------------------
-//
-// mGBA's libretro build has no netpacket support, so these only check the no-interface path.
-
-/// libretro cores keep their state in dylib globals, so these tests must not overlap.
 static CORE_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock() -> std::sync::MutexGuard<'static, ()> {
@@ -125,7 +115,6 @@ fn mgba() -> Option<LibretroCore> {
     Some(LibretroCore::open(&p).expect("vendored core is present but would not open"))
 }
 
-/// A header only, enough for mGBA to accept the cart.
 fn header_only_rom() -> PathBuf {
     let mut rom = vec![0u8; 0x8000];
     rom[0..4].copy_from_slice(&0xea00002eu32.to_le_bytes());
@@ -165,6 +154,5 @@ fn pump_link_is_harmless_on_a_core_that_never_registered_netpacket() {
     core.load(&header_only_rom()).expect("load");
     core.run_frame(ButtonMask::default());
 
-    // mGBA never registers netpacket: this must not panic or call into the core.
     core.pump_link();
 }

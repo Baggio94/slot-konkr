@@ -1,7 +1,3 @@
-//! START on the shelf, composited on the GPU and read back as pixels.
-//!
-//! `SCRATCH_PNG_DIR=/tmp cargo test -p slot --test render_shelf -- --nocapture`
-
 #![cfg(target_os = "macos")]
 
 mod common;
@@ -19,7 +15,6 @@ use slot_ui::{
 };
 use tempfile::TempDir;
 
-/// `gl::load_with` writes global function pointers, so two GL tests must not overlap.
 static GL: Mutex<()> = Mutex::new(());
 
 fn compositor() -> Option<(MutexGuard<'static, ()>, HeadlessSurface, Compositor)> {
@@ -33,10 +28,7 @@ fn tex(c: &mut Compositor, w: u32, h: u32, rgba: &[u8]) -> TexId {
     c.create_texture(w, h, rgba)
 }
 
-/// Uploads every face this screen draws, including the highlighted cart's board and lid:
-/// without them the picker opens and waits, so the screen would not change for the wrong reason.
 fn upload_faces(app: &mut App, c: &mut Compositor) {
-    // `carts` walks every shelf in the order `set_faces` hands them back.
     let row: Vec<TexId> = app
         .carts()
         .map(|cart| {
@@ -45,11 +37,9 @@ fn upload_faces(app: &mut App, c: &mut Compositor) {
         })
         .collect();
     app.set_faces(row);
-    // Both outlines: without the Game Boy shadow a dimmed pak draws as a ghost over the wallpaper.
     let shadow = cart_shadow();
     let shadow = tex(c, shadow.w, shadow.h, &shadow.rgba);
     app.set_cart_shadow(shadow);
-    // One per Game Pak mould: the two shells' top corners disagree.
     let notched = gb_cart_shadow(GbShell::Notched);
     let notched = tex(c, notched.w, notched.h, &notched.rgba);
     let rounded = gb_cart_shadow(GbShell::Rounded);
@@ -101,7 +91,6 @@ fn upload_faces(app: &mut App, c: &mut Compositor) {
     app.set_core_board_faces(board, lid);
 }
 
-/// A booted app on a shelf of the given carts, with every face it draws already on the GPU.
 fn shelf(d: &TempDir, c: &mut Compositor) -> App {
     write_slot_state(
         d.path(),
@@ -116,7 +105,6 @@ fn shelf(d: &TempDir, c: &mut Compositor) -> App {
     app
 }
 
-/// The composited frame, and a PNG of it wherever `SCRATCH_PNG_DIR` names somewhere to look.
 fn shot(app: &App, c: &mut Compositor, name: &str) -> Vec<u8> {
     let mut out = Vec::new();
     app.draw(&mut out);
@@ -138,13 +126,10 @@ fn shot(app: &App, c: &mut Compositor, name: &str) -> Vec<u8> {
     px
 }
 
-/// The picker opens in a quarter second, so this far past the press is a board or a shelf.
 fn let_it_hop(app: &mut App) {
     app.update(0.25);
 }
 
-/// The unpressed twin is the same card advanced beside the pressed one, so any difference is
-/// the press.
 #[test]
 fn start_draws_the_plain_shelf_on_a_game_boy_cart() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -171,7 +156,6 @@ fn start_draws_the_plain_shelf_on_a_game_boy_cart() {
         "START put something on screen over a Game Boy cart"
     );
 
-    // The control: proves the comparison can see a board lift off the shelf.
     let d = common::tmp_root_with_carts(&["Emerald", "Zzz"]);
     let twin = common::tmp_root_with_carts(&["Emerald", "Zzz"]);
     let mut pressed = shelf(&d, &mut c);
@@ -192,15 +176,12 @@ fn start_draws_the_plain_shelf_on_a_game_boy_cart() {
     );
 }
 
-/// Which Tetris came back, read off the panel: `cart_platform` picks between `Tetris.gba` and
-/// `Tetris.gb`. Both seat at the same depth, so they are told apart by plastic and label paper.
 #[test]
 fn the_card_says_which_tetris_is_in_the_slot() {
     let Some((_g, _s, mut c)) = compositor() else {
         eprintln!("no GL on this host, skipping");
         return;
     };
-    // A one cart library boots past the shelf, so Emerald keeps the GBA shelf populated.
     let d = common::tmp_root_with_carts(&["Tetris", "Emerald"]);
     common::write_gb_cart(&d, "Tetris", "TETRIS");
 
@@ -208,7 +189,6 @@ fn the_card_says_which_tetris_is_in_the_slot() {
     let gb = resumed_shot(&d, &mut c, Some(Platform::Gb), "resume-gb");
     let unstated = resumed_shot(&d, &mut c, None, "resume-unstated");
 
-    // A pak is pale grey, a GBA cart charcoal; read half way down the visible cartridge run.
     let (top, bottom) = cartridge_rows(&gba).expect("no cartridge in the slot at all");
     assert_eq!(
         cartridge_rows(&gb),
@@ -224,7 +204,6 @@ fn the_card_says_which_tetris_is_in_the_slot() {
          Advance cartridge reads {dark:?}: the wrong cartridge came back"
     );
 
-    // A GBA cart's label clears the lip; the pak's is inside the machine.
     let ink = label_colour(&clean_label("Tetris"));
     assert!(
         paper(&gba, ink) > 200,
@@ -236,14 +215,12 @@ fn the_card_says_which_tetris_is_in_the_slot() {
         "a pak is seated and its label well is above the lip, which no pak's is"
     );
 
-    // A card without `cart_platform` held GBA carts alone: same picture frame for frame.
     assert!(
         unstated == gba,
         "a card with no cart_platform line did not resume the Game Boy Advance cartridge"
     );
 }
 
-/// The card resumed with `platform` on it, booted and composited.
 fn resumed_shot(
     d: &TempDir,
     c: &mut Compositor,
@@ -265,8 +242,6 @@ fn resumed_shot(
     shot(&app, c, name)
 }
 
-/// The first and last screen rows the cartridge covers: whatever is not the clear black or a
-/// theme colour, as in `render_shelves.rs::shell_rows`.
 fn cartridge_rows(px: &[u8]) -> Option<(usize, usize)> {
     let flat = [[0.0, 0.0, 0.0, 1.0], housing(), opening(), edge(), recess()];
     let cart = |o: usize| {
@@ -280,13 +255,11 @@ fn cartridge_rows(px: &[u8]) -> Option<(usize, usize)> {
     Some((first, rows.next_back().unwrap_or(first)))
 }
 
-/// The pixel half way across the screen on `row`, the middle of the centred cartridge.
 fn centre(px: &[u8], row: usize) -> [u8; 3] {
     let o = (row * OUT_W as usize + (OUT_W / 2) as usize) * 4;
     [px[o], px[o + 1], px[o + 2]]
 }
 
-/// How much of this cartridge's label paper is on screen. The colour is a hash of the title.
 fn paper(px: &[u8], ink: [u8; 3]) -> usize {
     px.chunks(4)
         .filter(|p| (0..3).all(|k| p[k].abs_diff(ink[k]) <= 24))

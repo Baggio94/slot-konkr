@@ -6,17 +6,12 @@ use crate::platform::Platform;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Cart {
-    /// Decided by the folder `scan` found the rom in, never by reading the rom.
     pub platform: Platform,
-    /// Filename stem, which is the key for labels, saves and states. Not a content hash.
     pub stem: String,
     pub rom: PathBuf,
     pub label: Option<PathBuf>,
     pub title: String,
-    /// The four character header game code, empty when the rom has none. Always empty for
-    /// Game Boy carts, which have no such field.
     pub code: String,
-    /// The shell chosen for this cart in `System/cart_shell.ini`, if any.
     pub shell: Option<crate::ShellChoice>,
 }
 
@@ -41,9 +36,6 @@ impl From<std::io::Error> for StoreError {
     }
 }
 
-/// A missing card, library or platform folder is an empty shelf, not a boot failure. An
-/// unreadable folder or entry is skipped, since `App::boot` turns any `Err` into an empty shelf
-/// and one bad folder must not hide the others.
 pub fn scan(root: &Path) -> Result<Vec<Cart>, StoreError> {
     let read = |file: &str| std::fs::read_to_string(root.join(file)).unwrap_or_default();
     let shells = crate::cart_shell::layered(
@@ -66,7 +58,6 @@ pub fn scan(root: &Path) -> Result<Vec<Cart>, StoreError> {
                 continue;
             };
             let rom = entry.path();
-            // The folder decides the platform; the extension decides whether this is a cart.
             if is_hidden(&rom) || !rom.is_file() || !platform.accepts(&rom) {
                 continue;
             }
@@ -82,8 +73,6 @@ pub fn scan(root: &Path) -> Result<Vec<Cart>, StoreError> {
                     header_title(&rom).unwrap_or_default(),
                     header_code(&rom).unwrap_or_default(),
                 ),
-                // `gba.rs` offsets 0xA0 and 0xAC are in a Game Boy cart's RST vectors, so they
-                // would read opcode bytes.
                 _ => (crate::gb::title(&rom).unwrap_or_default(), String::new()),
             };
             carts.push(Cart {
@@ -103,8 +92,6 @@ pub fn scan(root: &Path) -> Result<Vec<Cart>, StoreError> {
     Ok(carts)
 }
 
-/// Where a title files on the shelf: digits first, then A to Z ignoring case, then anything led
-/// by neither (a bracket, a quote).
 pub fn sort_key(stem: &str) -> (u8, String) {
     (group_of(stem), stem.to_uppercase())
 }
@@ -117,8 +104,6 @@ fn group_of(stem: &str) -> u8 {
     }
 }
 
-/// The letter a title is filed under, for skipping a row a letter at a time. Anything not led
-/// by a letter shares the `#` stop.
 pub fn initial(stem: &str) -> char {
     match group_of(stem) {
         1 => stem
@@ -130,8 +115,6 @@ pub fn initial(stem: &str) -> char {
     }
 }
 
-/// A leading dot is metadata, not content. macOS writes `._<name>` sidecars onto FAT volumes
-/// with the shadowed file's extension, so the extension alone cannot filter them.
 pub fn is_hidden(p: &Path) -> bool {
     p.file_name()
         .and_then(|n| n.to_str())

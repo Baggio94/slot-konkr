@@ -1,7 +1,3 @@
-//! Shader sources are GLSL ES 1.00 so the device build compiles them unchanged. Only the
-//! preamble differs: the device supplies `precision` defaults and
-//! `#define FRAG_COLOR gl_FragColor`, the host maps the ES names onto GL 3.3 core.
-
 use crate::surface::GfxError;
 
 const VERT_PREAMBLE: &str = "#version 330 core\n#define attribute in\n#define varying out\n";
@@ -9,8 +5,6 @@ const VERT_PREAMBLE: &str = "#version 330 core\n#define attribute in\n#define va
 const FRAG_PREAMBLE: &str = "#version 330 core\n#define varying in\n\
                              #define texture2D texture\nout vec4 FRAG_COLOR;\n";
 
-/// No `#version` line: 100 is the default, and more drivers reject `#version 100` than
-/// require it.
 const VERT_PREAMBLE_ES: &str = "";
 const FRAG_PREAMBLE_ES: &str = "#define FRAG_COLOR gl_FragColor\n";
 
@@ -22,8 +16,6 @@ pub fn program(vert: &str, frag: &str) -> Result<gl::types::GLuint, GfxError> {
     crate::gl::program(&format!("{vp}{vert}"), &format!("{fp}{frag}"))
 }
 
-/// Unit quad to a rect in target pixels, origin top left. The y flip lives here, so only
-/// the blit deals with the framebuffer being stored bottom up.
 pub const RECT_VERT: &str = r#"
 attribute vec2 a_pos;
 uniform vec4 u_rect;
@@ -36,8 +28,6 @@ void main() {
 }
 "#;
 
-/// `RECT_VERT` turned about the rect's centre by `u_turn` (cos, sin). Separate because the
-/// game pass links `RECT_VERT` and would read an unset `u_turn` as (0, 0).
 pub const SPRITE_VERT: &str = r#"
 attribute vec2 a_pos;
 uniform vec4 u_rect;
@@ -55,12 +45,6 @@ void main() {
 }
 "#;
 
-/// `u_src` is the source size in pixels, which is also the number of times the 3x3 mask
-/// tiles across the target: one RGB triad per source pixel, exactly.
-///
-/// `u_uv` is the part of the texture the quad shows: origin in `xy`, size in `zw`. Only the
-/// picture reads through it; the mask stays on `v_uv`, so the grille stays locked to the panel
-/// when the picture is stretched.
 pub const GAME_FRAG: &str = r#"
 precision mediump float;
 uniform sampler2D u_game;

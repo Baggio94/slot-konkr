@@ -1,7 +1,3 @@
-//! The two shelves through the real frontend, composited on the GPU and read back as pixels.
-//!
-//! `SCRATCH_PNG_DIR=/tmp cargo test -p slot --test render_shelves -- --nocapture`
-
 #![cfg(target_os = "macos")]
 
 mod common;
@@ -15,14 +11,12 @@ use slot::frontend::Frontend;
 use slot_gfx::{Compositor, HeadlessSurface, OUT_H, OUT_W};
 use slot_input::{Action, Btn, InputSource, Millis, RawEvent};
 use slot_power::SimPlatform;
-// `slot_power::Platform` is the device; this one is the console a cart is for.
 use slot_store::{Cart, Platform as CartPlatform};
 use slot_ui::{
     cart_box, cart_face, clean_label, edge, housing, label_colour, label_text, opening, recess,
     rest_y, Draw, SlotChrome, CART_W, GB_CART_H, GB_LABEL_H, GB_LABEL_Y, LABEL_H, LABEL_Y, PLATE_H,
 };
 
-/// One batch of events per poll, and nothing once they run out.
 struct Script(VecDeque<Vec<RawEvent>>);
 
 impl InputSource for Script {
@@ -31,7 +25,6 @@ impl InputSource for Script {
     }
 }
 
-/// A tap: down on one frame, up on the next.
 fn tap(f: &mut Frontend, input: &mut Script, btn: Btn) {
     input.0.push_back(vec![RawEvent::Down(btn)]);
     f.advance(input);
@@ -44,7 +37,6 @@ fn at(px: &[u8], x: usize, y: usize) -> [u8; 3] {
     [px[o], px[o + 1], px[o + 2]]
 }
 
-/// The average colour of a patch. Type across a label makes any single pixel unreliable.
 fn patch(px: &[u8], x: usize, y: usize) -> [u32; 3] {
     let mut sum = [0u32; 3];
     let mut n = 0;
@@ -60,13 +52,10 @@ fn patch(px: &[u8], x: usize, y: usize) -> [u32; 3] {
     [sum[0] / n, sum[1] / n, sum[2] / n]
 }
 
-/// How far apart two readings are, summed over the channels.
 fn apart(a: [u32; 3], b: [u32; 3]) -> u32 {
     (0..3).map(|k| a[k].abs_diff(b[k])).sum()
 }
 
-/// Lit pixels across the middle of the top plate, to catch a shelf-name banner coming back.
-/// The span stops short of the corner the mark is in.
 fn banner_ink(px: &[u8]) -> usize {
     (0..PLATE_H as usize)
         .flat_map(|y| (200..520).map(move |x| (x, y)))
@@ -74,8 +63,6 @@ fn banner_ink(px: &[u8]) -> usize {
         .count()
 }
 
-/// Lit pixels across the bottom plate's HUD, which is drawn whatever the shelf holds, so it
-/// says a frame was composed at all.
 fn hud_ink(px: &[u8]) -> usize {
     ((OUT_H as usize - 40)..OUT_H as usize)
         .flat_map(|y| (0..OUT_W as usize).map(move |x| (x, y)))
@@ -83,14 +70,10 @@ fn hud_ink(px: &[u8]) -> usize {
         .count()
 }
 
-/// Inside the empty slot's dark opening, where the shelf's machine is printed when the shelf
-/// changes. Narrow enough to stay clear of the scoop's lit rim, which would read as ink.
 fn name_window() -> (usize, usize, usize, usize) {
     (OUT_W as usize / 2 - 70, OUT_H as usize - 49, 140, 27)
 }
 
-/// Every pixel of the band's name. Two shelves' bands compare equal only if they print the same
-/// word, which a count of lit pixels could not tell.
 fn name_pixels(px: &[u8]) -> Vec<[u8; 3]> {
     let (x0, y0, w, h) = name_window();
     (y0..y0 + h)
@@ -99,7 +82,6 @@ fn name_pixels(px: &[u8]) -> Vec<[u8; 3]> {
         .collect()
 }
 
-/// How much of the opening is lit above its own near-black, which is the name's type.
 fn name_ink(px: &[u8]) -> usize {
     name_pixels(px)
         .iter()
@@ -107,7 +89,6 @@ fn name_ink(px: &[u8]) -> usize {
         .count()
 }
 
-/// One frame to rasterise the name's face, then past its fade-in.
 fn let_the_name_in(f: &mut Frontend, c: &mut Compositor, input: &mut Script) {
     f.compose(c);
     f.advance(input);
@@ -133,8 +114,6 @@ fn composed(f: &mut Frontend, c: &mut Compositor, name: &str) -> Vec<u8> {
     px
 }
 
-/// The card's own Game Boy carts, copied read only into the test root. A fresh clone has no
-/// `sdcard/`, so a stand-in cart is used.
 fn put_game_boy_carts(root: &Path) {
     for (dir, stem, ext, cgb) in [
         ("GB", "Tetris Rosy Retrospection", "gb", 0x00u8),
@@ -149,16 +128,12 @@ fn put_game_boy_carts(root: &Path) {
     }
 }
 
-/// 32 KiB with a Game Boy header. The CGB flag at 0x143 is the only byte the shelf reads; the
-/// label name comes from the filename.
 fn gb_rom(cgb: u8) -> Vec<u8> {
     let mut rom = vec![0u8; 0x8000];
     rom[0x143] = cgb;
     rom
 }
 
-/// A point `down` pixels down the face of the lone pak on a Game Boy shelf. Readings go through
-/// here rather than a fixed screen row, which goes wrong the moment the cartridge moves.
 fn on_the_lone_pak(down: u32) -> (usize, usize) {
     (
         (OUT_W / 2) as usize,
@@ -166,28 +141,19 @@ fn on_the_lone_pak(down: u32) -> (usize, usize) {
     )
 }
 
-/// The pak's bare plastic, half way down the lettering plate above its label.
 fn alone() -> (usize, usize) {
     on_the_lone_pak(GB_LABEL_Y / 2)
 }
 
-/// The middle of that pak's label well. Neither reading alone tells a Game Boy shelf from a
-/// Colour one (plastic 55 apart, paper 59); together they are twice outside the tolerance.
 fn alone_label() -> (usize, usize) {
     on_the_lone_pak(GB_LABEL_Y + GB_LABEL_H / 2)
 }
 
-/// The two side slots of the carousel, at the same screen row so both read the same part of
-/// a side cart. A shelf of one leaves both bare.
 const SIDE_LEFT: (usize, usize) = (90, 250);
 const SIDE_RIGHT: (usize, usize) = (630, 250);
-/// The middle slot, on the selection itself.
 const MIDDLE: (usize, usize) = (360, 250);
-/// The ground the carts stand on, which an empty place on the row leaves behind.
 const GROUND: [u32; 3] = [0x05, 0x05, 0x08];
 
-/// The shoulders ring over one shelf per platform, and the plate's corner shows a different
-/// machine on each. On a two-cart shelf the other cart repeats on both sides of the selection.
 #[test]
 fn the_shoulders_ring_over_a_shelf_for_each_system() {
     let Ok(surface) = HeadlessSurface::new() else {
@@ -216,7 +182,6 @@ fn the_shoulders_ring_over_a_shelf_for_each_system() {
         "the plate corner came up with no mark in it at all: {} lit pixels",
         name_ink(&gba)
     );
-    // Every slot holds a cart, the two side slots hold the same one, and it is not the selection.
     let left = patch(&gba, SIDE_LEFT.0, SIDE_LEFT.1);
     let right = patch(&gba, SIDE_RIGHT.0, SIDE_RIGHT.1);
     let middle = patch(&gba, MIDDLE.0, MIDDLE.1);
@@ -236,7 +201,6 @@ fn the_shoulders_ring_over_a_shelf_for_each_system() {
         "the repeat put the selected cart beside itself: {left:?} either side of {middle:?}"
     );
 
-    // One shelf per platform: each cart stands alone in the middle of its own.
     let mut seen = Vec::new();
     let mut marks = vec![name_pixels(&gba)];
     for (name, banner, _platform) in [
@@ -285,7 +249,6 @@ fn the_shoulders_ring_over_a_shelf_for_each_system() {
         seen.push((cart, label));
     }
 
-    // Round the ring and back to where it started, on the cart the shelf was left on.
     tap(&mut f, &mut input, Btn::R1);
     let_the_name_in(&mut f, &mut c, &mut input);
     let back = composed(&mut f, &mut c, "gba-again");
@@ -300,7 +263,6 @@ fn the_shoulders_ring_over_a_shelf_for_each_system() {
         "the ring came back to the Game Boy Advance shelf under another system's name"
     );
 
-    // The name is a moment, not a label: it fades out of the slot on its own.
     std::thread::sleep(std::time::Duration::from_millis(2400));
     f.advance(&mut input);
     let later = composed(&mut f, &mut c, "gba-faded");
@@ -311,8 +273,6 @@ fn the_shoulders_ring_over_a_shelf_for_each_system() {
     );
 }
 
-/// A card whose roms sit loose at the top of `Games/` comes up a clean empty shelf, still
-/// composing a second later, not a crash, hang or half-drawn screen.
 #[test]
 fn a_card_nobody_has_organised_comes_up_an_empty_shelf() {
     let Ok(surface) = HeadlessSurface::new() else {
@@ -322,8 +282,6 @@ fn a_card_nobody_has_organised_comes_up_an_empty_shelf() {
         return;
     };
 
-    // A rom, its save and its label loose at the top of their folders, plus a pre-namespacing
-    // state directory.
     let d = tmp_root_with_carts(&[]);
     std::fs::write(d.path().join("Games/Emerald.gba"), vec![0u8; 0x100]).expect("loose rom");
     std::fs::write(d.path().join("Saves/Emerald.sav"), vec![7u8; 0x10000]).expect("loose save");
@@ -336,7 +294,6 @@ fn a_card_nobody_has_organised_comes_up_an_empty_shelf() {
     f.advance(&mut input);
     let empty = composed(&mut f, &mut c, "loose-card");
 
-    // An empty library draws no carts or top plate, but the bottom plate's HUD is always there.
     let plate = patch(&empty, 150, 470);
     assert!(
         apart(plate, GROUND) > 20,
@@ -360,7 +317,6 @@ fn a_card_nobody_has_organised_comes_up_an_empty_shelf() {
         );
     }
 
-    // A second of frames later it is still the same screen, and still composing.
     for _ in 0..60 {
         f.advance(&mut input);
     }
@@ -378,7 +334,6 @@ fn a_card_nobody_has_organised_comes_up_an_empty_shelf() {
         );
     }
 
-    // Contrast: the same readings find a cart when the rom is in `Games/GBA/`.
     let organised = tmp_root_with_carts(&["Emerald", "Fusion"]);
     clocked(organised.path());
     let mut f = Frontend::boot(Box::new(SimPlatform::at(organised.path().to_path_buf())));
@@ -393,8 +348,6 @@ fn a_card_nobody_has_organised_comes_up_an_empty_shelf() {
     );
 }
 
-/// A card whose carts are all Game Boy Advance gets a bare corner: there is no shelf to switch
-/// to. A two-platform card is composed beside it for contrast.
 #[test]
 fn a_card_on_one_shelf_leaves_the_corner_empty() {
     let Ok(surface) = HeadlessSurface::new() else {
@@ -417,7 +370,6 @@ fn a_card_on_one_shelf_leaves_the_corner_empty() {
         "a card with one shelf named it in the slot: {} lit pixels",
         name_ink(&bare)
     );
-    // And the shoulders leave it that way.
     tap(&mut f, &mut input, Btn::R1);
     let pressed = composed(&mut f, &mut c, "one-shelf-after-r1");
     assert_eq!(
@@ -426,7 +378,6 @@ fn a_card_on_one_shelf_leaves_the_corner_empty() {
         "R1 named a shelf on a card that has only one"
     );
 
-    // The same fixture with a Game Boy cart added.
     let two = tmp_root_with_carts(&["Emerald", "Fusion"]);
     put_game_boy_carts(two.path());
     clocked(two.path());
@@ -442,8 +393,6 @@ fn a_card_on_one_shelf_leaves_the_corner_empty() {
     );
 }
 
-/// The cart going into the slot from a shelf of two: it travels straight down, and both copies
-/// of the other cart part and go. Driven off the draw list so the clock lands mid-travel exactly.
 #[test]
 fn a_cart_going_in_from_a_repeated_row_takes_both_copies_of_its_neighbour_with_it() {
     let Ok(surface) = HeadlessSurface::new() else {
@@ -454,13 +403,11 @@ fn a_cart_going_in_from_a_repeated_row_takes_both_copies_of_its_neighbour_with_i
     };
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
     clocked(d.path());
-    // No faces are uploaded, so each cart draws as a rect in its label colour.
     let mut app = App::boot(d.path());
     let ink = label_colour(&clean_label("Emerald"));
 
     let standing = shot(&app, &mut c, Some("insert-0-standing"));
     let (from, _) = span(&standing, ink);
-    // Side carts are dimmed; what matters is that both sides match and the middle does not.
     let west = patch(&standing, SIDE_LEFT.0, SIDE_LEFT.1);
     let east = patch(&standing, SIDE_RIGHT.0, SIDE_RIGHT.1);
     app.apply(Action::Insert);
@@ -509,8 +456,6 @@ fn a_cart_going_in_from_a_repeated_row_takes_both_copies_of_its_neighbour_with_i
     }
 }
 
-/// A whole scroll, frame by frame, on shelves of two and three: the carts move as a rigid row,
-/// one way, no faster than the spring allows, and end home.
 #[test]
 fn a_scrolled_row_slides_by_a_pitch_rather_than_swapping_its_carts() {
     let Ok(surface) = HeadlessSurface::new() else {
@@ -525,20 +470,16 @@ fn a_scrolled_row_slides_by_a_pitch_rather_than_swapping_its_carts() {
     ] {
         let d = tmp_root_with_carts(stems);
         clocked(d.path());
-        // No faces: every cart is a rect in its own label colour.
         let mut app = App::boot(d.path());
         let mut frames = vec![shot(&app, &mut c, Some(&format!("scroll-{carts}-00")))];
-        // Pressed and let go: the shoulder auto repeats while held.
         app.apply(Action::ShelfRight);
         app.apply(Action::GbaUp(Btn::Right));
-        // Every frame is measured, every fourth written out.
         for f in 1..=30 {
             app.update(1.0 / 60.0);
             let name = (f % 4 == 0).then(|| format!("scroll-{carts}-{f:02}"));
             frames.push(shot(&app, &mut c, name.as_deref()));
         }
 
-        // Row offset in pitches off the middle, unwrapped per frame; starts a pitch out.
         let mut stood = 1.0f32;
         for (f, px) in frames.iter().enumerate() {
             let runs = row_runs(px);
@@ -548,7 +489,6 @@ fn a_scrolled_row_slides_by_a_pitch_rather_than_swapping_its_carts() {
                  720 px row of them holds",
                 runs.len()
             );
-            // Only carts wholly on screen: one hanging off an edge is measured short.
             let row: Vec<f32> = runs
                 .iter()
                 .filter(|(a, b)| *a > 0 && *b < OUT_W as usize - 1)
@@ -569,7 +509,6 @@ fn a_scrolled_row_slides_by_a_pitch_rather_than_swapping_its_carts() {
                     row[0]
                 );
             }
-            // The nearest reading to last frame's; a pitch is a whole cart, so nothing else fits.
             let now = [phase - 1.0, phase, phase + 1.0]
                 .into_iter()
                 .fold(f32::MAX, |a, b| {
@@ -583,8 +522,6 @@ fn a_scrolled_row_slides_by_a_pitch_rather_than_swapping_its_carts() {
                 now <= stood + 0.01,
                 "{carts} carts, frame {f}: the row turned round, from {stood} to {now}"
             );
-            // 23.5 px is the fastest a critically damped spring at this stiffness carries a
-            // one-pitch move in a 60th of a second.
             assert!(
                 stood - now < 0.12,
                 "{carts} carts, frame {f}: the row jumped {} of a pitch, which is a cart \
@@ -600,8 +537,6 @@ fn a_scrolled_row_slides_by_a_pitch_rather_than_swapping_its_carts() {
     }
 }
 
-/// The first and last column of every cart on the row, in screen order. Carts are the only lit
-/// thing in this band, separated by 26 px of backdrop.
 fn row_runs(px: &[u8]) -> Vec<(usize, usize)> {
     let lit = |x: usize| {
         (210..300).any(|y| {
@@ -620,7 +555,6 @@ fn row_runs(px: &[u8]) -> Vec<(usize, usize)> {
     runs
 }
 
-/// The horizontal centre of everything drawn in `ink`, and the lowest row it reaches.
 fn span(px: &[u8], ink: [u8; 3]) -> (f32, usize) {
     let close = |c: [u8; 3]| (0..3).all(|k| c[k].abs_diff(ink[k]) <= 24);
     let mut cols: Vec<usize> = Vec::new();
@@ -640,16 +574,12 @@ fn span(px: &[u8], ink: [u8; 3]) -> (f32, usize) {
     ((first + last) as f32 / 2.0, bottom)
 }
 
-/// One frame of the app's draw list, composited and, if `SCRATCH_PNG_DIR` is set, written out
-/// under `name`.
 fn shot(app: &App, c: &mut Compositor, name: Option<&str>) -> Vec<u8> {
     let mut out = Vec::new();
     app.draw(&mut out);
     frame_named(c, &out, name)
 }
 
-/// The same for a hand-built draw list, so every frame of the insertion is reachable by seat and
-/// platform.
 fn frame(c: &mut Compositor, out: &[Draw], name: &str) -> Vec<u8> {
     frame_named(c, out, Some(name))
 }
@@ -674,7 +604,6 @@ fn frame_named(c: &mut Compositor, out: &[Draw], name: Option<&str>) -> Vec<u8> 
     px
 }
 
-/// A cartridge for each shape, with a title hashing to a label colour of its own.
 fn cartridges() -> [(&'static str, Cart); 2] {
     [
         (
@@ -704,8 +633,6 @@ fn cartridges() -> [(&'static str, Cart); 2] {
     ]
 }
 
-/// Where this cartridge's paper starts down its face. A fixed row would land on paper for one
-/// shape and plastic for the other: a pak is 253 px tall against a GBA cart's 135.
 fn label_top(p: CartPlatform) -> usize {
     match p {
         CartPlatform::Gba => LABEL_Y as usize,
@@ -713,8 +640,6 @@ fn label_top(p: CartPlatform) -> usize {
     }
 }
 
-/// The first and last screen rows showing the cartridge's own paper. Only for a cartridge clear
-/// of the machine: a seated pak shows none.
 fn paper_rows(px: &[u8], ink: [u8; 3]) -> Option<(usize, usize)> {
     let close = |c: [u8; 3]| (0..3).all(|k| c[k].abs_diff(ink[k]) <= 24);
     let mut rows =
@@ -723,14 +648,10 @@ fn paper_rows(px: &[u8], ink: [u8; 3]) -> Option<(usize, usize)> {
     Some((first, rows.next_back().unwrap_or(first)))
 }
 
-/// Every colour in the frame that is not the cartridge: the clear black and the slot's four flat
-/// theme colours.
 fn backdrop() -> [[f32; 4]; 5] {
     [[0.0, 0.0, 0.0, 1.0], housing(), opening(), edge(), recess()]
 }
 
-/// The first and last screen rows the cartridge covers: whatever is neither backdrop nor theme
-/// colour. Tolerance 8 a channel against a 17 gap (GBA 0x35 shell vs 0x24 housing).
 fn shell_rows(px: &[u8]) -> Option<(usize, usize)> {
     let flat = backdrop();
     let cart = |c: [u8; 3]| {
@@ -746,8 +667,6 @@ fn shell_rows(px: &[u8]) -> Option<(usize, usize)> {
     Some((first, rows.next_back().unwrap_or(first)))
 }
 
-/// The insertion, rendered: a Game Boy pak stands centred, travels at its own size, catches on the
-/// lip, and seats leaving as much cartridge out as a GBA cart.
 #[test]
 fn both_cartridges_go_into_the_slot_at_their_own_size() {
     let Ok(surface) = HeadlessSurface::new() else {
@@ -756,7 +675,6 @@ fn both_cartridges_go_into_the_slot_at_their_own_size() {
     let Ok(mut c) = Compositor::new(&surface) else {
         return;
     };
-    // Named for what the frame is of, so the sequence read in order is the animation.
     let beats = [
         ("0-standing", 0.0),
         ("1-falling", 0.25),
@@ -784,7 +702,6 @@ fn both_cartridges_go_into_the_slot_at_their_own_size() {
                 cart: &cart,
                 face: Some(tex),
                 rest,
-                // A settled row.
                 scale: 1.0,
                 seat,
                 alert: None,
@@ -811,8 +728,6 @@ fn both_cartridges_go_into_the_slot_at_their_own_size() {
                     (middle - want).abs() < 1.5,
                     "{name} stands {top}..{bottom}, centred on {middle} rather than on {want}"
                 );
-                // The paper is the full label-well height at its own inset: a squashed cart
-                // or the wrong platform's numbers would show here.
                 let (paper_top, paper_bottom) =
                     paper_rows(&px, ink).expect("a standing cartridge shows its label");
                 let inset = paper_top - top;
@@ -838,7 +753,6 @@ fn both_cartridges_go_into_the_slot_at_their_own_size() {
         }
     }
 
-    // Seated, the two are the same picture: same top edge, same run of cartridge left out.
     let (first, rest) = seated.split_first().expect("both cartridges seated");
     for (name, top, bottom) in rest {
         assert!(
@@ -859,8 +773,6 @@ fn both_cartridges_go_into_the_slot_at_their_own_size() {
     }
 }
 
-/// How far the cartridge moves each frame of the travel at device rate, printed for judging by
-/// eye. Asserts no frame jumps more than half the cartridge, where it would read as two objects.
 #[test]
 fn no_frame_of_the_travel_jumps_further_than_the_cartridge_is_tall() {
     for (name, cart) in cartridges() {

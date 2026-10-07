@@ -19,8 +19,6 @@ fn rom(name: &str) -> PathBuf {
     p
 }
 
-/// The cores differ through the trait only in what they serialize: mGBA a whole machine, the
-/// mock a frame counter.
 fn is_mgba(core: &mut dyn RetroCore, rom: &Path) -> bool {
     core.load(rom).expect("core refused the test rom");
     core.run_frame(ButtonMask::default());
@@ -54,7 +52,6 @@ fn a_missing_core_falls_back_to_the_mock_rather_than_failing() {
     assert!(!is_mgba(core.as_mut(), &rom("missing.gba")));
 }
 
-/// A rom the core will not take reaches the app as `Failed`, or the insert waits forever.
 #[test]
 fn a_rom_the_real_core_refuses_reports_failed() {
     let _g = core_lock();
@@ -77,7 +74,6 @@ fn a_rom_the_real_core_refuses_reports_failed() {
     assert_eq!(emu.state(), CoreState::Failed);
 }
 
-/// The refusal reaches the slot. The mock takes anything, so only the real core exercises it.
 #[test]
 fn a_cart_the_real_core_refuses_comes_back_out_of_the_slot() {
     let _g = core_lock();

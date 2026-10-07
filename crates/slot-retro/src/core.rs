@@ -7,7 +7,6 @@ use crate::rumble::Rumble;
 pub const GBA_W: u32 = 240;
 pub const GBA_H: u32 = 160;
 
-/// libretro `RETRO_DEVICE_ID_JOYPAD` bit order.
 #[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
 pub struct ButtonMask(pub u16);
 
@@ -27,7 +26,7 @@ impl ButtonMask {
 
     pub fn turbo(self, frame: u32) -> ButtonMask {
         let mut mask = self.0 & !(Self::X | Self::Y);
-        if frame / 3 % 2 == 0 {
+        if (frame / 3).is_multiple_of(2) {
             if self.0 & Self::X != 0 {
                 mask |= Self::A;
             }
@@ -75,19 +74,11 @@ impl From<std::io::Error> for CoreError {
 pub trait RetroCore: Send {
     fn load(&mut self, rom: &Path) -> Result<(), CoreError>;
     fn run_frame(&mut self, input: ButtonMask);
-    /// One frame with two players' buttons: `p1` on input port 0, `p2` on port 1. Only a core
-    /// running two linked GBAs reads port 1, so the default runs `p1` alone and drops `p2`.
     fn run_frame_linked(&mut self, p1: ButtonMask, _p2: ButtonMask) {
         self.run_frame(p1);
     }
-    /// Sets a core option after `load`, for settings a player can change mid-game (colour
-    /// correction). The core re-reads its options when told they changed.
     fn set_option(&mut self, _key: &str, _value: &str) {}
-    /// Whether the *next* `run_frame` should emulate without drawing; `video_xrgb8888` keeps the
-    /// last drawn picture. Must be set before the frame: cores decide at the top of `retro_run`.
-    /// Render skipping is the only thing measured to raise the fast forward cap.
     fn set_frame_skip(&mut self, _skip: bool) {}
-    /// `GBA_W * GBA_H * 4` bytes, little endian XRGB8888, so the byte order is B, G, R, unused.
     fn video_xrgb8888(&self) -> &[u8];
     fn take_audio(&mut self) -> Vec<i16>;
     fn serialize(&mut self) -> Result<Vec<u8>, CoreError>;
@@ -95,19 +86,14 @@ pub trait RetroCore: Send {
     fn save_ram(&self) -> Option<Vec<u8>>;
     fn load_save_ram(&mut self, data: &[u8]) -> Result<(), CoreError>;
     fn av_info(&self) -> AvInfo;
-    /// Where this core's rumble lands. Without the interface, a cell nothing writes.
     fn rumble(&self) -> Rumble {
         Rumble::default()
     }
-    /// Where this core's netpacket traffic goes. Without the interface, a handle nothing uses.
     fn net(&self) -> Link {
         Link::default()
     }
-    /// Begins a netpacket session. `client_id` is libretro's: 0 the host, 1 the joiner.
     fn start_link(&mut self, _client_id: u16) {}
-    /// Once per frame: hand the core its inbound packets, then let it poll.
     fn pump_link(&mut self) {}
-    /// Ends a netpacket session: `start_link`'s counterpart. libretro's `stop` is optional.
     fn stop_link(&mut self) {}
 }
 
@@ -115,7 +101,6 @@ pub trait RetroCore: Send {
 mod tests {
     use super::*;
 
-    /// Records what `run_frame` was handed, to see what the default `run_frame_linked` passes on.
     #[derive(Default)]
     struct Recorder(Vec<ButtonMask>);
 

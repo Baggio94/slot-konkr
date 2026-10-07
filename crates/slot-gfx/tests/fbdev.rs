@@ -6,7 +6,6 @@ fn the_panel_size_is_read_from_the_framebuffer_rather_than_assumed() {
     assert_eq!(panel_size("720,1280"), Some((720, 1280)));
 }
 
-/// A zero or unparseable size reads as no answer.
 #[test]
 fn a_framebuffer_that_reports_nothing_usable_has_no_size() {
     assert_eq!(panel_size(""), None);
@@ -15,7 +14,6 @@ fn a_framebuffer_that_reports_nothing_usable_has_no_size() {
     assert_eq!(panel_size("wide,tall"), None);
 }
 
-/// A refusal with EGL_SUCCESS queued is not reported as error 0x3000.
 #[test]
 fn a_refusal_egl_never_flagged_does_not_print_as_an_error_code() {
     let quiet = egl_error("eglChooseConfig", 0x3000).to_string();
@@ -26,17 +24,14 @@ fn a_refusal_egl_never_flagged_does_not_print_as_an_error_code() {
     assert!(flagged.contains("0x3001"), "{flagged}");
 }
 
-/// The panel size parses out of `fb0/modes` lines.
 #[test]
 fn the_visible_mode_is_read_rather_than_the_virtual_framebuffer() {
     assert_eq!(panel_mode("U:720x480p-59\n"), Some((720, 480)));
     assert_eq!(panel_mode("D:640x480i-60"), Some((640, 480)));
-    // A driver that lists what it supports puts the one in use first.
     assert_eq!(
         panel_mode("U:720x480p-59\nU:640x480p-60\n"),
         Some((720, 480))
     );
-    // No name in front of it is still a size.
     assert_eq!(panel_mode("720x480p-59"), Some((720, 480)));
 }
 

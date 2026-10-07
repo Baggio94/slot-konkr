@@ -1,9 +1,3 @@
-//! mGBA's Game Boy lockstep, against the core slot actually loads.
-//!
-//! `GBSIOLockstep` is the pre-2024 `mLockstep` API, whose master blocks inside `wait()`;
-//! `cores/mgba/zz-gb-link-mode.patch` compiles it into the libretro target. The GBA half is in
-//! `mgba_link.rs`. Skipped where the vendored core is absent.
-
 mod common;
 
 use std::path::{Path, PathBuf};
@@ -34,7 +28,6 @@ fn lit(px: &[u8]) -> usize {
     px.chunks_exact(4).filter(|p| p[0..3] != [0, 0, 0]).count()
 }
 
-/// Link mode takes a Game Boy cart; the lockstep is only in the build with the patch.
 #[test]
 fn link_mode_accepts_a_game_boy_cart() {
     let _g = common::core_lock();
@@ -46,7 +39,6 @@ fn link_mode_accepts_a_game_boy_cart() {
     pair.load(&rom).expect("link mode refused a Game Boy rom");
 }
 
-/// Both consoles run: a lockstep that deadlocks or drops one end paints nothing.
 #[test]
 fn a_linked_game_boy_pair_runs_and_paints() {
     let _g = common::core_lock();
@@ -67,8 +59,6 @@ fn a_linked_game_boy_pair_runs_and_paints() {
     );
 }
 
-/// The same input twice reaches the same place. A lockstep whose scheduling depends on wall clock
-/// or thread order would not, and cross-device play needs it to.
 #[test]
 fn a_linked_game_boy_pair_is_deterministic() {
     let _g = common::core_lock();

@@ -7,7 +7,10 @@ fn pressed(mask: u16, frames: std::ops::Range<u32>) -> Vec<u16> {
 #[test]
 fn x_pulses_a_three_frames_on_three_off() {
     let a = ButtonMask::A;
-    assert_eq!(pressed(ButtonMask::X, 0..12), vec![a, a, a, 0, 0, 0, a, a, a, 0, 0, 0]);
+    assert_eq!(
+        pressed(ButtonMask::X, 0..12),
+        vec![a, a, a, 0, 0, 0, a, a, a, 0, 0, 0]
+    );
 }
 
 #[test]

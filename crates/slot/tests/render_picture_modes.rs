@@ -1,14 +1,3 @@
-//! L and R on a Game Boy cart, through the whole frontend: the real core, the real cart, the
-//! real compositor, composited on the GPU and read back as pixels.
-//!
-//! Draw-list assertions have passed while the panel was wrong, so "L fills the panel and R gives
-//! back the centred picture" is checked against the composited frame, and PNGs are written for
-//! judging the grille by eye.
-//!
-//! `SCRATCH_PNG_DIR=/tmp cargo test -p slot --test render_picture_modes -- --nocapture`
-//!
-//! Skipped without an mGBA dylib and a card to take a cart off.
-
 #![cfg(target_os = "macos")]
 
 mod common;
@@ -24,7 +13,6 @@ use slot_input::{Btn, InputSource, Millis, RawEvent};
 use slot_power::SimPlatform;
 use slot_store::{Core, Platform};
 
-/// One batch of events per poll, and nothing once they run out.
 struct Script(VecDeque<Vec<RawEvent>>);
 
 impl InputSource for Script {
@@ -38,13 +26,9 @@ fn at(px: &[u8], x: usize, y: usize) -> [u8; 3] {
     [px[o], px[o + 1], px[o + 2]]
 }
 
-/// Where a Game Boy picture lands at actual size: 480x432 in the middle of the panel, with
-/// 120 px of nothing either side and 24 top and bottom.
 const BAR_W: usize = 120;
 const BAR_H: usize = 24;
 
-/// How much of a band has anything on it. The margin is black and the mask never blanks a lit
-/// pixel, so this separates picture from margin.
 fn lit(px: &[u8], xs: std::ops::Range<usize>, ys: std::ops::Range<usize>) -> usize {
     ys.flat_map(|y| xs.clone().map(move |x| (x, y)))
         .filter(|(x, y)| at(px, *x, *y).iter().any(|c| *c > 8))
@@ -67,7 +51,6 @@ fn write_png(name: &str, w: u32, h: u32, rgba: &[u8]) {
     println!("wrote {path}");
 }
 
-/// Two panels side by side with a grey rule between them.
 fn side_by_side(left: &[u8], right: &[u8], gap: usize) -> (u32, u32, Vec<u8>) {
     let w = OUT_W as usize * 2 + gap;
     let mut out = vec![0u8; w * OUT_H as usize * 4];
@@ -86,8 +69,6 @@ fn side_by_side(left: &[u8], right: &[u8], gap: usize) -> (u32, u32, Vec<u8>) {
     (w as u32, OUT_H, out)
 }
 
-/// A patch of each panel blown up, nearest. At actual size a 3x3 mask cell sits on exactly one
-/// source pixel; stretched it does not.
 fn zoom(
     left: &[u8],
     right: &[u8],
@@ -120,8 +101,6 @@ fn zoom(
     (out_w as u32, out_h as u32, out)
 }
 
-/// The card's own Game Boy cart, copied into the test root; the card is only read. `None`
-/// without `sdcard/`: a stand-in rom paints nothing worth looking at.
 fn put_card_cart(root: &Path) -> Option<()> {
     let from = repo_root().join("sdcard/Games/GB/Tetris Rosy Retrospection.gb");
     let rom = std::fs::read(&from).ok()?;
@@ -130,8 +109,6 @@ fn put_card_cart(root: &Path) -> Option<()> {
     Some(())
 }
 
-/// Advances the whole frontend for a stretch of wall clock, since the animations and the
-/// emulator thread both run on real time.
 fn run_for(f: &mut Frontend, input: &mut Script, secs: f32) {
     let until = Instant::now() + Duration::from_secs_f32(secs);
     while Instant::now() < until {
@@ -143,8 +120,6 @@ fn run_for(f: &mut Frontend, input: &mut Script, secs: f32) {
 #[test]
 fn l_fills_the_panel_and_r_gives_back_the_centred_picture() {
     let _core = core_lock();
-    // The core this cart resolves to: a core the cart does not use is never found, and
-    // `MockCore`'s test pattern lights every margin.
     let core = Core::default_for(Platform::Gb);
     let file = format!(
         "{}_libretro.{}",
@@ -163,13 +138,11 @@ fn l_fills_the_panel_and_r_gives_back_the_centred_picture() {
         return;
     };
 
-    // Two carts so the shelf is a shelf, and the real one first alphabetically so A plays it.
     let d = tmp_root_with_gb_carts(&["Zzz"]);
     let Some(()) = put_card_cart(d.path()) else {
         eprintln!("no Game Boy cart on this machine's card, skipping");
         return;
     };
-    // `candidates` looks in the content root's own `System/` first.
     std::fs::copy(&dylib, d.path().join("System").join(&file)).expect("plant the core");
     clocked(d.path());
 
@@ -180,7 +153,6 @@ fn l_fills_the_panel_and_r_gives_back_the_centred_picture() {
     f.advance(&mut input);
     input.0.push_back(vec![RawEvent::Up(Btn::A)]);
     f.advance(&mut input);
-    // Long enough for the insert and for Tetris to get past its copyright screen.
     run_for(&mut f, &mut input, 5.0);
 
     f.compose(&mut c);
@@ -220,7 +192,6 @@ fn l_fills_the_panel_and_r_gives_back_the_centred_picture() {
     let stretched = c.read_frame();
     write_png("picture-stretch", OUT_W, OUT_H, &stretched);
 
-    // Measured as "most of the band has something on it": a Game Boy picture has black in it.
     let left = lit(&stretched, 0..BAR_W, 0..OUT_H as usize);
     let top = lit(&stretched, 0..OUT_W as usize, 0..BAR_H);
     assert!(
@@ -234,7 +205,6 @@ fn l_fills_the_panel_and_r_gives_back_the_centred_picture() {
 
     let (w, h, both) = side_by_side(&actual, &stretched, 8);
     write_png("picture-side-by-side", w, h, &both);
-    // Around the middle of the playfield, where there is an edge to watch the grille cross.
     let (w, h, close) = zoom(&actual, &stretched, 300, 200, 90, 60, 6);
     write_png("picture-zoom", w, h, &close);
 

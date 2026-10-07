@@ -11,14 +11,10 @@ use slot_store::{write_slot_state, SlotState};
 const FRAME_MS: Millis = 16;
 const DT: f32 = 1.0 / 60.0;
 
-/// `RETRO_RUMBLE_STRONG`, which is what the core passes.
 const STRONG: u32 = 0;
 
-/// What the core asks for reaches the motor. Neither the mock nor the test rom drives rumble,
-/// so this writes the cell the core's callback writes.
 #[test]
 fn what_the_core_asks_for_reaches_the_motor() {
-    // Two, because a single cart has nowhere to eject to and the slot refuses.
     let d = tmp_root_with_real_carts(&["Advance Wars", "Emerald"]);
     let (mut s, motor) = session_with_platform(d.path());
     let mut now = 0;
@@ -29,7 +25,6 @@ fn what_the_core_asks_for_reaches_the_motor() {
     step(&mut s, &mut now);
     assert_eq!(motor.last(), u16::MAX, "the core asked and nothing moved");
 
-    // The core is never told to stop. The phase keeps the motor down for every frame of the eject.
     let pressed = now;
     event(&mut s, RawEvent::Down(Btn::Menu), &mut now);
     while now < pressed + MENU_HOLD_MS + FRAME_MS {
@@ -40,7 +35,6 @@ fn what_the_core_asks_for_reaches_the_motor() {
     assert_eq!(motor.last(), 0, "the next frame turned it back on");
 }
 
-/// Rumble Off in the quick menu. The emulator still sees the request; the motor is never told.
 #[test]
 fn with_rumble_off_the_motor_stays_still_whatever_the_core_asks() {
     let d = tmp_root_with_real_carts(&["Advance Wars", "Emerald"]);
@@ -68,7 +62,6 @@ fn with_rumble_off_the_motor_stays_still_whatever_the_core_asks() {
     assert_eq!(motor.last(), 0, "the motor moved with rumble off");
 }
 
-/// An unplugged cart leaving the motor on would run until the battery died.
 #[test]
 fn ejecting_stops_the_motor() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -84,7 +77,6 @@ fn ejecting_stops_the_motor() {
     );
 }
 
-/// Nothing should buzz while the device is asleep.
 #[test]
 fn dozing_stops_the_motor() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -94,7 +86,6 @@ fn dozing_stops_the_motor() {
     assert_eq!(motor.last(), 0);
 }
 
-/// The power button dozes too, and with a stuck hall sensor it is the only way there.
 #[test]
 fn the_power_button_stops_the_motor() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -116,7 +107,6 @@ fn event(s: &mut Session, ev: RawEvent, now: &mut Millis) {
     s.update(DT);
 }
 
-/// Puts the selected cart in and waits out the load, which happens on its own thread.
 fn play(s: &mut Session, now: &mut Millis) {
     event(s, RawEvent::Down(Btn::A), now);
     event(s, RawEvent::Up(Btn::A), now);
@@ -128,8 +118,6 @@ fn play(s: &mut Session, now: &mut Millis) {
     }
 }
 
-/// The power menu replaces the screen but not the phase, and `poweroff` exits without running
-/// `Motor`'s destructor, so the motor must stop when the menu opens.
 #[test]
 fn the_power_menu_takes_the_motor_down() {
     let d = tmp_root_with_real_carts(&["Advance Wars", "Emerald"]);

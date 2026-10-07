@@ -1,7 +1,3 @@
-//! The link screen's artwork: the console's port, the two ends of an AGB-005 link cable, the
-//! Wireless Adapter with its label, and the signal arcs, click marks and swap arrows.
-//! Built once, off the frame loop, by the binary's link art worker.
-
 use crate::art::render_svg;
 use crate::cart::CartFace;
 use crate::text;
@@ -13,18 +9,14 @@ const ADAPTER_SVG: &str = include_str!("../assets/link_adapter.svg");
 
 pub const PORT_W: u32 = 720;
 pub const PORT_H: u32 = 92;
-/// Top of the console strip on the canvas.
 pub const PORT_Y: f32 = 388.0;
 pub const PLUG_W: u32 = 92;
 pub const PLUG_H: u32 = 244;
-/// The plug's tip is at the face's bottom edge, this far from its left.
 pub const PLUG_TIP_X: f32 = 46.0;
 pub const ADAPTER_W: u32 = 268;
 pub const ADAPTER_H: u32 = 182;
-/// The middle of the adapter's base line, inside its face.
 pub const ADAPTER_BASE_X: f32 = 134.0;
 pub const ADAPTER_BASE_Y: f32 = 144.0;
-/// The right-hand arcs' faces on the canvas for a seated adapter: left, top, width, height.
 pub const ARCS: [(f32, f32, u32, u32); 3] = [
     (508.0, 290.0, 16, 56),
     (530.0, 274.0, 20, 88),
@@ -40,7 +32,6 @@ pub const ARROW_LEFT_X: f32 = 268.0;
 pub const ARROW_RIGHT_X: f32 = 436.0;
 pub const ARROW_Y: f32 = 52.0;
 
-/// The adapter is drawn at 1.75× its traced units.
 const ADAPTER_SCALE: f32 = 1.75;
 const LABEL_INK: [u8; 3] = [0xec, 0xee, 0xef];
 const LOGO_INK: [u8; 3] = [0x7d, 0x85, 0x8e];
@@ -58,7 +49,6 @@ pub struct LinkArt {
     pub arrow_right: CartFace,
 }
 
-/// Takes seconds on the H700: call it from a worker thread.
 pub fn link_art() -> LinkArt {
     let arcs_right = [arc_face(0), arc_face(1), arc_face(2)];
     let arcs_left = [
@@ -132,10 +122,8 @@ enum Align {
     Right,
 }
 
-/// One label row: `x`, baseline `y`, the text, its size, ink and alignment.
 type LabelRow = (f32, f32, &'static str, f32, [u8; 3], Align);
 
-/// The traced adapter with its label rows and SLOT in the logo.
 fn adapter_face() -> CartFace {
     let mut face = svg_face(ADAPTER_SVG, ADAPTER_W, ADAPTER_H);
     let at = |x: f32, y: f32| {

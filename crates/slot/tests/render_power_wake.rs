@@ -1,9 +1,3 @@
-//! POWER on a dozing device, through the real frontend: the frame composited on the GPU and
-//! read back, with the backlight the device would write recorded beside it. Both are needed:
-//! pixels cannot show the panel is off, and the backlight cannot show what is drawn.
-//!
-//! `SCRATCH_PNG_DIR=/tmp cargo test -p slot --test render_power_wake -- --nocapture`
-
 #![cfg(target_os = "macos")]
 
 mod common;
@@ -20,7 +14,6 @@ use slot_gfx::{Compositor, HeadlessSurface, OUT_H, OUT_W};
 use slot_input::{Btn, InputSource, Millis, RawEvent, POWER_HOLD_MS};
 use slot_power::{Battery, Charge, LedState, Platform, SimPlatform};
 
-/// One batch of events per poll, and nothing once they run out.
 struct Script(VecDeque<Vec<RawEvent>>);
 
 impl InputSource for Script {
@@ -29,7 +22,6 @@ impl InputSource for Script {
     }
 }
 
-/// `SimPlatform` that records `set_backlight`, which the host platform otherwise drops.
 struct RecordingPanel {
     inner: SimPlatform,
     backlight: Arc<AtomicU8>,
@@ -82,7 +74,6 @@ fn at(px: &[u8], x: usize, y: usize) -> [u8; 3] {
     [px[o], px[o + 1], px[o + 2]]
 }
 
-/// Whether the whole panel is `Phase::Doze`'s flat black, sampled on a lattice.
 fn all_black(px: &[u8]) -> bool {
     (0..OUT_H as usize).step_by(7).all(|y| {
         (0..OUT_W as usize)
@@ -91,8 +82,6 @@ fn all_black(px: &[u8]) -> bool {
     })
 }
 
-/// Whether anything on the panel is bright enough to read. The menu's ground is nearly as dark
-/// as the doze, so "not black" is not enough.
 fn any_ink(px: &[u8]) -> bool {
     (0..OUT_H as usize).step_by(3).any(|y| {
         (0..OUT_W as usize)
@@ -119,7 +108,6 @@ fn composed(f: &mut Frontend, c: &mut Compositor, name: &str) -> Vec<u8> {
     px
 }
 
-/// A tap: down on one frame, up on the next.
 fn tap(f: &mut Frontend, input: &mut Script, btn: Btn) {
     input.0.push_back(vec![RawEvent::Down(btn)]);
     f.advance(input);
@@ -127,8 +115,6 @@ fn tap(f: &mut Frontend, input: &mut Script, btn: Btn) {
     f.advance(input);
 }
 
-/// Holding POWER while dozing must light the panel before the power menu, or the user keeps
-/// holding until the PMIC cuts the rails at six seconds. The hold is a real second of wall clock.
 #[test]
 fn power_on_a_dozing_device_brings_the_screen_back_before_the_menu() {
     let Ok(surface) = HeadlessSurface::new() else {
@@ -156,7 +142,6 @@ fn power_on_a_dozing_device_brings_the_screen_back_before_the_menu() {
         "the shelf drew nothing, so going dark proves nothing"
     );
 
-    // A tap of POWER is one of the two things that puts it out.
     tap(&mut f, &mut input, Btn::Power);
     let dozing = composed(&mut f, &mut c, "doze");
     assert_eq!(
@@ -166,7 +151,6 @@ fn power_on_a_dozing_device_brings_the_screen_back_before_the_menu() {
     );
     assert!(all_black(&dozing), "the doze left something on the screen");
 
-    // POWER held: the screen has to come back before the menu does.
     input.0.push_back(vec![RawEvent::Down(Btn::Power)]);
     f.advance(&mut input);
     let woken = composed(&mut f, &mut c, "woken");
@@ -180,7 +164,6 @@ fn power_on_a_dozing_device_brings_the_screen_back_before_the_menu() {
         "the screen is still the doze's own black"
     );
 
-    // The same press, held on past the threshold, with the thumb never leaving the button.
     let until = Instant::now() + Duration::from_millis(POWER_HOLD_MS + 200);
     while Instant::now() < until {
         f.advance(&mut input);

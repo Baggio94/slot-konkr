@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use slot_power::{Battery, Charge, LedState, LidPolicy, Platform, Power};
 
-/// The panel a real platform would drive, shared so the test can see what reached it.
 struct Panel {
     step: Arc<AtomicU8>,
     clock: i64,
@@ -72,7 +71,6 @@ fn the_lid_restores_the_level_it_darkened() {
     assert_eq!(step.load(Ordering::Relaxed), 7);
 }
 
-/// A hall sensor bounces. A second close must not make the dark panel the level to restore.
 #[test]
 fn closing_twice_does_not_swallow_the_level() {
     let (mut p, step) = lit();
@@ -83,7 +81,6 @@ fn closing_twice_does_not_swallow_the_level() {
     assert_eq!(step.load(Ordering::Relaxed), 4);
 }
 
-/// Brightness set with the lid shut is applied on the next wake, not while dark.
 #[test]
 fn a_level_set_while_shut_waits_for_the_open() {
     let (mut p, step) = lit();

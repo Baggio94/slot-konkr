@@ -1,9 +1,3 @@
-//! The carousel wrapping, one frame per cell tiled into a contact sheet, so the motion can be
-//! looked at: a draw-list assertion once passed while the row travelled backwards. Carts draw as
-//! rects in their label colours. Does nothing unless `SCRATCH_DIR` is set:
-//!
-//! `SCRATCH_DIR=/tmp/wrap cargo test -p slot-ui --test render_shelf_wrap -- --nocapture`
-
 use slot_gfx::{Draw, OUT_H, OUT_W};
 use slot_store::{Cart, Platform};
 use slot_ui::Shelf;
@@ -31,8 +25,6 @@ fn shelf_with(n: usize) -> Shelf {
     )
 }
 
-/// One frame of the row at a third size, with a tick under the centre where the selected cart
-/// should rest.
 fn frame(s: &Shelf) -> Vec<u8> {
     let mut px = vec![0u8; CELL_W * CELL_H * 3];
     for p in px.chunks_mut(3) {
@@ -64,7 +56,6 @@ fn frame(s: &Shelf) -> Vec<u8> {
     px
 }
 
-/// The frames tiled into one image, with a hairline between cells.
 fn sheet(frames: &[Vec<u8>], path: &str) {
     let rows = frames.len().div_ceil(COLS);
     let (w, h) = (COLS * (CELL_W + 1) + 1, rows * (CELL_H + 1) + 1);
@@ -106,8 +97,6 @@ fn run() -> Run {
     }
 }
 
-/// Runs the shelf as `App::update` does (`tick` then `update` each frame) with the direction
-/// held.
 fn hold(n: usize, start: usize, way: i32, frames: usize) -> Run {
     let mut s = shelf_with(n);
     s.select(start);
@@ -126,7 +115,6 @@ fn hold(n: usize, start: usize, way: i32, frames: usize) -> Run {
     out
 }
 
-/// Two taps, the second landing `gap` frames into the first one's travel.
 fn double_tap(n: usize, start: usize, way: i32, gap: usize, frames: usize) -> Run {
     let mut s = shelf_with(n);
     s.select(start);
@@ -149,8 +137,6 @@ fn double_tap(n: usize, start: usize, way: i32, gap: usize, frames: usize) -> Ru
     out
 }
 
-/// The widest strip of bare backdrop at each edge over the sequence: a short row can slide far
-/// enough to leave an edge empty.
 fn widest_gap(s: &Shelf) -> (f32, f32) {
     let mut list = Vec::new();
     s.draw_row(None, 0.0, 0.0, 1.0, &mut list);
@@ -164,7 +150,6 @@ fn widest_gap(s: &Shelf) -> (f32, f32) {
     (left, right)
 }
 
-/// The per-frame travel, flagging every frame the row reversed under a held direction.
 fn verdict(name: &str, way: i32, r: &Run) {
     let back: Vec<usize> = r
         .scroll
@@ -196,7 +181,6 @@ fn render_shelf_wrap() {
     std::fs::create_dir_all(&dir).unwrap();
     for n in [2usize, 3, 4, 10] {
         for (way, name) in [(1i32, "right"), (-1, "left")] {
-            // Start on the cart this direction wraps off, so the wrap comes first.
             let start = if way > 0 { n - 1 } else { 0 };
             let r = hold(n, start, way, 72);
             verdict(&format!("n={n} hold {name}"), way, &r);

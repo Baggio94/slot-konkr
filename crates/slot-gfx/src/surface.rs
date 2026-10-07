@@ -30,21 +30,16 @@ pub trait Surface {
     fn proc_address(&self, name: &str) -> *const c_void;
 }
 
-/// Largest whole multiple of 720x480 that fits, floored at 1. A fractional blit would
-/// resample the LCD3x mask and break its per pixel phase.
 pub fn fit_scale(win_w: u32, win_h: u32) -> u32 {
     (win_w / OUT_W).min(win_h / OUT_H).max(1)
 }
 
-/// Origin and size of the blit rect inside a window, centred with black bars.
 pub fn fit_rect(win_w: u32, win_h: u32) -> (i32, i32, i32, i32) {
     let s = fit_scale(win_w, win_h) as i32;
     let (w, h) = (OUT_W as i32 * s, OUT_H as i32 * s);
     ((win_w as i32 - w) / 2, (win_h as i32 - h) / 2, w, h)
 }
 
-/// The composite scaled down to fit, aspect preserved, for a panel smaller than 720x480.
-/// Soft, since the mask is resampled, but a 640x480 panel would otherwise lose 80 px of chrome.
 pub fn blit_rect_fit(panel: (u32, u32), shake: f32) -> (i32, i32, i32, i32) {
     let scale = (panel.0 as f32 / OUT_W as f32).min(panel.1 as f32 / OUT_H as f32);
     let w = (OUT_W as f32 * scale).round() as i32;
@@ -58,8 +53,6 @@ pub fn blit_rect_fit(panel: (u32, u32), shake: f32) -> (i32, i32, i32, i32) {
     )
 }
 
-/// The rect the composite is presented in, displaced horizontally by `shake` offscreen
-/// pixels times the blit scale.
 pub fn blit_rect(window: (u32, u32), shake: f32) -> (i32, i32, i32, i32) {
     if window.0 < OUT_W || window.1 < OUT_H {
         return blit_rect_fit(window, shake);

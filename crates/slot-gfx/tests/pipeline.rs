@@ -3,10 +3,8 @@ use slot_gfx::{
 };
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-/// `gl::load_with` writes global function pointers, so two GL tests must not overlap.
 static GL: Mutex<()> = Mutex::new(());
 
-/// None where no GL context is available, so the test skips rather than fails.
 fn compositor() -> Option<(MutexGuard<'static, ()>, HeadlessSurface, Compositor)> {
     let guard = GL.lock().unwrap_or_else(PoisonError::into_inner);
     let surface = HeadlessSurface::new().ok()?;
@@ -19,20 +17,17 @@ fn px(frame: &[u8], x: usize, y: usize) -> [u8; 3] {
     [frame[o], frame[o + 1], frame[o + 2]]
 }
 
-/// A screenshot as the switcher uploads one: RGBA at the source size, not the core's BGRA.
 fn flat_shot(rgb: [u8; 3]) -> Vec<u8> {
     std::iter::repeat_n([rgb[0], rgb[1], rgb[2], 255], (SRC_W * SRC_H) as usize)
         .flatten()
         .collect()
 }
 
-/// Where `video_refresh` centres a Game Boy's 160x144 picture inside the 240x160 buffer.
 const GB_X: usize = 40;
 const GB_Y: usize = 8;
 const GB_W: usize = 160;
 const GB_H: usize = 144;
 
-/// That window in texture coordinates, origin then size.
 const GB_RECT: [f32; 4] = [
     GB_X as f32 / SRC_W as f32,
     GB_Y as f32 / SRC_H as f32,
@@ -40,11 +35,8 @@ const GB_RECT: [f32; 4] = [
     GB_H as f32 / SRC_H as f32,
 ];
 
-/// The whole texture, the default.
 const WHOLE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
-/// A core's frame: XRGB8888, which is B, G, R, unused in memory. `inside` paints the Game Boy
-/// window and `margin` the border around it.
 fn gb_shaped(inside: impl Fn(usize, usize) -> [u8; 3], margin: [u8; 3]) -> Vec<u8> {
     let mut buf = Vec::with_capacity((SRC_W * SRC_H * 4) as usize);
     for y in 0..SRC_H as usize {
@@ -60,15 +52,11 @@ fn gb_shaped(inside: impl Fn(usize, usize) -> [u8; 3], margin: [u8; 3]) -> Vec<u
     buf
 }
 
-/// A source pixel through one mask cell, as the pass computes it. The tolerance is the byte
-/// the shader rounds to, not slack in the relationship.
 fn masked(rgb: [u8; 3], ox: usize, oy: usize) -> [i32; 3] {
     let cell = lcd3x_mask()[oy][ox];
     [0, 1, 2].map(|ch| (rgb[ch] as f32 * cell[ch]).round() as i32)
 }
 
-/// The horizontal period of the pattern in the band, in panel pixels, or `None` if none up to
-/// eight.
 fn period_x(frame: &[u8], xs: std::ops::Range<usize>, ys: std::ops::Range<usize>) -> Option<usize> {
     (1..=8).find(|p| {
         (xs.start..xs.end - p).all(|x| ys.clone().all(|y| px(frame, x, y) == px(frame, x + p, y)))
@@ -106,7 +94,6 @@ fn game_pass_multiplies_every_output_cell_by_the_lcd3x_mask() {
     assert!(worst <= 1, "max channel deviation {worst} from the mask");
 }
 
-/// A missing flip in upload, draw or readback shows up as an upside down or mirrored frame.
 #[test]
 fn the_game_frame_keeps_its_orientation_from_upload_to_readback() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -141,7 +128,6 @@ fn the_game_frame_keeps_its_orientation_from_upload_to_readback() {
     );
 }
 
-/// Power on really squeezes and brightens the drawn picture.
 #[test]
 fn the_picture_strikes_as_a_band_at_the_centre_before_it_fills_the_frame() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -178,7 +164,6 @@ fn the_picture_strikes_as_a_band_at_the_centre_before_it_fills_the_frame() {
     );
 }
 
-/// Items before `Draw::Game` are covered by the picture and items after it are drawn over it.
 #[test]
 fn the_game_marker_draws_the_picture_where_it_sits_in_the_list() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -211,7 +196,6 @@ fn the_game_marker_draws_the_picture_where_it_sits_in_the_list() {
     );
 }
 
-/// A shot carries the same 3x3 mask cells as the live game.
 #[test]
 fn a_saved_shot_is_drawn_through_the_lcd_pass() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -249,14 +233,11 @@ fn a_saved_shot_is_drawn_through_the_lcd_pass() {
     }
 }
 
-/// A still ignores the game's sub-rect and always draws the whole buffer. The live game is the
-/// control, so a build that ignored the sub-rect everywhere would fail.
 #[test]
 fn a_still_is_not_cropped_by_the_picture_mode() {
     let Some((_g, _s, mut c)) = compositor() else {
         return;
     };
-    // A shot with its corners marked, so a crop moves something a comparison can see.
     let mut shot = flat_shot([120, 120, 120]);
     for (x, y) in [(0, 0), (SRC_W as usize - 1, SRC_H as usize - 1)] {
         let o = (y * SRC_W as usize + x) * 4;
@@ -312,7 +293,6 @@ fn draw_list_rects_land_in_top_left_pixel_space() {
     assert_ne!(px(&frame, 2, 3), [255, 0, 0], "rect runs one row long");
 }
 
-/// Updating a texture replaces its contents.
 #[test]
 fn a_replaced_texture_draws_its_new_contents() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -351,7 +331,6 @@ fn blue_light_warms_monotonically_and_clamps_at_the_last_step() {
     }
 }
 
-/// A zero turn draws exactly what an unturned `Tex` draws.
 #[test]
 fn an_unturned_image_draws_exactly_as_a_plain_one() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -388,13 +367,11 @@ fn an_unturned_image_draws_exactly_as_a_plain_one() {
     assert!(plain == turned, "a turn of zero moved something");
 }
 
-/// Positive turns are clockwise on the panel.
 #[test]
 fn a_quarter_turn_takes_the_top_left_corner_to_the_top_right() {
     let Some((_g, _s, mut c)) = compositor() else {
         return;
     };
-    // Four by two, each texel 10 px once drawn: the top left red, the rest blue.
     let mut rgba = [0u8, 0, 255, 255].repeat(8);
     rgba[0..4].copy_from_slice(&[255, 0, 0, 255]);
     let tex = c.create_texture_nearest(4, 2, &rgba);
@@ -411,7 +388,6 @@ fn a_quarter_turn_takes_the_top_left_corner_to_the_top_right() {
     }]);
     let frame = c.read_frame();
 
-    // Turned, the quad stands 20 wide and 40 tall about the same centre, (120, 110).
     assert_eq!(
         px(&frame, 127, 93),
         [255, 0, 0],
@@ -425,14 +401,11 @@ fn a_quarter_turn_takes_the_top_left_corner_to_the_top_right() {
     assert_eq!(px(&frame, 113, 127), [0, 0, 255]);
 }
 
-/// The default and explicit whole-texture sub-rect both draw one source pixel under each 3x3
-/// mask cell, checked against the arithmetic rather than a recorded frame.
 #[test]
 fn the_default_source_rect_draws_exactly_as_before() {
     let Some((_g, _s, mut c)) = compositor() else {
         return;
     };
-    // Three channels that differ everywhere, so a swap or a half-pixel slide shows up.
     let src: Vec<u8> = (0..(SRC_W * SRC_H) as usize)
         .flat_map(|i| {
             let (x, y) = (i % SRC_W as usize, i / SRC_W as usize);
@@ -478,15 +451,11 @@ fn the_default_source_rect_draws_exactly_as_before() {
     );
 }
 
-/// Fullscreen puts the Game Boy picture's corner texels in the panel's corners, with no margin
-/// anywhere on screen.
 #[test]
 fn fullscreen_puts_the_pictures_corners_in_the_panels_corners() {
     let Some((_g, _s, mut c)) = compositor() else {
         return;
     };
-    // Four corners that cannot be confused with each other or with the margin, and a body
-    // that is none of the five.
     let corner = |x: usize, y: usize| match (x, y) {
         (0, 0) => Some([255, 0, 0]),
         (x, 0) if x == GB_W - 1 => Some([0, 255, 0]),
@@ -498,7 +467,6 @@ fn fullscreen_puts_the_pictures_corners_in_the_panels_corners() {
     let src = gb_shaped(|x, y| corner(x, y).unwrap_or([90, 90, 90]), MARGIN);
     c.set_screen_power(1.0);
 
-    // The control: at actual size the panel's own corner is the margin, not the picture.
     c.set_game_source_rect(WHOLE);
     c.begin_frame();
     c.upload_game(&src);
@@ -536,8 +504,6 @@ fn fullscreen_puts_the_pictures_corners_in_the_panels_corners() {
         }
     }
 
-    // Cyan is the margin and nothing in the picture is cyan, so one cyan-dominant pixel
-    // anywhere means the border came along with the stretch.
     let strayed = (0..OUT_H as usize).any(|y| {
         (0..OUT_W as usize).any(|x| {
             let p = px(&full, x, y);
@@ -547,15 +513,11 @@ fn fullscreen_puts_the_pictures_corners_in_the_panels_corners() {
     assert!(!strayed, "the margin is still on screen in fullscreen");
 }
 
-/// Stretching the picture must not disturb the grille's period, measured off the composited
-/// frame.
 #[test]
 fn the_mask_period_is_three_pixels_in_both_modes() {
     let Some((_g, _s, mut c)) = compositor() else {
         return;
     };
-    // Flat inside the window and black outside it, so any structure the measurement finds
-    // is the grille and nothing the picture brought with it.
     let src = gb_shaped(|_, _| [0x80, 0x80, 0x80], [0, 0, 0]);
     c.set_screen_power(1.0);
 
@@ -571,8 +533,6 @@ fn the_mask_period_is_three_pixels_in_both_modes() {
     c.draw_game();
     let full = c.read_frame();
 
-    // At actual size the picture is 480x432 in the middle of the panel; measure inside it,
-    // since the black margin either side has no grille to have a period.
     let lit_x = GB_X * 3..(GB_X + GB_W) * 3;
     let lit_y = GB_Y * 3..(GB_Y + GB_H) * 3;
     assert_eq!(
@@ -586,7 +546,6 @@ fn the_mask_period_is_three_pixels_in_both_modes() {
         "actual size: the grille does not repeat every 3 px down"
     );
 
-    // Fullscreen has no margin, so the measurement runs edge to edge.
     assert_eq!(
         period_x(&full, 0..OUT_W as usize, 0..OUT_H as usize),
         Some(3),

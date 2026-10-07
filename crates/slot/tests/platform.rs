@@ -1,9 +1,3 @@
-//! Which platform's folders a seated cart's files land in, through the real `Session`.
-//!
-//! `Platform::default()` is `Gba`, so only a Game Boy cart can tell a session that stores its
-//! platform from one that assumes it. A wrong platform writes one game's battery save over
-//! another's.
-
 mod common;
 
 use std::path::Path;
@@ -14,12 +8,10 @@ use slot::session::Session;
 use slot_input::{Btn, RawEvent};
 use slot_store::{core_for_platform, Core, Platform, StateRing};
 
-/// The core the session opens a Game Boy cart on, so these stay about the platform folder.
 fn seated_core(root: &Path, stem: &str) -> Core {
     core_for_platform(root, stem, Platform::Gb)
 }
 
-/// Seats the cart under the shelf and runs past the autosave deadline.
 fn seat_and_autosave(root: &Path) {
     common::clocked(root);
     let mut s = Session::boot(root.to_path_buf());
@@ -39,8 +31,6 @@ fn seat_and_autosave(root: &Path) {
     s.app_mut().tick_ms(60_000);
 }
 
-/// `session.rs` hands the cart's `Platform` to `App`; without it a Game Boy cart's state lands in
-/// the GBA folder. Two carts, because a single cart boots straight past the shelf.
 #[test]
 fn a_game_boy_carts_autosave_lands_under_gb_and_never_under_gba() {
     let d = common::tmp_root_with_gb_carts(&["Tetris", "Zelda"]);
@@ -73,7 +63,6 @@ fn a_game_boy_carts_autosave_lands_under_gb_and_never_under_gba() {
          of the same name keeps its own"
     );
 
-    // The battery save collides too: a GBA and a Game Boy cart of the same name would share a path.
     assert!(
         d.path().join("Saves/GB/Tetris.sav").is_file(),
         "the Game Boy cart's battery save did not land under its own platform's directory"
@@ -85,8 +74,6 @@ fn a_game_boy_carts_autosave_lands_under_gb_and_never_under_gba() {
     );
 }
 
-/// A hand-organised Game Boy card is scanned, seated, saved under `GB/`, and resumed on the next
-/// boot. `e2e.rs` covers GBA, which cannot tell a kept platform from the default.
 #[test]
 fn a_hand_organised_game_boy_card_scans_seats_saves_and_resumes() {
     let d = common::tmp_root_with_gb_carts(&["Tetris", "Zelda"]);

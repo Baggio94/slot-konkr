@@ -1,7 +1,3 @@
-//! The link screen's art, through `draw_link_art`, composited in software.
-//!
-//! `SCRATCH_PNG_DIR=/tmp cargo test -p slot --test render_link_screen -- --nocapture`
-
 mod common;
 
 use std::io;
@@ -22,8 +18,6 @@ use slot_ui::{
     UndoFace, OUT_H, OUT_W,
 };
 
-/// One rastered face. `CartFace` and `UndoFace` carry the same fields; the compositor wants only
-/// the pixels and their size.
 struct Face {
     rgba: Vec<u8>,
     w: u32,
@@ -81,7 +75,6 @@ fn sprites_and_faces() -> (LinkSprites, Vec<(TexId, Face)>) {
     (sprites, faces)
 }
 
-/// Straight-alpha over-compositing, nearest neighbour, with `Turned` rotated about its centre.
 fn composite(out: &[Draw], faces: &[(TexId, Face)]) -> Vec<u8> {
     let (w, h) = (OUT_W as usize, OUT_H as usize);
     let mut px = vec![0u8; w * h * 4];
@@ -165,7 +158,6 @@ fn render(menu: GameMenu, kind: LinkKind, now: u64, name: &str) -> Vec<u8> {
     px
 }
 
-/// The composited frame, written out to look at when `SCRATCH_PNG_DIR` names somewhere to put it.
 fn dump(px: &[u8], name: &str) {
     let Ok(dir) = std::env::var("SCRATCH_PNG_DIR") else {
         return;
@@ -192,8 +184,6 @@ fn the_host_picks_a_purple_plug_over_the_port() {
         housing[2] > housing[1] + 30,
         "no purple housing above the port: {housing:?}"
     );
-    // R11: (360, 396) lands on the port's middle gold pin (pins at y 7-12, x 359-364 on the port
-    // face); sample the dark slot below the pins instead.
     let slot = at(&px, 360, 406);
     assert!(
         slot.iter().all(|c| *c < 0x14),
@@ -255,12 +245,8 @@ fn a_failed_plug_leaves_where_it_waited() {
     );
 }
 
-/// The compositor's ground. A sample still equal to this is one nothing reached.
 const GROUND: [u8; 3] = [0x05, 0x05, 0x08];
 
-/// The plug visibly leaves the port, in pixels, not just via a moving `plug_tip`. The sample is
-/// inside the plug housing, 60 px above the tip and above `PORT_Y`: plug when seated, ground
-/// when withdrawn.
 #[test]
 fn ending_a_link_pulls_the_plug_back_out_of_the_port() {
     let menu = GameMenu::Unplug {
@@ -282,8 +268,6 @@ fn ending_a_link_pulls_the_plug_back_out_of_the_port() {
     );
 }
 
-/// The same for the adapter, which lifts off the port. The sample is its label plate where a
-/// seated adapter puts it.
 #[test]
 fn ending_a_wireless_link_lifts_the_adapter_off_the_port() {
     let menu = GameMenu::Unplug {
@@ -305,22 +289,14 @@ fn ending_a_wireless_link_lifts_the_adapter_off_the_port() {
     );
 }
 
-// --- the key legend -----------------------------------------------------------------------
-//
-// Laid out in `App::draw_game_menu` from the seated cart, so it takes a whole `App`, and is
-// rendered because a cap off panel, at zero alpha or zero size is still in the draw list.
-
-/// Whether a lit pixel is there at all: anything the compositor left other than the ground.
 fn lit(px: &[u8], o: usize) -> bool {
     px[o] != 0x05 || px[o + 1] != 0x05 || px[o + 2] != 0x08
 }
 
-/// How much type the frame actually carries.
 fn ink(px: &[u8]) -> usize {
     (0..px.len() / 4).filter(|i| lit(px, i * 4)).count()
 }
 
-/// The rows the frame has anything on, top and bottom.
 fn inked_rows(px: &[u8]) -> (usize, usize) {
     let rows: Vec<usize> = (0..OUT_H as usize)
         .filter(|y| (0..OUT_W as usize).any(|x| lit(px, (y * OUT_W as usize + x) * 4)))
@@ -331,7 +307,6 @@ fn inked_rows(px: &[u8]) -> (usize, usize) {
     )
 }
 
-/// The real key caps, rastered the way the device rasters them, in `LinkLegend::ALL` order.
 fn legend_faces() -> Vec<(TexId, Face)> {
     LinkLegend::ALL
         .iter()
@@ -351,11 +326,8 @@ fn legend_faces() -> Vec<(TexId, Face)> {
         .collect()
 }
 
-/// The link screen's legend for a cart with the given header, composited into a frame. Only
-/// the legend's textures get a face; the filter never decides which pixels count.
 fn legend_pixels(title: &str, code: &str, name: &str) -> Vec<u8> {
     let d = common::tmp_root_with_carts(&["Zzz"]);
-    // "Cart" sorts before "Zzz", so `Action::Insert` seats it.
     common::write_retail_header(&d, "Cart", title, code);
     let mut app = common::boot(d.path());
     app.apply(Action::Insert);
@@ -379,7 +351,6 @@ fn legend_pixels(title: &str, code: &str, name: &str) -> Vec<u8> {
     px
 }
 
-/// The legend of the screen a player opens over a live session, composited the same way.
 fn connected_legend_pixels(name: &str) -> Vec<u8> {
     let d = common::tmp_root_with_carts(&["Zzz"]);
     common::write_retail_header(&d, "Cart", "POKEMON RUBY", "AXVE");
@@ -392,7 +363,6 @@ fn connected_legend_pixels(name: &str) -> Vec<u8> {
     }
     let faces = legend_faces();
     app.set_link_legend_faces(faces.iter().map(|(t, f)| (*t, f.w)).collect());
-    // A session, then the shortcut: which is the screen this is about.
     app.begin_link(0);
     app.apply(Action::GameMenu);
     assert!(
@@ -410,7 +380,6 @@ fn connected_legend_pixels(name: &str) -> Vec<u8> {
     px
 }
 
-/// One cap's ink, composited alone, for holding a row against the caps it should be made of.
 fn cap_ink(key: &'static str, label: &'static str) -> usize {
     let f: Face = hint_face(key, label).into();
     let (w, h) = (f.w as f32, f.h as f32);
@@ -426,8 +395,6 @@ fn cap_ink(key: &'static str, label: &'static str) -> usize {
     ink(&composite(&[draw], &[(tex, f)]))
 }
 
-/// The screen over a live session offers only B (leave it running) and A (end it), checked on
-/// the glass.
 #[test]
 fn the_connected_screen_shows_back_and_end_link() {
     let px = connected_legend_pixels("legend-connected");
@@ -439,13 +406,6 @@ fn the_connected_screen_shows_back_and_end_link() {
     );
 }
 
-// --- the banner a refused press gets -------------------------------------------------------
-//
-// Two refusals can apply to one press: a cart nothing can link, and a core that cannot link.
-// Which sentence the player reads is read off the pixels, since `app.toast()` would agree with a
-// face uploaded in the wrong order.
-
-/// The real banner faces, in `Toast::ALL` order, which is how `App` finds each one.
 fn toast_faces() -> Vec<(TexId, Face)> {
     Toast::ALL
         .iter()
@@ -453,11 +413,8 @@ fn toast_faces() -> Vec<(TexId, Face)> {
         .collect()
 }
 
-/// The banner on the glass after SELECT+MENU over a cart this core is running. Only the
-/// banner's own textures get a face.
 fn banner_pixels(core: Core, title: &str, code: &str, name: &str) -> Vec<u8> {
     let d = common::tmp_root_with_carts(&["Zzz"]);
-    // "Cart" sorts before "Zzz", so `Action::Insert` seats it.
     common::write_retail_header(&d, "Cart", title, code);
     let mut app = common::boot(d.path());
     app.apply(Action::Insert);
@@ -475,7 +432,6 @@ fn banner_pixels(core: Core, title: &str, code: &str, name: &str) -> Vec<u8> {
     );
     let mut out = Vec::new();
     app.draw(&mut out);
-    // Drawn on the frame the press landed on, which is where the fade is still at full.
     let banner: Vec<Draw> = out
         .into_iter()
         .filter(|d| matches!(*d, Draw::Tex { tex, .. } if faces.iter().any(|(t, _)| *t == tex)))
@@ -485,7 +441,6 @@ fn banner_pixels(core: Core, title: &str, code: &str, name: &str) -> Vec<u8> {
     px
 }
 
-/// One banner's ink, composited alone, for holding a frame against the sentence it should be.
 fn banner_ink(t: Toast) -> usize {
     let f: Face = toast_face(t).into();
     let (w, h) = (f.w as f32, f.h as f32);
@@ -501,11 +456,8 @@ fn banner_ink(t: Toast) -> usize {
     ink(&composite(&[draw], &[(tex, f)]))
 }
 
-/// Apotris: both refusals apply, but NO LINK SUPPORT must be what reaches the glass, since
-/// switching core would not help.
 #[test]
 fn a_cart_nothing_can_link_reads_no_link_support_on_the_glass() {
-    // gpSP, since mGBA's cable carries Apotris.
     let px = banner_pixels(Core::Gpsp, "APOTRIS", "2ATE", "banner-apotris-gpsp");
     assert!(
         ink(&px) > 0,
@@ -521,7 +473,6 @@ fn a_cart_nothing_can_link_reads_no_link_support_on_the_glass() {
         banner_ink(Toast::NeedsGpsp),
         "the two sentences carry the same ink, so this frame proves nothing"
     );
-    // In the plate band at the top, whole.
     let (first, last) = inked_rows(&px);
     assert!(
         last < OUT_H as usize / 4,
@@ -529,10 +480,8 @@ fn a_cart_nothing_can_link_reads_no_link_support_on_the_glass() {
     );
 }
 
-/// A cart gpSP can carry, on mGBA, reads the sentence naming the core that would link it.
 #[test]
 fn a_cart_gpsp_can_link_reads_please_switch_to_gpsp() {
-    // A Wireless Adapter cart, which mGBA's cable cannot carry.
     let px = banner_pixels(Core::Mgba, "POKEMON EMER", "BPEE", "banner-emerald-mgba");
     assert!(
         ink(&px) > 0,
@@ -545,7 +494,6 @@ fn a_cart_gpsp_can_link_reads_please_switch_to_gpsp() {
     );
 }
 
-/// The SELECT Mode cap alone: the exact extra type the switchable screen should carry.
 fn mode_cap_ink() -> usize {
     let f: Face = hint_face("SELECT", "Mode").into();
     let (w, h) = (f.w as f32, f.h as f32);
@@ -561,9 +509,6 @@ fn mode_cap_ink() -> usize {
     ink(&composite(&[draw], &[(tex, f)]))
 }
 
-/// The legend names SELECT only where it does something. Ruby runs as `mul_poke` by cable and
-/// `rfu` by adapter, so the switch is a choice; gpSP links Mario Golf over the adapter either way.
-/// The first frame carries exactly one SELECT Mode cap more type than the second.
 #[test]
 fn the_legend_shows_select_mode_only_where_the_hardware_can_be_switched() {
     let switchable = legend_pixels("POKEMON RUBY", "AXVE", "legend-switchable");
@@ -585,7 +530,6 @@ fn the_legend_shows_select_mode_only_where_the_hardware_can_be_switched() {
         "the difference between the two frames is not one SELECT Mode cap"
     );
 
-    // On the strip, and the whole of it on the panel.
     for (px, what) in [(&switchable, "switchable"), (&fixed, "fixed")] {
         let (first, last) = inked_rows(px);
         assert!(
@@ -599,14 +543,6 @@ fn the_legend_shows_select_mode_only_where_the_hardware_can_be_switched() {
     }
 }
 
-// --- the sentence the first step shows ------------------------------------------------------
-//
-// Opening the link screen asks for a warm, which takes about 1.1 s out of the step that runs
-// `slotlink.sh link host|join`. Once the driver is loaded the step says it is looking for the other
-// player. Read off the glass, since an index into the wrong face list draws the wrong line.
-
-/// A radio whose warm finishes when the test says so. It can accept a `Warm` and still report a
-/// cold driver, the 1.1 s a quick player presses A inside.
 #[derive(Clone, Default)]
 struct FakeRadio {
     warm: Arc<AtomicBool>,
@@ -623,7 +559,6 @@ impl RadioJobs for FakeRadio {
     }
 }
 
-/// The real step sentences, in `LinkStep::ALL` order, through the rasteriser the device uses.
 fn step_faces() -> Vec<(TexId, Face)> {
     LinkStep::ALL
         .iter()
@@ -631,12 +566,8 @@ fn step_faces() -> Vec<(TexId, Face)> {
         .collect()
 }
 
-/// The line on the glass while the worker sits on its first step, with the driver warm or cold,
-/// and what the radio was asked for on the way there.
 fn first_step_pixels(warm: bool, name: &str) -> (Vec<u8>, Vec<RadioJob>) {
     let d = common::tmp_root_with_carts(&["Zzz"]);
-    // "Cart" sorts before "Zzz", so `Action::Insert` seats it. Ruby, because the link screen only
-    // opens for a cart gpSP can carry.
     common::write_retail_header(&d, "Cart", "POKEMON RUBY", "AXVE");
     let mut app = common::boot(d.path());
     app.apply(Action::Insert);
@@ -652,7 +583,6 @@ fn first_step_pixels(warm: bool, name: &str) -> (Vec<u8>, Vec<RadioJob>) {
     app.set_link_step_faces(faces.iter().map(|(t, f)| (*t, f.w, f.h)).collect());
     app.apply(Action::GameMenu);
     assert!(app.game_menu_open(), "the link screen never opened");
-    // A worker held on its first step, standing in for an `slotlink.sh link` that has not answered.
     let (release, held) = channel::<()>();
     app.start_link(
         LinkStarter::spawn_with(
@@ -691,7 +621,6 @@ fn first_step_pixels(warm: bool, name: &str) -> (Vec<u8>, Vec<RadioJob>) {
     (px, asked)
 }
 
-/// One sentence's ink, composited alone, for holding a frame against the line it should carry.
 fn line_ink(step: LinkStep) -> usize {
     let f: Face = menu_face(step.line()).into();
     let (w, h) = (f.w as f32, f.h as f32);
@@ -707,8 +636,6 @@ fn line_ink(step: LinkStep) -> usize {
     ink(&composite(&[draw], &[(tex, f)]))
 }
 
-/// Cold, the screen still says the load is ahead. The warm was already asked for: the caption
-/// follows the driver finishing, not the request.
 #[test]
 fn a_cold_radio_says_it_is_bringing_the_radio_up() {
     let (px, asked) = first_step_pixels(false, "step-radio-cold");
@@ -729,7 +656,6 @@ fn a_cold_radio_says_it_is_bringing_the_radio_up() {
     );
 }
 
-/// Warm, and the sentence about the wait is gone: the step goes straight to what it is doing.
 #[test]
 fn a_warm_radio_goes_straight_to_looking_for_the_other_player() {
     let (px, _) = first_step_pixels(true, "step-radio-warm");
@@ -739,7 +665,6 @@ fn a_warm_radio_goes_straight_to_looking_for_the_other_player() {
         line_ink(LinkStep::Waiting),
         "a warm radio is still being announced as coming up"
     );
-    // Up where the link screen's one line sits, and whole.
     let (first, last) = inked_rows(&px);
     assert!(
         last < OUT_H as usize / 2,

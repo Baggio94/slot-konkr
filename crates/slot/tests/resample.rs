@@ -53,11 +53,6 @@ fn a_starved_ratio_stretches_and_a_full_one_compresses() {
     );
 }
 
-/// `src_hz` comes from the core's `retro_system_av_info.timing.sample_rate`. A degenerate rate
-/// must pass through: NaN and infinity would silence the resampler for the session, and zero
-/// or negative would spin `process` until the device runs out of memory.
-///
-/// NaN is asserted first because it fails rather than hangs.
 #[test]
 fn a_core_rate_that_is_not_a_rate_passes_the_samples_through() {
     for (name, hz) in [

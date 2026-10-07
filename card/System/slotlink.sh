@@ -1,39 +1,18 @@
 #!/bin/sh
-# slot's two-device link network, shipped on the card and run as `sh slotlink.sh link <verb>`.
-#
-#   link host   WPA2 access point on wlan1, addressed 10.42.0.1
-#   link join   station on wlan0, addressed 10.42.0.2. Exits 3 when no host answers.
-#   link down   tear down whatever a session left
-#   link warm   wait for the driver's interfaces, so a later host or join starts faster
-#   link cool   accepted and ignored: BaseOS owns the driver
-#
-# BaseOS loads 8821cs at boot, with its own recovery for radios that reset slowly, so this never
-# loads or unloads it. Needs only wpa_supplicant, wpa_cli and busybox, all in BaseOS's rootfs. Every external is
-# overridable through AGS_* so the script runs under test off-device.
 set -u
 
 NET="${AGS_NET_SYS:-/sys/class/net}"
 RUN="${AGS_RUN:-/run}"
 
-# A private two-device network. The PSK keeps the link encrypted, not secret.
 LINK_SSID="${AGS_LINK_SSID:-slotlink}"
 LINK_PSK="${AGS_LINK_PSK:-slotlink0}"
-# Never a DFS channel: on an SP, 5580 MHz kept the AP from ever starting.
 LINK_FREQ="${AGS_LINK_FREQ:-5745}"
 LINK_HOST_IP="${AGS_LINK_HOST_IP:-10.42.0.1/24}"
 LINK_PEER_IP="${AGS_LINK_PEER_IP:-10.42.0.2/24}"
-# Waits are in seconds of wall clock, not polls: each poll also runs wpa_cli, about 0.1 s on the
-# SP, which stretched a count of 0.25 s polls to half as long again.
 LINK_WAIT_S="${AGS_LINK_WAIT_S:-10}"
-# How long a joiner stays pinned to LINK_FREQ before scanning every channel. 20 s covers a host
-# that starts well after the joiner (its driver and AP take about 6 s); with LINK_WAIT_S behind it
-# this matches the 30 s the host listens for.
 LINK_PIN_WAIT_S="${AGS_LINK_PIN_WAIT_S:-20}"
-# wpa_supplicant rescans only every 5 s on its own, so a joiner asks every 0.5 s.
 LINK_RESCAN="${AGS_LINK_RESCAN:-2}"
-# Extra global lines for the AP config, for measurements. Empty in production.
 LINK_AP_GLOBAL="${AGS_LINK_AP_GLOBAL:-}"
-# Append a timeline of each step here (seconds since boot). /dev/kmsg puts it in dmesg.
 LINK_TRACE="${AGS_LINK_TRACE:-}"
 LINK_MARK="$RUN/slotlink.session"
 
@@ -41,7 +20,6 @@ WPA_SUPPLICANT="${AGS_WPA_SUPPLICANT:-wpa_supplicant}"
 WPA_CLI="${AGS_WPA_CLI:-wpa_cli}"
 IP="${AGS_IP:-ip}"
 UPTIME="${AGS_UPTIME:-/proc/uptime}"
-# `wpa_cli -i wlan0` with no -p looks here, so the joiner's socket must live here too.
 CTRL_DIR="${AGS_CTRL_DIR:-/var/run/wpa_supplicant}"
 
 trace() {
@@ -50,7 +28,6 @@ trace() {
 	return 0
 }
 
-# $1 exists under $NET within $2 polls.
 wait_dev() {
 	w=0
 	while [ ! -d "$NET/$1" ] && [ "$w" -lt "$2" ]; do
@@ -60,8 +37,6 @@ wait_dev() {
 	[ -d "$NET/$1" ]
 }
 
-# wlan0, which BaseOS brings up in the background at boot: early after boot it may still be
-# on its way.
 wifi_up() {
 	wait_dev wlan0 40 || return 0
 	trace "wlan0 present"
@@ -69,8 +44,6 @@ wifi_up() {
 	$IP link set wlan0 up 2>/dev/null || true
 }
 
-# Stop the supplicant behind socket $2 in $1 and wait for the socket to go: a new supplicant
-# refuses to start while it exists. A socket nobody answers on is removed.
 supplicant_stop() {
 	if $WPA_CLI -p "$1" -i "$2" terminate >/dev/null 2>&1; then
 		s=0
@@ -85,8 +58,6 @@ supplicant_stop() {
 	return 0
 }
 
-# Everything a session leaves on either end. Run before host and join as well as by down,
-# because slot does not always get to call down.
 link_clear() {
 	supplicant_stop "$RUN/wpa_ap" wlan1
 	$IP addr flush dev wlan1 2>/dev/null || true
@@ -98,9 +69,6 @@ link_clear() {
 	fi
 }
 
-# Wait for COMPLETED. $1 socket dir, $2 interface, $3 bound in seconds, $4 polls between scan
-# requests (0 for none), $5 frequency to scan (empty for all). A control-socket SCAN sweeps every
-# channel unless told otherwise, which takes seconds.
 link_wait() {
 	p=0
 	was=
@@ -125,7 +93,6 @@ link_wait() {
 	done
 }
 
-# The host always uses wlan1, which the driver registers beside wlan0.
 link_host() {
 	echo "$$" > "$LINK_MARK"
 	trace "host: asked"
@@ -137,7 +104,6 @@ link_host() {
 	/bin/mkdir -p "$RUN/wpa_ap"
 	{
 		echo "ctrl_interface=$RUN/wpa_ap"
-		# Start the AP without first scanning for a network to join: 0.4 s instead of 4.5 s.
 		echo 'ap_scan=2'
 		if [ -n "$LINK_AP_GLOBAL" ]; then
 			printf '%s\n' "$LINK_AP_GLOBAL"
@@ -156,13 +122,11 @@ link_host() {
 
 	$IP link set wlan1 up 2>/dev/null || true
 	$WPA_SUPPLICANT -B -i wlan1 -c "$RUN/slotlink-ap.conf" -Dnl80211 >/dev/null 2>&1 || return 1
-	# Never address an AP that did not come up: that looks like a working link with nobody there.
 	link_wait "$RUN/wpa_ap" wlan1 "$LINK_WAIT_S" 0 "" || return 1
 	$IP addr add "$LINK_HOST_IP" dev wlan1 2>/dev/null || true
 	trace "host: addressed"
 }
 
-# $1 is the frequency to pin, or empty to scan everything. Pinned associates in about 1 s.
 link_sta_conf() {
 	{
 		echo "ctrl_interface=$CTRL_DIR"
@@ -179,8 +143,6 @@ link_sta_conf() {
 	/bin/chmod 600 "$RUN/slotlink-sta.conf"
 }
 
-# Attempt one pins LINK_FREQ; attempt two scans every channel, for a host that is also on a home
-# network and so sits on that network's channel.
 link_join() {
 	echo "$$" > "$LINK_MARK"
 	trace "join: asked"
@@ -213,7 +175,6 @@ link_join() {
 		attempt=$((attempt + 1))
 	done
 	trace "join: no host found"
-	# 3 means the radio worked and nobody answered; 1 means the radio failed.
 	return 3
 }
 

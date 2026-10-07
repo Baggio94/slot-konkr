@@ -1,17 +1,3 @@
-//! Records a site clip: slot on a card root, driven by a script of presses at exactly 60 fps,
-//! the emulator stepped once per frame, frames piped to ffmpeg at 720x480.
-//!
-//! `SLOT_SILENT=1 cargo run --release --example record -- ROOT SCRIPT OUT`
-//!
-//! A script is one command per line, `#` for comments. Frames count from the last command:
-//!   wait N         run N frames
-//!   tap BTN [N]    press for N frames (6), then release
-//!   hold BTN N     press for N frames, then release
-//!   down BTN / up BTN
-//!   rec [NAME]     start a clip: OUT itself, or OUT/NAME.mp4 when named
-//!   cut            end it; nothing outside a clip is kept, and one session can cut many
-//! BTN is up, down, left, right, a, b, x, y, l1, r1, l2, r2, start, select or menu.
-
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -23,7 +9,6 @@ use slot_power::SimPlatform;
 
 const FPS: f64 = 60.0;
 
-/// 2026-09-30 16:00 UTC, noon on the card's UTC-4.
 const CLOCK: i64 = 1_790_784_000;
 
 enum Step {
@@ -34,7 +19,6 @@ enum Step {
     Cut,
 }
 
-/// One clip's ffmpeg, fed from its own thread.
 struct Clip {
     path: String,
     frames: std::sync::mpsc::Sender<Vec<u8>>,
@@ -54,8 +38,6 @@ impl Clip {
             .spawn()
             .expect("ffmpeg");
         let mut pipe = ffmpeg.stdin.take().unwrap();
-        // Off the frame loop: a frame that stalls more than 25 ms lets the emulator run one on
-        // its own clock.
         let (frames, queued) = std::sync::mpsc::channel::<Vec<u8>>();
         let writer = std::thread::spawn(move || {
             for pixels in queued {
@@ -130,8 +112,6 @@ fn parse(script: &str) -> Vec<Step> {
     steps
 }
 
-/// What the device does after the frame the recorder reads: the blit's blue light gain, and the
-/// backlight, which is linear in its level and shown against the level the take started at.
 fn panel(pixels: &mut [u8], app: &slot::app::App, lit: u8) {
     let light = f32::from(app.brightness()) / f32::from(lit);
     let gain = blue_light_gain(app.blue_light()).map(|g| g * light);
@@ -145,7 +125,6 @@ fn panel(pixels: &mut [u8], app: &slot::app::App, lit: u8) {
     }
 }
 
-/// Hands the frontend whatever the script queued since the last poll.
 #[derive(Default)]
 struct Scripted(Vec<RawEvent>);
 
@@ -165,28 +144,21 @@ fn main() {
 
     let surface = HeadlessSurface::new().expect("headless GL");
     let mut compositor = Compositor::new(&surface).expect("compositor");
-    // A stopped clock: every clip shows the same time, and a loop ends on the minute it began.
     let mut frontend = Frontend::boot(Box::new(SimPlatform::at(root.into()).stopped_at(CLOCK)));
     frontend.upload_faces(&mut compositor);
     frontend.drive_emulator();
 
     let mut input = Scripted::default();
-    // The level the card starts at shows as recorded; a change from it dims or brightens.
     let lit = frontend.app().brightness().max(1);
     let mut frame = 0u64;
     let mut clip: Option<Clip> = None;
     let present = Duration::from_secs_f64(1.0 / FPS);
-    // Real time: fast forward runs the emulator on its own clock, so a recorder racing ahead of
-    // it caught a fraction of the frames the device shows.
     let mut due = std::time::Instant::now();
     let mut run = |input: &mut Scripted, frame: &mut u64, clip: &mut Option<Clip>| {
-        // A core loads on its own thread in real time. Waiting here keeps that out of the
-        // video, so a take never depends on how fast this machine loads it.
         let loading = std::time::Instant::now();
         while frontend.core_settling() && loading.elapsed() < Duration::from_secs(5) {
             std::thread::sleep(Duration::from_millis(5));
         }
-        // Off camera, as fast as the frames come, so a long walk to a scene costs no wait.
         due += present;
         match due.checked_duration_since(std::time::Instant::now()) {
             Some(wait) if clip.is_some() => std::thread::sleep(wait),
@@ -195,11 +167,8 @@ fn main() {
         *frame += 1;
         let now = (*frame as f64 * 1000.0 / FPS) as Millis;
         frontend.advance_at(input, now, (1.0 / FPS) as f32);
-        // Long enough that every frame is the emulator's own, whatever the host's speed.
         frontend.step_emulator(present, Duration::from_secs(1));
         frontend.compose(&mut compositor);
-        // Read every frame, kept or not: frames composed and never read back came out black
-        // once reading began.
         let mut pixels = compositor.read_frame();
         panel(&mut pixels, frontend.app(), lit);
         if let Some(clip) = clip {

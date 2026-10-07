@@ -1,8 +1,3 @@
-//! A on the shelf. A tap resumes where the cart left off, a hold starts it clean.
-//!
-//! Two carts throughout: one cart on the card is a dedicated device and boots past the
-//! shelf entirely.
-
 mod common;
 
 use std::path::Path;
@@ -38,7 +33,6 @@ fn a_tap_resumes_and_a_hold_starts_clean() {
     assert!(hold.starting_clean(), "holding A still resumed");
 }
 
-/// Skipped, not destroyed. A clean start is for getting past a stuck save, not for losing it.
 #[test]
 fn a_clean_start_leaves_the_state_on_disk() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -54,7 +48,6 @@ fn a_clean_start_leaves_the_state_on_disk() {
     );
 }
 
-/// The hold fires while the finger is down, not on release.
 #[test]
 fn the_clean_start_fires_on_the_threshold_not_the_release() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -70,7 +63,6 @@ fn the_clean_start_fires_on_the_threshold_not_the_release() {
     );
 }
 
-/// The release after a fired hold is not a second press, or it would insert again and resume.
 #[test]
 fn the_release_after_a_hold_is_not_another_press() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -81,8 +73,6 @@ fn the_release_after_a_hold_is_not_another_press() {
     assert!(a.starting_clean(), "the release resumed the cart after all");
 }
 
-/// The mock core's frame counter, read off the card after an autosave. A resumed cart is far
-/// ahead of a clean one.
 fn counter_after(root: &Path, hold: bool) -> u64 {
     common::clocked(root);
     let mut s = Session::boot(root.to_path_buf());
@@ -96,14 +86,12 @@ fn counter_after(root: &Path, hold: bool) -> u64 {
         s.update(1.0 / 60.0);
         std::thread::sleep(Duration::from_millis(1));
     }
-    // Past the autosave deadline, the cheapest way to get the core's state written out.
     s.app_mut().tick_ms(60_000);
     let state = persist::read_resume(root, Platform::Gba, Core::Mgba, "Emerald")
         .expect("nothing was flushed");
     u64::from_le_bytes(state.try_into().expect("the mock's state is 8 bytes"))
 }
 
-/// The flag reaches the core, not only the phase.
 #[test]
 fn a_hold_hands_the_core_no_state_and_a_tap_hands_it_the_resume() {
     let tapped = tmp_root_with_carts(&["Emerald", "Fusion"]);

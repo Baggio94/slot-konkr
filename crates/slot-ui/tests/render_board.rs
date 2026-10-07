@@ -1,7 +1,3 @@
-//! Rasterises the open cart's face to a PNG. Does nothing unless `SCRATCH_PNG` names a file:
-//!
-//! `SCRATCH_PNG=/tmp/board.png cargo test -p slot-ui --test render_board -- --nocapture`
-
 use slot_store::{Cart, Platform};
 use slot_ui::board_face;
 

@@ -5,7 +5,6 @@ use slot::app::{App, Phase};
 use slot_input::{Action, Btn};
 use slot_store::{Cart, Core, Platform, StateRing};
 
-/// No content root, so nothing this app does can reach a ring.
 fn app_playing(stem: &str) -> App {
     let mut a = App::new(vec![Cart {
         platform: Platform::Gba,
@@ -31,7 +30,6 @@ fn double_tap_menu_with_no_states_does_not_open_the_switcher() {
     assert!(matches!(a.phase(), Phase::Playing { .. }));
 }
 
-/// The same no-op on a real card with a cart that has never been saved.
 #[test]
 fn a_cart_that_has_never_been_saved_does_not_open_the_switcher() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -59,7 +57,6 @@ fn saving_pushes_a_polaroid_with_its_picture() {
     );
 }
 
-/// The stamp is the filename, so two saves inside one second would silently be one save.
 #[test]
 fn two_saves_in_the_same_second_are_two_entries() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -94,7 +91,6 @@ fn a_saved_state_opens_the_switcher_and_a_loads_it_back() {
     );
 }
 
-/// B is the way out, not a second load button.
 #[test]
 fn b_dismisses_the_switcher_without_loading() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -107,7 +103,6 @@ fn b_dismisses_the_switcher_without_loading() {
     assert!(loaded.lock().expect("loaded").is_none());
 }
 
-/// A second double tap of MENU is the same dismissal, per the input map.
 #[test]
 fn menu_dismisses_the_switcher_it_opened() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -118,7 +113,6 @@ fn menu_dismisses_the_switcher_it_opened() {
     assert!(matches!(a.phase(), Phase::Playing { .. }));
 }
 
-/// Left and right walk the ring, not the shelf behind it, and A loads the one landed on.
 #[test]
 fn flicking_selects_which_state_a_loads() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -138,7 +132,6 @@ fn flicking_selects_which_state_a_loads() {
     );
 }
 
-/// `SELECT+L1` is the no-look load. It takes the newest without opening anything.
 #[test]
 fn load_state_takes_the_newest_entry_without_the_switcher() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -157,8 +150,6 @@ fn load_state_takes_the_newest_entry_without_the_switcher() {
     assert!(matches!(a.phase(), Phase::Playing { .. }));
 }
 
-/// The switcher cannot eject and has no shelf underneath: both would leave the emulator paused
-/// with no way back.
 #[test]
 fn the_switcher_swallows_the_shelf_and_eject_bindings() {
     let d = tmp_root_with_carts(&["Emerald"]);

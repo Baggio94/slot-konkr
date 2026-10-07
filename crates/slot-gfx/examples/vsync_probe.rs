@@ -1,16 +1,3 @@
-//! How the SP's framebuffer EGL paces presents, against the display engine's vsync interrupt.
-//! Runs with slot stopped, since it owns the panel.
-//!
-//!   vsync_probe <pace> [finish] [delay_ms]
-//!     pace = swap    loop as fast as the swap allows
-//!     pace = sleep   sleep each loop to a fixed 16.667 ms, as slot did
-//!     finish         glFinish after every swap (hard GPU sync)
-//!     delay_ms       after the swap returns, wait this long before drawing the next frame
-//!
-//! A thread polls /proc/interrupts for the display IRQ and stamps every vsync. For each frame the
-//! first vsync after the swap was called is when the new buffer can first be on the panel; the
-//! report gives how long each frame waited for it, and whether the swap returned before it.
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -74,7 +61,7 @@ fn main() {
 
     let mut surface = FbdevSurface::new().expect("egl");
     gl::load_with(|s| surface.proc_address(s));
-    let mut frames = Vec::new(); // (swap called, swap returned)
+    let mut frames = Vec::new();
     let frame = Duration::from_micros(16_667);
     for i in 0..FRAMES {
         let began = Instant::now();

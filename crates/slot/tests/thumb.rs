@@ -10,7 +10,6 @@ fn decode(png_bytes: &[u8]) -> (Vec<u8>, u32, u32) {
     (buf, info.width, info.height)
 }
 
-/// libretro hands over XRGB8888 little endian, so the bytes arrive B, G, R, X.
 #[test]
 fn a_thumbnail_keeps_the_frames_colours() {
     let mut frame = vec![0u8; (GBA_W * GBA_H * 4) as usize];
@@ -23,8 +22,6 @@ fn a_thumbnail_keeps_the_frames_colours() {
     assert_eq!(&rgb[..3], &[0xd0, 0x40, 0x20]);
 }
 
-/// A save before the core's first frame has no picture; a truncated read would be worse than
-/// no polaroid.
 #[test]
 fn a_short_frame_is_not_a_thumbnail() {
     assert!(thumb::png(&[]).is_none());

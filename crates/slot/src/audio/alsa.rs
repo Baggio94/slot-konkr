@@ -1,6 +1,3 @@
-//! ALSA through `dlopen`, as the libretro core is loaded, so the cross build needs no rootfs
-//! `libasound` for six PCM entry points.
-
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -16,14 +13,10 @@ const SND_PCM_FORMAT_S16_LE: c_int = 2;
 const SND_PCM_ACCESS_RW_INTERLEAVED: c_int = 3;
 const CHANNELS: c_uint = 2;
 
-/// ALSA's buffer. Two of these are about the ring's target, so device and emulator agree.
 const LATENCY_US: c_uint = 40_000;
 
-/// Frames per write: about one video frame at the GBA's rate, so writes match production.
 const PERIOD_FRAMES: usize = 512;
 
-/// Most specific first. On the H700 only `default` (the card's `asound.conf`) unmutes the
-/// speaker and line out, and it needs `plug:` to convert 32768 Hz to the codec's 32000.
 const DEVICES: [&str; 4] = ["plug:default", "default", "plughw:0,0", "hw:0,0"];
 
 type PcmOpen = unsafe extern "C" fn(*mut *mut c_void, *const c_char, c_int, c_int) -> c_int;
@@ -88,20 +81,11 @@ impl Alsa {
                 continue;
             };
             let mut pcm: *mut c_void = std::ptr::null_mut();
-            let err = unsafe {
-                (self.open)(
-                    &mut pcm,
-                    cname.as_ptr(),
-                    SND_PCM_STREAM_PLAYBACK,
-                    // Blocking: the write paces the worker.
-                    0,
-                )
-            };
+            let err = unsafe { (self.open)(&mut pcm, cname.as_ptr(), SND_PCM_STREAM_PLAYBACK, 0) };
             if err < 0 || pcm.is_null() {
                 last = AudioError::Device(format!("{name}: {}", self.message(err)));
                 continue;
             }
-            // ALSA resamples: 32768 Hz is not a rate every codec offers.
             let err = unsafe {
                 (self.set_params)(
                     pcm,
@@ -164,7 +148,6 @@ impl Drop for AlsaSink {
 }
 
 impl AudioSink for AlsaSink {
-    /// The PCM is opened on the thread that writes to it, so the handle never crosses one.
     fn open(&mut self, sample_rate: u32) -> Result<(), AudioError> {
         self.close();
         let ring = self.ring.clone();
@@ -204,7 +187,6 @@ impl AudioSink for AlsaSink {
     }
 }
 
-/// The open PCM and the library it came from, both owned by the writing thread.
 struct Playback {
     alsa: Alsa,
     pcm: *mut c_void,
@@ -218,7 +200,6 @@ fn play(ring: &Arc<Ring>, sample_rate: u32) -> Result<Playback, AudioError> {
 }
 
 impl Playback {
-    /// A blocking write per period paces the whole frontend: the ring drains at the codec's rate.
     fn run(&self, ring: &Ring, stop: &AtomicBool) {
         let mut buf = vec![0i16; PERIOD_FRAMES * CHANNELS as usize];
         while !stop.load(Ordering::Relaxed) {
@@ -234,7 +215,6 @@ impl Playback {
                     )
                 };
                 if frames < 0 {
-                    // Underruns are routine after a doze and recoverable; anything else ends it.
                     let err = unsafe { (self.alsa.recover)(self.pcm, frames as c_int, 1) };
                     if err < 0 {
                         eprintln!("slot: audio: {}", self.alsa.message(err));
@@ -251,7 +231,6 @@ impl Playback {
 impl Drop for Playback {
     fn drop(&mut self) {
         unsafe {
-            // Drop, not drain: queued audio belongs to a session that has ended.
             (self.alsa.drop)(self.pcm);
             (self.alsa.close)(self.pcm);
         }

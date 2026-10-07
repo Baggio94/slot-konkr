@@ -1,8 +1,3 @@
-//! The worker that does the slow parts of starting a link session.
-//!
-//! The radio is faked throughout. Under test is the sequence of reported steps and whether the
-//! radio is taken back down on the way out.
-
 use std::io;
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -13,11 +8,8 @@ use slot::link_net::{Cancel, TcpLink};
 use slot::link_radio::{LinkRole, RadioFail};
 use slot::link_start::{LinkFail, LinkProgress, LinkStarter, LinkStep};
 
-/// How long a test waits for a worker outcome; short enough that a broken worker fails
-/// rather than hanging the suite.
 const BAIL: Duration = Duration::from_secs(5);
 
-/// Poll to the end, throwing away the steps on the way. Returns the one terminal message.
 fn drain(starter: &mut LinkStarter) -> LinkProgress {
     let deadline = Instant::now() + BAIL;
     loop {
@@ -33,7 +25,6 @@ fn drain(starter: &mut LinkStarter) -> LinkProgress {
     }
 }
 
-/// Poll to the end, keeping every step seen on the way and dropping the outcome.
 fn drain_steps(starter: &mut LinkStarter) -> Vec<LinkStep> {
     let deadline = Instant::now() + BAIL;
     let mut steps = Vec::new();
@@ -74,8 +65,6 @@ fn a_radio_that_will_not_come_up_stops_before_the_socket() {
         !tried_socket.load(Ordering::SeqCst),
         "opened a socket on a network that never came up"
     );
-    // `slotlink.sh link host` can configure the interface and still exit non-zero, so the
-    // teardown runs on this path too.
     assert_eq!(
         downs.load(Ordering::SeqCst),
         1,
@@ -112,7 +101,6 @@ fn a_failure_always_takes_the_radio_back_down() {
     );
 }
 
-/// A link that worked keeps the radio up, because the session runs over it.
 #[test]
 fn a_link_that_comes_up_leaves_the_radio_up() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -131,7 +119,6 @@ fn a_link_that_comes_up_leaves_the_radio_up() {
         }),
         LinkRole::Host,
         port,
-        // Uses the port it was handed, proving the worker passes it through.
         Box::new(|port, cancel: &Cancel| {
             TcpLink::host_until("127.0.0.1", port, Duration::from_secs(10), cancel)
         }),
@@ -155,7 +142,6 @@ fn a_link_that_comes_up_leaves_the_radio_up() {
 
 #[test]
 fn the_steps_are_reported_in_order_before_the_outcome() {
-    // The screen shows each step; reporting only the outcome leaves 30 s of blank screen.
     let mut starter = LinkStarter::spawn_with(
         Box::new(|_, _| Ok(())),
         Box::new(|| {}),
@@ -189,8 +175,6 @@ fn cancelling_reports_cancelled_rather_than_a_timeout() {
     );
 }
 
-/// `host_until` reserves `Interrupted` and `TimedOut` for its two ways out, so any other
-/// error is a real fault on the wire.
 #[test]
 fn a_socket_fault_that_is_neither_a_deadline_nor_a_cancel_blames_the_wire() {
     let mut starter = LinkStarter::spawn_with(
@@ -206,8 +190,6 @@ fn a_socket_fault_that_is_neither_a_deadline_nor_a_cancel_blames_the_wire() {
     ));
 }
 
-/// A worker that dies without an outcome must not read as still working, or the screen waits
-/// forever. The panic this prints to stderr is expected.
 #[test]
 fn a_worker_that_dies_is_reported_rather_than_polled_forever() {
     let mut starter = LinkStarter::spawn_with(
@@ -223,16 +205,12 @@ fn a_worker_that_dies_is_reported_rather_than_polled_forever() {
     ));
 }
 
-/// A joiner's `connect` completes even after a cancel, and handing the link over transfers the
-/// radio. If the `Ready` lands in a dropped receiver, the worker must take the radio down itself
-/// or the device is stranded on a link network until reboot.
 #[test]
 fn a_link_that_comes_up_after_the_player_left_puts_the_radio_back() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let peer = std::thread::spawn(move || {
         let accepted = listener.accept();
-        // Held open so the worker's side is a real, connected link.
         std::thread::sleep(Duration::from_millis(300));
         drop(accepted);
     });
@@ -249,7 +227,6 @@ fn a_link_that_comes_up_after_the_player_left_puts_the_radio_back() {
         }),
         LinkRole::Join,
         port,
-        // Waits for the test to say the player has gone, so the race happens deterministically.
         Box::new(move |p, _| {
             while !open.load(Ordering::SeqCst) {
                 std::thread::sleep(Duration::from_millis(5));
@@ -273,8 +250,6 @@ fn a_link_that_comes_up_after_the_player_left_puts_the_radio_back() {
     let _ = peer.join();
 }
 
-/// `slotlink.sh link join` exits 3 when no host answered. That is the other player's absence,
-/// not a radio fault, and must not be shown as one.
 #[test]
 fn a_join_that_found_no_host_says_nobody_arrived() {
     let tried_socket = Arc::new(AtomicBool::new(false));
@@ -299,8 +274,6 @@ fn a_join_that_found_no_host_says_nobody_arrived() {
     );
 }
 
-/// A cancel during the radio step (a joiner searches for half a minute) is reported as
-/// cancelled, which closes the screen, not as a fault.
 #[test]
 fn a_cancel_while_the_radio_is_coming_up_is_not_a_fault() {
     let mut starter = LinkStarter::spawn_with(
@@ -322,9 +295,6 @@ fn a_cancel_while_the_radio_is_coming_up_is_not_a_fault() {
     ));
 }
 
-/// A starter nobody holds any more stops, rather than running out its thirty seconds holding the
-/// radio and port and then taking the radio down under whatever started since. Driven through
-/// the socket step, the long one; the fake, like `host_until`, leaves only when the flag says so.
 #[test]
 fn a_starter_that_is_dropped_stops_waiting() {
     let gave_up = Arc::new(AtomicBool::new(false));

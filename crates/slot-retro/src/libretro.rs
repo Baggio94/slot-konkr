@@ -14,52 +14,29 @@ use crate::rumble::Rumble;
 
 const VIDEO_BYTES: usize = (GBA_W * GBA_H * 4) as usize;
 
-/// A libretro core keeps its emulator in dylib globals, so a second live core would share
-/// the first one's machine.
 static LIVE: AtomicBool = AtomicBool::new(false);
 
-/// mGBA's libretro build is compiled `COLOR_16_BIT`, so it only ever offers RGB565 and the
-/// host converts. A core built the other way needs no conversion.
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum PixelFormat {
     Xrgb8888,
     Rgb565,
 }
 
-/// Everything the core's callbacks read or write. Lives in a `Box` so its address survives
-/// the `LibretroCore` being moved.
 struct Host {
     video: Vec<u8>,
     format: PixelFormat,
     audio: Vec<i16>,
-    /// What input ports 0 and 1 read this frame. Only a core running two linked GBAs reads
-    /// port 1, and it holds 0 otherwise.
     inputs: [u16; 2],
     system_dir: CString,
     save_dir: CString,
     rumble: Rumble,
-    /// A core that is never offered the interface disables rumble outright and says nothing
-    /// about it, so this is the only way to see that the offer was taken.
     asked_for_rumble: bool,
-    /// The core's netpacket vtable. Its pointers belong to the dylib and stay valid while it is
-    /// loaded. The core may withdraw it again.
     netpacket: Option<NetpacketCallback>,
-    /// Where the core's serial traffic goes. Always present, whether or not the core registers
-    /// netpacket.
     net: Link,
-    /// The peer's client id (`1 - client_id`), used to tag every packet handed to the core with
-    /// its real sender. `None` outside a session.
     net_peer: Option<u16>,
-    /// The core's audio-buffer-status callback, registered only while its frameskip option is
-    /// in an auto mode.
     audio_status: Option<AudioBufferStatusFn>,
-    /// Core options, keyed as libretro names them. Values are kept as CStrings because the
-    /// pointer handed back to the core has to stay valid after the callback returns.
     options: std::collections::HashMap<String, std::ffi::CString>,
-    /// Set when an option changed since the core last asked, cleared when it does.
     options_dirty: bool,
-    /// The options the core declared, each with its values in listed order (the first is the
-    /// default). The only way to tell a real option key from a typo, which `options` accepts.
     declared: std::collections::HashMap<String, Vec<String>>,
 }
 
@@ -67,8 +44,6 @@ thread_local! {
     static ACTIVE: Cell<*mut Host> = const { Cell::new(ptr::null_mut()) };
 }
 
-/// Publishes the host to the callbacks for the duration of one call into the core. The
-/// lifetime keeps Rust off the `Host` while the core has it.
 struct Active<'a>(PhantomData<&'a mut Host>);
 
 impl Active<'_> {
@@ -84,8 +59,6 @@ impl Drop for Active<'_> {
     }
 }
 
-/// # Safety
-/// Only call from a core callback, which the core only invokes while an `Active` is bound.
 unsafe fn with_host<R>(f: impl FnOnce(&mut Host) -> R) -> Option<R> {
     let p = ACTIVE.with(|a| a.get());
     if p.is_null() {
@@ -94,11 +67,8 @@ unsafe fn with_host<R>(f: impl FnOnce(&mut Host) -> R) -> Option<R> {
     Some(f(&mut *p))
 }
 
-/// libretro's log callback is variadic, which stable Rust cannot express. The arity only
-/// differs in the arguments a no-op never reads.
 unsafe extern "C" fn log_noop(_level: c_uint, _fmt: *const c_char) {}
 
-/// Called from the emulator thread, once per frame while a cart is buzzing.
 unsafe extern "C" fn set_rumble_state(port: c_uint, effect: c_uint, strength: u16) -> bool {
     with_host(|h| h.rumble.set(port, effect, strength)).unwrap_or(false)
 }
@@ -109,8 +79,6 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
             if data.is_null() {
                 return false;
             }
-            // True: `video_refresh` returns early on a NULL frame, leaving the last picture,
-            // and gpSP's skipped frames in fast forward already arrive that way.
             *(data as *mut bool) = true;
             true
         }
@@ -145,7 +113,6 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
                 return false;
             }
             let var = &mut *(data as *mut Variable);
-            // A second pointer inside `data`, not covered by the check above.
             if var.key.is_null() {
                 return false;
             }
@@ -153,8 +120,6 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
                 return false;
             };
             with_host(|h| match h.options.get(key) {
-                // The core reads this pointer after we return, so it must point at storage
-                // the host owns and keeps, not at a temporary.
                 Some(value) => {
                     var.value = value.as_ptr();
                     true
@@ -178,16 +143,11 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
             .unwrap_or(false)
         }
         SET_VARIABLES => {
-            // A NULL list is legal and means the core has no options.
             if data.is_null() {
                 return with_host(|h| h.declared.clear()).is_some();
             }
-            // A NULL-key-terminated array of `{key, "Description; first|second|third"}`, the
-            // first value being the default. This is the v0 shape, which cores fall back to
-            // because `GET_CORE_OPTIONS_VERSION` is unanswered, so v2 value labels are lost.
             let mut list = std::collections::HashMap::new();
             let mut p = data as *const Variable;
-            // Bound the walk in case the terminator never comes.
             for _ in 0..4096 {
                 let var = &*p;
                 if var.key.is_null() {
@@ -235,8 +195,6 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
             true
         }
         SET_AUDIO_BUFFER_STATUS_CALLBACK => {
-            // NULL withdraws the callback. Answer `true` either way: `false` makes both cores
-            // disable frameskip entirely.
             if data.is_null() {
                 return with_host(|h| h.audio_status = None).is_some();
             }
@@ -244,7 +202,6 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
             with_host(|h| h.audio_status = cb.callback).is_some()
         }
         SET_NETPACKET_INTERFACE => {
-            // A NULL pointer is the core withdrawing the interface, which is legal.
             if data.is_null() {
                 return with_host(|h| h.netpacket = None).is_some();
             }
@@ -257,7 +214,6 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
     }
 }
 
-/// Called by the core, on the emulator thread, with a packet to put on the wire.
 unsafe extern "C" fn netpacket_send(
     _flags: c_int,
     buf: *const c_void,
@@ -271,23 +227,15 @@ unsafe extern "C" fn netpacket_send(
     with_host(|h| h.net.push_outbound(bytes));
 }
 
-/// The core asking, mid frame, for anything that has arrived.
-///
-/// `receive` can reenter `netpacket_send` (gpSP `rfu.c:879-882`), which takes its own
-/// `&mut Host`, so everything needed is copied out and the borrow dropped before calling it
-/// (Miri flags the alternative).
 unsafe extern "C" fn netpacket_poll_receive() {
     let Some((receive, net, client_id)) = with_host(|h| {
         let receive = h.netpacket.as_ref().and_then(|cb| cb.receive)?;
-        // No fallback to 0, which is our own id. `net_peer` can be `None` while still active
-        // during `halt_link`; skip delivery then rather than mislabel the sender.
         let client_id = h.net_peer?;
         Some((receive, h.net.clone(), client_id))
     })
     .flatten() else {
         return;
     };
-    // An ended session must not deliver stale packets to the core.
     if !net.is_active() {
         return;
     }
@@ -296,9 +244,6 @@ unsafe extern "C" fn netpacket_poll_receive() {
     }
 }
 
-/// `RetroCore::start_link`, as a free function so tests can drive it on a bare `Host`.
-/// `client_id` 0 is the host and 1 the joiner. The link is marked active only if the core
-/// registered netpacket. `start` and `connected` can reenter, so no host borrow is held.
 unsafe fn begin_link(client_id: u16) {
     let Some(start) = with_host(|h| h.netpacket.as_ref().and_then(|cb| cb.start)).flatten() else {
         return;
@@ -312,16 +257,11 @@ unsafe fn begin_link(client_id: u16) {
         h.netpacket.as_ref().and_then(|cb| cb.connected)
     })
     .flatten();
-    // gpSP's serial IRQ timing scales with the connected peer count (`serial.c:175`).
-    // The admission `bool` is ignored: there are only ever two parties.
     if let Some(connected) = connected {
         connected(peer);
     }
 }
 
-/// `RetroCore::stop_link`, as a free function for tests. Calls `disconnected` then `stop`, both
-/// optional, with no host borrow held. Leaves the link's active flag to the caller
-/// (`Cmd::EndLink`), since a core with no `stop` still needs its session marked over.
 unsafe fn halt_link() {
     let Some((stop, peer, disconnected)) = with_host(|h| {
         let stop = h.netpacket.as_ref().and_then(|cb| cb.stop);
@@ -339,12 +279,9 @@ unsafe fn halt_link() {
     }
 }
 
-/// `LibretroCore::pump_link`, as a free function for tests. Same reentrancy and stale-packet
-/// rules as `netpacket_poll_receive`.
 unsafe fn drain_link() {
     let Some((receive, poll, net, client_id)) = with_host(|h| {
         let cb = h.netpacket.as_ref()?;
-        // No fallback to 0, which is our own id.
         let client_id = h.net_peer?;
         Some((cb.receive, cb.poll, h.net.clone(), client_id))
     })
@@ -364,8 +301,6 @@ unsafe fn drain_link() {
     }
 }
 
-/// `RetroCore::set_frame_skip`, as a free function for tests. No host borrow is held across
-/// the callback.
 unsafe fn report_audio_status(skip: bool) {
     let Some(status) = with_host(|h| h.audio_status).flatten() else {
         return;
@@ -380,16 +315,13 @@ unsafe extern "C" fn video_refresh(
     pitch: usize,
 ) {
     if data.is_null() {
-        return; // duplicate frame, keep the previous one
+        return;
     }
     with_host(|h| {
         let cols = width.min(GBA_W) as usize;
         let rows = height.min(GBA_H) as usize;
-        // Centre a smaller picture here, not at draw time, because `thumb::png` encodes the whole
-        // buffer. Whole-pixel offsets keep the LCD mask's phase.
         let ox = (GBA_W as usize - cols) / 2;
         let oy = (GBA_H as usize - rows) / 2;
-        // Clear the margin every frame, so a core that changes size leaves no old edges.
         if cols != GBA_W as usize || rows != GBA_H as usize {
             h.video.fill(0);
         }
@@ -451,12 +383,9 @@ unsafe extern "C" fn input_state(port: c_uint, device: c_uint, _index: c_uint, i
     .unwrap_or(0)
 }
 
-/// One live libretro core, loaded from any dylib. Only one may be open at a time, since a
-/// core keeps its machine in dylib globals.
 pub struct LibretroCore {
     api: Api,
     host: Box<Host>,
-    /// mGBA reads the rom in place, so these bytes must outlive the loaded game.
     rom: Vec<u8>,
     rom_path: Option<CString>,
     av: AvInfo,
@@ -470,8 +399,6 @@ fn cdir(path: &Path) -> Result<CString, CoreError> {
 }
 
 impl LibretroCore {
-    /// Reports the dylib's own directory as both. That is only right when there is no
-    /// content root to point at, which is every test and nothing else.
     pub fn open(dylib: &Path) -> Result<Self, CoreError> {
         let dir = dylib.parent().unwrap_or(Path::new(".")).to_path_buf();
         Self::open_with(dylib, &dir, &dir)
@@ -485,8 +412,6 @@ impl LibretroCore {
             .inspect_err(|_| LIVE.store(false, Ordering::SeqCst))
     }
 
-    /// What the core will search for `gba_bios.bin`. Read back from the string actually
-    /// handed to the environment callback, not from the argument.
     pub fn reported_system_dir(&self) -> String {
         self.host.system_dir.to_string_lossy().into_owned()
     }
@@ -495,17 +420,11 @@ impl LibretroCore {
         self.host.save_dir.to_string_lossy().into_owned()
     }
 
-    /// Whether the core took the rumble interface, which it asks for once at init.
     pub fn asked_for_rumble(&self) -> bool {
         self.host.asked_for_rumble
     }
 
-    /// Set a core option, taking effect the next time the core asks (usually the next
-    /// `retro_load_game`). Setting a key again frees the string the core last got for it.
-    /// Uses `self.host` directly: `with_host` is a no-op outside a call into the core.
     pub fn set_option(&mut self, key: &str, value: &str) {
-        // Warn on keys or values the core never declared, since they silently do nothing.
-        // Quiet for a core that declared no options at all.
         if !self.host.declared.is_empty() {
             match self.host.declared.get(key) {
                 None => eprintln!("slot-retro: core declares no option {key:?}, setting it anyway"),
@@ -522,8 +441,6 @@ impl LibretroCore {
         self.host.options_dirty = true;
     }
 
-    /// Every option the frontend has set, in no particular order. For checking against
-    /// `declared_options`.
     pub fn options(&self) -> Vec<(String, String)> {
         self.host
             .options
@@ -532,8 +449,6 @@ impl LibretroCore {
             .collect()
     }
 
-    /// Every option the core declared, with its values in listed order. Empty for a core that
-    /// never sent `SET_VARIABLES`.
     pub fn declared_options(&self) -> &std::collections::HashMap<String, Vec<String>> {
         &self.host.declared
     }
@@ -616,7 +531,6 @@ impl Drop for LibretroCore {
 }
 
 impl RetroCore for LibretroCore {
-    /// Marks options dirty, so a running core re-reads them via `GET_VARIABLE_UPDATE`.
     fn set_option(&mut self, key: &str, value: &str) {
         LibretroCore::set_option(self, key, value);
     }
@@ -667,14 +581,7 @@ impl RetroCore for LibretroCore {
         unsafe { (self.api.run)() };
     }
 
-    /// Skips the next frame's render by reporting an audio underrun to the core's auto
-    /// frameskip, which both cores read before running the frame. Fixed-interval mode is unusable:
-    /// mGBA checks its counter after `runFrame`, so it shows a stale frame.
-    ///
-    /// Both `occupancy` and `underrun_likely` are set so Auto and Auto (Threshold, default 33%)
-    /// agree. A no-op when the core registered no callback.
     fn set_frame_skip(&mut self, skip: bool) {
-        // Core code may reach back through an environment callback.
         let _a = Active::bind(&mut self.host);
         unsafe { report_audio_status(skip) };
     }
@@ -748,19 +655,16 @@ impl RetroCore for LibretroCore {
         self.host.net.clone()
     }
 
-    /// Begins a netpacket session. See `begin_link`.
     fn start_link(&mut self, client_id: u16) {
         let _a = Active::bind(&mut self.host);
         unsafe { begin_link(client_id) };
     }
 
-    /// Once per frame: deliver arrived packets, then call the core's own `poll` if it has one.
     fn pump_link(&mut self) {
         let _a = Active::bind(&mut self.host);
         unsafe { drain_link() };
     }
 
-    /// Ends a netpacket session. See `halt_link`.
     fn stop_link(&mut self) {
         let _a = Active::bind(&mut self.host);
         unsafe { halt_link() };
@@ -774,11 +678,8 @@ mod tests {
     use std::collections::HashMap;
     use std::ffi::CStr;
 
-    // These drive `environment` and the trampolines directly on a bare `Host`, with no dylib.
-
     fn host_with(options: HashMap<String, CString>, options_dirty: bool) -> Box<Host> {
         Box::new(Host {
-            // Full size: `video_refresh` writes through a raw pointer into it.
             video: vec![0; VIDEO_BYTES],
             format: PixelFormat::Xrgb8888,
             audio: Vec::new(),
@@ -797,7 +698,6 @@ mod tests {
         })
     }
 
-    /// One `{key, value}` entry, plus the `CString`s it points into, which must outlive the call.
     fn declaration(key: &str, value: &str) -> (Variable, CString, CString) {
         let key = CString::new(key).unwrap();
         let value = CString::new(value).unwrap();
@@ -808,7 +708,6 @@ mod tests {
         (var, key, value)
     }
 
-    /// The NULL-key terminator of a `SET_VARIABLES` list.
     fn end_of_list() -> Variable {
         Variable {
             key: ptr::null(),
@@ -816,7 +715,6 @@ mod tests {
         }
     }
 
-    /// `SET_VARIABLES` records each declared key with its values, stopping at the terminator.
     #[test]
     fn set_variables_records_what_the_core_declared() {
         let mut host = host_with(HashMap::new(), false);
@@ -851,7 +749,6 @@ mod tests {
         );
     }
 
-    /// A NULL list clears earlier declarations, so a later core does not inherit them.
     #[test]
     fn set_variables_with_no_list_declares_nothing() {
         let mut host = host_with(HashMap::new(), false);
@@ -902,7 +799,6 @@ mod tests {
         assert!(var.value.is_null());
     }
 
-    /// `GET_VARIABLE_UPDATE` reports the dirty flag once, then clears it.
     #[test]
     fn get_variable_update_reports_and_clears_the_dirty_flag() {
         let mut host = host_with(HashMap::new(), true);
@@ -925,7 +821,6 @@ mod tests {
         assert!(!dirty_again, "flag must be cleared after being read once");
     }
 
-    /// A `Variable` with a null key is refused, not dereferenced.
     #[test]
     fn get_variable_refuses_a_null_key() {
         let mut host = host_with(HashMap::new(), false);
@@ -939,10 +834,7 @@ mod tests {
         assert!(!ok);
     }
 
-    // --- auto frameskip ------------------------------------------------------------------
-
     thread_local! {
-        /// Every `(active, occupancy, underrun_likely)` the frontend reported, in order.
         static TEST_AUDIO_STATUS: RefCell<Vec<(bool, c_uint, bool)>> =
             const { RefCell::new(Vec::new()) };
     }
@@ -971,7 +863,6 @@ mod tests {
         assert!(host.audio_status.is_some(), "the callback was never stored");
     }
 
-    /// NULL withdraws the callback and is answered `true`, or the cores disable frameskip.
     #[test]
     fn set_audio_buffer_status_callback_null_withdraws_it() {
         let mut host = host_with(HashMap::new(), false);
@@ -985,7 +876,6 @@ mod tests {
         assert!(host.audio_status.is_none());
     }
 
-    /// A skip reports an underrun and an empty buffer, a draw reports neither.
     #[test]
     fn set_frame_skip_tells_the_core_to_skip_by_reporting_an_underrun() {
         TEST_AUDIO_STATUS.with(|r| r.borrow_mut().clear());
@@ -1008,7 +898,6 @@ mod tests {
         });
     }
 
-    /// With no callback registered, `set_frame_skip` does nothing.
     #[test]
     fn set_frame_skip_is_a_noop_when_the_core_registered_no_callback() {
         TEST_AUDIO_STATUS.with(|r| r.borrow_mut().clear());
@@ -1021,26 +910,16 @@ mod tests {
         TEST_AUDIO_STATUS.with(|r| assert!(r.borrow().is_empty()));
     }
 
-    // --- netpacket -----------------------------------------------------------------------
-    //
-    // A hand-built `NetpacketCallback` stands in for the core.
-
     thread_local! {
         static TEST_RECEIVED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
-        /// The `client_id` each `test_receive` call landed with, in `TEST_RECEIVED` order.
         static TEST_RECEIVED_CLIENT_IDS: RefCell<Vec<u16>> = const { RefCell::new(Vec::new()) };
         static TEST_POLLS: Cell<u32> = const { Cell::new(0) };
-        /// What `test_start` was last called with.
         static TEST_START_CLIENT: Cell<Option<u16>> = const { Cell::new(None) };
-        /// How many times `test_stop` fired.
         static TEST_STOP_CALLS: Cell<u32> = const { Cell::new(0) };
-        /// What `test_connected` was last called with.
         static TEST_CONNECTED_CLIENT: Cell<Option<u16>> = const { Cell::new(None) };
-        /// What `test_disconnected` was last called with.
         static TEST_DISCONNECTED_CLIENT: Cell<Option<u16>> = const { Cell::new(None) };
     }
 
-    /// The recorders persist across tests on the same worker thread, so reset them first.
     fn reset_test_netpacket_recorders() {
         TEST_RECEIVED.with(|r| r.borrow_mut().clear());
         TEST_RECEIVED_CLIENT_IDS.with(|c| c.borrow_mut().clear());
@@ -1057,15 +936,12 @@ mod tests {
         TEST_RECEIVED_CLIENT_IDS.with(|c| c.borrow_mut().push(client_id));
     }
 
-    /// gpSP's documented reentrancy (`rfu.c:879-882`): `receive` calls `netpacket_send` before
-    /// returning. Run under Miri to check the borrow discipline.
     unsafe extern "C" fn test_receive_reentrant(buf: *const c_void, len: usize, client_id: u16) {
         test_receive(buf, len, client_id);
         let reentrant = b"reentrant";
         netpacket_send(0, reentrant.as_ptr() as *const c_void, reentrant.len(), 0);
     }
 
-    /// A `start` that calls back into `netpacket_poll_receive` before returning.
     unsafe extern "C" fn test_start_reentrant(
         client_id: u16,
         _send: NetpacketSend,
@@ -1100,7 +976,6 @@ mod tests {
         TEST_DISCONNECTED_CLIENT.with(|c| c.set(Some(client_id)));
     }
 
-    /// A minimal core: libretro only guarantees `start` and `receive`.
     fn test_netpacket_callback() -> NetpacketCallback {
         NetpacketCallback {
             start: Some(test_start),
@@ -1112,8 +987,6 @@ mod tests {
             protocol_version: ptr::null(),
         }
     }
-
-    // `Active::bind` borrows `host` exclusively, so tests set up before binding and read after.
 
     #[test]
     fn set_netpacket_interface_stores_the_callback_the_core_hands_over() {
@@ -1191,7 +1064,6 @@ mod tests {
         let mut host = host_with(HashMap::new(), false);
         host.netpacket = Some(test_netpacket_callback());
         host.net.set_active(true);
-        // Delivery needs a peer on record, which `begin_link` sets alongside `set_active`.
         host.net_peer = Some(1);
         host.net.push_inbound(b"first".to_vec());
         host.net.push_inbound(b"second".to_vec());
@@ -1214,7 +1086,6 @@ mod tests {
     fn netpacket_poll_receive_does_nothing_without_a_receive_callback() {
         reset_test_netpacket_recorders();
         let mut host = host_with(HashMap::new(), false);
-        // No callback registered at all.
         host.net.set_active(true);
         host.net.push_inbound(b"stranded".to_vec());
         {
@@ -1230,13 +1101,11 @@ mod tests {
         );
     }
 
-    /// A packet arriving after the session went inactive is not delivered.
     #[test]
     fn netpacket_poll_receive_does_nothing_once_the_session_is_no_longer_active() {
         reset_test_netpacket_recorders();
         let mut host = host_with(HashMap::new(), false);
         host.netpacket = Some(test_netpacket_callback());
-        // Never marked active: a stale packet after `Cmd::EndLink`.
         host.net.push_inbound(b"stale".to_vec());
         {
             let _active = Active::bind(&mut host);
@@ -1251,14 +1120,11 @@ mod tests {
         );
     }
 
-    /// Active with no peer recorded (reachable during `halt_link`): nothing is delivered,
-    /// rather than delivered as client 0.
     #[test]
     fn netpacket_poll_receive_does_nothing_without_a_recorded_peer() {
         reset_test_netpacket_recorders();
         let mut host = host_with(HashMap::new(), false);
         host.netpacket = Some(test_netpacket_callback());
-        // Active with no `net_peer`, standing in for the `halt_link` window.
         host.net.set_active(true);
         host.net.push_inbound(b"orphaned".to_vec());
         {
@@ -1279,7 +1145,6 @@ mod tests {
         );
     }
 
-    /// Incoming packets are tagged with the peer's client id, not our own.
     #[test]
     fn netpacket_poll_receive_tags_packets_with_the_peers_client_id() {
         reset_test_netpacket_recorders();
@@ -1287,9 +1152,9 @@ mod tests {
         host.netpacket = Some(test_netpacket_callback());
         {
             let _active = Active::bind(&mut host);
-            unsafe { begin_link(0) }; // we are the host, client 0; the peer is client 1
+            unsafe { begin_link(0) };
         }
-        reset_test_netpacket_recorders(); // begin_link's own start() call is not the proof
+        reset_test_netpacket_recorders();
         host.net.push_inbound(b"from the peer".to_vec());
         {
             let _active = Active::bind(&mut host);
@@ -1311,7 +1176,7 @@ mod tests {
         let mut host = host_with(HashMap::new(), false);
         host.netpacket = Some(test_netpacket_callback());
         host.net.set_active(true);
-        host.net_peer = Some(1); // I4: a peer has to be on record to deliver at all now
+        host.net_peer = Some(1);
         host.net.push_inbound(b"queued".to_vec());
         {
             let _active = Active::bind(&mut host);
@@ -1328,7 +1193,7 @@ mod tests {
         let mut host = host_with(HashMap::new(), false);
         host.netpacket = Some(test_netpacket_callback());
         host.net.set_active(true);
-        host.net_peer = Some(1); // I4: a peer has to be on record to deliver at all now
+        host.net_peer = Some(1);
         {
             let _active = Active::bind(&mut host);
             unsafe { drain_link() };
@@ -1346,7 +1211,7 @@ mod tests {
             ..test_netpacket_callback()
         });
         host.net.set_active(true);
-        host.net_peer = Some(1); // I4: a peer has to be on record to deliver at all now
+        host.net_peer = Some(1);
         host.net.push_inbound(b"still delivered".to_vec());
         {
             let _active = Active::bind(&mut host);
@@ -1379,7 +1244,6 @@ mod tests {
         );
     }
 
-    /// `drain_link` delivers nothing once the session is inactive.
     #[test]
     fn drain_link_does_nothing_once_the_session_is_no_longer_active() {
         reset_test_netpacket_recorders();
@@ -1400,7 +1264,6 @@ mod tests {
         );
     }
 
-    /// `drain_link` delivers nothing while active with no peer recorded.
     #[test]
     fn drain_link_does_nothing_without_a_recorded_peer() {
         reset_test_netpacket_recorders();
@@ -1433,7 +1296,6 @@ mod tests {
         );
     }
 
-    /// `drain_link` tags packets with the peer's client id.
     #[test]
     fn drain_link_tags_packets_with_the_peers_client_id() {
         reset_test_netpacket_recorders();
@@ -1441,7 +1303,6 @@ mod tests {
         host.netpacket = Some(test_netpacket_callback());
         {
             let _active = Active::bind(&mut host);
-            // We are client 0, so the peer is 1, which a hardcoded 0 cannot pass by accident.
             unsafe { begin_link(0) };
         }
         reset_test_netpacket_recorders();
@@ -1460,8 +1321,6 @@ mod tests {
         });
     }
 
-    /// `receive` reentering through `netpacket_send` completes. Run under
-    /// `cargo +nightly miri test -p slot-retro` to catch a borrow held across it.
     #[test]
     fn drain_link_survives_the_reentrancy_gpsp_documents() {
         reset_test_netpacket_recorders();
@@ -1471,7 +1330,7 @@ mod tests {
             ..test_netpacket_callback()
         });
         host.net.set_active(true);
-        host.net_peer = Some(1); // I4: a peer has to be on record to deliver at all now
+        host.net_peer = Some(1);
         host.net.push_inbound(b"queued".to_vec());
         {
             let _active = Active::bind(&mut host);
@@ -1486,7 +1345,6 @@ mod tests {
         );
     }
 
-    /// The same reentrancy check for `netpacket_poll_receive`.
     #[test]
     fn netpacket_poll_receive_survives_the_reentrancy_gpsp_documents() {
         reset_test_netpacket_recorders();
@@ -1496,7 +1354,7 @@ mod tests {
             ..test_netpacket_callback()
         });
         host.net.set_active(true);
-        host.net_peer = Some(1); // I4: a peer has to be on record to deliver at all now
+        host.net_peer = Some(1);
         host.net.push_inbound(b"queued".to_vec());
         {
             let _active = Active::bind(&mut host);
@@ -1506,9 +1364,6 @@ mod tests {
         assert_eq!(host.net.take_outbound().as_deref(), Some(&b"reentrant"[..]));
     }
 
-    // --- begin_link (the logic behind `RetroCore::start_link`) ---------------------------
-
-    /// A `start` that calls back into the frontend finds no host borrow live (check under Miri).
     #[test]
     fn begin_link_survives_a_core_that_reenters_from_start() {
         reset_test_netpacket_recorders();
@@ -1547,7 +1402,6 @@ mod tests {
         );
     }
 
-    /// With no netpacket registered, the link is not marked active.
     #[test]
     fn begin_link_is_a_noop_when_the_core_never_registered_netpacket() {
         reset_test_netpacket_recorders();
@@ -1561,7 +1415,6 @@ mod tests {
         assert!(!host.net.is_active());
     }
 
-    /// `begin_link` calls `connected` with the peer id, which gpSP's serial timing counts.
     #[test]
     fn begin_link_calls_connected_with_the_peers_client_id() {
         reset_test_netpacket_recorders();
@@ -1572,7 +1425,7 @@ mod tests {
         });
         {
             let _active = Active::bind(&mut host);
-            unsafe { begin_link(0) }; // we are client 0; the peer is client 1
+            unsafe { begin_link(0) };
         }
 
         TEST_CONNECTED_CLIENT.with(|c| {
@@ -1584,12 +1437,11 @@ mod tests {
         });
     }
 
-    /// A missing `connected` (it is optional) does not stop a session starting.
     #[test]
     fn begin_link_is_fine_with_no_connected_callback() {
         reset_test_netpacket_recorders();
         let mut host = host_with(HashMap::new(), false);
-        host.netpacket = Some(test_netpacket_callback()); // connected: None
+        host.netpacket = Some(test_netpacket_callback());
 
         {
             let _active = Active::bind(&mut host);
@@ -1601,8 +1453,6 @@ mod tests {
             "a missing connected callback must not stop the session from starting"
         );
     }
-
-    // --- halt_link (the logic behind `RetroCore::stop_link`) -----------------------------
 
     #[test]
     fn halt_link_calls_the_cores_stop_when_it_registered_one() {
@@ -1620,12 +1470,11 @@ mod tests {
         TEST_STOP_CALLS.with(|c| assert_eq!(c.get(), 1, "stop was never called"));
     }
 
-    /// A missing `stop` (it is optional) is a no-op.
     #[test]
     fn halt_link_is_a_noop_when_the_core_never_offered_a_stop() {
         reset_test_netpacket_recorders();
         let mut host = host_with(HashMap::new(), false);
-        host.netpacket = Some(test_netpacket_callback()); // stop: None, the minimal core
+        host.netpacket = Some(test_netpacket_callback());
 
         {
             let _active = Active::bind(&mut host);
@@ -1635,7 +1484,6 @@ mod tests {
         TEST_STOP_CALLS.with(|c| assert_eq!(c.get(), 0));
     }
 
-    /// `halt_link` calls `disconnected` with the peer id `begin_link` derived.
     #[test]
     fn halt_link_calls_disconnected_with_the_peers_client_id() {
         reset_test_netpacket_recorders();
@@ -1646,7 +1494,7 @@ mod tests {
         });
         {
             let _active = Active::bind(&mut host);
-            unsafe { begin_link(1) }; // we are client 1; the peer is client 0
+            unsafe { begin_link(1) };
         }
         {
             let _active = Active::bind(&mut host);
@@ -1662,7 +1510,6 @@ mod tests {
         });
     }
 
-    /// `halt_link` with no session begun reports no `disconnected`.
     #[test]
     fn halt_link_does_not_call_disconnected_when_no_session_ever_started() {
         reset_test_netpacket_recorders();
@@ -1674,15 +1521,11 @@ mod tests {
 
         {
             let _active = Active::bind(&mut host);
-            unsafe { halt_link() }; // no begin_link first
+            unsafe { halt_link() };
         }
 
         TEST_DISCONNECTED_CLIENT.with(|c| assert_eq!(c.get(), None, "nothing was ever connected"));
     }
-
-    // --- input ports ---------------------------------------------------------------------
-    //
-    // mGBA's link mode reads player 1 from port 0 and player 2 from port 1.
 
     #[test]
     fn input_state_answers_each_port_from_its_own_mask() {
@@ -1715,9 +1558,6 @@ mod tests {
         assert_eq!(unsafe { input_state(2, DEVICE_JOYPAD, 0, JOYPAD_MASK) }, 0);
     }
 
-    // --- picture placement ---------------------------------------------------------------
-
-    /// A 160x144 picture goes in the middle of the 240x160 buffer: x 40..=199, y 8..=151.
     #[test]
     fn a_small_picture_is_centred_in_the_buffer() {
         let mut host = host_with(HashMap::new(), false);
@@ -1733,7 +1573,6 @@ mod tests {
         assert!(!lit(40, 7), "the picture starts one row too early");
     }
 
-    /// The margin is cleared every frame, so a size change leaves no old edges.
     #[test]
     fn the_margin_is_cleared_when_the_picture_shrinks() {
         let mut host = host_with(HashMap::new(), false);
@@ -1748,7 +1587,6 @@ mod tests {
         assert_eq!(corner, 0, "the previous picture is still in the margin");
     }
 
-    /// A gradient, so a shifted or reordered frame reads back different bytes.
     fn gradient(w: usize, h: usize) -> Vec<u8> {
         let mut px = vec![0u8; w * h * 4];
         for y in 0..h {
@@ -1762,7 +1600,6 @@ mod tests {
         px
     }
 
-    /// A full-size GBA frame lands unshifted, with no margin.
     #[test]
     fn a_full_size_picture_is_unmoved() {
         let mut host = host_with(HashMap::new(), false);
@@ -1780,11 +1617,8 @@ mod tests {
         assert_eq!(unsafe { with_host(|h| h.video.clone()) }.unwrap(), frame);
     }
 
-    // --- duplicate frames -----------------------------------------------------------------
-
     #[test]
     fn get_can_dupe_tells_a_core_the_frontend_keeps_the_last_frame() {
-        // libretro.h: `RETRO_ENVIRONMENT_GET_CAN_DUPE 3`.
         assert_eq!(GET_CAN_DUPE, 3);
 
         let mut host = host_with(HashMap::new(), false);
@@ -1800,7 +1634,6 @@ mod tests {
         );
     }
 
-    /// A NULL `data` is refused.
     #[test]
     fn get_can_dupe_refuses_a_null_pointer() {
         let mut host = host_with(HashMap::new(), false);
@@ -1809,8 +1642,6 @@ mod tests {
         assert!(!unsafe { environment(GET_CAN_DUPE, ptr::null_mut()) });
     }
 
-    /// A NULL frame leaves the picture unchanged. Real dimensions are passed, as gpSP's skipped
-    /// frames do.
     #[test]
     fn a_duplicate_frame_leaves_the_previous_picture_exactly_as_it_was() {
         let mut host = host_with(HashMap::new(), false);
@@ -1833,7 +1664,6 @@ mod tests {
         );
     }
 
-    /// Two NULL frames in a row leave a centred Game Boy picture and its margin unchanged.
     #[test]
     fn a_duplicate_frame_keeps_a_centred_game_boy_picture_where_it_is() {
         let mut host = host_with(HashMap::new(), false);
@@ -1849,7 +1679,6 @@ mod tests {
 
         let kept = unsafe { with_host(|h| h.video.clone()) }.unwrap();
         assert_eq!(kept, drawn, "the picture did not survive two duplicates");
-        // Source (100, 50), centred to (140, 58), proves there was a picture to keep.
         let lit = (58 * GBA_W as usize + 140) * 4;
         assert_eq!(
             &kept[lit..lit + 3],

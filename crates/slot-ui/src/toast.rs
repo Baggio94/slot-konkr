@@ -5,8 +5,6 @@ use crate::icon::{haloed, HALO_PX};
 use crate::text;
 use crate::CartFace;
 
-/// Everything the HUD ever says in words, each answering something the player just did. Two
-/// answer the link shortcut where it cannot be carried out, which would otherwise say nothing.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Toast {
     StateSaved,
@@ -14,13 +12,8 @@ pub enum Toast {
     NeedsGpsp,
     NoLink,
     LinkEnded,
-    /// The far end ended the session. Separate from `LinkEnded` because the player here cannot
-    /// see which device ended it.
     PeerEnded,
-    /// The host runs another GBA BIOS, so its game cannot run here.
     BiosMismatch,
-    /// TEMPORARY, with `Action::ColourCorrectionToggle`. Two variants because faces are
-    /// rasterised per variant.
     ColourOn,
     ColourOff,
 }
@@ -38,7 +31,6 @@ impl Toast {
         Toast::ColourOff,
     ];
 
-    /// Position in `ALL`, the order faces are uploaded in.
     pub fn index(self) -> usize {
         self as usize
     }
@@ -50,7 +42,6 @@ impl Toast {
             Toast::NeedsGpsp => "Please switch to gpSP",
             Toast::NoLink => "No link support",
             Toast::LinkEnded => "Link ended",
-            // Passive: here the link was ended by the other device, not by this player.
             Toast::PeerEnded => "Link was ended",
             Toast::BiosMismatch => "BIOS does not match",
             Toast::ColourOn => "Correction On",
@@ -59,8 +50,6 @@ impl Toast {
     }
 }
 
-/// One box for every string, so the line never moves. Wide enough for the longest at full
-/// size, or `fit` would shrink that one line.
 const TOAST_W: u32 = 240;
 const TOAST_H: u32 = 22;
 const TOAST_PX: f32 = 16.0;
@@ -72,12 +61,10 @@ pub fn toast_rect() -> (f32, f32, f32, f32) {
     ((OUT_W as f32 - w) / 2.0, (PLATE_H - h) / 2.0, w, h)
 }
 
-/// The box every toast is rastered into, for laying out before the string is known.
 pub fn toast_box() -> (u32, u32) {
     (TOAST_W + 2 * HALO_PX, TOAST_H + 2 * HALO_PX)
 }
 
-/// Type and a halo only. Nothing backs a toast, so the halo keeps it legible over the game.
 pub fn toast_face(toast: Toast) -> CartFace {
     let Some(font) = text::label_font() else {
         return CartFace {
@@ -148,8 +135,6 @@ mod tests {
         }
     }
 
-    /// LINK ENDED's ink is taller than the 12 px fallback and within a pixel of STATE SAVED
-    /// (round capitals overshoot flat ones by a row).
     #[test]
     fn the_ended_line_is_rastered_the_size_the_others_are() {
         let ended = toast_face(Toast::LinkEnded);
@@ -175,7 +160,6 @@ mod tests {
         );
     }
 
-    /// `fit` silently shrinks a line that does not fit, so every line is held to full size.
     #[test]
     fn every_toast_is_set_at_full_size() {
         let font = text::label_font().expect("label font");

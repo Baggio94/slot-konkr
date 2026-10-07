@@ -1,12 +1,3 @@
-//! Sets the lettering moulded into each cart and writes it as a coverage mask beside the other
-//! assets. Run by hand on a Mac, whose licensed Gill Sans and Futura it reads; only the masks it
-//! writes are committed, never the fonts.
-//!
-//!     cargo run -p slot-ui --example lettering
-//!
-//! The Game Boy wordmark is Gill Sans Italic, set tight and emboldened; the rest of Nintendo's
-//! moulded type is Futura. "Nintendo" is its own logotype, not a face, and Futura Bold stands in.
-
 use std::path::Path;
 
 use fontdue::{Font, FontSettings};
@@ -17,7 +8,6 @@ const GILL_ITALIC: u32 = 2;
 const FUTURA_MEDIUM: u32 = 0;
 const FUTURA_BOLD: u32 = 2;
 
-/// Set at this multiple and averaged down, so a stroke a pixel wide keeps its weight.
 const OVER: u32 = 4;
 
 struct Run<'a> {
@@ -25,9 +15,7 @@ struct Run<'a> {
     text: &'a str,
     px: f32,
     tracking: f32,
-    /// Horizontal lean per pixel of height; 0 is upright.
     lean: f32,
-    /// Extra weight, in pixels at 1x.
     bold: f32,
 }
 
@@ -67,8 +55,6 @@ impl Canvas {
             - run.tracking
     }
 
-    /// Sets `runs` on one baseline, the line centred on `cx` and scaled down as a whole to fit
-    /// `max_w`. Coordinates are at 1x. Returns the line's right edge and the scale it was set at.
     fn line(
         &mut self,
         runs: &[Run],
@@ -118,7 +104,6 @@ impl Canvas {
                     }
                 }
             }
-            // Already at the oversampled size; only the tracking is set at 1x.
             pen += m.advance_width + run.tracking * o;
         }
     }
@@ -181,7 +166,6 @@ fn main() {
         bold: 0.6,
     };
 
-    // The grey and black paks' plate, which spans 33..207 by 16..64: Nintendo GAME BOY(TM).
     let mut gb = Canvas::new(gb_w, gb_h);
     let (right, k) = gb.line(
         &[
@@ -214,7 +198,6 @@ fn main() {
     );
     gb.write(&assets.join("lettering_gb.png"));
 
-    // The clear pak's plate: GAME BOY COLOR, above the groove at row 52.
     let mut gbc = Canvas::new(gb_w, gb_h);
     gbc.line(
         &[
@@ -235,8 +218,6 @@ fn main() {
     );
     gbc.write(&assets.join("lettering_gbc.png"));
 
-    // The GBA cart's grip, between the ridge and the label: GAME BOY ADVANCE, the ADVANCE wide
-    // and spaced the way the logo sets it.
     let (gba_w, gba_h) = slot_ui::seated_box(slot_store::Platform::Gba);
     let mut gba = Canvas::new(gba_w, gba_h);
     gba.line(

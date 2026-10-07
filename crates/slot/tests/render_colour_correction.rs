@@ -1,14 +1,3 @@
-//! The quick menu's Colour Correction against the real core: the same cart, the same number of
-//! emulated frames, once with the row off and once with it on, and the two pictures compared.
-//!
-//! A draw list or the option map cannot say whether the tint is visible (the core accepts a
-//! typo silently), so this compares pixels. Both runs load the same ROM, press nothing and run
-//! the same number of frames, so every differing pixel is the option's doing.
-//!
-//! `SCRATCH_PNG_DIR=/tmp cargo test -p slot --test render_colour_correction -- --nocapture`
-//!
-//! Skipped without an mGBA dylib and a card to take a cart off.
-
 mod common;
 
 use std::path::{Path, PathBuf};
@@ -17,18 +6,13 @@ use common::{core_lock, repo_root, vendored_core};
 use slot_retro::{ButtonMask, GBA_H, GBA_W};
 use slot_store::Core;
 
-/// Frames each cart runs before its picture is read, per cart: a picture read while the cart is
-/// still on black has nothing to tint.
 fn frames_for(name: &str) -> usize {
     match name {
-        // Metroid Fusion is on its intro's starfield well before this.
         "gba" => 240,
-        // Pokémon Crystal is still black at 240 frames, through its boot and Game Freak lead-in.
         _ => 900,
     }
 }
 
-/// The core's framebuffer is little endian XRGB8888, which on the wire is B, G, R, unused.
 fn to_rgba(xrgb: &[u8]) -> Vec<u8> {
     xrgb.chunks_exact(4)
         .flat_map(|p| [p[2], p[1], p[0], 0xff])
@@ -51,7 +35,6 @@ fn write_png(name: &str, w: u32, h: u32, rgba: &[u8]) {
     println!("wrote {path}");
 }
 
-/// The two pictures blown up side by side, since a colour cast only shows beside the original.
 fn side_by_side(left: &[u8], right: &[u8], n: usize) -> (u32, u32, Vec<u8>) {
     let (w, h) = (GBA_W as usize, GBA_H as usize);
     let gap = 8;
@@ -77,7 +60,6 @@ fn side_by_side(left: &[u8], right: &[u8], n: usize) -> (u32, u32, Vec<u8>) {
     (out_w as u32, out_h as u32, out)
 }
 
-/// The mean of each channel across the whole picture, which is what a tint moves.
 fn mean_rgb(rgba: &[u8]) -> [f64; 3] {
     let n = (rgba.len() / 4) as f64;
     let mut sum = [0f64; 3];
@@ -89,7 +71,6 @@ fn mean_rgb(rgba: &[u8]) -> [f64; 3] {
     sum.map(|s| s / n)
 }
 
-/// How much colour the picture has: mean per-pixel channel spread. Grey is zero.
 fn mean_saturation(rgba: &[u8]) -> f64 {
     let n = (rgba.len() / 4) as f64;
     let sum: f64 = rgba
@@ -102,7 +83,6 @@ fn mean_saturation(rgba: &[u8]) -> f64 {
     sum / n
 }
 
-/// Share of pixels that differ. A tint touches almost everything not already black.
 fn share_changed(a: &[u8], b: &[u8]) -> f64 {
     let n = a.len() / 4;
     let diff = a
@@ -113,7 +93,6 @@ fn share_changed(a: &[u8], b: &[u8]) -> f64 {
     diff as f64 / n as f64
 }
 
-/// One run through slot's own `open_core_for`, so the option is applied as production does.
 fn picture(root: &Path, dylib: &Path, rom: &Path, colour: bool, frames: usize) -> Vec<u8> {
     let mut core = slot::core::open_core_for(
         root,
@@ -129,8 +108,6 @@ fn picture(root: &Path, dylib: &Path, rom: &Path, colour: bool, frames: usize) -
     to_rgba(core.video_xrgb8888())
 }
 
-/// A cart copied out of the ignored `/sdcard`. `None` without a card: a stand-in rom paints
-/// nothing worth tinting.
 fn card_cart(root: &Path, from: &str, to: &str) -> Option<PathBuf> {
     let rom = std::fs::read(repo_root().join(from)).ok()?;
     let at = root.join(to);
@@ -138,9 +115,6 @@ fn card_cart(root: &Path, from: &str, to: &str) -> Option<PathBuf> {
     Some(at)
 }
 
-/// The card's setting carried to the picture by the real `Session`. Compared on saturation,
-/// not per pixel: wall-clock sessions land on different frames, drifting a fraction of a
-/// percent against the correction's roughly one third.
 #[test]
 fn the_cards_setting_reaches_the_core_through_the_session() {
     use slot::app::Phase;
@@ -166,7 +140,6 @@ fn the_cards_setting_reaches_the_core_through_the_session() {
             eprintln!("no GBA cart on this machine's card, skipping");
             return;
         };
-        // The root's own `System/` is the first place `candidates` looks.
         std::fs::copy(&dylib, d.path().join("System/mgba_libretro.dylib")).expect("plant a core");
         let state = SlotState {
             clock_set: true,
@@ -180,7 +153,6 @@ fn the_cards_setting_reaches_the_core_through_the_session() {
         s.feed([RawEvent::Up(Btn::A)], 32);
         let deadline = Instant::now() + Duration::from_secs(20);
         let mut now = 32;
-        // The same published frame count for both runs.
         while !matches!(s.app().phase(), Phase::Playing { .. }) || s.frames_published() < 240 {
             assert!(
                 Instant::now() < deadline,
@@ -192,7 +164,6 @@ fn the_cards_setting_reaches_the_core_through_the_session() {
             s.update(1.0 / 60.0);
             std::thread::sleep(Duration::from_millis(1));
         }
-        // A published frame is only handed out once, so loop until one is waiting.
         let picture = loop {
             assert!(Instant::now() < deadline, "no frame was ever published");
             if let Some(f) = s.frame() {
@@ -215,7 +186,6 @@ fn the_cards_setting_reaches_the_core_through_the_session() {
             mean_saturation(&picture)
         );
         sat.push(mean_saturation(&picture));
-        // Dropped before the next boot: one machine per process, and `Drop` joins the worker.
         drop(s);
     }
     let [off, on] = sat[..] else {
@@ -228,8 +198,6 @@ fn the_cards_setting_reaches_the_core_through_the_session() {
     );
 }
 
-/// Both consoles, because the row sets `Auto`: mGBA picks the tint per cart, and a GBA-only
-/// change would leave Game Boy Color carts untouched.
 #[test]
 fn colour_correction_changes_the_picture_on_both_consoles() {
     let Some(dylib) = vendored_core() else {
@@ -255,12 +223,9 @@ fn colour_correction_changes_the_picture_on_both_consoles() {
             eprintln!("no {name} cart on this machine's card, skipping it");
             continue;
         };
-        // One core at a time: libretro keeps its machine in dylib globals, so the first has to
-        // be dropped before the second opens.
         let frames = frames_for(name);
         let off = picture(d.path(), &dylib, &rom, false, frames);
         let on = picture(d.path(), &dylib, &rom, true, frames);
-        // A black picture has nothing to tint: a fixture failure, not the row's.
         assert!(
             mean_rgb(&off).iter().sum::<f64>() > 12.0,
             "{name}: still black after {frames} frames, so there is no picture to correct"
@@ -284,15 +249,12 @@ fn colour_correction_changes_the_picture_on_both_consoles() {
             "{name}: the picture is byte for byte identical with correction on and off, so \
              either the option never reached the core or it does nothing worth a row"
         );
-        // A tint changes almost everything. Half the picture is far above any stray pixels.
         let changed = share_changed(&off, &on);
         assert!(
             changed > 0.5,
             "{name}: only {:.1}% of the picture changed, which is not a tint",
             changed * 100.0
         );
-        // Both corrections desaturate; brightness differs (GBA darkens, 148 to 76 on this frame;
-        // GBC lifts, 133 to 173), so asserting "darker" would be wrong for one console.
         assert!(
             sat_on < sat_off,
             "{name}: correction did not wash the picture out: saturation {sat_off:.1} to \

@@ -1,13 +1,4 @@
 #!/bin/sh
-# Builds gpSP's libretro core for the SP from the source archive that ships beside it on the card
-# (the GPL-2.0 3(a) source), with every patch beside this script applied.
-#
-#   build.sh stamp COMMIT                        print what a build of COMMIT would record
-#   build.sh build COMMIT TARBALL WORKDIR OUT    build TARBALL into WORKDIR, then OUT and OUT.meta
-#
-# Upstream's `make platform=arm64` recipe. The CPU goes in through CFLAGS in the environment, which
-# the Makefile appends to: CFLAGS on make's command line would silently replace all of its flags.
-# The taskfile compares OUT.meta against `stamp`, so a changed pin, flag or patch rebuilds.
 set -eu
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -38,7 +29,6 @@ build() {
 	commit="$1" tarball="$2" work="$3" out="$4"
 	src="$work/gpsp-$commit"
 
-	# Unpacked fresh on every run, so nothing from an earlier pin or build is linked in.
 	rm -rf "$work"
 	mkdir -p "$work"
 	tar -xzf "$tarball" -C "$work"
@@ -47,12 +37,10 @@ build() {
 		exit 1
 	fi
 
-	# `stamp` records each patch's sha256, so editing one rebuilds.
 	for p in "$here"/*.patch; do
 		git -C "$src" apply -p1 "$p"
 	done
 
-	# Named explicitly: `git rev-parse` here would find slot's commit, not gpSP's.
 	CFLAGS="$device_cflags" make -C "$src" platform=arm64 \
 		GIT_VERSION="\"$(printf %s "$commit" | cut -c1-7)\"" \
 		-j"$(getconf _NPROCESSORS_ONLN)"

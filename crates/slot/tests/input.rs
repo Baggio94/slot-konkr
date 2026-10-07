@@ -70,8 +70,6 @@ fn the_lid_key_toggles_because_the_host_has_no_hinge() {
     );
 }
 
-/// Escape and L are bound to nothing: both would end a live link session, which cannot be
-/// resumed.
 #[test]
 fn the_two_reflex_keys_no_longer_end_a_session() {
     let mut h = HostInput::new();
@@ -83,8 +81,6 @@ fn the_two_reflex_keys_no_longer_end_a_session() {
     }
 }
 
-/// Losing focus releases every held key. The key-up goes to whatever took focus, so without
-/// this a key down at cmd-tab stays held on the pad for the rest of the session.
 #[test]
 fn a_window_that_loses_focus_lets_go_of_the_keys_held_in_it() {
     let mut h = HostInput::new();
@@ -96,7 +92,6 @@ fn a_window_that_loses_focus_lets_go_of_the_keys_held_in_it() {
         edge(&mut h, KeyCode::ArrowRight, true),
         vec![RawEvent::Down(Btn::Right)]
     );
-    // One key released normally, so the rest is not "release everything ever pressed".
     assert_eq!(
         edge(&mut h, KeyCode::KeyZ, false),
         vec![RawEvent::Up(Btn::A)]
@@ -107,10 +102,8 @@ fn a_window_that_loses_focus_lets_go_of_the_keys_held_in_it() {
         vec![RawEvent::Up(Btn::Right)],
         "the key still down when the window went away was never released"
     );
-    // Nothing is released twice: a release the game already had would put the button down again.
     h.on_window_event(&WindowEvent::Focused(false));
     assert!(h.poll(0).is_empty());
-    // Focus coming back says nothing about what is held.
     h.on_window_event(&WindowEvent::Focused(true));
     assert!(h.poll(0).is_empty());
 }

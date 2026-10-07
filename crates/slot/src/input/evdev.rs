@@ -1,15 +1,9 @@
-//! The evdev wire format and the device's button codes. No I/O beyond sysfs reads, so it is
-//! testable off device.
-
 use std::path::{Path, PathBuf};
 
 use slot_input::{Btn, RawEvent};
 
-/// `struct input_event`: a 64-bit timeval, then type, code and value, in native endianness.
-/// Every slot target is little endian, which the decode assumes.
 pub const EVENT_BYTES: usize = 24;
 
-/// The frame marker the kernel ends every group of edges with.
 pub const EV_SYN: u16 = 0x00;
 pub const EV_KEY: u16 = 0x01;
 pub const EV_SW: u16 = 0x05;
@@ -19,8 +13,6 @@ pub const EV_ABS: u16 = 0x03;
 pub const ABS_HAT0X: u16 = 0x10;
 pub const ABS_HAT0Y: u16 = 0x11;
 
-/// The d-pad: two axes on hat 0, not four keys. A zero releases whichever direction the axis
-/// was last at, so this remembers it.
 #[derive(Default)]
 pub struct Hat {
     x: i32,
@@ -28,8 +20,6 @@ pub struct Hat {
 }
 
 impl Hat {
-    /// Up to two events: a thumb rolled round the pivot swings the axis end to end without
-    /// passing zero, and the direction left must be released.
     pub fn feed(&mut self, ev: Ev) -> Vec<RawEvent> {
         let (held, ends) = match ev.code {
             ABS_HAT0X => (&mut self.x, [Btn::Left, Btn::Right]),
@@ -72,20 +62,16 @@ pub fn decode(bytes: &[u8]) -> Option<Ev> {
 pub fn to_raw(ev: Ev) -> Option<RawEvent> {
     let btn = match ev.kind {
         EV_KEY => code_to_btn(ev.code)?,
-        // The hinge is a switch, and its "code" collides with a key the pad may also send.
         EV_SW if ev.code == SW_LID => Btn::Lid,
         _ => return None,
     };
     match ev.value {
         0 => Some(RawEvent::Up(btn)),
         1 => Some(RawEvent::Down(btn)),
-        // 2 is autorepeat, which would re-arm the gesture layer's hold and double-tap windows.
         _ => None,
     }
 }
 
-/// Transcribed from `SLOT_TRACE_INPUT` on the device: the board ignores the kernel's names
-/// (`0x137` is `BTN_TR` but START on the case). Directions come from `Hat`.
 pub fn code_to_btn(code: u16) -> Option<Btn> {
     Some(match code {
         0x130 => Btn::A,
@@ -102,24 +88,17 @@ pub fn code_to_btn(code: u16) -> Option<Btn> {
         115 => Btn::VolUp,
         114 => Btn::VolDown,
         116 => Btn::Power,
-        // 0x162 follows 0x138 on every MENU press. Mapping it would make each press a double
-        // tap, which opens the state switcher.
         _ => return None,
     })
 }
 
-/// Key codes the frontend uses; a node reporting none is not the pad. Power must be here: it
-/// is alone on its own node, which would otherwise be skipped.
 const WANTED: [u16; 15] = [
     0x130, 0x131, 0x132, 0x133, 0x134, 0x135, 0x136, 0x137, 0x138, 0x13a, 0x13b, 0x162, 115, 114,
     116,
 ];
 
-/// Shared with the motor. The words print most significant first, so offsets count from the end.
 pub use slot_power::has_bit;
 
-/// Event nodes worth opening, in name order. Chosen by capability, never position: node
-/// numbering changes between boots.
 pub fn pick_devices(dev: &Path, sys: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dev) else {
         return Vec::new();
@@ -149,7 +128,6 @@ fn wanted_node(device: &Path) -> bool {
     lid || WANTED.iter().any(|bit| has_bit(&keys, *bit))
 }
 
-/// What sysfs calls the node, for logging.
 pub fn device_name(sys: &Path, node: &Path) -> String {
     node.file_name()
         .and_then(|n| std::fs::read_to_string(sys.join(n).join("device/name")).ok())

@@ -20,7 +20,6 @@ fn pseudorandom_240x160() -> Vec<u8> {
         .collect()
 }
 
-/// The shader as written: sin evaluated per output pixel, no table anywhere.
 fn render_reference(src: &[u8]) -> Vec<u8> {
     let mut out = vec![0u8; OUT_W * OUT_H * 3];
     for oy in 0..OUT_H {
@@ -83,7 +82,6 @@ fn mask_phase_puts_one_rgb_triad_per_source_pixel() {
     }
 }
 
-/// The 8 bit mask texture the GPU samples stays within one LSB of the reference.
 #[test]
 fn quantised_mask_texture_stays_within_one_lsb_of_the_reference() {
     let src = pseudorandom_240x160();

@@ -1,7 +1,6 @@
 use gilrs::Button;
 use slot_input::Btn;
 
-/// Face buttons map by position: the RG SP's A is right of B, which is East and South on a pad.
 pub fn pad_to_btn(button: Button) -> Option<Btn> {
     Some(match button {
         Button::DPadUp => Btn::Up,
@@ -10,7 +9,6 @@ pub fn pad_to_btn(button: Button) -> Option<Btn> {
         Button::DPadRight => Btn::Right,
         Button::East => Btn::A,
         Button::South => Btn::B,
-        // The top face button, where the RG SP puts X.
         Button::North => Btn::X,
         Button::West => Btn::Y,
         Button::LeftTrigger => Btn::L1,

@@ -26,7 +26,6 @@ fn the_clock_is_asked_for_once_and_only_once() {
     );
 }
 
-/// It outranks a seated cart: resuming into a game with a wrong rtc is what it prevents.
 #[test]
 fn the_clock_comes_before_a_seated_cart() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -46,12 +45,11 @@ fn the_clock_comes_before_a_seated_cart() {
 fn confirming_writes_the_picked_time_to_the_platform() {
     let d = tmp_root_with_carts(&["Emerald"]);
     let (mut a, clock) = app_booting_with_clock(d.path());
-    a.apply(Action::GbaDown(Btn::Up)); // one step on the field under the cursor
+    a.apply(Action::GbaDown(Btn::Up));
     a.confirm_clock();
     assert_ne!(clock.get(), 0, "the platform clock was never set");
 }
 
-/// A device whose rtc is already right is confirmed, not typed in.
 #[test]
 fn the_picker_starts_from_the_clock_the_platform_already_has() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -66,7 +64,7 @@ fn the_picker_starts_from_the_clock_the_platform_already_has() {
 
 #[test]
 fn a_field_wraps_rather_than_running_off_the_end() {
-    let mut c = ClockPicker::from_secs(0); // 1970-01-01 00:00
+    let mut c = ClockPicker::from_secs(0);
     c.field(Field::Month);
     for _ in 0..13 {
         c.up();
@@ -90,7 +88,6 @@ fn february_29_is_reachable_in_a_leap_year_and_not_otherwise() {
     assert_eq!(c.day(), 1, "2027 has no 29th of February");
 }
 
-/// The day may be picked before the month, and a 31st carried into February is not a date.
 #[test]
 fn a_day_the_new_month_does_not_have_is_pulled_back() {
     let mut c = ClockPicker::from_ymd(2026, 1, 31);
@@ -99,8 +96,6 @@ fn a_day_the_new_month_does_not_have_is_pulled_back() {
     assert_eq!((c.month(), c.day()), (2, 28));
 }
 
-/// The card keeps UTC because the base system's clock and ntp assume it. The picker shows wall
-/// time and takes the offset back off before handing over an epoch.
 #[test]
 fn the_picker_hands_back_utc_rather_than_what_was_typed() {
     let mut c = ClockPicker::from_ymd(2026, 8, 12);
@@ -110,7 +105,6 @@ fn the_picker_hands_back_utc_rather_than_what_was_typed() {
     }
     let typed = c.secs();
     c.field(Field::Offset);
-    // Ten half hour steps down is UTC-5.
     for _ in 0..10 {
         c.down();
     }
@@ -132,7 +126,6 @@ fn the_offset_steps_in_half_hours_because_real_zones_do() {
     assert_eq!(c.offset_min(), 60);
 }
 
-/// Walking off either end would offer zones no country keeps.
 #[test]
 fn the_offset_stops_at_the_ends_of_the_real_range() {
     let mut c = ClockPicker::from_ymd(2026, 8, 12);
@@ -147,7 +140,6 @@ fn the_offset_stops_at_the_ends_of_the_real_range() {
     assert_eq!(c.offset_min(), -720, "walked past UTC-12");
 }
 
-/// The binary re-rasterises the line when this changes, so the text must mention the offset.
 #[test]
 fn the_offset_is_part_of_the_line_of_type() {
     let mut c = ClockPicker::from_ymd(2026, 8, 12);
@@ -158,7 +150,6 @@ fn the_offset_is_part_of_the_line_of_type() {
     assert!(c.text().contains("-00:30"), "{}", c.text());
 }
 
-/// The offset is read by everything that prints a time, so it has to persist to the card.
 #[test]
 fn confirming_persists_the_offset_and_sets_the_platform_to_utc() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -178,8 +169,6 @@ fn confirming_persists_the_offset_and_sets_the_platform_to_utc() {
     );
 }
 
-/// Everything user facing reads the wall clock: the shelf, polaroid captions and state stamps.
-/// Mixing utc and local would be worse than all utc.
 #[test]
 fn the_wall_clock_is_local_rather_than_the_utc_the_card_keeps() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -196,9 +185,6 @@ fn the_wall_clock_is_local_rather_than_the_utc_the_card_keeps() {
     assert_eq!(a.wall_secs(), 1_700_000_000 - 300 * 60);
 }
 
-/// An RTC that lost power sets its fault flag, the kernel refuses every read, and the system
-/// clock comes up at the epoch. Without this the clock screen's gate is already set and the
-/// clock stays wrong.
 #[test]
 fn a_clock_that_never_got_set_is_asked_for_again() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -218,7 +204,6 @@ fn a_clock_that_never_got_set_is_asked_for_again() {
     );
 }
 
-/// Only when obviously wrong: a plausible date is the user's, and asking every boot would nag.
 #[test]
 fn a_clock_that_looks_like_a_real_date_is_not_asked_for_again() {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
@@ -237,20 +222,15 @@ fn a_clock_that_looks_like_a_real_date_is_not_asked_for_again() {
     );
 }
 
-/// A reading with seconds in it, which the picker cannot show: 20:53:42 UTC.
 const AT: i64 = 1_786_568_022;
-/// How long the screen is up before it is confirmed. The platform's clock runs on under it.
 const OPEN_FOR: i64 = 100;
 
-/// The two ways onto the clock screen. Confirming has to behave the same from either.
 #[derive(Copy, Clone, Debug)]
 enum Way {
     FirstBoot,
     QuickMenu,
 }
 
-/// The clock screen, reached `way`, at `AT`. From the menu the card already has an offset, so
-/// the picker shows local time.
 fn clock_screen(way: Way) -> (TempDir, App, Clock) {
     let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
     if let Way::QuickMenu = way {
@@ -280,8 +260,6 @@ fn clock_screen(way: Way) -> (TempDir, App, Clock) {
     (d, a, clock)
 }
 
-/// Confirming what the screen says changes nothing. The picker shows the minute and stands
-/// still, so a naive confirm would turn the clock back by the seconds and the time it was open.
 #[test]
 fn confirming_the_clock_untouched_leaves_it_where_it_is() {
     for way in [Way::FirstBoot, Way::QuickMenu] {
@@ -317,7 +295,6 @@ fn changing_the_minute_moves_the_clock_by_exactly_that_minute() {
     }
 }
 
-/// Moving the offset alone moves UTC the other way: half an hour west is half an hour later.
 #[test]
 fn changing_only_the_offset_moves_utc_by_exactly_that_change() {
     for way in [Way::FirstBoot, Way::QuickMenu] {

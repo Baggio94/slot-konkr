@@ -4,7 +4,6 @@ mod device_app;
 mod host_app;
 
 fn main() {
-    // Build tooling needs the content layout without opening a window.
     let mut args = std::env::args().skip(1);
     if args.next().as_deref() == Some("--init-root") {
         let Some(dir) = args.next() else {

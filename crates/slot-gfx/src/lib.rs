@@ -15,7 +15,6 @@ mod shaders;
 mod surface;
 
 pub use draw::{Draw, TexId};
-// Built on the host too so it stays type checked; off the device it fails at dlopen.
 pub use fbdev::{egl_error, panel_mode, panel_size, FbdevSurface};
 pub use fbo::{Compositor, BACKDROP};
 pub use grade::{blue_light_gain, BLUE_LIGHT_MAX};

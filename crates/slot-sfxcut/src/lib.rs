@@ -1,50 +1,33 @@
-//! Cuts the two cartridge noises out of a real recording into the committed
-//! `crates/slot/assets/*.pcm`. Not part of the device build. It finds the transients, cuts a
-//! fixed window around the chosen one, and aligns it to the cartridge animation.
-
 mod wav;
 
 pub use wav::{read_wav, WavError};
 
 pub const HZ: f32 = 48_000.0;
 
-/// Clip lengths the frontend expects. `Sfx::tail` derives from them, so changing these
-/// changes the animation.
 pub const INSERT_LEN: usize = 11_520;
 pub const EJECT_LEN: usize = 15_120;
 
-/// Where the transient must land in each clip, mirroring `Sfx::lead`.
 pub const INSERT_LEAD: f32 = 0.097;
 pub const EJECT_LEAD: f32 = 0.021;
 
-/// Peak levels matching the frontend's existing loudness against game audio.
 pub const INSERT_PEAK: f32 = 11_397.0;
 pub const EJECT_PEAK: f32 = 12_000.0;
 
-/// A sharp event in the recording: one cart going in, or one coming out.
 #[derive(Clone, Copy, Debug)]
 pub struct Take {
-    /// Seconds from the start of the recording.
     pub at: f32,
-    /// Loudest sample in the 30 ms around it, 0.0 to 1.0.
     pub peak: f32,
-    /// Silence before it. A take with a neighbour too close cannot be cut cleanly.
     pub clear_before: f32,
-    /// Room after it, to the next take or the end of the recording.
     pub clear_after: f32,
 }
 
 impl Take {
-    /// Whether a clip of `len` samples leading by `lead` fits around this take without
-    /// running into the next one or off either end.
     pub fn fits(&self, lead: f32, len: usize) -> bool {
         let after = len as f32 / HZ - lead;
         self.clear_before >= lead && self.clear_after >= after
     }
 }
 
-/// Every sharp event in the recording, in time order. It also finds coughs, so listen to the
-/// pick rather than trusting the list.
 pub fn takes(pcm: &[f32]) -> Vec<Take> {
     let rms: Vec<f32> = (0..pcm.len().saturating_sub(WIN))
         .step_by(HOP)
@@ -64,7 +47,6 @@ pub fn takes(pcm: &[f32]) -> Vec<Take> {
         if 20.0 * (now / quiet).log10() < JUMP_DB {
             continue;
         }
-        // One cart makes several hops loud: keep the first per 80 ms.
         if hits
             .last()
             .is_some_and(|&p| (k - p) * HOP < (0.080 * HZ) as usize)
@@ -82,9 +64,7 @@ pub fn takes(pcm: &[f32]) -> Vec<Take> {
 
     let onsets: Vec<usize> = hits.iter().map(|&k| onset(pcm, k * HOP)).collect();
 
-    // One insert is several transients (rails, contacts, stop). Group them and anchor on the
-    // loudest, the contact, which is what `lead` is measured to.
-    let mut grouped: Vec<(usize, usize)> = Vec::new(); // (anchor, last onset in the group)
+    let mut grouped: Vec<(usize, usize)> = Vec::new();
     for &sample in &onsets {
         match grouped.last_mut() {
             Some((anchor, last)) if (sample - *last) as f32 / HZ < GROUP => {
@@ -98,7 +78,6 @@ pub fn takes(pcm: &[f32]) -> Vec<Take> {
     }
     let mut anchors: Vec<usize> = grouped.into_iter().map(|(a, _)| a).collect();
 
-    // Handling the device makes small noises that clear the detector but are not takes.
     let loudest = anchors
         .iter()
         .map(|&a| peak_around(a))
@@ -127,15 +106,13 @@ pub fn takes(pcm: &[f32]) -> Vec<Take> {
         .collect()
 }
 
-const HOP: usize = 240; // 5 ms
-const WIN: usize = 480; // 10 ms
-const HISTORY: usize = 20; // 100 ms of hops
+const HOP: usize = 240;
+const WIN: usize = 480;
+const HISTORY: usize = 20;
 const JUMP_DB: f32 = 12.0;
-const FLOOR: f32 = 0.004; // about -48 dBFS, below which it is room tone
-const GROUP: f32 = 0.400; // transients closer than this are one cart action
+const FLOOR: f32 = 0.004;
+const GROUP: f32 = 0.400;
 
-/// The sample the rise starts on: the first near a flagged hop crossing a third of the local
-/// peak. The 5 ms hop grid is too coarse against a 21 ms lead.
 fn onset(pcm: &[f32], hop_start: usize) -> usize {
     let lo = hop_start.saturating_sub(WIN);
     let hi = (hop_start + 3 * WIN).min(pcm.len());
@@ -150,9 +127,7 @@ fn onset(pcm: &[f32], hop_start: usize) -> usize {
 
 #[derive(Debug)]
 pub enum CutError {
-    /// The window would start before the recording does.
     NotEnoughBefore { want: f32, have: f32 },
-    /// The window would run off the end.
     NotEnoughAfter { want: f32, have: f32 },
 }
 
@@ -175,9 +150,6 @@ impl std::fmt::Display for CutError {
     }
 }
 
-/// Cut `len` samples putting the transient at `at` exactly `lead` in, normalise to `peak` and
-/// fade both ends. `lift_db` raises the quiet lead-in (the rails) before the transient; zero
-/// leaves it alone.
 pub fn cut(
     pcm: &[f32],
     at: f32,
@@ -205,8 +177,6 @@ pub fn cut(
     Ok(finish(&mut buf, peak))
 }
 
-/// Raise everything before the transient by `db`, easing to unity over the last 15 ms.
-/// Applied before normalising, so the transient still decides the gain.
 fn lift(buf: &mut [f32], lead: f32, db: f32) {
     if db == 0.0 {
         return;
@@ -220,11 +190,9 @@ fn lift(buf: &mut [f32], lead: f32, db: f32) {
     }
 }
 
-/// Fade both ends, scale the loudest sample to `peak`, and convert to i16. The fades stop a
-/// cut through room tone clicking.
 fn finish(buf: &mut [f32], peak: f32) -> Vec<i16> {
-    const IN: usize = 96; // 2 ms
-    const OUT: usize = 900; // 19 ms
+    const IN: usize = 96;
+    const OUT: usize = 900;
 
     let n = buf.len();
     for (i, s) in buf.iter_mut().enumerate() {
@@ -240,12 +208,10 @@ fn finish(buf: &mut [f32], peak: f32) -> Vec<i16> {
         .collect()
 }
 
-/// 0 to 1 with both ends flat, so a fade neither starts nor stops abruptly.
 fn raised_cosine(u: f32) -> f32 {
     0.5 * (1.0 - (std::f32::consts::PI * u).cos())
 }
 
-/// Mono signed 16 bit little endian, as the frontend's `include_bytes!` expects.
 pub fn to_le_bytes(pcm: &[i16]) -> Vec<u8> {
     pcm.iter().flat_map(|s| s.to_le_bytes()).collect()
 }

@@ -2,20 +2,16 @@ use crate::quad::Quad;
 use crate::shaders::{SPRITE_FRAG, SPRITE_VERT};
 use crate::surface::{GfxError, OUT_H, OUT_W};
 
-/// Handle to a texture the compositor owns. UI code never sees a GL name.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct TexId(usize);
 
 #[cfg(feature = "test-support")]
 impl TexId {
-    /// A handle by index, for tests and tools without a live context. Gated so a forged
-    /// handle cannot reach the device build.
     pub const fn from_raw(id: usize) -> Self {
         TexId(id)
     }
 }
 
-/// Chrome geometry, in offscreen pixels with the origin at the top left.
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum Draw {
     Rect {
@@ -33,7 +29,6 @@ pub enum Draw {
         tex: TexId,
         alpha: f32,
     },
-    /// `Tex` turned about its own centre by `turn` radians, clockwise on the panel.
     Turned {
         x: f32,
         y: f32,
@@ -43,15 +38,12 @@ pub enum Draw {
         alpha: f32,
         turn: f32,
     },
-    /// Where the game layer goes in the list. The pass owns its rect, since power on squeezes
-    /// it.
     Game,
-    /// A 240x160 still drawn through the game pass, so it wears the same mask as `Game`.
-    Shot { tex: TexId },
+    Shot {
+        tex: TexId,
+    },
 }
 
-/// One program for both variants: a rect is a textured quad sampling a white texel, so a
-/// draw list never has to change program mid list.
 pub struct Sprites {
     prog: gl::types::GLuint,
     white: gl::types::GLuint,
@@ -99,8 +91,6 @@ impl Sprites {
         self.push(w, h, rgba, gl::LINEAR)
     }
 
-    /// For a texture drawn at a whole number magnification, where linear filtering would blur
-    /// the pixel grid.
     pub fn create_texture_nearest(&mut self, w: u32, h: u32, rgba: &[u8]) -> TexId {
         self.push(w, h, rgba, gl::NEAREST)
     }
@@ -111,7 +101,6 @@ impl Sprites {
         TexId(self.textures.len() - 1)
     }
 
-    /// Replaces a texture's contents in place, so redrawn cards do not grow the pool.
     pub fn update_texture(&mut self, id: TexId, w: u32, h: u32, rgba: &[u8]) {
         let Some(tex) = self.textures.get(id.0) else {
             return;
@@ -136,7 +125,6 @@ impl Sprites {
         }
     }
 
-    /// For the passes that sample a sprite texture without drawing it as a sprite.
     pub fn source(&self, id: TexId) -> Option<gl::types::GLuint> {
         self.textures.get(id.0).copied()
     }
@@ -174,10 +162,8 @@ impl Sprites {
                     Some(t) => (x, y, w, h, *t, [1.0, 1.0, 1.0, alpha], turn),
                     None => continue,
                 },
-                // The compositor splits the list on these and draws the game pass itself.
                 Draw::Game | Draw::Shot { .. } => continue,
             };
-            // Exactly (1, 0) when unturned, so the shader's correction term is exactly zero.
             let (cos, sin) = if turn == 0.0 {
                 (1.0, 0.0)
             } else {

@@ -10,7 +10,6 @@ fn bottom_edge(d: &Draw) -> Option<f32> {
     }
 }
 
-/// Width of the filled part of the bar, which is the last rect in the list.
 fn fill(kind: HudKind, value: u8) -> f32 {
     let mut h = Hud::new();
     h.show(kind, value, false, 0);
@@ -30,7 +29,6 @@ fn hud_fades_after_1500ms() {
     assert!(!h.visible(2500));
 }
 
-/// A zero timestamp is not an adjustment, or every boot opens with a bar.
 #[test]
 fn nothing_shows_until_something_is_adjusted() {
     assert!(!Hud::new().visible(0));
@@ -82,7 +80,6 @@ fn the_hud_draws_a_dark_plate_behind_itself() {
 
 #[test]
 fn muted_volume_uses_the_muted_icon() {
-    // Zero and muted draw the same empty bar, so only the glyph tells them apart.
     assert_eq!(HudKind::Volume.icon(0, false), Icon::VolumeZero);
     assert_eq!(HudKind::Volume.icon(0, true), Icon::VolumeMuted);
     assert_eq!(HudKind::Volume.icon(40, true), Icon::VolumeMuted);
@@ -143,7 +140,6 @@ fn both_fast_forward_glyphs_share_one_box() {
     );
 }
 
-/// Fast forward never starts the bar timer, so the badge must persist on its own.
 #[test]
 fn the_badge_outlives_the_bar_timer_without_a_plate() {
     let mut h = Hud::new();
@@ -171,8 +167,6 @@ fn the_badge_leaves_when_fast_forward_stops() {
     assert!(out.is_empty(), "the plate outlived the fast forward");
 }
 
-/// The badge stands alone (latched fast forward can last minutes), but a level bar still
-/// gets its plate, so this cannot pass by never drawing one.
 #[test]
 fn the_ff_badge_draws_no_plate_but_the_bar_still_does() {
     let full = |out: &Vec<Draw>| {

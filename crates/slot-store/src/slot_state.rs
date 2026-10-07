@@ -7,48 +7,29 @@ pub const BRIGHTNESS_MAX: u8 = 9;
 pub const BLUE_LIGHT_MAX: u8 = 9;
 pub const VOLUME_MAX: u8 = 100;
 
-/// Real zone offsets, in minutes (some zones are off by 30 or 45). The card keeps UTC because
-/// the base system's clock and ntp assume it.
 pub const UTC_OFFSET_MIN: i16 = -720;
 pub const UTC_OFFSET_MAX: i16 = 840;
 
-/// The quick menu's fast forward ceilings, in game frames per refresh, left to right. The only
-/// values `ff_speed` may hold, so 5 must be rejected. 8 was measured and bought nothing: 281 fps
-/// against 6's 280 on mGBA, while 16.67 ms overruns rose from 1% to 7%.
 pub const FF_SPEEDS: [u8; 4] = [2, 3, 4, 6];
 
-/// Default fast forward ceiling, chosen on the device. Builds that only accept 2..=4 read it as
-/// their default, 4x.
 pub const FF_SPEED_DEFAULT: u8 = 6;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SlotState {
-    /// Filename stem. `None` is an empty slot, which is the shelf.
     pub cart: Option<String>,
-    /// Which shelf `cart` stands on, since a stem can collide across platform folders.
-    /// `None` is not `Gba`: it means look the stem up across the shelves and take the first match.
     pub cart_platform: Option<Platform>,
     pub brightness: u8,
     pub blue_light: u8,
     pub volume: u8,
-    /// Separate from `volume`, so unmuting restores the last level.
     pub muted: bool,
-    /// Whether the wall clock was ever confirmed. Marks first launch, so a fresh card must
-    /// read false.
     pub clock_set: bool,
-    /// Minutes to add to the card's UTC to get local time.
     pub utc_offset_min: i16,
     pub rumble: bool,
-    /// The most game frames a screen refresh runs while fast forwarding: one of `FF_SPEEDS`.
     pub ff_speed: u8,
-    /// Whether fast forward is heard, sped up, rather than dropped.
     pub ff_sound: bool,
-    /// Whether the core simulates the original LCD's washed-out tint. Device-wide, since the
-    /// quick menu only opens with no cart seated. See `slot::core::apply_core_options`.
     pub colour_correction: bool,
 }
 
-/// Not derived: all zeroes would boot with the backlight off and the mixer silent.
 impl Default for SlotState {
     fn default() -> Self {
         SlotState {
@@ -99,9 +80,6 @@ pub fn write_slot_state(root: &Path, s: &SlotState) -> std::io::Result<()> {
     atomic_write(&state_path(root), text.as_bytes())
 }
 
-/// The original fields are all or nothing: a missing or out-of-range one means corruption, and
-/// defaults would hide it. Unknown lines (a newer build) are skipped, and the later quick menu
-/// fields fall back to their own defaults individually.
 fn parse(text: &str) -> Option<SlotState> {
     let mut cart = None;
     let mut cart_platform = None;
@@ -139,7 +117,6 @@ fn parse(text: &str) -> Option<SlotState> {
     let fallback = SlotState::default();
     Some(SlotState {
         cart: (!cart.is_empty()).then_some(cart),
-        // Absent is a meaning of its own, not a value waiting on a default.
         cart_platform,
         brightness: brightness?,
         blue_light: blue_light?,
@@ -154,12 +131,10 @@ fn parse(text: &str) -> Option<SlotState> {
     })
 }
 
-/// The platform's directory name in lower case, e.g. `cart_platform=gb`.
 fn platform_key(platform: Platform) -> String {
     platform.dir_name().to_ascii_lowercase()
 }
 
-/// The reverse, ignoring case. Anything unrecognised is `None`, as if the card never said.
 fn platform_value(value: &str) -> Option<Platform> {
     Platform::ALL
         .into_iter()
@@ -173,7 +148,6 @@ fn offset(value: &str) -> Option<i16> {
         .filter(|n| (UTC_OFFSET_MIN..=UTC_OFFSET_MAX).contains(n))
 }
 
-/// One of `FF_SPEEDS`; anything else, including 5 and 7, reads as the default.
 fn ff_speed_value(value: &str) -> Option<u8> {
     value.parse().ok().filter(|n| FF_SPEEDS.contains(n))
 }

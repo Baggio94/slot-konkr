@@ -1,13 +1,4 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1283.0 145.0">
-  <!-- ANBERNIC RG SP, set as outlines so no font ships with the frontend. The maker's name is
-       Futura Bold sheared into an italic, because Apple's Futura has no Bold Italic cut; the
-       model is the GameCube face, which is what the article's ADVANCE is set in. The name is
-       set 1.35x the model, on one baseline, as the article sets its own two.
-
-       The white keyline is the signature, and it is drawn by z-order: every glyph is stroked
-       first and then filled with the label's ground on top, so stroke that landed inside a
-       neighbouring letter is covered and what survives is the outline of the silhouette. A
-       per-glyph stroke would rule a line between every pair of letters instead. -->
   <g transform="translate(22.50 122.50) scale(1 -1)">
     <g fill="none" stroke="#ffffff" stroke-width="17.00" stroke-linejoin="round" stroke-linecap="round">
       <path d="M73.0238726790451 37.13527851458886 68.67639257294431 70.42440318302388 49.6816976127321 37.13527851458886ZM75.57294429708223 17.37400530503979H38.437665782493376L28.647214854111407 0.0H0.9283819628647216L60.992042440318315 100.00000000000001H89.37400530503979L105.43766578249338 0.0H77.71883289124669Z"/>

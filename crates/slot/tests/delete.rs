@@ -51,7 +51,6 @@ fn deleting_the_last_state_closes_the_switcher() {
     );
 }
 
-/// A delete also comes out of the switcher's snapshot, or the dots count an entry that is gone.
 #[test]
 fn the_deleted_state_leaves_the_switcher_with_it() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -74,7 +73,6 @@ fn the_deleted_state_leaves_the_switcher_with_it() {
     );
 }
 
-/// An undo that names a different state survives the delete.
 #[test]
 fn deleting_someone_elses_state_leaves_the_offer_alone() {
     let d = tmp_root_with_carts(&["Emerald"]);
@@ -83,7 +81,6 @@ fn deleting_someone_elses_state_leaves_the_offer_alone() {
     let mut a = app_playing_in(d.path(), "Emerald");
     a.apply_at(Action::SaveState, 1_000);
     a.apply_at(Action::Polaroids, 1_100);
-    // Newest first, so the older entry is the one the save did not make.
     a.apply(Action::ShelfRight);
     a.apply(Action::GbaDown(Btn::Y));
     assert!(

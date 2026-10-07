@@ -9,7 +9,6 @@ use slot_retro::{ButtonMask, MockCore, RetroCore};
 use slot_store::{Core, Platform, StateRing};
 use slot_ui::{photo_face, Polaroids, Printed};
 
-/// `gl::load_with` writes global function pointers, so two GL tests must not overlap.
 static GL: Mutex<()> = Mutex::new(());
 
 fn compositor() -> Option<(MutexGuard<'static, ()>, HeadlessSurface, Compositor)> {
@@ -24,7 +23,6 @@ fn px(frame: &[u8], x: usize, y: usize) -> [u8; 3] {
     [frame[o], frame[o + 1], frame[o + 2]]
 }
 
-/// The switcher's photo item alone, plates off, so every corner of the picture can be read.
 fn switcher_photo(p: &Polaroids) -> Vec<Draw> {
     let mut out = Vec::new();
     p.draw(None, Printed::default(), None, Printed::default(), &mut out);
@@ -45,8 +43,6 @@ fn mock_frame(frames: u32) -> Vec<u8> {
     core.video_xrgb8888().to_vec()
 }
 
-/// The core hands over XRGB8888 (B, G, R in memory). Uses a frame whose channels differ, since a
-/// swap is invisible against grey.
 #[test]
 fn a_mock_frame_keeps_its_colours_through_the_game_pass() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -80,8 +76,6 @@ fn a_mock_frame_keeps_its_colours_through_the_game_pass() {
     );
 }
 
-/// The whole picture path: a core frame PNG-encoded on save, decoded, uploaded and drawn, with no
-/// channel swap or rescale along the way.
 #[test]
 fn a_saved_frame_arrives_intact_on_its_screenshot() {
     let Some((_g, _s, mut c)) = compositor() else {
@@ -116,8 +110,6 @@ fn a_saved_frame_arrives_intact_on_its_screenshot() {
     }
 }
 
-/// Full screen is 3x, the game's own integer scale, so sampling must be nearest: a linear tap
-/// would blur every edge into a two pixel ramp.
 #[test]
 fn the_switcher_magnifies_its_screenshot_without_resampling_it() {
     let Some((_g, _s, mut c)) = compositor() else {

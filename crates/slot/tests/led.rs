@@ -9,13 +9,11 @@ use slot_input::{Action, Btn};
 use slot_power::LedState;
 use slot_ui::PowerChoice;
 
-/// Watches what the platform was last told, not just what `App::led_state` computed, so
-/// dropping the `set_led` call from the fast tick fails a test.
 #[test]
 fn the_fast_tick_actually_reaches_the_platforms_set_led() {
     let d = tmp_root_with_carts(&["Emerald"]);
     let (mut a, charge, percent, led, _writes) = app_playing_with_led(d.path(), "Emerald");
-    charge.store(2, Ordering::Relaxed); // Charging
+    charge.store(2, Ordering::Relaxed);
     percent.store(50, Ordering::Relaxed);
     a.tick_ms(5_000);
     assert_eq!(
@@ -25,13 +23,11 @@ fn the_fast_tick_actually_reaches_the_platforms_set_led() {
     );
 }
 
-/// A device where `status` never populates only ever reaches `Low` and `Running`, since
-/// neither needs a charge reading.
 #[test]
 fn a_full_battery_reads_charged_not_running() {
     let d = tmp_root_with_carts(&["Emerald"]);
     let (mut a, charge, percent) = app_playing_with_charge(d.path(), "Emerald");
-    charge.store(3, Ordering::Relaxed); // Full
+    charge.store(3, Ordering::Relaxed);
     percent.store(100, Ordering::Relaxed);
     a.tick_ms(10_000);
     assert_eq!(a.led_state(), LedState::Charged);
@@ -41,19 +37,17 @@ fn a_full_battery_reads_charged_not_running() {
 fn a_flat_battery_that_is_not_charging_reads_low() {
     let d = tmp_root_with_carts(&["Emerald"]);
     let (mut a, charge, percent) = app_playing_with_charge(d.path(), "Emerald");
-    charge.store(1, Ordering::Relaxed); // Discharging
+    charge.store(1, Ordering::Relaxed);
     percent.store(10, Ordering::Relaxed);
     a.tick_ms(10_000);
     assert_eq!(a.led_state(), LedState::Low);
 }
 
-/// Pins the 20% threshold as a literal, so a changed `BATTERY_LOW` fails here rather than
-/// moving both sides of the comparison.
 #[test]
 fn the_low_threshold_is_twenty_percent_not_just_a_number_comfortably_below_it() {
     let d = tmp_root_with_carts(&["Emerald"]);
     let (mut a, charge, percent) = app_playing_with_charge(d.path(), "Emerald");
-    charge.store(1, Ordering::Relaxed); // Discharging
+    charge.store(1, Ordering::Relaxed);
 
     percent.store(20, Ordering::Relaxed);
     a.tick_ms(10_000);
@@ -72,29 +66,25 @@ fn the_low_threshold_is_twenty_percent_not_just_a_number_comfortably_below_it() 
     );
 }
 
-/// Before any battery reading the LED is green, not `Off`: `Off` means a real shutdown.
 #[test]
 fn no_reading_yet_reads_running_not_off() {
     let d = tmp_root_with_carts(&["Emerald"]);
-    let a = app_playing_in(d.path(), "Emerald"); // no platform attached at all
+    let a = app_playing_in(d.path(), "Emerald");
     assert_eq!(a.led_state(), LedState::Running);
 }
 
-/// The fast tick recomputes every second, but an unchanged state is written once, not every
-/// tick, since hammering the real node is not known to be safe.
 #[test]
 fn the_led_is_written_once_per_change_not_once_per_tick() {
     let d = tmp_root_with_carts(&["Emerald"]);
     let (mut a, charge, percent, _led, writes) = app_playing_with_led(d.path(), "Emerald");
-    charge.store(1, Ordering::Relaxed); // Discharging
-    percent.store(50, Ordering::Relaxed); // above BATTERY_LOW, so this reads Running
+    charge.store(1, Ordering::Relaxed);
+    percent.store(50, Ordering::Relaxed);
     a.tick_ms(2_000);
     let after_first = writes.load(Ordering::Relaxed);
     assert!(
         after_first > 0,
         "the very first tick never reached the platform at all"
     );
-    // Ten more unchanged seconds at the fast tick's cadence.
     for extra_s in 1..=10 {
         a.tick_ms(2_000 + extra_s * 1_000);
     }
@@ -105,12 +95,11 @@ fn the_led_is_written_once_per_change_not_once_per_tick() {
     );
 }
 
-/// `Off` is the last thing the platform hears before `poweroff`.
 #[test]
 fn power_off_leaves_the_led_off_rather_than_lit_through_shutdown() {
     let d = tmp_root_with_carts(&["Emerald"]);
     let (mut a, charge, percent, led, _writes) = app_playing_with_led(d.path(), "Emerald");
-    charge.store(1, Ordering::Relaxed); // Discharging, so the LED is lit green beforehand
+    charge.store(1, Ordering::Relaxed);
     percent.store(50, Ordering::Relaxed);
     a.tick_ms(2_000);
     assert_ne!(
@@ -118,7 +107,6 @@ fn power_off_leaves_the_led_off_rather_than_lit_through_shutdown() {
         led_code(LedState::Off),
         "the rig should start lit, or this test proves nothing"
     );
-    // The hold only raises a menu the user may still cancel, so the light stays on.
     a.apply(Action::PowerHold);
     assert_ne!(
         led.load(Ordering::Relaxed),
@@ -126,7 +114,6 @@ fn power_off_leaves_the_led_off_rather_than_lit_through_shutdown() {
         "the menu is a question, not a shutdown"
     );
 
-    // Walked to the row by its position, not a count of presses.
     for _ in 0..PowerChoice::PowerOff.index() {
         a.apply(Action::GbaDown(Btn::Down));
     }
@@ -138,12 +125,11 @@ fn power_off_leaves_the_led_off_rather_than_lit_through_shutdown() {
     );
 }
 
-/// The idle doze timeout, the other caller of `begin_power_off`, also darkens the light.
 #[test]
 fn a_doze_timeout_also_leaves_the_led_off_rather_than_lit_through_shutdown() {
     let d = tmp_root_with_carts(&["Emerald"]);
     let (mut a, charge, percent, led, _writes) = app_playing_with_led(d.path(), "Emerald");
-    charge.store(1, Ordering::Relaxed); // Discharging, so the LED is lit green beforehand
+    charge.store(1, Ordering::Relaxed);
     percent.store(50, Ordering::Relaxed);
     a.tick_ms(2_000);
     assert_ne!(
@@ -160,13 +146,12 @@ fn a_doze_timeout_also_leaves_the_led_off_rather_than_lit_through_shutdown() {
     );
 }
 
-/// The slow tick is what actually calls `App::on_battery`.
 #[test]
 fn the_slow_tick_actually_runs_the_power_off_policy_on_what_it_reads() {
     let d = tmp_root_with_carts(&["Emerald"]);
     let (mut a, charge, percent) = app_playing_with_charge(d.path(), "Emerald");
-    charge.store(1, Ordering::Relaxed); // Discharging: nothing here suppresses the cutoff
-    percent.store(3, Ordering::Relaxed); // below BATTERY_CRITICAL
+    charge.store(1, Ordering::Relaxed);
+    percent.store(3, Ordering::Relaxed);
     a.tick_ms(10_000);
     assert!(
         a.powering_off(),
@@ -174,13 +159,11 @@ fn the_slow_tick_actually_runs_the_power_off_policy_on_what_it_reads() {
     );
 }
 
-/// A charge tick between the choice and `poweroff` must not turn the case light back on for
-/// the five seconds rcK takes.
 #[test]
 fn the_fast_tick_does_not_relight_the_case_through_a_shutdown() {
     let d = tmp_root_with_carts(&["Emerald"]);
     let (mut a, charge, percent, led, _writes) = app_playing_with_led(d.path(), "Emerald");
-    charge.store(1, Ordering::Relaxed); // Discharging, so the LED is lit green beforehand
+    charge.store(1, Ordering::Relaxed);
     percent.store(50, Ordering::Relaxed);
     a.tick_ms(2_000);
 
@@ -193,7 +176,6 @@ fn the_fast_tick_does_not_relight_the_case_through_a_shutdown() {
         "the choice darkens the case, or this test proves nothing"
     );
 
-    // The next charge tick comes due while the shutdown screen is still on the panel.
     a.tick_ms(3_000);
     assert_eq!(
         led.load(Ordering::Relaxed),

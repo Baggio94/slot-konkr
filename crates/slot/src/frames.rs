@@ -2,13 +2,9 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-/// Video handoff from the emulator thread to the renderer. Buffers are moved, not copied, and
-/// the lock is held only for a pointer swap. Three buffers: written, published, read.
 pub struct Frames {
     inner: Mutex<Inner>,
     size: usize,
-    /// Count of successful `latest` calls. `latest` consumes, so calling it outside the render
-    /// path steals a frame.
     taken: AtomicU64,
 }
 
@@ -42,7 +38,6 @@ impl Frames {
         }
     }
 
-    /// An unread frame is overwritten, not queued: a stale frame late is worse than none.
     pub fn publish(&self, buf: Vec<u8>) {
         let mut i = self.lock();
         if let Some(dropped) = i.ready.replace(buf) {
@@ -59,7 +54,6 @@ impl Frames {
         })
     }
 
-    /// Non-consuming. The only safe way to ask whether a frame is waiting.
     pub fn is_ready(&self) -> bool {
         self.lock().ready.is_some()
     }
@@ -76,7 +70,6 @@ impl Frames {
         self.lock().spare.push(buf);
     }
 
-    /// Ignores poisoning: a lost frame beats the renderer giving up for the session.
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }

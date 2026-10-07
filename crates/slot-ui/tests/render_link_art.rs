@@ -1,5 +1,3 @@
-//! `SCRATCH_PNG=/tmp/link-art.png cargo test -p slot-ui --test render_link_art -- --nocapture`
-
 use slot_ui::{link_art, CartFace};
 
 #[test]

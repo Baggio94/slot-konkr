@@ -5,14 +5,9 @@ use crate::battery::{draw_gauge, GAUGE_H};
 use crate::plate::HINT_H;
 use crate::slot_chrome::MOUTH_H;
 
-/// Centred in the case band, not measured off the screen's bottom edge.
 const FOOTER_Y: f32 = OUT_H as f32 - MOUTH_H + (MOUTH_H - HINT_H as f32) / 2.0;
-/// Matches the gap beside the row's outer carts, so the footer lines up with them.
 const FOOTER_MARGIN: f32 = 24.0;
 
-/// A line of type and the width it rasterised to. The width cannot be recovered from a
-/// `TexId`, and only the compositor can mint one, so the space is held from the width alone
-/// while the face is still on its way.
 #[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
 pub struct Printed {
     pub face: Option<TexId>,
@@ -28,8 +23,6 @@ impl Printed {
     }
 }
 
-/// What is printed on the case: the charge at the left margin and the time at the right. The
-/// band's middle is the cart bay (x 224 to 496), so nothing is printed across it.
 pub fn draw_footer(
     battery: Option<Battery>,
     percent: Printed,
@@ -42,7 +35,6 @@ pub fn draw_footer(
     printed(OUT_W as f32 - FOOTER_MARGIN - clock.w as f32, clock, out);
 }
 
-/// A placeholder holds the space until the face arrives, so the row does not reflow.
 pub(crate) fn draw_printed(x: f32, y: f32, p: Printed, out: &mut Vec<Draw>) {
     if p.w == 0 {
         return;

@@ -5,8 +5,6 @@ use crate::quad::Quad;
 use crate::shaders::{BLIT_FRAG, BLIT_VERT};
 use crate::surface::{blit_rect, GfxError, Surface, OUT_H, OUT_W};
 
-/// Backdrop behind everything drawn offscreen. Black, since grey sat within 6/765 of the
-/// default cart shell and hid it.
 pub const BACKDROP: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
 pub struct Compositor {
@@ -25,7 +23,6 @@ impl Compositor {
     pub fn new(surface: &dyn Surface) -> Result<Self, GfxError> {
         crate::gl::load(surface);
         let blit = crate::shaders::program(BLIT_VERT, BLIT_FRAG)?;
-        // Nearest and clamped: the blit is an integer multiply, never a resample.
         let tex = crate::gl::texture(OUT_W, OUT_H, gl::NEAREST, gl::CLAMP_TO_EDGE, gl::RGBA, None);
         unsafe {
             let mut fbo = 0;
@@ -72,7 +69,6 @@ impl Compositor {
         self.game.draw(&self.quad);
     }
 
-    /// Sprites in order, with the game pass drawn wherever the list places `Draw::Game`.
     pub fn draw_list(&mut self, items: &[Draw]) {
         let mut from = 0;
         for (i, item) in items.iter().enumerate() {
@@ -110,7 +106,6 @@ impl Compositor {
         self.gain = blue_light_gain(step);
     }
 
-    /// 0.0 dark, 1.0 fully on. Affects the game layer only, not the chrome.
     pub fn set_screen_power(&mut self, t: f32) {
         self.game.set_power(t);
     }
@@ -119,13 +114,10 @@ impl Compositor {
         self.game.set_source_rect(rect);
     }
 
-    /// Horizontal offset in offscreen pixels, applied on the blit so game, chrome and HUD move
-    /// together.
     pub fn set_shake(&mut self, dx: f32) {
         self.shake = dx;
     }
 
-    /// The offscreen target, top row first (glReadPixels returns it bottom up).
     pub fn read_frame(&self) -> Vec<u8> {
         let stride = OUT_W as usize * 4;
         let mut buf = vec![0u8; stride * OUT_H as usize];

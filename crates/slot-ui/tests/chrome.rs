@@ -5,7 +5,6 @@ use slot_ui::{
     MOUTH_H, OUT_H, OUT_W,
 };
 
-/// Where a settled shelf stands its selected cart.
 const CENTRED: f32 = (OUT_W - CART_W) as f32 / 2.0;
 
 fn centred(c: &Cart) -> f32 {
@@ -24,7 +23,6 @@ fn cart() -> Cart {
     }
 }
 
-/// A Game Boy Game Pak: the same width and 1.87x the height. The travel tests run over both.
 fn pak() -> Cart {
     Cart {
         platform: Platform::Gb,
@@ -37,12 +35,10 @@ fn pak() -> Cart {
     }
 }
 
-/// Both cartridges, each named for the failure message.
 fn both() -> [(&'static str, Cart); 2] {
     [("the GBA cart", cart()), ("the Game Boy pak", pak())]
 }
 
-/// Where this cartridge's label well starts and how tall it is, on the seated cart.
 fn label_band(c: &Cart) -> (f32, f32) {
     let (y, h) = match c.platform {
         Platform::Gba => (LABEL_Y as f32, LABEL_H as f32),
@@ -65,7 +61,6 @@ fn quad(d: &Draw) -> Quad {
         Draw::Rect { x, y, w, h, .. }
         | Draw::Tex { x, y, w, h, .. }
         | Draw::Turned { x, y, w, h, .. } => Quad { x, y, w, h },
-        // The pass owns its own rect, fully on.
         Draw::Game | Draw::Shot { .. } => Quad {
             x: 0.0,
             y: 0.0,
@@ -75,7 +70,6 @@ fn quad(d: &Draw) -> Quad {
     }
 }
 
-/// The one quad that is not the slot, the veil or the cover under the plastic.
 fn is_cart(d: &Draw) -> bool {
     let cover = matches!(*d, Draw::Rect { colour, .. } if colour == [0.0, 0.0, 0.0, 1.0]);
     !(is_mouth(d) || is_lip(d) || is_housing(d) || tinted(d, recess()) || cover)
@@ -90,7 +84,6 @@ fn is_lip(d: &Draw) -> bool {
     tinted(d, edge())
 }
 
-/// By colour, not by size, so reshaping the slot cannot make detectors silently match nothing.
 fn tinted(d: &Draw, c: [f32; 4]) -> bool {
     match *d {
         Draw::Rect { colour, .. } => (0..3).all(|i| (colour[i] - c[i]).abs() < 0.001),
@@ -132,8 +125,6 @@ fn cart_at(out: &[Draw]) -> usize {
         .expect("no cart sized quad in the list")
 }
 
-/// How much of the cart the slot leaves showing: the part of its quad nothing opaque is
-/// painted over afterwards.
 fn cart_visible_height(out: &[Draw]) -> f32 {
     let i = cart_at(out);
     let cart = quad(&out[i]);
@@ -160,8 +151,6 @@ fn chrome_into(c: &Cart, seat: f32, out: &mut Vec<Draw>) {
     .draw(out);
 }
 
-/// The cart going in leaves from the quad the row had it in mid-spring (taken from a real row
-/// two frames into a press) and arrives over the mouth at the slot's size.
 #[test]
 fn a_cart_the_row_had_not_finished_moving_slides_across_as_it_goes_in() {
     let c = cart();
@@ -174,7 +163,6 @@ fn a_cart_the_row_had_not_finished_moving_slides_across_as_it_goes_in() {
         (rest - CENTRED).abs() > 100.0 && scale < 0.95,
         "the row settled before the press: this proves nothing at {rest} and {scale}"
     );
-    // The face makes the cartridge the one textured quad, found even at a shrunk size.
     let face = TexId::from_raw(3);
     let at = |seat: f32| {
         let mut out = Vec::new();
@@ -200,7 +188,6 @@ fn a_cart_the_row_had_not_finished_moving_slides_across_as_it_goes_in() {
         (start.x - rest).abs() < 0.01 && (start.w - CART_W as f32 * scale).abs() < 0.01,
         "the cart starts at {start:?} rather than in the quad the row had it in"
     );
-    // And on the row's floor, not `rest_y`, which would hang it in the air.
     assert!(
         (start.y + start.h - foot_y(CART_H as f32)).abs() < 0.01,
         "the cart starts with its foot at {} rather than on the row's floor",
@@ -213,7 +200,6 @@ fn a_cart_the_row_had_not_finished_moving_slides_across_as_it_goes_in() {
         (seated.x + seated.w / 2.0 - mid).abs() < 0.01 && (seated.w - sw).abs() < 0.01,
         "the cart seats at {seated:?} rather than the slot's size in the mouth"
     );
-    // Measured as distance left to go, since the travel direction depends on the start side.
     let off = |q: Quad| (q.x + q.w / 2.0 - mid).abs();
     let mut last = start;
     for step in 1..=20 {
@@ -234,7 +220,6 @@ fn a_cart_the_row_had_not_finished_moving_slides_across_as_it_goes_in() {
     }
 }
 
-/// The slot `t` of the way through the power on: cart seated, picture coming up behind.
 fn draw_powering_on(t: f32, out: &mut Vec<Draw>) {
     let c = cart();
     SlotChrome {
@@ -273,7 +258,6 @@ fn draw_ejecting(c: &Cart, t: f32, out: &mut Vec<Draw>) {
     chrome_into(c, 1.0 - t, out);
 }
 
-/// Just short of seated. An arrived cart is not in the list at all.
 fn cart_quad(c: &Cart, t: f32) -> Quad {
     let out = chrome(c, t.min(0.999));
     quad(&out[cart_at(&out)])
@@ -328,7 +312,6 @@ fn the_lip_is_the_frontmost_band() {
     assert!(lip > cart && lip > housing, "the lip is not in front");
 }
 
-/// The cart meets the lip and needs a push: travel per unit time dips there, then recovers.
 #[test]
 fn the_cart_catches_on_the_lip_before_going_in() {
     for (name, c) in both() {
@@ -344,8 +327,6 @@ fn the_cart_catches_on_the_lip_before_going_in() {
     }
 }
 
-/// The handoff out of the shelf: the chrome's first frame is the shelf's box, same size and
-/// place.
 #[test]
 fn an_unseated_cart_stands_where_the_shelf_left_it() {
     for (name, c) in both() {
@@ -362,8 +343,6 @@ fn an_unseated_cart_stands_where_the_shelf_left_it() {
     }
 }
 
-/// The cartridge leaves the shelf at its own `cart_box`, shrinks without growing back, and is
-/// the slot's size by the time its foot reaches the lip.
 #[test]
 fn a_cart_shrinks_to_the_slot_by_the_lip() {
     let lip = OUT_H as f32 - MOUTH_H;
@@ -395,8 +374,6 @@ fn a_cart_shrinks_to_the_slot_by_the_lip() {
     }
 }
 
-/// How much cartridge is left out of the machine once landed. The recess is fixed, so it is the
-/// same for either cartridge.
 #[test]
 fn every_cartridge_seats_to_the_same_depth() {
     let tops: Vec<(&str, f32)> = both()
@@ -418,8 +395,6 @@ fn every_cartridge_seats_to_the_same_depth() {
     }
 }
 
-/// The catch lands on the same frame of the animation for both cartridges, and on the lip
-/// rather than through it.
 #[test]
 fn every_cartridge_lands_its_foot_on_the_lip_at_the_same_moment() {
     let lip = OUT_H as f32 - MOUTH_H;
@@ -430,7 +405,6 @@ fn every_cartridge_lands_its_foot_on_the_lip_at_the_same_moment() {
                 let q = cart_quad(c, t);
                 q.y + q.h
             };
-            // Fine enough (1/400ths) that the answer is the animation's, not the sampling's.
             let at = (0..=400)
                 .map(|s| s as f32 / 400.0)
                 .find(|t| foot(*t) >= lip)
@@ -461,7 +435,6 @@ fn every_cartridge_lands_its_foot_on_the_lip_at_the_same_moment() {
     }
 }
 
-/// The cart comes to rest filling the opening, so the slot's base stays covered.
 #[test]
 fn a_seated_cart_stops_in_the_opening_and_covers_its_base() {
     for (name, c) in both() {
@@ -489,8 +462,6 @@ fn a_seated_cart_stops_in_the_opening_and_covers_its_base() {
     }
 }
 
-/// What a seated cartridge leaves out of the machine: the same 38 px for either, but a GBA
-/// cart shows a 7 px sliver of label and a Game Boy pak none, as on the hardware.
 #[test]
 fn a_seated_cart_shows_at_most_a_sliver_of_label_and_a_pak_shows_none() {
     for (name, c, shows_paper) in [
@@ -522,7 +493,6 @@ fn a_seated_cart_shows_at_most_a_sliver_of_label_and_a_pak_shows_none() {
     }
 }
 
-/// Something is always drawn after the cart, so it never slides over the case.
 #[test]
 fn the_cart_is_never_the_frontmost_thing() {
     let out = chrome(&cart(), 0.6);
@@ -547,8 +517,6 @@ fn ejecting_reverses_the_travel() {
     }
 }
 
-/// Early in the power on the picture has not reached the slot and the case is fading, so
-/// there must be no cart behind it.
 #[test]
 fn the_seated_cart_leaves_with_the_case_not_through_it() {
     for t in [0.2, 0.4, 0.6, 0.8] {
@@ -567,7 +535,6 @@ fn the_seated_cart_leaves_with_the_case_not_through_it() {
     }
 }
 
-/// A game layer listed at zero power would be a black rectangle over the travelling cart.
 #[test]
 fn a_dark_screen_lists_no_game_layer() {
     let mut out = Vec::new();
@@ -593,11 +560,9 @@ fn the_chrome_does_not_scale_with_the_screen() {
     );
 }
 
-/// The housing is solid until the screen comes up and gone once the picture fills the frame.
 #[test]
 fn the_slot_is_solid_until_the_picture_is_behind_it() {
     let dark = bands(0.0);
-    // Piece count not pinned; what matters is none of it is see through.
     assert!(dark.len() >= 3, "the slot lost its bands");
     assert!(
         dark.iter().all(opaque),
@@ -639,8 +604,6 @@ fn the_seated_cart_never_shows_through_the_fading_housing() {
     }
 }
 
-/// The refusal symbol fits on the seated cart's face. Only the compositor can mint a `TexId`,
-/// so the size is what can be tested.
 #[test]
 fn the_alert_fits_on_the_cart_face() {
     let (w, h) = icon_box(ALERT_PX);
@@ -649,7 +612,6 @@ fn the_alert_fits_on_the_cart_face() {
     assert!(h * 4 > ch, "a {h} px alert on a {ch} px cart is a speck");
 }
 
-/// Measured against the drop through the lip, not the catch, which is the slowest stretch.
 #[test]
 fn the_travel_eases_out_into_the_seat() {
     for (name, c) in both() {
@@ -663,8 +625,6 @@ fn the_travel_eases_out_into_the_seat() {
     }
 }
 
-/// The slot is drawn whole whether or not a cart is going in, so the recess never shows
-/// the backdrop.
 #[test]
 fn the_empty_slot_is_the_same_slot_the_chrome_draws() {
     let mut empty = Vec::new();
@@ -685,7 +645,6 @@ fn the_empty_slot_is_the_same_slot_the_chrome_draws() {
     }
     .draw(&mut seated);
 
-    // The chrome carries a cart as well, so compare the slot's own pieces.
     let slot_of = |list: &[Draw]| -> Vec<(Quad, f32)> {
         list.iter()
             .filter(|d| is_housing(d) || is_lip(d) || is_mouth(d) || tinted(d, recess()))
@@ -703,12 +662,8 @@ fn the_empty_slot_is_the_same_slot_the_chrome_draws() {
     );
 }
 
-/// Dark is a hole and always goes behind the cart. Plastic covering the cart must cover it
-/// from some row down to the bottom of the screen; anything else is a bar across the cart.
 #[test]
 fn nothing_is_ever_ruled_across_the_cart() {
-    // Across the whole travel and both cartridges, since a taller one is over the slot's pieces
-    // for a different stretch.
     for (_, c) in both() {
         for step in 0..=20 {
             let seat = step as f32 / 20.0;
@@ -727,8 +682,6 @@ fn nothing_is_ever_ruled_across_the_cart() {
                 "the scoop is not part of the hole"
             );
 
-            // Plastic may draw behind (the slot's top bar does), but whatever covers the cart must
-            // cover it in one piece down to the bottom of the screen.
             let c = quad(&out[cart]);
             let mut x = c.x + 1.0;
             while x < c.x + c.w {
@@ -763,7 +716,6 @@ fn nothing_is_ever_ruled_across_the_cart() {
                 x += 4.0;
             }
 
-            // And the hole is one hole: plastic across it would slice the label in half.
             let recess = out[..cart]
                 .iter()
                 .find_map(|d| tinted(d, recess()).then(|| quad(d)))
@@ -772,7 +724,6 @@ fn nothing_is_ever_ruled_across_the_cart() {
                 let q = quad(d);
                 let inside = q.y > recess.y + 0.01 && q.y + q.h < recess.y + recess.h - 0.01;
                 let over_cart = q.x < c.x + c.w && q.x + q.w > c.x;
-                // Wide enough to be a band, not the arc's own column-cut edge inside the recess.
                 let band = q.w > c.w / 2.0;
                 assert!(
                     !(opaque(d) && inside && over_cart && band),
@@ -783,8 +734,6 @@ fn nothing_is_ever_ruled_across_the_cart() {
     }
 }
 
-/// The GBA SP's thumb scoop: one broad arc across the middle of the near wall, deepest at
-/// the centre.
 #[test]
 fn the_slot_has_a_thumb_scoop_across_its_middle() {
     let out = chrome(&cart(), 0.5);
@@ -794,7 +743,6 @@ fn the_slot_has_a_thumb_scoop_across_its_middle() {
         .copied()
         .max_by(|a, b| a.w.partial_cmp(&b.w).unwrap())
         .expect("no slot drawn");
-    // Cut column by column: each piece is a vertical span, only together an arc.
     let below: Vec<_> = dark
         .iter()
         .copied()
@@ -837,7 +785,6 @@ fn the_slot_has_a_thumb_scoop_across_its_middle() {
         "the deepest part of the scoop is off to one side"
     );
 
-    // Smooth: no step along the curve wider than a pixel.
     let mut edges: Vec<(f32, f32)> = below.iter().map(|q| (q.x, q.y + q.h)).collect();
     edges.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     for pair in edges.windows(2) {
@@ -855,7 +802,6 @@ fn the_slot_has_a_thumb_scoop_across_its_middle() {
     );
 }
 
-/// The slot sits in a bay stepped down from the shell: a recess, not a painted stripe.
 #[test]
 fn the_slot_sits_in_a_recessed_bay() {
     let out = chrome(&cart(), 0.5);
@@ -881,7 +827,6 @@ fn the_slot_sits_in_a_recessed_bay() {
     );
 }
 
-/// It catches where a real cart would: its bottom edge meeting the slot's top edge.
 #[test]
 fn the_cart_catches_on_the_top_edge_of_the_slot() {
     let lip = OUT_H as f32 - MOUTH_H;
@@ -893,7 +838,6 @@ fn the_cart_catches_on_the_top_edge_of_the_slot() {
                 ref other => panic!("the cart is not a quad: {other:?}"),
             }
         };
-        // Find where travel slows to its minimum and check the cart's bottom is at the lip.
         let mut slowest = (f32::MAX, 0.0f32);
         let mut t = 0.05;
         while t < 0.95 {
@@ -904,7 +848,6 @@ fn the_cart_catches_on_the_top_edge_of_the_slot() {
             t += 0.05;
         }
         let at = bottom_at(slowest.1);
-        // Tight, in pixels: the creep past the lip is the same whatever cartridge stands on it.
         assert!(
             (at - lip).abs() < 16.0,
             "{name} hesitates at {at} but the slot's top edge is {lip}"

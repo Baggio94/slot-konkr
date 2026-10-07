@@ -1,7 +1,5 @@
 use slot_ui::{centred_hints, TexId, HINT_EDGE, LEGEND_GAP, OUT_W};
 
-/// Centring ignores each face's transparent trailing strip, counts the gaps, and lands every
-/// hint on a whole pixel.
 #[test]
 fn a_row_of_hints_is_centred_by_what_shows_of_each() {
     let (a, b) = (TexId::from_raw(1), TexId::from_raw(2));

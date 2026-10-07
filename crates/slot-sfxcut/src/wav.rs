@@ -1,6 +1,3 @@
-//! Just enough RIFF to read what a phone and `afconvert` produce. Anything else is an error,
-//! not a guess.
-
 use std::path::Path;
 
 use crate::HZ;
@@ -11,7 +8,6 @@ pub enum WavError {
     NotRiff,
     NoFmt,
     NoData,
-    /// Compressed, or a bit depth this does not handle.
     Unsupported(String),
 }
 
@@ -33,14 +29,13 @@ impl From<std::io::Error> for WavError {
     }
 }
 
-/// Mono f32 in -1.0 to 1.0 at 48 kHz, whatever the file was. Stereo is summed.
 pub fn read_wav(path: &Path) -> Result<Vec<f32>, WavError> {
     let b = std::fs::read(path)?;
     if b.len() < 12 || &b[0..4] != b"RIFF" || &b[8..12] != b"WAVE" {
         return Err(WavError::NotRiff);
     }
 
-    let mut fmt: Option<(u16, u16, u32, u16)> = None; // format, channels, rate, bits
+    let mut fmt: Option<(u16, u16, u32, u16)> = None;
     let mut data: Option<&[u8]> = None;
 
     let mut i = 12;
@@ -61,7 +56,6 @@ pub fn read_wav(path: &Path) -> Result<Vec<f32>, WavError> {
             b"data" => data = Some(&b[body..end]),
             _ => {}
         }
-        // Chunks are word aligned.
         i = body + size + (size & 1);
     }
 
@@ -69,8 +63,6 @@ pub fn read_wav(path: &Path) -> Result<Vec<f32>, WavError> {
     let data = data.ok_or(WavError::NoData)?;
     let channels = channels.max(1) as usize;
 
-    // 1 is integer PCM, 3 is IEEE float, 0xFFFE is extensible and its real format lives in
-    // the chunk extension; treating it by bit depth covers what afconvert emits.
     let frames: Vec<f32> = match (format, bits) {
         (1 | 0xFFFE, 16) => data
             .chunks_exact(2)
@@ -106,7 +98,6 @@ pub fn read_wav(path: &Path) -> Result<Vec<f32>, WavError> {
     Ok(resampled(mono, rate))
 }
 
-/// Linear resample to the 48 kHz everything downstream assumes, so a take is never retimed.
 fn resampled(src: Vec<f32>, rate: u32) -> Vec<f32> {
     if rate == HZ as u32 || src.is_empty() {
         return src;

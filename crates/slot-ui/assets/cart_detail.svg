@@ -1,11 +1,3 @@
-<!--
-  The moulding on a GBA cart's face: the grip ridge above the label and the thumb notch at the
-  bottom. Black is shadow and white is light — see `silhouette::rasterise_detail`, which splits
-  this file into two masks by luminance. Light comes from the upper left, so the ridge is lit
-  along its upper edge and the notch, being cut into the shell, is lit along its lower one. The
-  shapes themselves are unchanged from when they were a single dark mask; what is new is the
-  lit edge beside each, which is what makes them read as plastic rather than as a scratch.
--->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 141">
   <defs>
     <g id="ridge">

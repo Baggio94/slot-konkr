@@ -1,9 +1,3 @@
-//! The in-game menu and the link it starts.
-//!
-//! Nothing here touches `slotlink.sh` or a network interface: every starter is built through
-//! `LinkStarter::spawn_with` with its slow parts injected. The one real `TcpLink` is over
-//! loopback, because `LinkProgress::Ready` carries a transport.
-
 mod common;
 
 use std::io;
@@ -28,11 +22,8 @@ use slot_store::{write_slot_state, Core, Platform, SlotState};
 use slot_ui::{arrows_hint_face, hint_face, opening, Draw, TexId, Toast, HINT_EDGE, OUT_H, OUT_W};
 use tempfile::TempDir;
 
-/// How long a test waits on a real worker thread before deciding it never will answer.
 const BAIL: Duration = Duration::from_secs(5);
 
-/// A game in the slot on a stated core, which decides whether the link screen exists. Two
-/// carts, so `single_cart` does not apply; Ruby's code so gpSP carries it (`mul_poke`).
 fn playing_on(core: Core) -> (App, TempDir) {
     let d = common::tmp_root_with_carts(&["Emerald", "Zzz"]);
     common::write_retail_header(&d, "Emerald", "POKEMON RUBY", "AXVE");
@@ -47,7 +38,6 @@ fn playing_on(core: Core) -> (App, TempDir) {
     (app, d)
 }
 
-/// A worker whose radio always comes up and whose socket step is whatever the test says.
 fn fake_starter(
     socket: impl FnMut(u16, &Cancel) -> io::Result<TcpLink> + Send + 'static,
 ) -> LinkStarter {
@@ -64,7 +54,6 @@ fn io_err(kind: io::ErrorKind) -> io::Error {
     io::Error::new(kind, "from a test")
 }
 
-/// Frames until the overlay stops waiting on the real worker thread, bounded.
 fn settle(app: &mut App) {
     let deadline = Instant::now() + BAIL;
     while matches!(app.game_menu(), Some(GameMenu::Working { .. })) {
@@ -74,7 +63,6 @@ fn settle(app: &mut App) {
     }
 }
 
-/// HOST and JOIN, each a different width so a test can tell which one is drawn.
 fn fake_roles(app: &mut App) -> Vec<(TexId, u32, u32)> {
     let faces: Vec<(TexId, u32, u32)> = (0..LinkRow::ALL.len())
         .map(|i| (TexId::from_raw(700 + i), 120 + 40 * i as u32, 40))
@@ -91,8 +79,6 @@ fn select_and_menu_open_the_link_screen_on_host() {
     assert!(matches!(app.phase(), Phase::Playing { .. }));
 }
 
-/// mGBA links by running both machines in step, so the screen opens on its own link rather
-/// than sending the player to another core.
 #[test]
 fn the_link_screen_opens_under_mgba_on_its_own_cable() {
     let (mut app, _d) = playing_on(Core::Mgba);
@@ -109,7 +95,6 @@ fn the_link_screen_opens_under_mgba_on_its_own_cable() {
     );
 }
 
-/// On gpSP the screen itself is the answer; the banner stays out of it.
 #[test]
 fn the_link_screen_on_gpsp_says_nothing_in_the_banner() {
     let (mut app, _d) = playing_on(Core::Gpsp);
@@ -146,7 +131,6 @@ fn b_on_pick_hands_the_game_back() {
     assert!(matches!(app.phase(), Phase::Playing { .. }));
 }
 
-/// The shelf's quick menu is a different screen on a different button, and still works.
 #[test]
 fn the_game_menu_does_not_open_on_the_shelf() {
     let d = common::tmp_root_with_carts(&["Emerald", "Zzz"]);
@@ -161,7 +145,6 @@ fn the_game_menu_does_not_open_on_the_shelf() {
     );
 }
 
-/// Host is libretro's client 0 and the joiner is client 1, never the same.
 #[test]
 fn the_host_is_client_zero_and_the_joiner_client_one() {
     assert_eq!(LinkRow::Host.client_id(), 0);
@@ -195,7 +178,6 @@ fn a_on_pick_starts_the_link_in_the_picked_role() {
     settle(&mut app);
 }
 
-/// Each failure gets its own sentence, telling the player what to do.
 #[test]
 fn each_failure_says_which_one_it_was() {
     for (kind, want) in [
@@ -223,7 +205,6 @@ fn each_failure_says_which_one_it_was() {
     );
 }
 
-/// B leaves a failure screen back into the game, which was never interrupted.
 #[test]
 fn b_on_a_failure_puts_the_player_back_in_the_game() {
     let (mut app, _d) = playing_on(Core::Gpsp);
@@ -246,7 +227,6 @@ fn b_on_a_failure_puts_the_player_back_in_the_game() {
     assert!(!app.link_active(), "a failed link started a session anyway");
 }
 
-/// A player who backed out is not shown a screen about the thing they just did on purpose.
 #[test]
 fn a_cancelled_link_says_nothing_and_returns_to_the_game() {
     let (mut app, _d) = playing_on(Core::Gpsp);
@@ -268,8 +248,6 @@ fn a_cancelled_link_says_nothing_and_returns_to_the_game() {
     assert!(matches!(app.phase(), Phase::Playing { .. }));
 }
 
-/// `Ready` must start a session and hand its transport on; otherwise the overlay closes over
-/// a game that looks linked and is not.
 #[test]
 fn a_link_that_comes_up_holds_linked_for_a_second_then_hands_the_game_back() {
     let (mut app, _d) = playing_on(Core::Gpsp);
@@ -341,8 +319,6 @@ fn a_peer_lost_during_the_hold_closes_the_screen_and_breaks_the_badge() {
     assert_eq!(app.link_badge(), slot_ui::LinkBadge::JoinedLost);
 }
 
-/// B asks the worker to stop, and the screen stays until it answers, or the access point could
-/// still be coming up behind the game. This fake ignores the flag, the slowest case.
 #[test]
 fn b_during_the_radio_step_does_not_hand_the_game_back_early() {
     let (mut app, _d) = playing_on(Core::Gpsp);
@@ -350,7 +326,6 @@ fn b_during_the_radio_step_does_not_hand_the_game_back_early() {
     let (release, held) = channel::<()>();
     app.start_link(
         LinkStarter::spawn_with(
-            // Stands in for an `slotlink.sh link` that has not answered yet.
             Box::new(move |_, _| {
                 held.recv().expect("released");
                 Ok(())
@@ -384,8 +359,6 @@ fn b_during_the_radio_step_does_not_hand_the_game_back_early() {
     assert!(!app.game_menu_open(), "the cancel never landed at all");
 }
 
-/// `LinkStarter` has no `Drop`, so a dropped host could leave its access point up for thirty
-/// seconds. Every path that ends the overlay asks it to stop first.
 #[test]
 fn a_shut_lid_cancels_the_link_it_interrupted() {
     let (mut app, _d) = playing_on(Core::Gpsp);
@@ -419,8 +392,6 @@ fn a_shut_lid_cancels_the_link_it_interrupted() {
     );
 }
 
-/// The screen opens over a live session and shows it with the key that ends it. The core keeps
-/// running (`Session::sync_speed`) and `Session::overlaid` keeps the buttons from the game.
 #[test]
 fn the_shortcut_opens_the_connected_screen_over_a_live_session() {
     let (mut app, _d) = playing_on(Core::Gpsp);
@@ -439,7 +410,6 @@ fn the_shortcut_opens_the_connected_screen_over_a_live_session() {
     );
 }
 
-/// B changes nothing: the session and its radio carry on.
 #[test]
 fn b_leaves_the_session_running() {
     let (mut app, _d) = playing_on(Core::Gpsp);
@@ -455,7 +425,6 @@ fn b_leaves_the_session_running() {
     );
 }
 
-/// A ends the session immediately, and the banner says so.
 #[test]
 fn a_ends_the_session_and_says_so() {
     let (mut app, _d) = playing_on(Core::Gpsp);
@@ -465,7 +434,6 @@ fn a_ends_the_session_and_says_so() {
     app.apply(Action::GbaDown(Btn::A));
     assert!(!app.link_active(), "A left the session running");
     assert_eq!(app.toast(), Some(Toast::LinkEnded));
-    // The session ends on the frame the key landed; the unplug animation only catches up.
     assert!(
         matches!(app.game_menu(), Some(GameMenu::Unplug { .. })),
         "A did not put the plug back out: {:?}",
@@ -475,12 +443,9 @@ fn a_ends_the_session_and_says_so() {
         app.update(1.0 / 60.0);
     }
     assert!(!app.game_menu_open(), "the screen stayed up over the game");
-    // Down, then a cool for a BaseOS whose down leaves the driver loaded. Exactly those two:
-    // closing through `close_game_menu` would cool a second time.
     assert_eq!(log.jobs(), vec![RadioJob::Down, RadioJob::Cool]);
 }
 
-/// The unplug also plays on the far device, which has no screen up, so both ends agree.
 #[test]
 fn a_peer_ending_the_link_unplugs_on_this_device_too() {
     let (mut app, _d) = playing_on(Core::Gpsp);
@@ -509,8 +474,6 @@ fn a_peer_ending_the_link_unplugs_on_this_device_too() {
     );
 }
 
-/// The menu must draw something over the game, with a scrim between, or on a device it reads
-/// as a chord that swallows buttons.
 #[test]
 fn the_link_screen_draws_its_role_over_the_game() {
     let (mut app, _d) = playing_on(Core::Gpsp);
@@ -532,16 +495,8 @@ fn the_link_screen_draws_its_role_over_the_game() {
     assert!(host > scrim);
 }
 
-// --- the two wirings into the running game ------------------------------------------------
-//
-// `App` holds neither the core nor the transport, so these drive a real `Session` to prove the
-// game pauses and the link's wire reaches the core's thread.
-
-/// A real `Session` with a gpSP cart playing, on the mock core. `selected_core.ini` saying gpSP
-/// is what makes the link screen exist.
 fn session_playing_on_gpsp() -> (Session, TempDir, Millis) {
     let d = common::tmp_root_with_carts(&["Emerald"]);
-    // A cart gpSP can carry, as in `playing_on`: the link screen does not open otherwise.
     common::write_retail_header(&d, "Emerald", "POKEMON RUBY", "AXVE");
     slot_store::write_selected_core(d.path(), "Emerald", Core::Gpsp).expect("write core");
     write_slot_state(
@@ -571,8 +526,6 @@ fn step(s: &mut Session, now: &mut Millis, events: &[RawEvent]) {
     s.update(1.0 / 60.0);
 }
 
-/// Frames until the worker has read the speed it was set to (`observed_speed`), not just been
-/// told it.
 fn runs_at(s: &mut Session, now: &mut Millis, want: Speed) -> bool {
     let deadline = Instant::now() + BAIL;
     while s.observed_speed() != Some(want) {
@@ -585,8 +538,6 @@ fn runs_at(s: &mut Session, now: &mut Millis, want: Speed) -> bool {
     true
 }
 
-/// The menu pauses the game through `Session::held`, or the core and motor run on behind it.
-/// Driven from raw button edges so the opening chord goes through the real gesture layer.
 #[test]
 fn the_open_menu_pauses_the_game_underneath_it() {
     let (mut s, _d, mut now) = session_playing_on_gpsp();
@@ -609,7 +560,6 @@ fn the_open_menu_pauses_the_game_underneath_it() {
     );
 }
 
-/// A started link hands its transport to the emulator thread, not only marks itself live.
 #[test]
 fn a_started_link_reaches_the_emulator_thread_with_its_transport() {
     let (mut s, _d, mut now) = session_playing_on_gpsp();
@@ -640,8 +590,6 @@ fn a_started_link_reaches_the_emulator_thread_with_its_transport() {
     }
 }
 
-/// The menu's presses are masked from the game, or a link coming up before A is released
-/// resumes the game with A already down.
 #[test]
 fn a_button_the_menu_is_using_never_reaches_the_game() {
     let (mut s, _d, mut now) = session_playing_on_gpsp();
@@ -659,8 +607,6 @@ fn a_button_the_menu_is_using_never_reaches_the_game() {
     );
 }
 
-/// A far end dropped over loopback breaks the badge and then ends the session on both `App`
-/// and the emulator thread, through `Session::update`'s lost-peer hop.
 #[test]
 fn a_dropped_peer_breaks_the_badge_and_ends_the_session_end_to_end() {
     let (mut s, _d, mut now) = session_playing_on_gpsp();
@@ -679,7 +625,6 @@ fn a_dropped_peer_breaks_the_badge_and_ends_the_session_end_to_end() {
     }
     let far = far.join().expect("host thread");
 
-    // Live on both sides before anything is dropped.
     let deadline = Instant::now() + BAIL;
     while !(s.app().link_active() && s.emu().is_some_and(|e| e.net().is_active())) {
         assert!(
@@ -690,7 +635,6 @@ fn a_dropped_peer_breaks_the_badge_and_ends_the_session_end_to_end() {
         std::thread::sleep(Duration::from_millis(2));
     }
 
-    // `TcpLink`'s `Drop` sends a real FIN.
     drop(far);
 
     let deadline = Instant::now() + BAIL;
@@ -700,14 +644,12 @@ fn a_dropped_peer_breaks_the_badge_and_ends_the_session_end_to_end() {
         std::thread::sleep(Duration::from_millis(2));
     }
 
-    // The broken badge has to be seen for `LINK_LOST_MS` before the session ends on its own.
     let margin_steps = (LINK_LOST_MS / 16) as usize + 30;
     for _ in 0..margin_steps {
         step(&mut s, &mut now, &[]);
     }
     assert!(!s.app().link_active(), "the session never ended");
 
-    // The ending reaches the emulator thread too, which only `Session::bridge_link` does.
     let deadline = Instant::now() + BAIL;
     while s.emu().is_some_and(|e| e.net().is_active()) {
         assert!(
@@ -719,9 +661,6 @@ fn a_dropped_peer_breaks_the_badge_and_ends_the_session_end_to_end() {
     }
 }
 
-/// A link ended on the far device ends here too, well inside `LINK_LOST_MS`, and the banner
-/// says which end it was. The far `TcpLink` stays open after sending the control frame, so
-/// only the message can explain the ending.
 #[test]
 fn a_peer_that_ends_the_link_ends_this_session_without_waiting_out_the_timeout() {
     let (mut s, _d, mut now) = session_playing_on_gpsp();
@@ -750,7 +689,6 @@ fn a_peer_that_ends_the_link_ends_this_session_without_waiting_out_the_timeout()
         std::thread::sleep(Duration::from_millis(2));
     }
 
-    // The far player ends it. This side has not stepped, so nothing of its own closed the wire.
     far.send_end();
     assert!(
         !far.is_closed(),
@@ -784,7 +722,6 @@ fn a_peer_that_ends_the_link_ends_this_session_without_waiting_out_the_timeout()
         "a deliberate ending broke the badge as if the peer had vanished"
     );
 
-    // And it reached the emulator thread, which only `bridge_link` does.
     let deadline = Instant::now() + BAIL;
     while s.emu().is_some_and(|e| e.net().is_active()) {
         assert!(
@@ -796,7 +733,6 @@ fn a_peer_that_ends_the_link_ends_this_session_without_waiting_out_the_timeout()
     }
 }
 
-/// Sprites distinguishable only by their `TexId`, so a test can tell which one was drawn.
 fn fake_link_sprites() -> slot::link_screen::LinkSprites {
     let s = |n: usize| slot::link_screen::Sprite {
         tex: TexId::from_raw(n),
@@ -816,19 +752,14 @@ fn fake_link_sprites() -> slot::link_screen::LinkSprites {
     }
 }
 
-/// The first cart on the card in the slot and running on gpSP, with `fake_link_sprites`' faces
-/// to tell the plug from the adapter.
 fn seated_on_gpsp(d: &TempDir) -> App {
     seated_on(d, Core::Gpsp)
 }
 
-/// The same, on a named core, since the core decides whether the link screen opens.
 fn seated_on(d: &TempDir, core: Core) -> App {
     seated_on_platform(d, core, Platform::Gba)
 }
 
-/// The same, for any platform. Core and platform are set together as `session::spawn_core`
-/// does: a cart with no platform yet would be answered as a GBA cart.
 fn seated_on_platform(d: &TempDir, core: Core, platform: Platform) -> App {
     let mut app = common::boot(d.path());
     app.apply(Action::Insert);
@@ -842,8 +773,6 @@ fn seated_on_platform(d: &TempDir, core: Core, platform: Platform) -> App {
     app
 }
 
-/// A cart in the slot, its link screen open and drawn, with `fake_link_sprites`' faces to
-/// tell the plug from the adapter.
 fn open_link_screen(d: &TempDir) -> Vec<Draw> {
     let mut app = seated_on_gpsp(d);
     app.apply(Action::GameMenu);
@@ -852,11 +781,9 @@ fn open_link_screen(d: &TempDir) -> Vec<Draw> {
     out
 }
 
-/// A retail Pokémon cart links over the Wireless Adapter, so that is what its screen shows.
 #[test]
 fn a_pokemon_cart_shows_the_adapter() {
     let d = common::tmp_root_with_carts(&["Zzz"]);
-    // Written before `boot`, so the shelf scan reads it. It sorts before "Zzz", so it is seated.
     common::write_retail_header(&d, "Pokemon Emerald", "POKEMON EMER", "BPEE");
     let out = open_link_screen(&d);
     assert!(
@@ -871,12 +798,10 @@ fn a_pokemon_cart_shows_the_adapter() {
     );
 }
 
-/// gpSP forces a Pokémon ROM with a non-standard header (a hack) to the cable, whatever its title.
 #[test]
 fn a_pokemon_hack_shows_the_cable() {
     let d = common::tmp_root_with_carts(&["Zzz"]);
     common::write_retail_header(&d, "Pokemon Emerald", "POKEMON EMER", "BPEE");
-    // Overwrite the entry branch opcode byte gpSP checks, leaving title and code retail.
     let rom = d.path().join("Games/GBA").join("Pokemon Emerald.gba");
     let mut bytes = std::fs::read(&rom).expect("read rom");
     bytes[3] = 0;
@@ -894,20 +819,11 @@ fn a_pokemon_hack_shows_the_cable() {
     );
 }
 
-// --- the cable or the adapter -------------------------------------------------------------
-//
-// The screen opens on the hardware gpSP would pick and SELECT switches it. gpSP reads its link
-// mode only while a game loads, so linking in the mode it was not loaded with reloads the game
-// behind the screen first. `App` asks for that and `Session` carries it out.
-
-/// A tap of SELECT the way the gesture layer delivers one: on the release, with no chord.
 fn select(app: &mut App) {
     app.apply(Action::GbaDown(Btn::Select));
     app.apply(Action::GbaUp(Btn::Select));
 }
 
-/// Which hardware the open screen draws, told apart by `fake_link_sprites`' faces: 2 and 3
-/// are the two plugs, 4 the adapter.
 fn drawn_hardware(app: &App) -> LinkKind {
     let mut out = Vec::new();
     app.draw(&mut out);
@@ -924,8 +840,6 @@ fn drawn_hardware(app: &App) -> LinkKind {
     }
 }
 
-/// Frames until the link worker reports its socket step, which tells a started link from a
-/// screen still waiting on a reload.
 fn reaches_waiting(app: &mut App) -> bool {
     let deadline = Instant::now() + BAIL;
     while !matches!(
@@ -944,8 +858,6 @@ fn reaches_waiting(app: &mut App) -> bool {
     true
 }
 
-/// Frames for a stretch of wall clock long enough for a worker, had one been started, to have
-/// moved the screen on.
 fn idle(app: &mut App, ms: u64) {
     let until = Instant::now() + Duration::from_millis(ms);
     while Instant::now() < until {
@@ -954,8 +866,6 @@ fn idle(app: &mut App, ms: u64) {
     }
 }
 
-/// The link screen open as Join with the hardware switched, and A pressed. Join, so the
-/// worker reaches out rather than binding the port every test shares.
 fn switched_and_picked() -> (App, TempDir) {
     let (mut app, d) = playing_on(Core::Gpsp);
     app.apply(Action::GameMenu);
@@ -965,7 +875,6 @@ fn switched_and_picked() -> (App, TempDir) {
     (app, d)
 }
 
-/// SELECT swaps the cable for the adapter on the same frame, and the choice is kept per cart.
 #[test]
 fn select_on_pick_switches_the_hardware_and_the_cart_keeps_it() {
     let (mut app, _d) = playing_on(Core::Gpsp);
@@ -1002,10 +911,8 @@ fn select_on_pick_switches_the_hardware_and_the_cart_keeps_it() {
     );
 }
 
-/// Switched away and back is the mode the game runs, so A starts the link with no reload.
 #[test]
 fn a_in_the_mode_the_game_already_runs_starts_the_link_straight_away() {
-    // One live link per process: every test shares the product's port.
     let _link = common::link_port_lock();
     let (mut app, _d) = playing_on(Core::Gpsp);
     app.apply(Action::GameMenu);
@@ -1023,11 +930,8 @@ fn a_in_the_mode_the_game_already_runs_starts_the_link_straight_away() {
     settle(&mut app);
 }
 
-/// A in the other mode asks for a reload (cart and `gpsp_serial`) and starts nothing yet, or a
-/// link would come up over the old mode.
 #[test]
 fn a_in_a_switched_mode_asks_for_the_game_to_reload_first() {
-    // One live link per process: every test shares the product's port.
     let _link = common::link_port_lock();
     let (mut app, _d) = switched_and_picked();
     assert_eq!(
@@ -1066,11 +970,8 @@ fn a_in_a_switched_mode_asks_for_the_game_to_reload_first() {
     );
 }
 
-/// After the reload the link starts in the picked role, and the screen carries on from its
-/// current step.
 #[test]
 fn the_reload_finishing_starts_the_link() {
-    // One live link per process: every test shares the product's port.
     let _link = common::link_port_lock();
     let (mut app, _d) = switched_and_picked();
     let Some(GameMenu::Working { since, .. }) = app.game_menu() else {
@@ -1095,11 +996,8 @@ fn the_reload_finishing_starts_the_link() {
     settle(&mut app);
 }
 
-/// B during the reload is heard; once the reload finishes the screen closes and hands the game
-/// back instead of linking.
 #[test]
 fn b_during_the_reload_hands_the_game_back_once_it_finishes() {
-    // One live link per process: every test shares the product's port.
     let _link = common::link_port_lock();
     let (mut app, _d) = switched_and_picked();
     app.take_link_reload().expect("no reload asked for");
@@ -1117,11 +1015,8 @@ fn b_during_the_reload_hands_the_game_back_once_it_finishes() {
     assert!(!app.link_active());
 }
 
-/// A game that will not load in the switched mode goes back to the one it came from, the
-/// switch is undone, and the refusal shakes.
 #[test]
 fn a_reload_that_fails_goes_back_to_the_mode_the_game_came_from() {
-    // One live link per process: every test shares the product's port.
     let _link = common::link_port_lock();
     let (mut app, _d) = switched_and_picked();
     app.set_link_sprites(fake_link_sprites());
@@ -1157,11 +1052,8 @@ fn a_reload_that_fails_goes_back_to_the_mode_the_game_came_from() {
     );
 }
 
-/// Neither mode loads, so the cart comes back out of the slot with the alert rather than
-/// sitting seated with no core.
 #[test]
 fn a_game_that_loads_in_neither_mode_comes_back_out_refused() {
-    // One live link per process: every test shares the product's port.
     let _link = common::link_port_lock();
     let (mut app, _d) = switched_and_picked();
     app.take_link_reload().expect("no reload asked for");
@@ -1185,11 +1077,8 @@ fn a_game_that_loads_in_neither_mode_comes_back_out_refused() {
     assert!(matches!(app.phase(), Phase::Shelf), "{:?}", app.phase());
 }
 
-/// A shut lid closes the screen, but a reload underway still ends in a game or on the shelf,
-/// never a seated cart with no core.
 #[test]
 fn a_lid_shut_over_a_game_that_loads_in_neither_mode_opens_onto_the_shelf() {
-    // One live link per process: every test shares the product's port.
     let _link = common::link_port_lock();
     let (mut app, _d) = switched_and_picked();
     app.take_link_reload().expect("no reload asked for");
@@ -1210,14 +1099,10 @@ fn a_lid_shut_over_a_game_that_loads_in_neither_mode_opens_onto_the_shelf() {
     );
 }
 
-/// A game with no cable protocol loads on `auto` and gpSP links it over the adapter either
-/// way, so SELECT is refused with the shake and A links straight away.
 #[test]
 fn select_is_refused_where_gpsp_would_link_the_same_either_way() {
-    // One live link per process: every test shares the product's port.
     let _link = common::link_port_lock();
     let d = common::tmp_root_with_carts(&["Zzz"]);
-    // "Mario Golf" sorts before "Zzz", so `Action::Insert` seats it.
     common::write_retail_header(&d, "Mario Golf", "MARIO GOLF", "BMGE");
     let mut app = seated_on_gpsp(&d);
     app.apply(Action::GameMenu);
@@ -1242,11 +1127,8 @@ fn select_is_refused_where_gpsp_would_link_the_same_either_way() {
     settle(&mut app);
 }
 
-/// A compares the pick with the `gpsp_serial` the core was loaded with, not what the screen
-/// opened on.
 #[test]
 fn a_reloads_only_for_a_serial_the_core_was_not_loaded_with() {
-    // One live link per process: every test shares the product's port.
     let _link = common::link_port_lock();
     let (mut app, _d) = playing_on(Core::Gpsp);
     app.set_link_loaded("rfu");
@@ -1272,8 +1154,6 @@ fn a_reloads_only_for_a_serial_the_core_was_not_loaded_with() {
     );
 }
 
-/// A core that refused its resume: running, but on its own default machine, which a flush
-/// will not write back.
 struct RefusedResume;
 
 impl Snapshot for RefusedResume {
@@ -1296,11 +1176,8 @@ impl Snapshot for RefusedResume {
     }
 }
 
-/// Over a core that refused its resume, the flush will not overwrite the player's state, so a
-/// reload would lose progress. A in a switched mode is refused; the current mode still links.
 #[test]
 fn a_switch_is_refused_over_a_resume_the_core_would_not_take() {
-    // One live link per process: every test shares the product's port.
     let _link = common::link_port_lock();
     let (mut app, _d) = playing_on(Core::Gpsp);
     app.set_snapshot(Box::new(RefusedResume));
@@ -1329,8 +1206,6 @@ fn a_switch_is_refused_over_a_resume_the_core_would_not_take() {
     settle(&mut app);
 }
 
-/// Pick names every key it takes (B, SELECT, arrows, A), using the real faces so the row is
-/// proven to fit the console strip.
 #[test]
 fn pick_names_cancel_mode_swap_and_link_across_the_strip() {
     let (mut app, _d) = playing_on(Core::Gpsp);
@@ -1384,7 +1259,6 @@ fn pick_names_cancel_mode_swap_and_link_across_the_strip() {
     );
 }
 
-/// The mock core's own frame counter, which is the whole of its save state.
 fn counter(s: &Session) -> u64 {
     let state = s
         .emu()
@@ -1395,8 +1269,6 @@ fn counter(s: &Session) -> u64 {
     u64::from_le_bytes(state.try_into().expect("mock state is 8 bytes"))
 }
 
-/// The reload end to end through a real `Session`: the new emulator carries on from exactly
-/// where the old one stopped, and only then does the link start.
 #[test]
 fn a_link_in_a_switched_mode_reloads_the_game_and_then_starts_the_link() {
     let (mut s, _d, mut now) = session_playing_on_gpsp();
@@ -1474,12 +1346,9 @@ fn a_link_in_a_switched_mode_reloads_the_game_and_then_starts_the_link() {
     }
 }
 
-/// A `Session` over a real core planted under gpSP's name, and a real ROM, since the mock loads
-/// anything. `None` with no core to plant; the caller holds `core_lock`.
 fn session_on_a_real_core() -> Option<(Session, TempDir, Millis)> {
     let core = common::vendored_core()?;
     let d = common::tmp_root_with_real_carts(&["Emerald"]);
-    // A real ROM, but carrying Ruby's identity, so the link screen this test drives will open.
     common::write_real_cart_as(&d, "Emerald", "POKEMON RUBY", "AXVE");
     slot_store::write_selected_core(d.path(), "Emerald", Core::Gpsp).expect("write core");
     std::fs::copy(
@@ -1510,8 +1379,6 @@ fn session_on_a_real_core() -> Option<(Session, TempDir, Millis)> {
     Some((s, d, now))
 }
 
-/// With the ROM removed under the running game, neither mode reloads: the session goes back
-/// once, gives up, and ejects the cart refused, never leaving it seated with no core.
 #[test]
 fn a_game_that_will_not_load_again_comes_back_out_of_the_slot() {
     let _g = common::core_lock();
@@ -1571,18 +1438,9 @@ fn a_game_that_will_not_load_again_comes_back_out_of_the_slot() {
     }
 }
 
-// --- the carts gpSP cannot link ----------------------------------------------------------
-//
-// gpSP speaks the Wireless Adapter and three named cable protocols. Any other cart stays on
-// `SERIAL_MODE_AUTO`, which its netpacket hooks ignore, so a session would link and then drop
-// every packet.
-
-/// Apotris, a cable game absent from gpSP's `gba_over.h`: the screen stays shut and the banner
-/// says so.
 #[test]
 fn a_cart_gpsp_cannot_carry_is_refused_the_link_screen_and_told_why() {
     let d = common::tmp_root_with_carts(&["Apotris", "Zzz"]);
-    // "Apotris" sorts before "Zzz", so `Action::Insert` seats it.
     common::write_retail_header(&d, "Apotris", "APOTRIS", "2ATE");
     let mut app = seated_on_gpsp(&d);
     app.apply(Action::GameMenu);
@@ -1606,13 +1464,12 @@ fn a_cart_gpsp_cannot_carry_is_refused_the_link_screen_and_told_why() {
     );
 }
 
-/// A cart gpSP does carry still opens the screen with no banner.
 #[test]
 fn a_cart_gpsp_carries_still_opens_the_link_screen() {
     for (stem, title, code) in [
-        ("Mario Golf", "MARIO GOLF", "BMGE"),    // the adapter list
-        ("Emerald", "POKEMON EMER", "BPEE"),     // the Pokémon family
-        ("Advance Wars", "ADVANCEWARS", "AWRE"), // Advance Wars
+        ("Mario Golf", "MARIO GOLF", "BMGE"),
+        ("Emerald", "POKEMON EMER", "BPEE"),
+        ("Advance Wars", "ADVANCEWARS", "AWRE"),
     ] {
         let d = common::tmp_root_with_carts(&["Zzz"]);
         common::write_retail_header(&d, stem, title, code);
@@ -1627,8 +1484,6 @@ fn a_cart_gpsp_carries_still_opens_the_link_screen() {
     }
 }
 
-/// When both refusals apply, the cart's own wins: Apotris on mGBA is not sent to gpSP, which
-/// cannot carry it either.
 #[test]
 fn a_cart_gpsp_cannot_link_is_refused_on_gpsp_and_carried_by_mgbas_cable() {
     let refused = |core, open: bool| {
@@ -1643,13 +1498,10 @@ fn a_cart_gpsp_cannot_link_is_refused_on_gpsp_and_carried_by_mgbas_cable() {
         );
         app.toast()
     };
-    // gpSP speaks named protocols and has none for this cart, so there is nothing to reach.
     assert_eq!(refused(Core::Gpsp, false), Some(Toast::NoLink));
-    // mGBA runs both machines in step, which carries every cart, Apotris included.
     assert_eq!(refused(Core::Mgba, true), None);
 }
 
-/// A cart gpSP can link, sitting on mGBA, is still told to switch to gpSP.
 #[test]
 fn a_wireless_adapter_cart_on_mgba_still_says_to_switch_to_gpsp() {
     let d = common::tmp_root_with_carts(&["Emerald", "Zzz"]);
@@ -1667,8 +1519,6 @@ fn a_wireless_adapter_cart_on_mgba_still_says_to_switch_to_gpsp() {
     );
 }
 
-/// The platform is asked first: `link_carried` matches Pokémon by title, so `POKEMON RED` in a
-/// `.gb` header would pass gpSP's test. On gpSP a Game Boy cart gets `NoLink`, never `NeedsGpsp`.
 #[test]
 fn a_game_boy_cart_links_on_mgba_and_is_refused_on_gpsp() {
     for (core, open) in [(Core::Mgba, true), (Core::Gpsp, false)] {
@@ -1705,8 +1555,6 @@ fn a_game_boy_cart_links_on_mgba_and_is_refused_on_gpsp() {
     }
 }
 
-/// The legend names SELECT only where the press is not refused (see
-/// `select_is_refused_where_gpsp_would_link_the_same_either_way`).
 #[test]
 fn the_pick_legend_names_mode_only_where_the_hardware_can_be_switched() {
     let faces: Vec<(TexId, u32)> = LinkLegend::ALL
@@ -1720,7 +1568,6 @@ fn the_pick_legend_names_mode_only_where_the_hardware_can_be_switched() {
         out
     };
 
-    // A Pokémon cart loads differently on cable (`mul_poke`) and adapter (`rfu`), so Mode shows.
     let (mut app, _d) = playing_on(Core::Gpsp);
     app.set_link_legend_faces(faces.clone());
     app.apply(Action::GameMenu);
@@ -1731,7 +1578,6 @@ fn the_pick_legend_names_mode_only_where_the_hardware_can_be_switched() {
         "a cart whose hardware can be switched did not offer SELECT"
     );
 
-    // An adapter-list game with no cable protocol links over the adapter either way.
     let d = common::tmp_root_with_carts(&["Zzz"]);
     common::write_retail_header(&d, "Mario Golf", "MARIO GOLF", "BMGE");
     let mut app = seated_on_gpsp(&d);
@@ -1753,7 +1599,6 @@ fn the_pick_legend_names_mode_only_where_the_hardware_can_be_switched() {
     }
 }
 
-/// What the radio was asked to do, in order. `App` never waits on it, so a test reads the list.
 #[derive(Clone, Default)]
 struct RadioLog(Arc<std::sync::Mutex<Vec<RadioJob>>>);
 
@@ -1768,7 +1613,6 @@ impl RadioJobs for RadioLog {
         self.0.lock().expect("radio log").push(job);
     }
 
-    /// Asked for is not loaded: nothing here runs, so no warm ever finishes.
     fn warmed(&self) -> bool {
         false
     }
@@ -1780,8 +1624,6 @@ fn watched(app: &mut App) -> RadioLog {
     log
 }
 
-/// Opening the screen starts warming the driver (about a second) while the player picks a
-/// role. `link host` loads it itself if this has not finished.
 #[test]
 fn opening_the_link_screen_warms_the_radio() {
     let (mut app, _d) = playing_on(Core::Gpsp);
@@ -1790,7 +1632,6 @@ fn opening_the_link_screen_warms_the_radio() {
     assert_eq!(log.jobs(), vec![RadioJob::Warm]);
 }
 
-/// Leaving without starting a link cools the driver, or it drains the battery until power off.
 #[test]
 fn leaving_the_link_screen_without_a_session_cools_it() {
     let (mut app, _d) = playing_on(Core::Gpsp);
@@ -1800,7 +1641,6 @@ fn leaving_the_link_screen_without_a_session_cools_it() {
     assert_eq!(log.jobs(), vec![RadioJob::Warm, RadioJob::Cool]);
 }
 
-/// Closing because a session started must not cool: that takes the session's network down.
 #[test]
 fn a_screen_that_closes_over_a_live_session_leaves_the_radio_alone() {
     let (mut app, _d) = playing_on(Core::Gpsp);
@@ -1814,7 +1654,6 @@ fn a_screen_that_closes_over_a_live_session_leaves_the_radio_alone() {
     );
 }
 
-/// With no session, the same shortcut opens the screen.
 #[test]
 fn the_shortcut_still_opens_the_screen_when_nothing_is_linked() {
     let (mut app, _d) = playing_on(Core::Gpsp);

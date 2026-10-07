@@ -3,9 +3,6 @@ use std::f32::consts::PI;
 const BRIGHTEN_SCANLINES: f32 = 16.0;
 const BRIGHTEN_LCD: f32 = 4.0;
 
-/// LCD3x modulates by sin of the output pixel index, so at exactly 3x it repeats every 3
-/// pixels on both axes and the whole shader collapses to this table sampled with GL_REPEAT.
-/// Only true at 3x; any other scale needs the per pixel sin back.
 pub fn lcd3x_mask() -> [[[f32; 3]; 3]; 3] {
     let mut mask = [[[0.0f32; 3]; 3]; 3];
     for (oy, row) in mask.iter_mut().enumerate() {
@@ -23,7 +20,6 @@ pub fn lcd3x_mask() -> [[[f32; 3]; 3]; 3] {
     mask
 }
 
-/// The table as an RGBA8 texture, row major, alpha opaque.
 pub fn mask_texture_rgba8() -> [u8; 3 * 3 * 4] {
     let mask = lcd3x_mask();
     let mut tex = [255u8; 3 * 3 * 4];

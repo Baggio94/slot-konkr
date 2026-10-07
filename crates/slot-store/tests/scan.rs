@@ -4,14 +4,12 @@ use common::tmp_root;
 use slot_store::{scan, Platform};
 use tempfile::TempDir;
 
-/// `rel` is a path relative to `Games/`, e.g. `"GBA/Pokemon Emerald.gba"`.
 fn write_rom(d: &TempDir, rel: &str, title: &str) {
     let mut rom = vec![0u8; 0x100];
     rom[0xa0..0xa0 + title.len()].copy_from_slice(title.as_bytes());
     std::fs::write(d.path().join("Games").join(rel), rom).expect("write rom");
 }
 
-/// `rel` is a path relative to `Labels/`, e.g. `"GBA/Pokemon Emerald.png"`.
 fn write_png(d: &TempDir, rel: &str) {
     let path = d.path().join("Labels").join(rel);
     std::fs::create_dir_all(path.parent().expect("label has a parent")).expect("create dir");
@@ -47,7 +45,6 @@ fn scan_ignores_non_gba_files() {
 fn an_appledouble_sidecar_is_not_shelved_as_a_cart() {
     let d = tmp_root();
     write_rom(&d, "GBA/Metroid Fusion.gba", "METROID");
-    // macOS leaves this beside a rom copied onto FAT, with the same extension.
     write_rom(&d, "GBA/._Metroid Fusion.gba", "METROID");
     let carts = scan(d.path()).unwrap();
     assert_eq!(carts.len(), 1, "an AppleDouble sidecar reached the shelf");
@@ -76,7 +73,6 @@ fn a_root_with_no_games_directory_scans_as_empty() {
     assert!(scan(d.path()).unwrap().is_empty());
 }
 
-/// Location decides the platform. Nothing is read out of the ROM to work it out.
 #[test]
 fn a_cart_takes_the_platform_of_the_folder_it_is_in() {
     let d = tmp_root();
@@ -92,7 +88,6 @@ fn a_cart_takes_the_platform_of_the_folder_it_is_in() {
     assert_eq!(by_stem("Chromatic"), Platform::Gbc);
 }
 
-/// A `.gba` filed under `GB/` does not appear.
 #[test]
 fn a_gba_rom_in_the_game_boy_folder_does_not_appear() {
     let d = tmp_root();
@@ -100,14 +95,11 @@ fn a_gba_rom_in_the_game_boy_folder_does_not_appear() {
     assert!(scan(d.path()).unwrap().is_empty());
 }
 
-/// An unreadable platform folder costs only that folder, since `App::boot` turns an `Err` into
-/// an empty shelf.
 #[test]
 fn an_unreadable_platform_folder_does_not_take_the_rest_of_the_library_with_it() {
     let d = tmp_root();
     write_rom(&d, "GBA/Metroid Fusion.gba", "METROID");
     std::fs::write(d.path().join("Games/GB/Tetris.gb"), vec![0u8; 0x150]).unwrap();
-    // A plain file where the Colour folder belongs, so `read_dir` answers ENOTDIR.
     std::fs::remove_dir(d.path().join("Games/GBC")).unwrap();
     std::fs::write(d.path().join("Games/GBC"), b"not a directory").unwrap();
 
@@ -118,7 +110,6 @@ fn an_unreadable_platform_folder_does_not_take_the_rest_of_the_library_with_it()
     assert!(carts.iter().any(|c| c.stem == "Tetris"));
 }
 
-/// Two carts of the same name on different platforms are two carts with two labels.
 #[test]
 fn the_same_stem_on_two_platforms_is_two_carts_with_two_labels() {
     let d = tmp_root();

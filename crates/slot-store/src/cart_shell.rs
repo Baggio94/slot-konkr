@@ -1,11 +1,6 @@
-//! Per-cart shell overrides: `System/cart_shell.ini`, `<stem> = <outline> <rrggbb> <finish>`,
-//! and `Labels/cart_shell.ini` over it.
-
 use std::collections::HashMap;
 
 pub const CART_SHELL_FILE: &str = "System/cart_shell.ini";
-/// Beside the labels, and over the one in System: a line here wins for its cart, and `auto`
-/// puts a cart back on the plastic slot picks, whatever System says.
 pub const LABELS_SHELL_FILE: &str = "Labels/cart_shell.ini";
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -72,7 +67,6 @@ impl ShellChoice {
     }
 }
 
-/// Every line of a `cart_shell.ini` that parses, by stem.
 pub fn choices(text: &str) -> HashMap<String, ShellChoice> {
     crate::ini::parse(text)
         .into_iter()
@@ -80,7 +74,6 @@ pub fn choices(text: &str) -> HashMap<String, ShellChoice> {
         .collect()
 }
 
-/// The choices of both files: System's, then each line of the Labels file over them.
 pub fn layered(system: &str, labels: &str) -> HashMap<String, ShellChoice> {
     let mut out = choices(system);
     for (stem, value) in crate::ini::parse(labels) {

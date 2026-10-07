@@ -5,7 +5,6 @@ use crate::footer::Printed;
 use crate::hud::HUD_INK;
 use crate::plate::HINT_H;
 
-/// Sized to the gauge, not the HUD row: a larger bolt would push the gauge sideways.
 pub const BOLT_PX: f32 = 18.0;
 
 pub const GAUGE_W: f32 = 22.0;
@@ -13,17 +12,12 @@ pub const GAUGE_H: f32 = 11.0;
 const _: () = assert!(GAUGE_H < GAUGE_W);
 const NUB_W: f32 = 2.5;
 const NUB_H: f32 = 4.0;
-/// The capsule wall, drawn as four rects since the draw list has only filled quads. Public for
-/// the tests.
 pub const WALL: f32 = 1.5;
 const GAP: f32 = 7.0;
 
-/// The bolt's slot, left of the capsule. Inside it the bolt was too small to read and hid the
-/// fill.
 const BOLT_W: f32 = 14.0;
 const BOLT_H: f32 = 14.0;
 const BOLT_GAP: f32 = 5.0;
-// The bolt must never touch the capsule; `the_bolt_never_reaches_the_capsule` checks at runtime.
 const _: () = assert!(BOLT_GAP > 0.0);
 
 const INK: [f32; 4] = [
@@ -33,8 +27,6 @@ const INK: [f32; 4] = [
     1.0,
 ];
 
-/// The capsule, its fill, and the number beside it. `x` and `y` are the top left of the whole
-/// cluster: the bolt's slot is always reserved, so nothing moves when a cable goes in.
 pub fn draw_gauge(
     x: f32,
     y: f32,
@@ -43,7 +35,6 @@ pub fn draw_gauge(
     bolt: Option<TexId>,
     out: &mut Vec<Draw>,
 ) {
-    // No battery node draws nothing: an empty capsule would say the battery is flat.
     let Some(b) = battery else {
         return;
     };
@@ -58,7 +49,6 @@ pub fn draw_gauge(
         });
     };
 
-    // Independent of `b.charge`, or the capsule jumps sideways when a cable goes in.
     let cx = x + BOLT_W + BOLT_GAP;
 
     rect(cx, y, GAUGE_W, WALL, out);
@@ -79,7 +69,6 @@ pub fn draw_gauge(
         );
     }
 
-    // In its own slot, never over the fill.
     if let (Charge::Charging, Some(tex)) = (b.charge, bolt) {
         out.push(Draw::Tex {
             x,

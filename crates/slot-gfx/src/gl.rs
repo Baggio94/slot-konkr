@@ -2,8 +2,6 @@ use crate::surface::{GfxError, Surface};
 use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Whether the loaded context is GLES, which changes internal formats and VAO use. Read from
-/// the driver, not a build feature, so a host build on a GLES context still draws.
 static ES: AtomicBool = AtomicBool::new(false);
 
 pub fn load(surface: &dyn Surface) {
@@ -20,8 +18,6 @@ pub fn es() -> bool {
     ES.load(Ordering::Relaxed)
 }
 
-/// ES 2.0 has no sized internal formats: the internal format has to be spelled exactly as
-/// the data's, and `RGBA8` is a hard error rather than a hint it ignores.
 pub fn internal_format(format: gl::types::GLenum) -> gl::types::GLint {
     match es() {
         true => format as gl::types::GLint,
@@ -106,8 +102,6 @@ unsafe fn info_log(
     String::from_utf8_lossy(&buf).into_owned()
 }
 
-/// An RGBA8 texture. `format` is the layout of `data`: libretro's XRGB8888 is little endian,
-/// so the GBA frame arrives as B, G, R, X.
 pub fn texture(
     w: u32,
     h: u32,

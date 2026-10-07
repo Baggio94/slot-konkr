@@ -1,24 +1,17 @@
-//! A record of what the buttons actually send, written to the card, since the device has no
-//! console. A board that disagrees with the `evdev` code table reads as a dead button.
-
 use std::path::{Path, PathBuf};
 
 use super::evdev::{
     code_to_btn, device_name, pick_devices, Ev, ABS_HAT0X, ABS_HAT0Y, EV_ABS, EV_KEY, EV_SW, SW_LID,
 };
 
-/// Set to anything but `0` to write the trace. Off by default: it logs every button edge.
 pub const TRACE_VAR: &str = "SLOT_TRACE_INPUT";
 
-/// At the card root, so it is the first thing seen on a computer.
 pub const TRACE_FILE: &str = "input-trace.log";
 
 pub fn enabled() -> bool {
     std::env::var_os(TRACE_VAR).is_some_and(|v| v != "0")
 }
 
-/// Every event node, opened or skipped, since a silent button is either an unknown code or an
-/// unread node.
 pub fn survey(dev: &Path, sys: &Path) -> Vec<String> {
     let opened = pick_devices(dev, sys);
     let Ok(entries) = std::fs::read_dir(dev) else {
@@ -60,12 +53,10 @@ pub fn survey(dev: &Path, sys: &Path) -> Vec<String> {
         .collect()
 }
 
-/// One button edge. Code in hex (as the table is) and decimal (as `evtest` and kernel headers).
 pub fn event_line(node: &str, ms: u128, ev: Ev) -> String {
     let btn = match ev.kind {
         EV_KEY => code_to_btn(ev.code).map_or_else(|| "unmapped".to_string(), |b| format!("{b:?}")),
         EV_SW if ev.code == SW_LID => "Lid".to_string(),
-        // The d-pad. The value's sign says which end is pressed.
         EV_ABS if ev.code == ABS_HAT0X => "hat0x".to_string(),
         EV_ABS if ev.code == ABS_HAT0Y => "hat0y".to_string(),
         _ => "ignored".to_string(),

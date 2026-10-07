@@ -1,8 +1,3 @@
-//! mGBA's link mode: two GBAs from one game, joined by mGBA's lockstep link, stepped together on
-//! one thread, with only the local player's GBA shown. Every test skips when
-//! `vendor/mgba_libretro.dylib` is absent, and fails with a rebuild hint when it predates link
-//! mode.
-
 mod common;
 
 use std::path::{Path, PathBuf};
@@ -23,195 +18,164 @@ fn rom(name: &str, bytes: Vec<u8>) -> PathBuf {
     p
 }
 
-/// `common::gba_rom` that paints KEYINPUT into the first pixel every vblank instead of a counter.
 fn keys_rom() -> Vec<u8> {
     let mut rom = common::gba_rom();
     let mut set = |index: usize, word: u32| {
         let o = 0xc0 + index * 4;
         rom[o..o + 4].copy_from_slice(&word.to_le_bytes());
     };
-    set(5, 0xe2805c01); // add  r5, r0, #0x100   (was mov r3, #0)
-    set(9, 0xe1d533b0); // ldrh r3, [r5, #0x30]  KEYINPUT (was add r3, r3, #1)
+    set(5, 0xe2805c01);
+    set(9, 0xe1d533b0);
     rom
 }
 
-/// `common::gba_rom` that clears RCNT (serial mode), writes SIOCNT for multiplayer every vblank
-/// and paints what it reads back into the first pixel. mGBA fills in the multiplayer id on each
-/// write, so the picture says which player a GBA is, if it is linked at all.
 fn sio_rom() -> Vec<u8> {
     let mut rom = common::gba_rom();
     let mut set = |index: usize, word: u32| {
         let o = 0xc0 + index * 4;
         rom[o..o + 4].copy_from_slice(&word.to_le_bytes());
     };
-    set(5, 0xea000008); // b     setup                  (was mov r3, #0)
-    set(9, 0xea000009); // b     poke                   (was add r3, r3, #1)
-    set(15, 0xe2805c01); // setup: add  r5, r0, #0x100
-    set(16, 0xe3a06000); //        mov  r6, #0
-    set(17, 0xe1c563b4); //        strh r6, [r5, #0x34]   RCNT = 0: serial, not GPIO
-    set(18, 0xe3a06a02); //        mov  r6, #0x2000       SIOCNT: multiplayer mode
-    set(19, 0xeafffff1); //        b    vb
-    set(20, 0xe1c562b8); // poke:  strh r6, [r5, #0x28]   write SIOCNT
-    set(21, 0xe1d532b8); //        ldrh r3, [r5, #0x28]   read it back
-    set(22, 0xeafffff2); //        b    strh r3, [r2]
+    set(5, 0xea000008);
+    set(9, 0xea000009);
+    set(15, 0xe2805c01);
+    set(16, 0xe3a06000);
+    set(17, 0xe1c563b4);
+    set(18, 0xe3a06a02);
+    set(19, 0xeafffff1);
+    set(20, 0xe1c562b8);
+    set(21, 0xe1d532b8);
+    set(22, 0xeafffff2);
     rom
 }
 
-/// `common::gba_rom` as a multiplayer game that starts a transfer every frame and paints the
-/// buttons. It sets multiplayer mode alone first: player 0 waits on player 1 to take a new mode,
-/// so a start bit in the same write would wait twice. Player 0 waits again when a transfer ends,
-/// 63,427 cycles later. Branches are to `0xc0 + index * 4 + 8 + offset * 4`.
 fn transfer_rom() -> Vec<u8> {
     let mut rom = common::gba_rom();
     let mut set = |index: usize, word: u32| {
         let o = 0xc0 + index * 4;
         rom[o..o + 4].copy_from_slice(&word.to_le_bytes());
     };
-    set(5, 0xea000008); // 0x0d4:        b    setup (0x0fc)          (was mov r3, #0)
-    set(9, 0xea00000b); // 0x0e4:        b    poke (0x118)           (was add r3, r3, #1)
-    set(15, 0xe2805c01); // 0x0fc: setup: add  r5, r0, #0x100
-    set(16, 0xe3a06000); // 0x100:        mov  r6, #0
-    set(17, 0xe1c563b4); // 0x104:        strh r6, [r5, #0x34]   RCNT = 0: serial, not GPIO
-    set(18, 0xe3a06a02); // 0x108:        mov  r6, #0x2000
-    set(19, 0xe1c562b8); // 0x10c:        strh r6, [r5, #0x28]   SIOCNT: multiplayer mode
-    set(20, 0xe3866080); // 0x110:        orr  r6, r6, #0x80     r6: multiplayer mode and start
-    set(21, 0xeaffffef); // 0x114:        b    vb (0x0d8)
-    set(22, 0xe1c562b8); // 0x118: poke:  strh r6, [r5, #0x28]   SIOCNT: start a transfer
-    set(23, 0xe1d533b0); // 0x11c:        ldrh r3, [r5, #0x30]   KEYINPUT
-    set(24, 0xeafffff0); // 0x120:        b    strh r3, [r2] (0x0e8)
+    set(5, 0xea000008);
+    set(9, 0xea00000b);
+    set(15, 0xe2805c01);
+    set(16, 0xe3a06000);
+    set(17, 0xe1c563b4);
+    set(18, 0xe3a06a02);
+    set(19, 0xe1c562b8);
+    set(20, 0xe3866080);
+    set(21, 0xeaffffef);
+    set(22, 0xe1c562b8);
+    set(23, 0xe1d533b0);
+    set(24, 0xeafffff0);
     rom
 }
 
-/// `keys_rom` that starts a long DMA before its first vblank, as Mario Kart: Super Circuit's boot
-/// does (0x10000 words, almost three frames), so the first frame end comes with the CPU blocked.
-/// Branches are to `0xc0 + index * 4 + 8 + offset * 4`.
 fn dma_rom() -> Vec<u8> {
     let mut rom = common::gba_rom();
     let mut set = |index: usize, word: u32| {
         let o = 0xc0 + index * 4;
         rom[o..o + 4].copy_from_slice(&word.to_le_bytes());
     };
-    set(5, 0xea000008); // 0x0d4:        b    setup (0x0fc)          (was mov r3, #0)
-    set(9, 0xe1d533b0); // 0x0e4:        ldrh r3, [r5, #0x30]   KEYINPUT (was add r3, r3, #1)
-    set(15, 0xe2805c01); // 0x0fc: setup: add  r5, r0, #0x100
-    set(16, 0xe3a06408); // 0x100:        mov  r6, #0x08000000
-    set(17, 0xe58060d4); // 0x104:        str  r6, [r0, #0xd4]   DMA3SAD: the cartridge
-    set(18, 0xe3a06402); // 0x108:        mov  r6, #0x02000000
-    set(19, 0xe58060d8); // 0x10c:        str  r6, [r0, #0xd8]   DMA3DAD: EWRAM
-    set(20, 0xe3a06484); // 0x110:        mov  r6, #0x84000000
-    set(21, 0xe58060dc); // 0x114:        str  r6, [r0, #0xdc]   DMA3CNT: 0x10000 words, 32-bit, now
-    set(22, 0xeaffffee); // 0x118:        b    vb (0x0d8)
+    set(5, 0xea000008);
+    set(9, 0xe1d533b0);
+    set(15, 0xe2805c01);
+    set(16, 0xe3a06408);
+    set(17, 0xe58060d4);
+    set(18, 0xe3a06402);
+    set(19, 0xe58060d8);
+    set(20, 0xe3a06484);
+    set(21, 0xe58060dc);
+    set(22, 0xeaffffee);
     rom
 }
 
-/// `common::gba_rom` as a multiplayer game that transfers every frame. It paints SIOCNT into the
-/// second pixel and SIOMULTI0/1 into the third and fourth, then puts 0x1000 plus id times 0x10
-/// into SIOMLT_SEND and starts a transfer. It fills SIOMLT_SEND every time because mGBA does not
-/// save that register. Branches are to `0xc0 + index * 4 + 8 + offset * 4`.
 fn multiplayer_rom() -> Vec<u8> {
     let mut rom = common::gba_rom();
     let mut set = |index: usize, word: u32| {
         let o = 0xc0 + index * 4;
         rom[o..o + 4].copy_from_slice(&word.to_le_bytes());
     };
-    set(5, 0xea000008); // 0x0d4:        b    setup (0x0fc)          (was mov r3, #0)
-    set(9, 0xea00000a); // 0x0e4:        b    poke (0x114)           (was add r3, r3, #1)
-    set(15, 0xe2805c01); // 0x0fc: setup: add  r5, r0, #0x100
-    set(16, 0xe3a06000); // 0x100:        mov  r6, #0
-    set(17, 0xe1c563b4); // 0x104:        strh r6, [r5, #0x34]   RCNT = 0: serial, not GPIO
-    set(18, 0xe3a06a02); // 0x108:        mov  r6, #0x2000
-    set(19, 0xe1c562b8); // 0x10c:        strh r6, [r5, #0x28]   SIOCNT: multiplayer mode
-    set(20, 0xeafffff0); // 0x110:        b    vb (0x0d8)
-    set(21, 0xe1d532b8); // 0x114: poke:  ldrh r3, [r5, #0x28]   SIOCNT
-    set(22, 0xe1c230b2); // 0x118:        strh r3, [r2, #2]      into the second pixel
-    set(23, 0xe1d532b0); // 0x11c:        ldrh r3, [r5, #0x20]   SIOMULTI0
-    set(24, 0xe1c230b4); // 0x120:        strh r3, [r2, #4]      into the third
-    set(25, 0xe1d532b2); // 0x124:        ldrh r3, [r5, #0x22]   SIOMULTI1
-    set(26, 0xe1c230b6); // 0x128:        strh r3, [r2, #6]      into the fourth
-    set(27, 0xe1c562b8); // 0x12c:        strh r6, [r5, #0x28]   SIOCNT: the mode, and the id
-    set(28, 0xe1d532b8); // 0x130:        ldrh r3, [r5, #0x28]
-    set(29, 0xe2033030); // 0x134:        and  r3, r3, #0x30     the id, times 0x10
-    set(30, 0xe3833a01); // 0x138:        orr  r3, r3, #0x1000
-    set(31, 0xe1c532ba); // 0x13c:        strh r3, [r5, #0x2a]   SIOMLT_SEND
-    set(32, 0xe3863080); // 0x140:        orr  r3, r6, #0x80
-    set(33, 0xe1c532b8); // 0x144:        strh r3, [r5, #0x28]   SIOCNT: start a transfer
-    set(34, 0xeaffffe7); // 0x148:        b    dr (0x0ec)
+    set(5, 0xea000008);
+    set(9, 0xea00000a);
+    set(15, 0xe2805c01);
+    set(16, 0xe3a06000);
+    set(17, 0xe1c563b4);
+    set(18, 0xe3a06a02);
+    set(19, 0xe1c562b8);
+    set(20, 0xeafffff0);
+    set(21, 0xe1d532b8);
+    set(22, 0xe1c230b2);
+    set(23, 0xe1d532b0);
+    set(24, 0xe1c230b4);
+    set(25, 0xe1d532b2);
+    set(26, 0xe1c230b6);
+    set(27, 0xe1c562b8);
+    set(28, 0xe1d532b8);
+    set(29, 0xe2033030);
+    set(30, 0xe3833a01);
+    set(31, 0xe1c532ba);
+    set(32, 0xe3863080);
+    set(33, 0xe1c532b8);
+    set(34, 0xeaffffe7);
     rom
 }
 
-/// `transfer_rom` that probes what a savestate does not carry: it transfers at VCOUNT 140, writes
-/// SIOMLT_SEND only while A is held, and paints SIOMULTI1. Run with A held, a GBA holds 0x2080 in
-/// an unsaved register and has RCNT's SC bit set; a fresh one holds neither. Branches are to
-/// `0xc0 + index * 4 + 8 + offset * 4`.
 fn probe_rom() -> Vec<u8> {
     let mut rom = transfer_rom();
     let mut set = |index: usize, word: u32| {
         let o = 0xc0 + index * 4;
         rom[o..o + 4].copy_from_slice(&word.to_le_bytes());
     };
-    set(7, 0xe354008c); // 0x0dc:        cmp  r4, #140          transfer at VCOUNT 140 (was 160)
-    set(12, 0xe354008c); // 0x0f0: dr:   cmp  r4, #140          (was 160)
-    set(22, 0xe1d543b0); // 0x118: poke: ldrh r4, [r5, #0x30]   KEYINPUT
-    set(23, 0xe3140001); // 0x11c:       tst  r4, #1            A held? (KEYINPUT is active low)
-    set(24, 0x01c562ba); // 0x120:       strheq r6, [r5, #0x2a] SIOMLT_SEND, only while A is held
-    set(25, 0xe1d532b2); // 0x124:       ldrh r3, [r5, #0x22]   SIOMULTI1
-    set(26, 0xe1c562b8); // 0x128:       strh r6, [r5, #0x28]   SIOCNT: start a transfer
-    set(27, 0xeaffffed); // 0x12c:       b    strh r3, [r2] (0x0e8)
+    set(7, 0xe354008c);
+    set(12, 0xe354008c);
+    set(22, 0xe1d543b0);
+    set(23, 0xe3140001);
+    set(24, 0x01c562ba);
+    set(25, 0xe1d532b2);
+    set(26, 0xe1c562b8);
+    set(27, 0xeaffffed);
     rom
 }
 
-/// `dma_rom` that starts its long DMA when it reads A, so the blocked frame end lands
-/// mid-session with the link already in. Branches are to `0xc0 + index * 4 + 8 + offset * 4`.
 fn dma_a_rom() -> Vec<u8> {
     let mut rom = dma_rom();
     let mut set = |index: usize, word: u32| {
         let o = 0xc0 + index * 4;
         rom[o..o + 4].copy_from_slice(&word.to_le_bytes());
     };
-    set(10, 0xea00000b); // 0x0e8:        b    test (0x11c)      (was strh r3, [r2])
-    set(21, 0xeaffffef); // 0x114:        b    vb (0x0d8)        setup now only loads the registers
-    set(23, 0xe3130001); // 0x11c: test:  tst  r3, #1            A held? (KEYINPUT is active low)
-    set(24, 0x058060dc); // 0x120:        streq r6, [r0, #0xdc]  DMA3CNT, only on the frame A is read
-    set(25, 0xe1c230b0); // 0x124:        strh r3, [r2]          paint the buttons
-    set(26, 0xeaffffef); // 0x128:        b    dr (0x0ec)
+    set(10, 0xea00000b);
+    set(21, 0xeaffffef);
+    set(23, 0xe3130001);
+    set(24, 0x058060dc);
+    set(25, 0xe1c230b0);
+    set(26, 0xeaffffef);
     rom
 }
 
-/// `common::gba_rom` holding the serial port's normal 8-bit mode with an external clock, writing
-/// SIODATA8 and painting the buttons every vblank. Nothing transfers, so the link must take up the
-/// restored mode unprompted. It paints buttons, not SIOCNT, because SIOCNT differs by player.
-/// Branches are to `0xc0 + index * 4 + 8 + offset * 4`.
 fn normal_rom() -> Vec<u8> {
     let mut rom = common::gba_rom();
     let mut set = |index: usize, word: u32| {
         let o = 0xc0 + index * 4;
         rom[o..o + 4].copy_from_slice(&word.to_le_bytes());
     };
-    set(5, 0xea000008); // 0x0d4:        b    setup (0x0fc)          (was mov r3, #0)
-    set(9, 0xea00000b); // 0x0e4:        b    poke (0x118)           (was add r3, r3, #1)
-    set(15, 0xe2805c01); // 0x0fc: setup: add  r5, r0, #0x100
-    set(16, 0xe3a06000); // 0x100:        mov  r6, #0
-    set(17, 0xe1c563b4); // 0x104:        strh r6, [r5, #0x34]   RCNT = 0: serial, not GPIO
-    set(18, 0xe1c562b8); // 0x108:        strh r6, [r5, #0x28]   SIOCNT: normal 8-bit, external clock
-    set(19, 0xe3a06001); // 0x10c:        mov  r6, #1
-    set(20, 0xeafffff0); // 0x110:        b    vb (0x0d8)
-    set(22, 0xe1c562ba); // 0x118: poke:  strh r6, [r5, #0x2a]   SIODATA8
-    set(23, 0xe1d533b0); // 0x11c:        ldrh r3, [r5, #0x30]   KEYINPUT
-    set(24, 0xeafffff0); // 0x120:        b    strh r3, [r2] (0x0e8)
+    set(5, 0xea000008);
+    set(9, 0xea00000b);
+    set(15, 0xe2805c01);
+    set(16, 0xe3a06000);
+    set(17, 0xe1c563b4);
+    set(18, 0xe1c562b8);
+    set(19, 0xe3a06001);
+    set(20, 0xeafffff0);
+    set(22, 0xe1c562ba);
+    set(23, 0xe1d533b0);
+    set(24, 0xeafffff0);
     rom
 }
 
-/// The 15-bit colour a rom wrote into pixel `x` of the first row. A painted register loses its
-/// top bit.
 fn painted(picture: &[u8], x: usize) -> u16 {
     let pixel = &picture[x * 4..x * 4 + 4];
     u16::from(pixel[2] >> 3) | u16::from(pixel[1] >> 3) << 5 | u16::from(pixel[0] >> 3) << 10
 }
 
-/// A session can start from states already in multiplayer mode that the game will not write
-/// again, so the link must take up the mode each GBA's registers hold as it connects. From the
-/// first transfer each GBA hears the other and SIOCNT shows both ready. The first frame is left
-/// out: what it paints was heard before the restore.
 #[test]
 fn a_pair_restored_in_multiplayer_mode_talks_from_the_first_transfer() {
     let _g = common::core_lock();
@@ -259,7 +223,6 @@ fn single_core(dylib: &Path) -> LibretroCore {
     LibretroCore::open(dylib).expect("vendored core is present but would not open")
 }
 
-/// The core reads options during `retro_load_game`, so they are set here, before any `load`.
 fn link_core(dylib: &Path, player: u8) -> LibretroCore {
     let mut core = single_core(dylib);
     core.set_option("mgba_link", "on");
@@ -267,8 +230,6 @@ fn link_core(dylib: &Path, player: u8) -> LibretroCore {
     core
 }
 
-/// The link state: `SLK1`, then for each player a little-endian u32 length and that GBA's
-/// state, player 0 first.
 fn slk1(states: [&[u8]; 2]) -> Vec<u8> {
     let mut out = b"SLK1".to_vec();
     for state in states {
@@ -300,7 +261,6 @@ fn split_slk1(container: &[u8]) -> [Vec<u8>; 2] {
     states
 }
 
-/// The picture after `frames` frames of `keys` on a lone GBA.
 fn single_picture(dylib: &Path, rom: &Path, keys: u16, frames: usize) -> Vec<u8> {
     let mut core = single_core(dylib);
     core.load(rom).expect("load");
@@ -310,7 +270,6 @@ fn single_picture(dylib: &Path, rom: &Path, keys: u16, frames: usize) -> Vec<u8>
     core.video_xrgb8888().to_vec()
 }
 
-/// Each device shows its own player's GBA, holding its own player's buttons.
 #[test]
 fn link_mode_shows_the_local_players_gba_holding_its_own_port() {
     let _g = common::core_lock();
@@ -356,7 +315,6 @@ fn link_mode_saves_both_gbas_in_one_link_state() {
     }
 }
 
-/// An explicit `off` gives one GBA and its own state.
 #[test]
 fn link_mode_off_keeps_the_single_gba_state() {
     let _g = common::core_lock();
@@ -372,14 +330,12 @@ fn link_mode_off_keeps_the_single_gba_state() {
     assert!(state.len() > 100_000, "state is {} bytes", state.len());
 }
 
-/// Two one-GBA states restored into link mode each carry on exactly as they would alone.
 #[test]
 fn a_link_state_of_two_single_gba_states_restores_each_player_where_they_were() {
     let _g = common::core_lock();
     let Some(dylib) = vendored() else { return };
     let rom = rom("mgba-link-restore.gba", common::gba_rom());
 
-    // Two moments of the counter rom, far enough apart to paint different pictures.
     let mut single = single_core(&dylib);
     single.load(&rom).expect("load");
     let mut states = Vec::new();
@@ -391,7 +347,6 @@ fn a_link_state_of_two_single_gba_states_restores_each_player_where_they_were() 
     }
     drop(single);
 
-    // Where each moment gets to alone, 5 frames on.
     let mut alone = Vec::new();
     for state in &states {
         let mut core = single_core(&dylib);
@@ -421,7 +376,6 @@ fn a_link_state_of_two_single_gba_states_restores_each_player_where_they_were() 
     }
 }
 
-/// Anything but a whole link state is refused, and the core still takes its own afterwards.
 #[test]
 fn link_mode_refuses_anything_but_a_whole_link_state() {
     let _g = common::core_lock();
@@ -459,8 +413,6 @@ fn link_mode_refuses_anything_but_a_whole_link_state() {
         .expect("link mode refused its own link state");
 }
 
-/// A restore the core refuses part way (player 1's state claims a future version) leaves both
-/// GBAs where they were.
 #[test]
 fn a_link_state_the_core_refuses_leaves_both_gbas_where_they_were() {
     let _g = common::core_lock();
@@ -477,7 +429,6 @@ fn a_link_state_the_core_refuses_leaves_both_gbas_where_they_were() {
     let mut refused = early.clone();
     refused[..4].copy_from_slice(&u32::MAX.to_le_bytes());
 
-    // Where the pair is before the refused restore, 60 frames in, and where it goes 5 frames on.
     let mut control = link_core(&dylib, 0);
     control.load(&rom).expect("link mode refused the rom");
     for _ in 0..60 {
@@ -513,15 +464,12 @@ fn a_link_state_the_core_refuses_leaves_both_gbas_where_they_were() {
     );
 }
 
-/// FNV-1a 64: the hash the lockstep's checksums will use.
 fn fnv1a(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
     })
 }
 
-/// Different buttons on each port, changing often, so a port read by the wrong GBA, or a frame
-/// late, would change the machines.
 fn script(frame: usize) -> (ButtonMask, ButtonMask) {
     let p0 = if frame.is_multiple_of(3) {
         ButtonMask::A
@@ -536,8 +484,6 @@ fn script(frame: usize) -> (ButtonMask, ButtonMask) {
     (ButtonMask(p0), ButtonMask(p1))
 }
 
-/// Both SPs must compute the same pair of machines whichever player they show: the link state
-/// hashes the same for `mgba_link_player` 0 and 1, and again on a second run.
 #[test]
 fn both_players_devices_compute_the_same_machines() {
     let _g = common::core_lock();
@@ -578,8 +524,6 @@ fn both_players_devices_compute_the_same_machines() {
     );
 }
 
-/// The same buttons for both players, with frequent edges that a GBA reading its buttons a frame
-/// late would paint differently.
 fn shared_script(frame: usize) -> ButtonMask {
     let mut keys = 0;
     if (10..40).contains(&frame) {
@@ -594,8 +538,6 @@ fn shared_script(frame: usize) -> ButtonMask {
     ButtonMask(keys)
 }
 
-/// `dma_a_rom`'s buttons. A on odd frame 3 starts the DMA at a frame end with player 0 blocked
-/// and the next hard sync over a frame away, the case the sync's early exit exists for.
 fn dma_script(frame: usize) -> ButtonMask {
     let mut keys = 0;
     if frame == 3 {
@@ -610,9 +552,6 @@ fn dma_script(frame: usize) -> ButtonMask {
     ButtonMask(keys)
 }
 
-/// Every frame's picture from each player's device, running `rom` as a linked pair from
-/// `container` (or from a load, when there is none) with `buttons(frame)` on both ports. Player 0
-/// first.
 fn linked_pictures(
     dylib: &Path,
     rom: &Path,
@@ -637,15 +576,12 @@ fn linked_pictures(
     })
 }
 
-/// The frames on which player 0's device and player 1's device showed different pictures.
 fn differing_frames(pictures: &[Vec<Vec<u8>>; 2]) -> Vec<usize> {
     (0..pictures[0].len())
         .filter(|&frame| pictures[0][frame] != pictures[1][frame])
         .collect()
 }
 
-/// A lone GBA's state, `frames` frames into `rom`. A state taken between `run_frame` calls is
-/// always at the end of a frame.
 fn single_state(dylib: &Path, rom: &Path, frames: usize) -> Vec<u8> {
     let mut single = single_core(dylib);
     single.load(rom).expect("load");
@@ -655,9 +591,6 @@ fn single_state(dylib: &Path, rom: &Path, frames: usize) -> Vec<u8> {
     single.serialize().expect("no state")
 }
 
-/// Two identical GBAs given the same buttons must read each change on the same frame. The link
-/// keeps player 1 slightly behind, so player 0 must stop at its frame end rather than run on and
-/// read the next frame's buttons early (which stalled Mario Kart: Super Circuit's lobby).
 #[test]
 fn two_identical_gbas_read_the_same_buttons_on_the_same_frame() {
     let _g = common::core_lock();
@@ -681,9 +614,6 @@ fn two_identical_gbas_read_the_same_buttons_on_the_same_frame() {
     );
 }
 
-/// Every known way a linked pair can start: rom, link state if any, and buttons per frame.
-/// Covers fresh loads, restores pairing a frame-end state with a just-loaded one (VCOUNT 126),
-/// `dma_rom` and `dma_a_rom` DMA stalls, and `normal_rom`'s 8-bit serial mode.
 type Start = (
     &'static str,
     PathBuf,
@@ -746,11 +676,6 @@ fn every_start(dylib: &Path) -> Vec<Start> {
     ]
 }
 
-/// When a GBA's next frame ends on the link's shared clock, read from its half of a link state.
-/// Core state: masterCycles 0x0c, CPU cycles 0x68, video event countdown 0x1f4, VCOUNT 0x406,
-/// DISPSTAT 0x404 (hblank bit). The lockstep driver's state is extdata after the 0x61000-byte core
-/// state: {u32 tag, i32 size, i64 offset} headers ending at tag 0; tag 0x41 is a u32 driver id
-/// then the driver state, with cycleOffset at 0x34. The arithmetic wraps, as mGBA's clocks do.
 fn next_frame_end(gba: &[u8]) -> u32 {
     let u32_at = |at: usize| u32::from_le_bytes(gba[at..at + 4].try_into().unwrap());
     let u16_at = |at: usize| u16::from_le_bytes(gba[at..at + 2].try_into().unwrap());
@@ -773,9 +698,6 @@ fn next_frame_end(gba: &[u8]) -> u32 {
         .wrapping_add(hblank + lines * 1232)
 }
 
-/// However a session starts, both GBAs read each button change on the same frame. The link goes
-/// in only once both stand at a frame end, and a DMA-blocked GBA must stop at the sync rather
-/// than run on a frame. Every frame is compared, the first too.
 #[test]
 fn every_start_gives_both_gbas_the_same_buttons_on_the_same_frame() {
     let _g = common::core_lock();
@@ -795,9 +717,6 @@ fn every_start_gives_both_gbas_the_same_buttons_on_the_same_frame() {
     );
 }
 
-/// Each start must also leave both GBAs' next frame ends within 256 cycles on the shared clock,
-/// since pictures alone miss a slow pair. Every start measured 0; 256 is well inside the 1,008
-/// cycles the join accepts as "at a frame end". Out of phase is ~240,000; a frame is 280,896.
 #[test]
 fn every_start_joins_the_two_gbas_with_their_frames_ending_together() {
     let _g = common::core_lock();
@@ -829,16 +748,12 @@ fn every_start_joins_the_two_gbas_with_their_frames_ending_together() {
     );
 }
 
-/// A restore must be a function of the link state alone: one SP may restore into running cores
-/// and the other into fresh ones. mGBA's savestate misses RCNT's SC/SD/SI/SO bits, SIOMLT_SEND,
-/// `haltPending` and the idle-loop counters; `probe_rom` exposes the first two.
 #[test]
 fn a_restore_does_not_depend_on_what_the_cores_ran_before_it() {
     let _g = common::core_lock();
     let Some(dylib) = vendored() else { return };
     let rom = rom("mgba-link-probe.gba", probe_rom());
 
-    // Taken with nothing held, so the state itself carries no SIOMLT_SEND worth sending.
     let alone = single_state(&dylib, &rom, 20);
     let container = slk1([&alone, &alone]);
 
@@ -889,8 +804,6 @@ fn a_restore_does_not_depend_on_what_the_cores_ran_before_it() {
     );
 }
 
-/// Mario Kart: Super Circuit's scripted walk from the title screen into a linked two-player race:
-/// DOWN and A at the title, then A for 3 frames every 30 from frame 4300.
 fn race_script(frame: usize) -> ButtonMask {
     let mut keys = 0;
     if (1500..=1506).contains(&frame) {
@@ -902,7 +815,6 @@ fn race_script(frame: usize) -> ButtonMask {
     ButtonMask(keys)
 }
 
-/// A picture a person can open, to see where the scripted walk got to.
 fn write_ppm(path: &Path, xrgb: &[u8]) {
     let mut out = format!("P6\n{GBA_W} {GBA_H}\n255\n").into_bytes();
     for pixel in xrgb.chunks(4) {
@@ -911,10 +823,6 @@ fn write_ppm(path: &Path, xrgb: &[u8]) {
     std::fs::write(path, out).expect("write picture");
 }
 
-/// Needs a Mario Kart: Super Circuit ROM, not in the tree. With `SLOT_MKSC_ROM` set,
-/// `cargo test --release -p slot --test mgba_link mario_kart -- --ignored` runs it.
-/// 25,000 frames covers the menus, the link handshake and minutes of racing. Each device's last
-/// picture lands in the test's temp directory as a PPM.
 #[test]
 #[ignore]
 fn mario_kart_super_circuit_is_the_same_race_on_both_devices() {
@@ -951,10 +859,6 @@ fn mario_kart_super_circuit_is_the_same_race_on_both_devices() {
     );
 }
 
-/// The Mario Kart walk from two one-GBA states taken at the title (frame 1400) must race exactly
-/// as a reset boot does: at frame 25,000 each device shows the boot's picture and both compute the
-/// same machines. States are not compared byte for byte, since a lone GBA's clock differs.
-/// Needs the ROM, as above.
 #[test]
 #[ignore]
 fn mario_kart_super_circuit_races_linked_after_a_restore() {
@@ -1024,8 +928,6 @@ fn mario_kart_super_circuit_races_linked_after_a_restore() {
     }
 }
 
-/// The link must connect after a restore as well as after a load: player 1 paints a different
-/// SIOCNT only while linked. "Different", not exact, because mGBA ORs SIOCNT's old bits back in.
 #[test]
 fn the_cable_is_plugged_in_after_a_load_and_after_a_restore() {
     let _g = common::core_lock();
@@ -1080,7 +982,6 @@ fn the_cable_is_plugged_in_after_a_load_and_after_a_restore() {
     );
 }
 
-/// A link-mode core's state loads into another link-mode core.
 #[test]
 fn a_link_states_travels_between_two_link_mode_cores() {
     let _g = common::core_lock();
@@ -1094,7 +995,6 @@ fn a_link_states_travels_between_two_link_mode_cores() {
         state.starts_with(b"SLK1"),
         "the host produced something that is not a link state"
     );
-    // One libretro core to a process, so the host goes before the joiner arrives.
     drop(host);
 
     let mut joiner = link_core(&dylib, 1);
@@ -1104,7 +1004,6 @@ fn a_link_states_travels_between_two_link_mode_cores() {
         .expect("a link-mode core refused a link state from its own build");
 }
 
-/// A core not in link mode cannot take a link state: it expects one GBA and gets two.
 #[test]
 fn a_single_core_refuses_a_link_state() {
     let _g = common::core_lock();
@@ -1124,8 +1023,6 @@ fn a_single_core_refuses_a_link_state() {
     );
 }
 
-/// The state swap with a real commercial cart and save. The BIOS options made the difference on
-/// hardware, which `apply_link_options` pins.
 #[test]
 fn the_card_cart_link_state_travels_between_two_link_mode_cores() {
     let _g = common::core_lock();
@@ -1160,9 +1057,6 @@ fn the_card_cart_link_state_travels_between_two_link_mode_cores() {
         .expect("the joiner refused the host's link state");
 }
 
-/// Skipping the video and audio of the unshown GBA must not change the machine, since the two
-/// devices skip different ones. Audio mixing still runs because `GBAAudioSerialize` carries
-/// `chA.samples` and `chB.samples`; only the output ring write may be skipped.
 #[test]
 fn skipping_the_peers_picture_and_sound_does_not_change_the_machine() {
     let _g = common::core_lock();
@@ -1210,7 +1104,6 @@ fn ready(emu: &slot::emu::EmuHandle) {
     assert_eq!(emu.state(), slot::emu::CoreState::Ready);
 }
 
-/// Reloading a game into link mode keeps the player's progress rather than refusing it.
 #[test]
 fn a_link_mode_worker_resumes_a_one_gba_state() {
     use slot::audio::AudioSink;
@@ -1235,8 +1128,6 @@ fn a_link_mode_worker_resumes_a_one_gba_state() {
     );
 }
 
-/// What a link-mode worker writes to the card is the local player's GBA, so the game resumes
-/// once it is loaded on its own again.
 #[test]
 fn a_link_mode_workers_state_resumes_on_a_single_core() {
     use slot::audio::AudioSink;

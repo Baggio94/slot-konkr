@@ -8,24 +8,18 @@ use crate::footer::{draw_printed, Printed};
 use crate::hud::{PLATE, PLATE_H};
 use crate::plate::{hint_quad, hint_row, hint_width, Hint, HINT_GAP, HINT_H, TITLE_H, TITLE_W};
 
-/// The GBA screen: 3x to 720x480, the game's own integer scale, so no resample.
 pub const PHOTO_W: u32 = 240;
 pub const PHOTO_H: u32 = 160;
 
-/// Stands in for a missing thumbnail. Neutral rather than black, so it reads as blank, not dead.
 const BLANK: [u8; 3] = [0x3a, 0x3a, 0x3e];
 
 pub const DOT: f32 = 6.0;
 const DOT_GAP: f32 = 10.0;
-/// The unselected dots: enough to count, faint enough that the selected one stands out.
 const DOT_DIM: f32 = 0.35;
 
-/// Clear of both ends of both plates, the same margin the case band uses for gauge and clock.
 const MARGIN: f32 = 16.0;
 
-/// Every action the switcher takes: ways out first, then actions on the state on screen.
 pub const LEGEND: [(&str, &str); 3] = [("B", "Back"), ("Y", "Delete"), ("A", "Load")];
-/// How many of `hints` belong to the left end of the plate. The rest, undo included, go right.
 const WAYS_OUT: usize = 2;
 const UNDO_KEY: &str = "X";
 
@@ -35,7 +29,6 @@ pub struct PhotoFace {
     pub h: u32,
 }
 
-/// The screenshot alone, at its own size, so the 3x upscale stays exact.
 pub fn photo_face(entry: &StateEntry) -> PhotoFace {
     let rgba = art::cover(&entry.thumb, PHOTO_W, PHOTO_H).unwrap_or_else(|| {
         std::iter::repeat_n(
@@ -52,17 +45,12 @@ pub fn photo_face(entry: &StateEntry) -> PhotoFace {
     }
 }
 
-/// The ring, one screenshot at a time. Opening pauses the game; `A` loads the selection and
-/// `B` or MENU puts it back.
 pub struct Polaroids {
     pub entries: Vec<StateEntry>,
     pub index: usize,
     faces: Vec<TexId>,
     title: Option<TexId>,
-    /// One per hint, in `hints` order. Shorter than `hints` while the undo is not yet rasterised,
-    /// so read by index rather than zipped.
     hint_faces: Vec<TexId>,
-    /// What the undo says, if on offer. Pushed from the app, whose clock the grace period runs on.
     undo: Option<String>,
 }
 
@@ -78,18 +66,14 @@ impl Polaroids {
         }
     }
 
-    /// In `entries` order, newest first. The caller uploads them: only the compositor can mint a
-    /// `TexId`.
     pub fn set_faces(&mut self, faces: Vec<TexId>) {
         self.faces = faces;
     }
 
-    /// Re-uploaded whenever the selection moves.
     pub fn set_title_face(&mut self, face: Option<TexId>) {
         self.title = face;
     }
 
-    /// In `hints` order.
     pub fn set_hint_faces(&mut self, faces: Vec<TexId>) {
         self.hint_faces = faces;
     }
@@ -98,8 +82,6 @@ impl Polaroids {
         self.undo = label.map(str::to_string);
     }
 
-    /// In plate order, left end then right. The undo only during its grace period, and last so the
-    /// others never move.
     pub fn hints(&self) -> Vec<Hint> {
         let mut out = hint_row(&LEGEND);
         if let Some(label) = &self.undo {
@@ -123,7 +105,6 @@ impl Polaroids {
         (self.entries.len(), self.index)
     }
 
-    /// Relative time of the selected entry: the top plate's title.
     pub fn title(&self, now: &str) -> String {
         match self.selected() {
             Some(e) => Self::relative_time(&e.stamp, now),
@@ -131,7 +112,6 @@ impl Polaroids {
         }
     }
 
-    /// Drops the entry under the eye and its face, which are indexed together.
     pub fn remove_selected(&mut self) {
         if self.index >= self.entries.len() {
             return;
@@ -151,8 +131,6 @@ impl Polaroids {
         self.index = (self.index + 1).min(self.entries.len().saturating_sub(1));
     }
 
-    /// The status arguments are passed fresh each call, not cached: the switcher can stay open for
-    /// hours and a latched value would freeze the gauge.
     pub fn draw(
         &self,
         battery: Option<Battery>,
@@ -169,9 +147,7 @@ impl Polaroids {
     fn draw_photo(&self, out: &mut Vec<Draw>) {
         let (w, h) = (OUT_W as f32, OUT_H as f32);
         out.push(match self.faces.get(self.index) {
-            // Through the game pass, so the shot carries the same mask as the live frame.
             Some(tex) => Draw::Shot { tex: *tex },
-            // Opaque: the paused game is underneath, and showing through would read as live.
             None => Draw::Rect {
                 x: 0.0,
                 y: 0.0,
@@ -196,7 +172,6 @@ impl Polaroids {
         out: &mut Vec<Draw>,
     ) {
         out.push(plate(0.0));
-        // No placeholder: absent type is absent, not a grey bar.
         if let Some(tex) = self.title {
             out.push(Draw::Tex {
                 x: (OUT_W as f32 - TITLE_W as f32) / 2.0,
@@ -208,8 +183,6 @@ impl Polaroids {
             });
         }
 
-        // Gauge left and clock right, the same corners the case band uses. `draw_gauge` draws
-        // nothing on `None`.
         draw_gauge(
             MARGIN,
             (PLATE_H - GAUGE_H) / 2.0,
@@ -218,14 +191,12 @@ impl Polaroids {
             bolt,
             out,
         );
-        // `draw_printed` so a clock whose face has not arrived still holds its space.
         if clock.w > 0 {
             let x = OUT_W as f32 - MARGIN - clock.w as f32;
             draw_printed(x, (PLATE_H - HINT_H as f32) / 2.0, clock, out);
         }
     }
 
-    /// The ways out at the left end, actions on the state at the right: two kinds, two groups.
     fn draw_bottom(&self, out: &mut Vec<Draw>) {
         let top = OUT_H as f32 - PLATE_H;
         out.push(plate(top));
@@ -248,7 +219,6 @@ impl Polaroids {
         self.draw_dots(top, out);
     }
 
-    /// Centred, the only span the legend leaves free.
     fn draw_dots(&self, top: f32, out: &mut Vec<Draw>) {
         let n = self.entries.len();
         let row = n as f32 * DOT + (n as f32 - 1.0).max(0.0) * DOT_GAP;
@@ -265,8 +235,6 @@ impl Polaroids {
         }
     }
 
-    /// Read straight off the two filenames. Hours rather than calendar days, so a save does not
-    /// age a day at midnight. Past the window, the date is what comparing old saves needs.
     pub fn relative_time(stamp: &str, now: &str) -> String {
         const RELATIVE_WINDOW: i64 = 12 * 3600;
         let (Some(then), Some(parsed)) = (parse_stamp(stamp), parse_stamp(now)) else {
@@ -282,7 +250,6 @@ impl Polaroids {
         if delta < RELATIVE_WINDOW {
             return format!("{} hr ago", delta / 3600);
         }
-        // Sliced: `parse_stamp` accepted it, so the fields are where the format says.
         format!("{} {}:{}", &stamp[..10], &stamp[11..13], &stamp[14..16])
     }
 }

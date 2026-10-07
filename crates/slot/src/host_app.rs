@@ -9,9 +9,6 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::WindowId;
 
-/// Frame pacing, as in `device_app`. Vsync alone is not enough: macOS does not present an
-/// occluded window, so the swap returns at once (0.22 ms vs 7.9 ms visible) and the loop would
-/// free-run at ~1900 fps. Also caps faster panels at the device's 60 Hz.
 const FRAME: Duration = Duration::from_micros(16_667);
 
 struct Slot {
@@ -57,7 +54,6 @@ impl ApplicationHandler for Slot {
             WindowEvent::CloseRequested => events.exit(),
             WindowEvent::Resized(size) => surface.resize(size),
             WindowEvent::RedrawRequested => {
-                // Times the whole frame, not just the present, as `device_app` does.
                 let began = Instant::now();
                 self.frontend.render(compositor, surface.window_size());
                 let swap = std::time::Instant::now();
@@ -70,14 +66,12 @@ impl ApplicationHandler for Slot {
                 }
                 surface.request_redraw();
                 self.frontend.advance(&mut self.input);
-                // The simulated platform ends the process outright.
                 if self.frontend.restarting() {
                     self.frontend.restart();
                 }
                 if self.frontend.powering_off() {
                     self.frontend.poweroff();
                     events.exit();
-                    // Before the wait: a stopping machine owes the panel nothing.
                     return;
                 }
                 if let Some(left) = FRAME.checked_sub(began.elapsed()) {

@@ -9,7 +9,6 @@ use crate::silhouette::{
 };
 use crate::text;
 
-/// The traced outline's aspect, so `cart.svg` rasterises unstretched.
 pub const CART_W: u32 = 360;
 pub const CART_H: u32 = (CART_W * SEATED_H + SEATED_W / 2) / SEATED_W;
 
@@ -17,8 +16,6 @@ pub const GB_CART_W: u32 = 312;
 
 pub const GB_CART_H: u32 = (GB_CART_W * GB_SEATED_H + SEATED_W / 2) / SEATED_W;
 
-/// The paper label well. The band above is the
-/// moulded grip, which is most of what makes the face read as a cartridge.
 pub const fn label_panel(w: u32, h: u32) -> (u32, u32, u32, u32) {
     (
         (w * 135 + 500) / 1000,
@@ -33,7 +30,6 @@ pub const LABEL_Y: u32 = label_panel(CART_W, CART_H).1;
 pub const LABEL_W: u32 = label_panel(CART_W, CART_H).2 - LABEL_X;
 pub const LABEL_H: u32 = label_panel(CART_W, CART_H).3 - LABEL_Y;
 
-/// The Game Boy label well.
 pub const fn gb_label_panel(w: u32, h: u32) -> (u32, u32, u32, u32) {
     (
         (w * 147 + 500) / 1000,
@@ -50,15 +46,11 @@ pub const GB_LABEL_H: u32 = gb_label_panel(GB_CART_W, GB_CART_H).3 - GB_LABEL_Y;
 
 const PAD: u32 = 10;
 const MAX_LINES: usize = 3;
-/// Three lines must clear the label's height; Open Sans Bold sets at about 1.36x the em.
 const MAX_PX: f32 = LABEL_H as f32 / (MAX_LINES as f32 * 1.36);
-/// On the near square Game Boy panel either bound can bind, so the fitter gets both.
 const GB_MAX_PX: f32 = (GB_LABEL_H - 2 * PAD) as f32 / MAX_LINES as f32;
 const MIN_PX: f32 = 10.0;
 
-/// How far the translucent edge reaches in; any pixel deeper is the plastic's own colour.
 const RIM: u32 = (4 * CART_W + SEATED_W / 2) / SEATED_W;
-/// The same depth of plastic on an object 1.87x as tall.
 const GB_RIM: u32 = (7 * GB_CART_W + SEATED_W / 2) / SEATED_W;
 
 pub struct CartFace {
@@ -67,44 +59,32 @@ pub struct CartFace {
     pub h: u32,
 }
 
-/// What a face takes from the object rather than the game, so both cartridges share one
-/// drawing path.
 struct Spec {
     w: u32,
     h: u32,
-    /// Left, top, width, height of the label well.
     label: (u32, u32, u32, u32),
     mask: &'static [u8],
     depth: &'static [u8],
     detail: &'static Detail,
     max_px: f32,
-    /// The height the type block must fit, or infinite where only the width can bind.
     max_h: f32,
-    /// Wider on the taller pak so it reads as the same depth of plastic.
     rim: u32,
-    /// The board clear plastic shows, as fractions of the face.
     board: Board,
 }
 
-/// Where a mould's board sits: its sides, its top, and its edge connector along the bottom.
 struct Board {
     x: (f32, f32),
     top: f32,
-    /// The span the 32 contacts are spread over.
     pins: (f32, f32),
     contacts_from: f32,
     traces_from: f32,
 }
 
-/// The shell a cart was moulded in, from the CGB flag rather than the folder: `.gb` and `.gbc`
-/// extensions are a dumping convention and routinely disagree with the flag.
 enum Shape {
     Gba,
     Gb(GbShell),
 }
 
-/// The Game Pak mould for this cart, or `None` for GBA. Opens the rom, so never call it on a
-/// frame.
 pub fn gb_shell_of(cart: &Cart) -> Option<GbShell> {
     match cart.platform {
         Platform::Gba => None,
@@ -138,8 +118,6 @@ fn spec(shape: Shape) -> Spec {
             max_px: MAX_PX,
             max_h: f32::INFINITY,
             rim: RIM,
-            // Narrower than the grip ears, just under the top wall, and with tall contacts: about
-            // the bottom sixth of the board, as a photographed AGB board has them.
             board: Board {
                 x: (0.135, 0.875),
                 top: 0.1,
@@ -158,7 +136,6 @@ fn spec(shape: Shape) -> Spec {
             max_px: GB_MAX_PX,
             max_h: (GB_LABEL_H - 2 * PAD) as f32,
             rim: GB_RIM,
-            // The board starts just under the rolled top edge.
             board: Board {
                 x: (0.075, 0.925),
                 top: 0.07,
@@ -181,8 +158,6 @@ pub fn seated_box(platform: Platform) -> (u32, u32) {
     }
 }
 
-/// The box a cart of this platform is drawn in. Both Game Pak moulds share one box, so this
-/// needs no rom.
 pub fn cart_box(platform: Platform) -> (u32, u32) {
     let s = spec(match platform {
         Platform::Gba => Shape::Gba,
@@ -191,13 +166,10 @@ pub fn cart_box(platform: Platform) -> (u32, u32) {
     (s.w, s.h)
 }
 
-/// The cart's shape in black, drawn under a side cart so dimming reads as shadow, not a ghost.
 pub fn cart_shadow() -> CartFace {
     shadow(CART_W, CART_H, cart_mask())
 }
 
-/// The same backing for one Game Boy shell. Each mould needs its own: an intersected outline
-/// leaves corner wedges unbacked, which show pale over a light wallpaper.
 pub fn gb_cart_shadow(shell: GbShell) -> CartFace {
     shadow(GB_CART_W, GB_CART_H, gb_cart_mask(shell))
 }
@@ -226,15 +198,12 @@ pub fn cart_face(cart: &Cart) -> CartFace {
     face
 }
 
-/// Only alpha is cut, because the sprite pass blends straight alpha, not premultiplied.
 fn clip_to_silhouette(s: &Spec, face: &mut CartFace) {
     for (px, cover) in face.rgba.chunks_exact_mut(4).zip(s.mask) {
         px[3] = ((px[3] as u32 * *cover as u32 + 127) / 255) as u8;
     }
 }
 
-/// FNV rather than the standard hasher, which is not stable across runs: a game must keep its
-/// colour on every boot.
 pub fn label_colour(title: &str) -> [u8; 3] {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in title.as_bytes() {
@@ -244,13 +213,10 @@ pub fn label_colour(title: &str) -> [u8; 3] {
     hsv_to_rgb((h % 360) as f32, 0.52, 0.74)
 }
 
-/// From the filename, because the header title is capped at twelve characters (`POKEMON EMER`).
 pub fn label_text(cart: &Cart) -> String {
     clean_label(&cart.stem)
 }
 
-/// A dumped filename carries region and revision tags and separates title from subtitle
-/// with a spaced hyphen. A bare hyphen is part of a word, so `Spider-Man` keeps its own.
 pub fn clean_label(stem: &str) -> String {
     let mut bare = String::with_capacity(stem.len());
     let mut depth = 0u32;
@@ -277,8 +243,6 @@ pub fn clean_label(stem: &str) -> String {
     }
 }
 
-/// The bracketed groups `clean_label` drops, in order. One tag per group, not per comma:
-/// `(USA, Europe)` is a single release.
 pub fn label_tags(stem: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut depth = 0u32;
@@ -313,7 +277,6 @@ pub fn label_tags(stem: &str) -> Vec<String> {
 
 fn shell_face(s: &Spec, shell: &Shell) -> CartFace {
     let mut rgba = Vec::with_capacity((s.w * s.h * 4) as usize);
-    // The rim of clear plastic is the highlight of the colour the body shows: two layers deep.
     let edge = rim_colour(through(shell.colour, shell.colour));
     for (i, depth) in s.depth.iter().enumerate() {
         let (x, y) = (i as u32 % s.w, i as u32 / s.w);
@@ -338,19 +301,12 @@ fn shell_face(s: &Spec, shell: &Shell) -> CartFace {
     }
 }
 
-/// How much of what clear plastic shows is its own colour, out of 255; the rest is whatever lies
-/// behind the front, seen through it.
 const SURFACE: u32 = 150;
 
-/// A green board, a paler trace and the gold of the contacts, as a photographed board has them.
 const BOARD: [u8; 3] = [0x2c, 0x96, 0x52];
 const TRACE: [u8; 3] = [0x5a, 0xb4, 0x74];
 const GOLD: [u8; 3] = [0xe6, 0xb4, 0x46];
 
-/// Clear plastic is a filter: what lies behind the front comes through multiplied by the
-/// plastic's colour, and the plastic's own colour is itself seen through the back half. So where
-/// only the back half is behind it, a clear cart is its colour seen through twice, the deep colour
-/// scanned carts have, and the board is a shadow in it: darker behind red, green behind colourless.
 fn through(plastic: [u8; 3], behind: [u8; 3]) -> [u8; 3] {
     let filter =
         |a: [u8; 3], b: [u8; 3]| [0, 1, 2].map(|c| (a[c] as u32 * b[c] as u32 / 255) as u8);
@@ -362,23 +318,18 @@ fn through(plastic: [u8; 3], behind: [u8; 3]) -> [u8; 3] {
     )
 }
 
-/// What clear plastic shows through its front: the board, its edge contacts along the bottom and
-/// the traces running up from them. `None` off the board, where the back half of the shell shows:
-/// the same plastic, so a clear cart there is its colour seen through twice.
 fn inside(s: &Spec, x: u32, y: u32) -> Option<[u8; 3]> {
     let b = &s.board;
     let (fx, fy) = (x as f32 / s.w as f32, y as f32 / s.h as f32);
     if !(b.x.0..b.x.1).contains(&fx) || fy < b.top {
         return None;
     }
-    // 32 contacts, as both cartridge edge connectors have.
     let (c0, c1) = b.pins;
     let pitch = (c1 - c0) / 32.0;
     let on_contact = (c0..c1).contains(&fx) && ((fx - c0) % pitch) < pitch * 0.6;
     if on_contact && fy >= b.contacts_from {
         return Some(GOLD);
     }
-    // One trace up from each contact.
     if on_contact && ((fx - c0) % pitch) < pitch * 0.2 && fy >= b.traces_from {
         Some(TRACE)
     } else {
@@ -386,7 +337,6 @@ fn inside(s: &Spec, x: u32, y: u32) -> Option<[u8; 3]> {
     }
 }
 
-/// A fixed scatter of flecks, about one pixel in a hundred, the same on every boot.
 fn fleck(x: u32, y: u32) -> bool {
     let mut h = x.wrapping_mul(0x9e37_79b9) ^ y.wrapping_mul(0x85eb_ca6b);
     h ^= h >> 15;
@@ -395,7 +345,6 @@ fn fleck(x: u32, y: u32) -> bool {
     h.is_multiple_of(100)
 }
 
-/// Lighter and less saturated; lightening alone looks like a white outline on the shell.
 fn rim_colour(base: [u8; 3]) -> [u8; 3] {
     let mean = (base[0] as u16 + base[1] as u16 + base[2] as u16) / 3;
     base.map(|c| {
@@ -412,11 +361,8 @@ fn lerp(a: [u8; 3], b: [u8; 3], num: u32, den: u32) -> [u8; 3] {
     out
 }
 
-/// The wall of the label's recess. Lit from the upper left, so top and left walls are shaded.
 const BEVEL: u32 = 3;
 
-/// The moulding in the shell. Shadow is multiplied and light mixed toward white, so the
-/// moulding still shows on a black pak.
 fn mould_detail(s: &Spec, face: &mut CartFace) {
     let mix = |px: &mut [u8], to: [u8; 3], a: u32| {
         for c in 0..3 {
@@ -425,7 +371,6 @@ fn mould_detail(s: &Spec, face: &mut CartFace) {
     };
     let sides = s.detail.shadow.iter().zip(&s.detail.highlight);
     for (px, (shade, light)) in face.rgba.chunks_exact_mut(4).zip(sides) {
-        // From the plastic under it, which on a clear pak is not the shell's own colour.
         let under = [px[0], px[1], px[2]];
         if *shade > 0 {
             mix(px, under.map(|c| (c as f32 * 0.62) as u8), *shade as u32);
@@ -491,7 +436,6 @@ fn recess_label(s: &Spec, face: &mut CartFace, shell: &Shell) {
     }
 }
 
-/// Source over, so a label's transparency shows the shell rather than punching a hole.
 fn paste_label(s: &Spec, face: &mut CartFace, label: &[u8]) {
     let (lx, ly, lw, lh) = s.label;
     for y in 0..lh {
@@ -534,7 +478,6 @@ fn generated_label(s: &Spec, title: &str) -> Vec<u8> {
     rgba
 }
 
-/// Label hues vary widely in luminance, so the ink flips between dark and light.
 fn ink(bg: [u8; 3]) -> [u8; 3] {
     let luma = 0.2126 * bg[0] as f32 + 0.7152 * bg[1] as f32 + 0.0722 * bg[2] as f32;
     if luma > 140.0 {

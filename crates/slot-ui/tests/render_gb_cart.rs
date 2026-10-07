@@ -1,18 +1,10 @@
-//! The Game Boy paks as they stand on the row, rasterised to a PNG: a GBA cart for scale and
-//! the grey, black and clear paks, each centred as the carousel centres it. Does nothing unless
-//! `SCRATCH_PNG` names an output file:
-//!
-//! `SCRATCH_PNG=/tmp/gb-carts.png cargo test -p slot-ui --test render_gb_cart -- --nocapture`
-
 use slot_store::scan;
 use slot_ui::{cart_face, rest_y, CartFace, CART_W, MOUTH_H, OUT_H, PLATE_H};
 use tempfile::TempDir;
 
-/// Four carts side by side, wider than the screen: a contact sheet, not a screenshot.
 const COLS: u32 = 4;
 const SHEET_W: u32 = COLS * CART_W;
 
-/// Near the wallpaper's darkness, so a shell reads as it will on the device.
 const GROUND: [u8; 3] = [0x14, 0x15, 0x1a];
 const PLATE: [u8; 3] = [0x25, 0x27, 0x2e];
 const FLOOR: [u8; 3] = [0x3a, 0x3d, 0x46];
@@ -33,7 +25,6 @@ fn write_gba_rom(d: &TempDir, name: &str, code: &str) {
     std::fs::write(games.join(name), rom).expect("write rom");
 }
 
-/// Source over, on an opaque ground, which is what the compositor does with a cart face.
 fn paste(frame: &mut [u8], face: &CartFace, left: u32) {
     for y in 0..face.h {
         for x in 0..face.w {
@@ -72,12 +63,10 @@ fn render_gb_cart() {
             frame.extend_from_slice(&c);
         }
     }
-    // The screen's centre line, which the row centres every cartridge on.
     for x in 0..SHEET_W {
         let d = (((OUT_H / 2) * SHEET_W + x) * 3) as usize;
         frame[d..d + 3].copy_from_slice(&FLOOR);
     }
-    // And the lip of the slot, which no cartridge may reach.
     for x in 0..SHEET_W {
         let d = (((OUT_H - MOUTH_H as u32) * SHEET_W + x) * 3) as usize;
         frame[d..d + 3].copy_from_slice(&FLOOR);

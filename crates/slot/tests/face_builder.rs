@@ -16,7 +16,6 @@ fn cart(stem: &str) -> Cart {
     }
 }
 
-/// Everything the worker sends back within a few seconds, in order.
 fn collect(builder: &FaceBuilder, want: usize) -> Vec<BuiltFaces> {
     let mut got = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -43,8 +42,6 @@ fn a_request_comes_back_as_the_open_carts_faces() {
     );
 }
 
-/// A burst of requests collapses to the newest. At most the in-flight first build and the
-/// newest may come back; a middle one means the queue was drained FIFO instead.
 #[test]
 fn the_newest_request_of_a_burst_is_the_last_built() {
     let builder = FaceBuilder::spawn();

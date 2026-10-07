@@ -1,7 +1,5 @@
 use std::path::Path;
 
-/// Decodes `path` to RGBA scaled to cover `w` by `h`, centre cropped. Any decode failure is
-/// `None`.
 pub fn cover(path: &Path, w: u32, h: u32) -> Option<Vec<u8>> {
     let (src, sw, sh) = decode(path)?;
     if sw == 0 || sh == 0 {
@@ -26,7 +24,6 @@ pub fn cover(path: &Path, w: u32, h: u32) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Averages the source footprint of one destination pixel; nearest neighbour when upscaling.
 fn box_average(src: &[u8], sw: u32, sh: u32, x0: f32, y0: f32, x1: f32, y1: f32) -> [u8; 4] {
     let xa = (x0.floor().max(0.0) as u32).min(sw - 1);
     let ya = (y0.floor().max(0.0) as u32).min(sh - 1);
@@ -55,7 +52,6 @@ fn decode(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
     let file = std::fs::File::open(path).ok()?;
     let mut dec = png::Decoder::new(std::io::BufReader::new(file));
     dec.set_transformations(png::Transformations::normalize_to_color8());
-    // A card holds user supplied art; a hostile or broken header must not become an OOM.
     dec.set_limits(png::Limits { bytes: 64 << 20 });
 
     let mut reader = dec.read_info().ok()?;
@@ -88,8 +84,6 @@ fn decode(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
     Some((rgba, info.width, info.height))
 }
 
-/// Rasterises `svg` to straight-alpha RGBA, since every caller expects straight alpha and
-/// `tiny_skia` returns premultiplied.
 pub(crate) fn render_svg(svg: &str, w: u32, h: u32) -> Option<Vec<u8>> {
     let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).ok()?;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h)?;
@@ -102,7 +96,6 @@ pub(crate) fn render_svg(svg: &str, w: u32, h: u32) -> Option<Vec<u8>> {
     Some(rgba)
 }
 
-/// Undoes `tiny_skia`'s premultiply in place. Only pixels with `0 < a < 255` differ.
 fn unpremultiply(rgba: &mut [u8]) {
     for px in rgba.chunks_exact_mut(4) {
         let a = px[3];

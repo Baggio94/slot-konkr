@@ -1,9 +1,3 @@
-//! Every option `apply_core_options` sets, checked against what the core itself declares.
-//!
-//! `LibretroCore::set_option` round trips a misspelt key through the frontend's map, so this
-//! reads back what was set and crosses it with `LibretroCore::declared_options` instead of
-//! naming keys. Skipped when no core dylib has been fetched.
-
 mod common;
 
 use slot::link_kind::{serial_option, LinkKind};
@@ -16,8 +10,6 @@ fn dylib_for(core: Core) -> std::path::PathBuf {
         .join(slot::core::dylib_name(core))
 }
 
-/// Every `gpsp_serial` `serial_option` can produce, taken from the function itself. The codes
-/// and titles reach each arm: a Pokémon header, Advance Wars 1 and 2, and none of them.
 fn every_serial_mode() -> Vec<&'static str> {
     let carts = [
         ("BPEE", "POKEMON EMER"),
@@ -39,8 +31,6 @@ fn every_serial_mode() -> Vec<&'static str> {
     modes
 }
 
-/// Asserts every option set on `core` is declared by it at a declared value. `what` names the
-/// combination that produced a failure.
 fn every_option_is_one_the_core_has(core: &LibretroCore, what: &str) {
     let declared = core.declared_options();
     assert!(
@@ -62,9 +52,6 @@ fn every_option_is_one_the_core_has(core: &LibretroCore, what: &str) {
     }
 }
 
-/// Every combination of the three things `apply_core_options` branches on, against both cores.
-/// One test because a libretro core keeps its machine in dylib globals, so `core_lock`
-/// serialises them anyway.
 #[test]
 fn every_option_slot_sets_is_one_the_core_declares() {
     let _g = common::core_lock();
@@ -97,8 +84,6 @@ fn every_option_slot_sets_is_one_the_core_declares() {
     }
 }
 
-/// Both cores declare a colour correction option and both are told about it. Named rather
-/// than derived: the core declaring it is the core's own word, so a typo here fails.
 #[test]
 fn both_cores_declare_a_colour_correction_option() {
     let _g = common::core_lock();
@@ -120,8 +105,6 @@ fn both_cores_declare_a_colour_correction_option() {
     }
 }
 
-/// A cable session runs the card's BIOS, so a game resumes across link mode. The joiner checks
-/// that the host's BIOS is its own before taking its state.
 #[test]
 fn a_cable_session_leaves_the_bios_to_the_card() {
     let _g = common::core_lock();
@@ -147,7 +130,6 @@ fn a_cable_session_leaves_the_bios_to_the_card() {
     every_option_is_one_the_core_has(&core, "mgba cable session");
 }
 
-/// And it is mGBA's alone: gpSP has no such mode, and a cable session never runs on it.
 #[test]
 fn a_cable_session_sets_nothing_on_gpsp() {
     let _g = common::core_lock();

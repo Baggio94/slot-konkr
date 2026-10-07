@@ -1,13 +1,9 @@
-//! mGBA's link mode saves both GBAs as one state: `SLK1`, then for each player a little-endian
-//! u32 length and that GBA's state. The card only ever holds the local player's GBA.
-
 const MAGIC: &[u8; 4] = b"SLK1";
 
 pub fn is_pair(state: &[u8]) -> bool {
     state.starts_with(MAGIC)
 }
 
-/// `player`'s GBA out of a link state. `None` when `state` is not a whole one.
 pub fn local(state: &[u8], player: u8) -> Option<Vec<u8>> {
     let mut rest = state.strip_prefix(MAGIC)?;
     let mut parts = Vec::with_capacity(2);
@@ -21,7 +17,6 @@ pub fn local(state: &[u8], player: u8) -> Option<Vec<u8>> {
         .flatten()
 }
 
-/// A one-GBA state as a link state, the same GBA for both players.
 pub fn pair(state: &[u8]) -> Vec<u8> {
     let mut out = MAGIC.to_vec();
     for _ in 0..2 {
@@ -31,7 +26,6 @@ pub fn pair(state: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The GBA BIOS checksum mGBA writes at byte 4 of a state, the local one of a link state.
 fn bios(state: &[u8]) -> Option<u32> {
     let gba = if is_pair(state) {
         local(state, 0)?
@@ -41,7 +35,6 @@ fn bios(state: &[u8]) -> Option<u32> {
     (gba.len() >= 0x400).then(|| u32::from_le_bytes(gba[4..8].try_into().unwrap()))
 }
 
-/// Whether two states were made on the same BIOS. Anything too short to be a GBA state passes.
 pub fn same_bios(a: &[u8], b: &[u8]) -> bool {
     match (bios(a), bios(b)) {
         (Some(a), Some(b)) => a == b,
