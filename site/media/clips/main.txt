@@ -1,5 +1,5 @@
 # cart:
-# Hero, a loop: from Mario Kart flip right to Recharged Yellow, insert, walk a moment, eject,
+# Hero, a loop: from Mario Kart flip right to Recharged Yellow, insert, eject,
 # keep flipping right round the shelf back to Mario Kart.
 wait 60
 tap right
@@ -7,7 +7,13 @@ wait 20
 tap right
 wait 20
 tap right
-wait 200
+wait 20
+tap right
+wait 20
+tap right
+wait 20
+tap right
+wait 64
 rec
 wait 5
 tap right
@@ -22,8 +28,8 @@ tap right
 wait 30
 tap a
 wait 110
-hold left 35
-wait 10
+tap up
+wait 30
 hold menu 66
 wait 60
 tap right
@@ -33,5 +39,11 @@ wait 20
 tap right
 wait 20
 tap right
-wait 52
+wait 20
+tap right
+wait 20
+tap right
+wait 20
+tap right
+wait 64
 cut

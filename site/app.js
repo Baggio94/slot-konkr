@@ -214,6 +214,14 @@
     }
 
     showPeer(step.getAttribute("data-pair"));
+    var only = step.getAttribute("data-still");
+    if (only) {
+      vid.removeAttribute("src");
+      vid.load();
+      vid.poster = "media/" + only;
+      vid.style.opacity = "1";
+      return;
+    }
     var clip = step.getAttribute("data-clip");
     if (!clip) { vid.style.opacity = "0"; vid.removeAttribute("src"); return; }
     var still = "media/" + clip.replace(/\.mp4$/, ".webp");

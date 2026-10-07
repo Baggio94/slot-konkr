@@ -1,21 +1,44 @@
 # cart:
 # The guide's steps as one continuous session, each `rec NAME` one step's clip, so each starts
 # where the last ended: browse, core picker, insert, eject, save states, switcher, fast forward
-# and rewind. Pokemon Recharged Yellow on mGBA, from a resume at the pond's edge facing the
-# water (see the clip notes), where the rod finds a wild battle.
-wait 180
+# and rewind. Pokemon Recharged Yellow on mGBA.
+wait 60
+tap left
+wait 200
 rec carousel
 wait 10
 tap right
 wait 24
-tap left
+tap right
 wait 24
-tap left
+tap right
+wait 24
+tap right
+wait 24
+tap right
+wait 24
+tap right
+wait 24
+tap right
+wait 24
+tap right
+wait 24
+tap right
+wait 24
+tap right
+wait 24
+tap right
+wait 24
+tap right
+wait 24
 wait 30
 tap r1
-wait 45
-tap l1
-wait 50
+wait 70
+tap r1
+wait 70
+tap r1
+wait 70
+wait 70
 cut
 rec core-picker
 wait 10
@@ -72,10 +95,10 @@ wait 60
 cut
 rec rewind
 wait 10
-tap select
-wait 40
-tap right
+tap up
 wait 20
+tap a
+wait 40
 down r2
 wait 60
 tap a 3
@@ -110,6 +133,6 @@ up r2
 wait 10
 tap b
 wait 20
-hold l2 100
+hold l2 60
 wait 30
 cut
