@@ -120,7 +120,7 @@ fn spec(shape: Shape) -> Spec {
             rim: RIM,
             board: Board {
                 x: (0.135, 0.875),
-                top: 0.1,
+                top: LABEL_Y as f32 / CART_H as f32,
                 pins: (0.17, 0.84),
                 contacts_from: 0.85,
                 traces_from: 0.76,
