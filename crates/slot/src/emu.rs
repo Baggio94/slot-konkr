@@ -103,6 +103,7 @@ struct Shared {
     driven: AtomicBool,
     locked: AtomicBool,
     present_ns: AtomicU64,
+    requested: AtomicBool,
     clock: Mutex<Clock>,
     clocked: Condvar,
 }
@@ -167,6 +168,7 @@ impl EmuHandle {
             driven: AtomicBool::new(false),
             locked: AtomicBool::new(false),
             present_ns: AtomicU64::new(PRESENT.as_nanos() as u64),
+            requested: AtomicBool::new(false),
             clock: Mutex::new(Clock::default()),
             clocked: Condvar::new(),
         });
@@ -222,21 +224,27 @@ impl EmuHandle {
     }
 
     pub fn begin_link(&self, client_id: u16, transport: Box<dyn LinkChannel>) {
-        let _ = self.cmds.send(Cmd::BeginLink(client_id, transport));
+        request(
+            &self.cmds,
+            &self.shared,
+            Cmd::BeginLink(client_id, transport),
+        );
     }
 
     pub fn begin_cable(&self, player: u8, transport: Box<dyn LinkChannel>) {
-        let _ = self.cmds.send(Cmd::BeginCable(player, transport));
+        request(&self.cmds, &self.shared, Cmd::BeginCable(player, transport));
     }
 
     pub fn end_link(&self) {
-        let _ = self.cmds.send(Cmd::EndLink);
+        request(&self.cmds, &self.shared, Cmd::EndLink);
     }
 
     pub fn set_option(&self, key: &str, value: &str) {
-        let _ = self
-            .cmds
-            .send(Cmd::SetOption(key.to_owned(), value.to_owned()));
+        request(
+            &self.cmds,
+            &self.shared,
+            Cmd::SetOption(key.to_owned(), value.to_owned()),
+        );
     }
 
     pub fn set_driven(&self, driven: bool) {
@@ -354,12 +362,12 @@ impl EmuHandle {
 
     pub fn request_state(&self) -> Receiver<Vec<u8>> {
         let (tx, rx) = channel();
-        let _ = self.cmds.send(Cmd::Save(tx));
+        request(&self.cmds, &self.shared, Cmd::Save(tx));
         rx
     }
 
     pub fn request_load(&self, state: Vec<u8>) {
-        let _ = self.cmds.send(Cmd::Load(state));
+        request(&self.cmds, &self.shared, Cmd::Load(state));
     }
 
     pub fn snapshot(&self) -> EmuSnapshot {
@@ -379,24 +387,24 @@ pub struct EmuSnapshot {
 impl Snapshot for EmuSnapshot {
     fn state(&self) -> Option<Vec<u8>> {
         let (tx, rx) = channel();
-        self.cmds.send(Cmd::Save(tx)).ok()?;
+        request(&self.cmds, &self.shared, Cmd::Save(tx)).then_some(())?;
         rx.recv().ok()
     }
 
     fn save_ram(&self) -> Option<Vec<u8>> {
         let (tx, rx) = channel();
-        self.cmds.send(Cmd::Sav(tx)).ok()?;
+        request(&self.cmds, &self.shared, Cmd::Sav(tx)).then_some(())?;
         rx.recv().ok().flatten()
     }
 
     fn thumb(&self) -> Option<Vec<u8>> {
         let (tx, rx) = channel();
-        self.cmds.send(Cmd::Thumb(tx)).ok()?;
+        request(&self.cmds, &self.shared, Cmd::Thumb(tx)).then_some(())?;
         rx.recv().ok().flatten()
     }
 
     fn load(&self, state: Vec<u8>) {
-        let _ = self.cmds.send(Cmd::Load(state));
+        request(&self.cmds, &self.shared, Cmd::Load(state));
     }
 
     fn resume_trusted(&self) -> bool {
@@ -406,6 +414,22 @@ impl Snapshot for EmuSnapshot {
     fn save_ram_trusted(&self) -> bool {
         !self.shared.sav_refused.load(Ordering::Acquire)
     }
+}
+
+fn request(cmds: &Sender<Cmd>, shared: &Shared, cmd: Cmd) -> bool {
+    if cmds.send(cmd).is_err() {
+        return false;
+    }
+    shared.requested.store(true, Ordering::Release);
+    let _clock = shared.clock.lock().unwrap_or_else(|e| e.into_inner());
+    shared.clocked.notify_all();
+    true
+}
+
+enum Wait {
+    Tick(u64),
+    Request,
+    Late,
 }
 
 impl Drop for EmuHandle {
@@ -752,18 +776,28 @@ impl Worker {
             self.frame_done(served);
             if lock {
                 let patience = if stalled { PRESENT } else { STALL };
-                match self.next_tick(served, patience) {
-                    Some(tick) => {
-                        served = tick;
-                        stalled = false;
-                        if let Some(measured) = rate.served(Instant::now(), tick) {
-                            scale = measured;
+                let until = Instant::now() + patience;
+                loop {
+                    match self.next_tick(served, until) {
+                        Wait::Tick(tick) => {
+                            served = tick;
+                            stalled = false;
+                            if let Some(measured) = rate.served(Instant::now(), tick) {
+                                scale = measured;
+                            }
+                        }
+                        Wait::Request => {
+                            for cmd in self.cmds.try_iter() {
+                                self.apply(cmd, core.as_mut(), &mut transport, &mut cable, &link);
+                            }
+                            continue;
+                        }
+                        Wait::Late => {
+                            rate.stalled();
+                            stalled = true;
                         }
                     }
-                    None => {
-                        rate.stalled();
-                        stalled = true;
-                    }
+                    break;
                 }
                 ticked = true;
                 continue;
@@ -878,18 +912,22 @@ impl Worker {
             .tick
     }
 
-    fn next_tick(&self, served: u64, patience: Duration) -> Option<u64> {
-        let until = Instant::now() + patience;
+    fn next_tick(&self, served: u64, until: Instant) -> Wait {
         let mut clock = self.shared.clock.lock().unwrap_or_else(|e| e.into_inner());
         loop {
             if clock.tick > served {
-                return Some(clock.tick);
+                return Wait::Tick(clock.tick);
             }
-            let left = until.checked_duration_since(Instant::now())?;
+            if self.shared.requested.swap(false, Ordering::AcqRel) {
+                return Wait::Request;
+            }
+            let Some(left) = until.checked_duration_since(Instant::now()) else {
+                return Wait::Late;
+            };
             if self.shared.stop.load(Ordering::Relaxed)
                 || !self.shared.driven.load(Ordering::Relaxed)
             {
-                return None;
+                return Wait::Late;
             }
             clock = match self.shared.clocked.wait_timeout(clock, left) {
                 Ok((c, _)) => c,

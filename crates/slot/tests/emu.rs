@@ -1016,6 +1016,35 @@ fn a_driven_worker_runs_one_frame_per_tick() {
 }
 
 #[test]
+fn a_locked_worker_answers_a_state_request_without_waiting_for_the_tick() {
+    let emu = spawn();
+    emu.set_driven(true);
+    assert!(
+        wait_for(|| emu.locked()),
+        "the worker never locked to the display"
+    );
+    let snapshot = emu.snapshot();
+    for _ in 0..10 {
+        emu.tick(PANEL);
+        assert!(emu.wait_frame(Duration::from_millis(100)));
+        std::thread::sleep(Duration::from_millis(2));
+        let before = emu.published_count();
+        let asked = Instant::now();
+        assert!(snapshot.state().is_some(), "no state came back");
+        let took = asked.elapsed();
+        assert!(
+            took < Duration::from_millis(5),
+            "the state took {took:?}, waiting on a tick that never came"
+        );
+        assert_eq!(
+            emu.published_count(),
+            before,
+            "answering the request ran a frame"
+        );
+    }
+}
+
+#[test]
 fn a_stalled_display_does_not_stall_the_worker() {
     let emu = spawn();
     emu.set_driven(true);
