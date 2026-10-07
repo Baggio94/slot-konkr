@@ -1,6 +1,0 @@
-# cart: Pokémon - Recharged Yellow
-# Lid Detection: the game running, untouched, while the lid closes over it.
-wait 300
-rec
-wait 360
-cut

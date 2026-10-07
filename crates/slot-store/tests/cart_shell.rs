@@ -129,3 +129,29 @@ fn a_card_with_only_the_labels_file_reads_it() {
     let carts = slot_store::scan(d.path()).unwrap();
     assert_eq!(carts[0].shell, ShellChoice::parse("auto c2332e clear"));
 }
+
+#[test]
+fn a_line_matches_its_cart_whichever_way_the_accent_is_spelled() {
+    let composed = "Pok\u{e9}mon";
+    let decomposed = "Poke\u{301}mon";
+    for (file, key) in [(composed, decomposed), (decomposed, composed)] {
+        let d = tempfile::tempdir().unwrap();
+        for dir in ["Games/GBA", "Labels"] {
+            std::fs::create_dir_all(d.path().join(dir)).unwrap();
+        }
+        std::fs::write(d.path().join(format!("Games/GBA/{file}.gba")), [0u8; 0x100]).unwrap();
+        std::fs::write(
+            d.path().join(slot_store::LABELS_SHELL_FILE),
+            format!("{key} = auto e2b413 clear\n"),
+        )
+        .unwrap();
+        let carts = slot_store::scan(d.path()).unwrap();
+        assert_eq!(
+            carts[0].shell,
+            ShellChoice::parse("auto e2b413 clear"),
+            "a {:?} line missed a {:?} rom",
+            key.as_bytes(),
+            file.as_bytes()
+        );
+    }
+}

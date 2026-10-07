@@ -20,6 +20,7 @@ gl = "0.14"
 cpal = "0.15"
 gilrs = "0.11"
 tempfile = "3"
+unicode-normalization = "0.1"
 resvg = { version = "0.48", default-features = false }
 usvg = { version = "0.48", default-features = false }
 

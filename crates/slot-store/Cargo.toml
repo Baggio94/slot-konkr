@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+unicode-normalization.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

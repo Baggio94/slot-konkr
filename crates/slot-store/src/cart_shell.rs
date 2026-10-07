@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use unicode_normalization::UnicodeNormalization;
+
 pub const CART_SHELL_FILE: &str = "System/cart_shell.ini";
 pub const LABELS_SHELL_FILE: &str = "Labels/cart_shell.ini";
 
@@ -67,10 +69,14 @@ impl ShellChoice {
     }
 }
 
+pub fn key(stem: &str) -> String {
+    stem.nfc().collect()
+}
+
 pub fn choices(text: &str) -> HashMap<String, ShellChoice> {
     crate::ini::parse(text)
         .into_iter()
-        .filter_map(|(stem, value)| Some((stem, ShellChoice::parse(&value)?)))
+        .filter_map(|(stem, value)| Some((key(&stem), ShellChoice::parse(&value)?)))
         .collect()
 }
 
@@ -78,9 +84,9 @@ pub fn layered(system: &str, labels: &str) -> HashMap<String, ShellChoice> {
     let mut out = choices(system);
     for (stem, value) in crate::ini::parse(labels) {
         if value.trim() == "auto" {
-            out.remove(&stem);
+            out.remove(&key(&stem));
         } else if let Some(choice) = ShellChoice::parse(&value) {
-            out.insert(stem, choice);
+            out.insert(key(&stem), choice);
         }
     }
     out

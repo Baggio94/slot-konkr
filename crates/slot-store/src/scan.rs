@@ -80,7 +80,7 @@ pub fn scan(root: &Path) -> Result<Vec<Cart>, StoreError> {
                 stem: stem.to_string(),
                 title,
                 code,
-                shell: shells.get(stem).copied(),
+                shell: shells.get(&crate::cart_shell::key(stem)).copied(),
                 label: label.is_file().then_some(label),
                 rom,
             });
