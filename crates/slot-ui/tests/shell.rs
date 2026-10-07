@@ -64,7 +64,7 @@ fn an_exact_entry_outranks_the_family_letter() {
 #[test]
 fn the_clear_carts_are_clear_and_the_rest_are_solid() {
     for code in table_keys() {
-        let clear = code == "RZW" || ["AX", "BP", "U3"].iter().any(|p| code.starts_with(p));
+        let clear = code == "RZW" || ["AX", "BPE", "U3"].iter().any(|p| code.starts_with(p));
         let want = if clear {
             Finish::Translucent
         } else {
@@ -396,4 +396,15 @@ fn depth(clear: &slot_ui::CartFace, solid: &slot_ui::CartFace) -> (f32, f32) {
         row.clone().sum::<f32>() / row.count() as f32
     };
     (lum(clear), lum(solid))
+}
+
+#[test]
+fn firered_and_leafgreen_are_solid() {
+    for code in ["BPRE", "BPGE"] {
+        assert_eq!(
+            gba_shell_for(code).finish,
+            Finish::Solid,
+            "{code} is not solid"
+        );
+    }
 }
