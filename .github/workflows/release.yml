@@ -15,12 +15,6 @@ jobs:
     container: rust:1-bullseye
     outputs:
       zip: ${{ steps.package.outputs.zip }}
-      mgba_sha: ${{ steps.package.outputs.mgba_sha }}
-      mgba_head: ${{ steps.package.outputs.mgba_head }}
-      mgba_patches: ${{ steps.package.outputs.mgba_patches }}
-      gpsp_sha: ${{ steps.package.outputs.gpsp_sha }}
-      gpsp_head: ${{ steps.package.outputs.gpsp_head }}
-      gpsp_patches: ${{ steps.package.outputs.gpsp_patches }}
     steps:
       - uses: actions/checkout@v7
 
@@ -62,15 +56,7 @@ jobs:
           out="slot-${GITHUB_REF_NAME}"
           zip="$out-h700.zip"
           zip -qry "$zip" "$out"
-          {
-            echo "zip=$zip"
-            echo "mgba_sha=$(sha256sum vendor/mgba_libretro.so | cut -d' ' -f1)"
-            echo "gpsp_sha=$(sha256sum vendor/gpsp_libretro.so | cut -d' ' -f1)"
-            echo "mgba_head=$(grep '^commit=' vendor/mgba_libretro.so.meta | cut -d= -f2)"
-            echo "mgba_patches=$(grep '^patch=' vendor/mgba_libretro.so.meta | cut -d= -f2 | cut -d' ' -f1 | paste -sd' ' -)"
-            echo "gpsp_head=$(cat vendor/gpsp-src.sha)"
-            echo "gpsp_patches=$(grep '^patch=' vendor/gpsp-src.meta | cut -d= -f2 | cut -d' ' -f1 | paste -sd' ' -)"
-          } >> "$GITHUB_OUTPUT"
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -94,30 +80,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ZIP: ${{ needs.build.outputs.zip }}
-          MGBA_SHA: ${{ needs.build.outputs.mgba_sha }}
-          MGBA_HEAD: ${{ needs.build.outputs.mgba_head }}
-          MGBA_PATCHES: ${{ needs.build.outputs.mgba_patches }}
-          GPSP_SHA: ${{ needs.build.outputs.gpsp_sha }}
-          GPSP_HEAD: ${{ needs.build.outputs.gpsp_head }}
-          GPSP_PATCHES: ${{ needs.build.outputs.gpsp_patches }}
         run: |
           set -eu
           cat > notes.md <<NOTES
           Unzip and copy the contents of \`slot-${GITHUB_REF_NAME}/\` onto SD2.
 
-          | | |
-          |---|---|
-          | \`System/slot\` | aarch64, built against glibc 2.31 |
-          | \`System/mgba_libretro.so\` | built from libretro/mgba @ \`${MGBA_HEAD}\` with \`${MGBA_PATCHES}\` applied, sha256 \`${MGBA_SHA}\` |
-          | \`System/gpsp_libretro.so\` | built from libretro/gpsp @ \`${GPSP_HEAD}\` with \`${GPSP_PATCHES}\` applied, sha256 \`${GPSP_SHA}\` |
-          | \`System/licenses/mgba-${MGBA_HEAD}.meta\` | mGBA's source commit and the patches applied, which ship beside it as \`mgba-*.patch\` |
-          | \`System/licenses/gpsp-${GPSP_HEAD}.tar.gz\` | gpSP's source at that commit |
-          | \`System/licenses/gpsp-${GPSP_HEAD}.meta\` | gpSP's source commit and the patches applied, which ship beside it as \`gpsp-*.patch\` |
-
-          mGBA is MPL-2.0 and gpSP is GPL-2.0, both credited with their license text under
-          \`System/licenses/\`. Both ship patched, built from the commits above with the listed
-          patches applied, and those patches ship under \`System/licenses/\`. gpSP's source
-          ships in this zip per GPL-2.0 section 3(a); mGBA's is public at its commit.
+          Emulation by mGBA (MPL-2.0) and gpSP (GPL-2.0). Their licences, patches and gpSP's source are in \`System/licenses/\`.
           NOTES
           gh release create "$GITHUB_REF_NAME" "$ZIP" --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" --notes-file notes.md
