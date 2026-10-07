@@ -382,6 +382,7 @@ fn a_gpsp_carts_resume_is_read_from_its_own_core_directory_through_the_session()
     }
 
     s.app_mut().tick_ms(60_000);
+    s.app_mut().settle_saves();
 
     let state = persist::read_resume(d.path(), Platform::Gba, Core::Gpsp, "Emerald")
         .expect("nothing resumed");
@@ -431,6 +432,7 @@ fn a_gpsp_cart_runs_the_dylib_planted_under_its_own_name_through_the_session() {
     }
 
     s.app_mut().tick_ms(60_000);
+    s.app_mut().settle_saves();
 
     let state = persist::read_resume(d.path(), Platform::Gba, Core::Gpsp, "Emerald")
         .expect("nothing resumed");
@@ -470,6 +472,7 @@ fn changing_the_ini_mid_session_does_not_move_a_seated_carts_autosave() {
     std::fs::remove_file(d.path().join(SELECTED_CORE_FILE)).unwrap();
 
     s.app_mut().tick_ms(60_000);
+    s.app_mut().settle_saves();
 
     assert!(
         StateRing::new(d.path(), Platform::Gba, Core::Gpsp, "Emerald")

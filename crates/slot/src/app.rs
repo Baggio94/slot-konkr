@@ -327,6 +327,7 @@ pub struct App {
     dozed_at: Millis,
     woke_on_press: bool,
     autosave_at: Millis,
+    pending_save: Option<std::thread::JoinHandle<()>>,
     battery_at: Millis,
     charge_at: Millis,
     battery: Option<Battery>,
@@ -429,6 +430,7 @@ impl App {
             dozed_at: 0,
             woke_on_press: false,
             autosave_at: AUTOSAVE_MS,
+            pending_save: None,
             battery_at: BATTERY_POLL_MS,
             charge_at: CHARGE_POLL_MS,
             battery: None,
@@ -936,6 +938,7 @@ impl App {
     }
 
     pub fn restart(&mut self) {
+        self.settle_saves();
         if let Some(power) = &mut self.power {
             power.restart();
         }
@@ -1030,6 +1033,7 @@ impl App {
     }
 
     pub fn poweroff(&mut self) {
+        self.settle_saves();
         if let Some(power) = &mut self.power {
             power.poweroff();
         }
@@ -1462,7 +1466,7 @@ impl App {
             self.on_doze_timeout();
         }
         if self.now() >= self.autosave_at {
-            self.flush_resume();
+            self.autosave();
         }
         if self.now() >= self.battery_at {
             self.battery_at = self.now() + BATTERY_POLL_MS;
@@ -1570,6 +1574,9 @@ impl App {
         let Some(root) = &self.root else {
             return;
         };
+        if let Some(h) = self.pending_save.take() {
+            let _ = h.join();
+        }
         let ring = StateRing::new(root, self.platform, self.core, stem);
         match ring.retire_resume(&format_stamp(self.wall_secs())) {
             Ok(Some(to)) => eprintln!(
@@ -2172,6 +2179,7 @@ impl App {
     }
 
     fn flush_eject(&mut self, stem: &str) {
+        self.settle_saves();
         let (Some(root), Some(snapshot)) = (&self.root, &self.snapshot) else {
             return;
         };
@@ -2670,7 +2678,49 @@ impl App {
         self.now().saturating_sub(self.dozed_at) >= power.timeout().as_millis() as Millis
     }
 
+    pub fn settle_saves(&mut self) {
+        if let Some(h) = self.pending_save.take() {
+            let _ = h.join();
+        }
+    }
+
+    fn autosave(&mut self) {
+        self.autosave_at = self.now() + AUTOSAVE_MS;
+        self.settle_saves();
+        let (Some(root), Some(snapshot), Some(cart)) = (&self.root, &self.snapshot, self.seated())
+        else {
+            return;
+        };
+        let Some(state) = snapshot.state() else {
+            eprintln!("slot: autosave: the core gave up no state");
+            return;
+        };
+        let (state, sav) = trusted_write(snapshot.as_ref(), state, "autosave");
+        let (root, platform, core, cart) =
+            (root.clone(), self.platform, self.core, cart.to_owned());
+        let write = move || {
+            if let Err(e) = persist::flush(
+                &root,
+                platform,
+                core,
+                &cart,
+                state.as_deref(),
+                sav.as_deref(),
+            ) {
+                eprintln!("slot: autosave: {e}");
+            }
+        };
+        match std::thread::Builder::new()
+            .name("slot-autosave".into())
+            .spawn(write)
+        {
+            Ok(h) => self.pending_save = Some(h),
+            Err(e) => eprintln!("slot: autosave: no writer thread: {e}"),
+        }
+    }
+
     pub fn flush_resume(&mut self) {
+        self.settle_saves();
         self.autosave_at = self.now() + AUTOSAVE_MS;
         let (Some(root), Some(snapshot), Some(cart)) = (&self.root, &self.snapshot, self.seated())
         else {

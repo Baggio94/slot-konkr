@@ -42,6 +42,7 @@ fn autosave_fires_at_sixty_seconds_and_not_before() {
             .is_none()
     );
     a.tick_ms(60_000);
+    a.settle_saves();
     assert!(
         StateRing::new(d.path(), Platform::Gba, Core::Mgba, "Emerald")
             .read_resume()
@@ -328,4 +329,37 @@ fn charging_outranks_low_so_a_flat_device_on_a_cable_is_not_red() {
     percent.store(3, Ordering::Relaxed);
     a.tick_ms(10_000);
     assert_eq!(a.led_state(), LedState::Charging);
+}
+
+#[test]
+fn an_autosave_lands_once_the_writes_settle() {
+    let d = tmp_root_with_carts(&["Emerald"]);
+    let mut a = app_playing_in(d.path(), "Emerald");
+    a.tick_ms(60_000);
+    a.settle_saves();
+    assert!(
+        StateRing::new(d.path(), Platform::Gba, Core::Mgba, "Emerald")
+            .read_resume()
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn a_lid_close_right_after_an_autosave_leaves_the_lids_state() {
+    let d = tmp_root_with_carts(&["Emerald"]);
+    let (snapshot, _) = counting();
+    let mut a = app_playing_with(d.path(), "Emerald", snapshot);
+    a.tick_ms(60_000);
+    a.apply(Action::LidClose);
+    a.settle_saves();
+    let state = StateRing::new(d.path(), Platform::Gba, Core::Mgba, "Emerald")
+        .read_resume()
+        .unwrap()
+        .expect("no resume written");
+    assert_eq!(
+        state,
+        vec![1u8; 64],
+        "the autosave landed over the lid's save"
+    );
 }

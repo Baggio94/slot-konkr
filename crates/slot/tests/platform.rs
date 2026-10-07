@@ -29,6 +29,7 @@ fn seat_and_autosave(root: &Path) {
     }
 
     s.app_mut().tick_ms(60_000);
+    s.app_mut().settle_saves();
 }
 
 #[test]

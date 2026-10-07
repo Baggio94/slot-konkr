@@ -87,6 +87,7 @@ fn counter_after(root: &Path, hold: bool) -> u64 {
         std::thread::sleep(Duration::from_millis(1));
     }
     s.app_mut().tick_ms(60_000);
+    s.app_mut().settle_saves();
     let state = persist::read_resume(root, Platform::Gba, Core::Mgba, "Emerald")
         .expect("nothing was flushed");
     u64::from_le_bytes(state.try_into().expect("the mock's state is 8 bytes"))
