@@ -545,7 +545,7 @@ fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
     }
     // The shelf's own name, shown faintly in the slot when the shelf changes. None on a card
     // with one shelf.
-    let platform_shown = app.shelf_platform_name().unwrap_or_default().to_string();
+    let platform_shown = app.slot_text().unwrap_or_default();
     if platform_shown != clocks.platform {
         clocks.platform = platform_shown.clone();
         if platform_shown.is_empty() {

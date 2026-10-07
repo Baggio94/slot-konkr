@@ -462,6 +462,7 @@ pub struct App {
     shelf_platform: slot_ui::Printed,
     /// The shelf changed and its name has not been shown yet.
     name_pending: bool,
+    slot_letter: Option<char>,
     /// When the name started showing in the slot. Starts on the first frame after its face
     /// exists, not at the switch: the face is rasterised a frame later, and at boot the clock
     /// jumps by however long every cart face took to rasterise.
@@ -583,6 +584,7 @@ impl App {
             bolt: None,
             shelf_platform: slot_ui::Printed::default(),
             name_pending: false,
+            slot_letter: None,
             shelf_named: None,
             shelf_clock: slot_ui::Printed::default(),
             hud: Hud::new(),
@@ -678,6 +680,27 @@ impl App {
         self.shelf_at = to;
         // The old name's face goes at once, so the new one is what the slot shows first.
         self.shelf_platform = slot_ui::Printed::default();
+        self.slot_letter = None;
+        self.shelf_named = None;
+        self.name_pending = true;
+    }
+
+    fn jump_letter(&mut self, dir: i32) {
+        let before = self.shelf().index;
+        match dir > 0 {
+            true => self.shelf_mut().jump_next_letter(),
+            false => self.shelf_mut().jump_prev_letter(),
+        }
+        if self.shelf().index == before {
+            return;
+        }
+        let Some(letter) = self.selected_stem().map(slot_store::initial) else {
+            return;
+        };
+        if self.slot_letter != Some(letter) {
+            self.shelf_platform = slot_ui::Printed::default();
+        }
+        self.slot_letter = Some(letter);
         self.shelf_named = None;
         self.name_pending = true;
     }
@@ -851,6 +874,13 @@ impl App {
     /// only ever had the one.
     pub fn clear_shelf_platform(&mut self) {
         self.shelf_platform = slot_ui::Printed::default();
+    }
+
+    pub fn slot_text(&self) -> Option<String> {
+        match self.slot_letter {
+            Some(letter) => Some(letter.to_string()),
+            None => self.shelf_platform_name().map(str::to_string),
+        }
     }
 
     /// Which machine the band should name, or `None` on a card with one shelf.
@@ -1394,8 +1424,8 @@ impl App {
                 // Before the shelf's own movement, so an open picker takes the arrows.
                 _ if self.core_picker.is_some() => self.core_picker_input(action),
                 // Up and Down jump a letter at a time. SELECT+Up is brightness, handled first.
-                Action::GbaDown(Btn::Up) => self.shelf_mut().jump_prev_letter(),
-                Action::GbaDown(Btn::Down) => self.shelf_mut().jump_next_letter(),
+                Action::GbaDown(Btn::Up) => self.jump_letter(-1),
+                Action::GbaDown(Btn::Down) => self.jump_letter(1),
                 Action::ShelfLeft | Action::GbaDown(Btn::Left) => self.shelf_mut().hold_left(now),
                 Action::ShelfRight | Action::GbaDown(Btn::Right) => {
                     self.shelf_mut().hold_right(now)

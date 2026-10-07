@@ -2288,3 +2288,44 @@ fn the_colour_shortcut_names_the_state_it_arrived_at() {
         );
     }
 }
+
+fn slot_text_alpha(a: &App, tex: slot_ui::TexId) -> f32 {
+    let mut out = Vec::new();
+    a.draw(&mut out);
+    out.iter()
+        .find_map(|d| match *d {
+            Draw::Tex { tex: t, alpha, .. } if t == tex => Some(alpha),
+            _ => None,
+        })
+        .unwrap_or(0.0)
+}
+
+#[test]
+fn a_letter_jump_shows_the_letter_in_the_slot_and_fades_like_the_shelf_name() {
+    let mut a = app_with_carts(&["Alpha", "Bravo"]);
+    let face = slot_ui::TexId::from_raw(77);
+    assert_eq!(
+        a.slot_text(),
+        None,
+        "a one shelf card printed something in the slot"
+    );
+
+    a.apply(Action::GbaDown(Btn::Down));
+    assert_eq!(a.slot_text().as_deref(), Some("B"));
+    a.set_shelf_platform_face(face, 20);
+    a.update(1.0 / 60.0);
+    a.update(0.5);
+    assert!(slot_text_alpha(&a, face) > 0.0, "the letter never showed");
+    a.update(5.0);
+    assert_eq!(slot_text_alpha(&a, face), 0.0, "the letter never faded");
+
+    a.apply(Action::GbaDown(Btn::Left));
+    a.apply(Action::GbaDown(Btn::Down));
+    assert_eq!(a.slot_text().as_deref(), Some("B"));
+    a.update(1.0 / 60.0);
+    a.update(0.5);
+    assert!(
+        slot_text_alpha(&a, face) > 0.0,
+        "jumping to the letter already printed did not show it again"
+    );
+}
