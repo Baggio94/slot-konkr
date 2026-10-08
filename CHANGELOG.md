@@ -2,6 +2,7 @@
 
 ## [Unreleased](https://github.com/BrandonKowalski/slot/compare/v1.4.0...main)
 
+- The boot logo is built to the size of the one BaseOS installed, so it fits every panel instead of only 720x480. A logo installed at the wrong size is rebuilt at the right one.
 - The speaker no longer buzzes while nothing is playing. slot lets go of the audio device after 3 seconds of silence and takes it back when sound starts. Thanks to flo333 for finding it.
 
 ## [1.4.0](https://github.com/BrandonKowalski/slot/releases/tag/v1.4.0)
