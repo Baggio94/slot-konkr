@@ -44,11 +44,12 @@ impl QuickRow {
     }
 
     pub fn up(self) -> QuickRow {
-        QuickRow::ALL[self.index().saturating_sub(1)]
+        let n = QuickRow::ALL.len();
+        QuickRow::ALL[(self.index() + n - 1) % n]
     }
 
     pub fn down(self) -> QuickRow {
-        QuickRow::ALL[(self.index() + 1).min(QuickRow::ALL.len() - 1)]
+        QuickRow::ALL[(self.index() + 1) % QuickRow::ALL.len()]
     }
 }
 

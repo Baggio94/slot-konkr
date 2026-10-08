@@ -24,9 +24,9 @@ for f in os.listdir(sys.argv[2]):
         break' "$cart" "$card/Games/$(echo "$platform" | tr a-z A-Z)")
 	fi
 	sed -i.bak "s|^cart=.*|cart=$cart|; s|^cart_platform=.*|cart_platform=$platform|" \
-		"$work/card/System/slot.state"
+		"$work/card/Config/slot.state"
 	core=$(sed -n 's/^# core: *//p' "$here/clips/$name.txt")
-	[ -n "$core" ] && echo "$cart = $core" >> "$work/card/System/selected_core.ini"
+	[ -n "$core" ] && echo "$cart = $core" >> "$work/card/Config/selected_core.ini"
 	clips=$(sed -n 's/^rec \([a-z0-9-]*\)$/\1/p' "$here/clips/$name.txt")
 	out="$here/$name.mp4"
 	[ -n "$clips" ] && out="$here"

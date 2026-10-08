@@ -210,20 +210,19 @@ fn a_hold_opens_the_menu_and_commits_nothing() {
 }
 
 #[test]
-fn the_menu_moves_and_stops_at_both_ends() {
+fn the_menu_moves_and_wraps_at_both_ends() {
     let d = tmp_root_with_carts(&["Emerald"]);
     let mut a = app_playing_in(d.path(), "Emerald");
+    let last = PowerChoice::ALL.len() - 1;
     a.apply(Action::PowerHold);
     a.apply(Action::GbaDown(Btn::Up));
-    assert_eq!(a.power_menu(), Some(0), "it does not wrap off the top");
-    for _ in 0..PowerChoice::ALL.len() + 1 {
+    assert_eq!(a.power_menu(), Some(last), "up from the top did not wrap");
+    a.apply(Action::GbaDown(Btn::Down));
+    assert_eq!(a.power_menu(), Some(0), "down from the bottom did not wrap");
+    for i in 1..=last {
         a.apply(Action::GbaDown(Btn::Down));
+        assert_eq!(a.power_menu(), Some(i));
     }
-    assert_eq!(
-        a.power_menu(),
-        Some(PowerChoice::ALL.len() - 1),
-        "nor off the bottom"
-    );
 }
 
 #[test]

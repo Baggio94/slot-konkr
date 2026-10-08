@@ -99,22 +99,23 @@ fn the_quick_menu_is_only_on_the_carousel() {
 }
 
 #[test]
-fn up_and_down_move_the_bar_and_stop_at_the_ends() {
+fn up_and_down_move_the_bar_and_wrap_at_the_ends() {
     let (_d, mut a, _) = on_carousel();
     a.apply(Action::QuickMenu);
     press(&mut a, Btn::Up);
     assert_eq!(
         a.quick_menu(),
-        Some(QuickRow::FastForward),
-        "wrapped off the top"
+        Some(QuickRow::About),
+        "up from the top did not wrap to the bottom"
     );
     for want in [
+        QuickRow::FastForward,
         QuickRow::FastForwardSound,
         QuickRow::ColourCorrection,
         QuickRow::Rumble,
         QuickRow::DateTime,
         QuickRow::About,
-        QuickRow::About,
+        QuickRow::FastForward,
     ] {
         press(&mut a, Btn::Down);
         assert_eq!(a.quick_menu(), Some(want));
@@ -225,7 +226,7 @@ fn colour_correction_leaves_the_settings_around_it_alone() {
 #[test]
 fn the_arrows_change_nothing_on_a_row_that_opens() {
     let (d, mut a, _) = on_carousel();
-    let before = std::fs::read(d.path().join("System/slot.state")).expect("read slot.state");
+    let before = std::fs::read(d.path().join("Config/slot.state")).expect("read slot.state");
     for row in [QuickRow::DateTime, QuickRow::About] {
         open_at(&mut a, row);
         press(&mut a, Btn::Left);
@@ -234,7 +235,7 @@ fn the_arrows_change_nothing_on_a_row_that_opens() {
         a.apply(Action::QuickMenu);
     }
     assert_eq!(
-        std::fs::read(d.path().join("System/slot.state")).expect("read slot.state"),
+        std::fs::read(d.path().join("Config/slot.state")).expect("read slot.state"),
         before,
         "an arrow on a row that opens wrote the card"
     );

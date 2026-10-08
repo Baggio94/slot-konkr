@@ -51,7 +51,7 @@ fn choices_keeps_the_lines_that_parse() {
 #[test]
 fn scan_gives_each_cart_its_line_and_the_rest_none() {
     let d = tempfile::tempdir().unwrap();
-    for dir in ["Games/GB", "System"] {
+    for dir in ["Games/GB", "System", "Config"] {
         std::fs::create_dir_all(d.path().join(dir)).unwrap();
     }
     for stem in ["Chosen", "Plain", "Garbled"] {
@@ -78,7 +78,7 @@ fn scan_gives_each_cart_its_line_and_the_rest_none() {
 #[test]
 fn the_labels_file_lies_over_the_system_one_line_by_line() {
     let d = tempfile::tempdir().unwrap();
-    for dir in ["Games/GB", "System", "Labels"] {
+    for dir in ["Games/GB", "System", "Config", "Labels"] {
         std::fs::create_dir_all(d.path().join(dir)).unwrap();
     }
     for stem in ["Both", "SystemOnly", "LabelsOnly", "BackToAuto", "Neither"] {

@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
-pub const DIRS: [&str; 19] = [
+pub const DIRS: [&str; 20] = [
     "BIOS",
+    "Config",
     "Games",
     "Games/GBA",
     "Games/GB",
@@ -25,6 +26,9 @@ pub const DIRS: [&str; 19] = [
 pub fn ensure(root: &Path) {
     for sub in DIRS {
         let _ = std::fs::create_dir_all(root.join(sub));
+    }
+    if let Err(e) = slot_store::move_config(root) {
+        eprintln!("slot: config: {e}");
     }
 }
 

@@ -2322,8 +2322,12 @@ impl App {
         };
         let last = PowerChoice::ALL.len() - 1;
         match action {
-            Action::GbaDown(Btn::Up) => self.power_menu = Some(index.saturating_sub(1)),
-            Action::GbaDown(Btn::Down) => self.power_menu = Some((index + 1).min(last)),
+            Action::GbaDown(Btn::Up) => {
+                self.power_menu = Some(if index == 0 { last } else { index - 1 })
+            }
+            Action::GbaDown(Btn::Down) => {
+                self.power_menu = Some(if index >= last { 0 } else { index + 1 })
+            }
             Action::GbaDown(Btn::B) => self.power_menu = None,
             Action::GbaDown(Btn::A) => {
                 self.power_menu = None;

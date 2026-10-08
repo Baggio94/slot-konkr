@@ -55,7 +55,7 @@ fn a_long_multibyte_name_is_written_rather_than_panicking() {
 #[test]
 fn corrupt_slot_state_reads_as_default_rather_than_panicking() {
     let d = tmp_root();
-    std::fs::write(d.path().join("System/slot.state"), b"\x00\xff not json").unwrap();
+    std::fs::write(d.path().join("Config/slot.state"), b"\x00\xff not json").unwrap();
     assert_eq!(read_slot_state(d.path()), SlotState::default());
 }
 
@@ -80,7 +80,7 @@ fn slot_state_round_trips_including_a_stem_with_an_equals_sign() {
 fn a_slot_state_missing_a_key_reads_as_default_not_half_populated() {
     let d = tmp_root();
     std::fs::write(
-        d.path().join("System/slot.state"),
+        d.path().join("Config/slot.state"),
         "cart=Emerald\nbrightness=3\nblue_light=1\n",
     )
     .unwrap();
@@ -95,7 +95,7 @@ fn an_out_of_range_level_reads_as_default() {
         "cart=\nbrightness=3\nblue_light=10\nvolume=50\n",
         "cart=\nbrightness=3\nblue_light=1\nvolume=101\n",
     ] {
-        std::fs::write(d.path().join("System/slot.state"), body).unwrap();
+        std::fs::write(d.path().join("Config/slot.state"), body).unwrap();
         assert_eq!(
             read_slot_state(d.path()),
             SlotState::default(),
@@ -134,7 +134,7 @@ fn slot_state_round_trips_a_negative_utc_offset() {
 fn a_line_the_reader_does_not_know_is_skipped() {
     let d = tmp_root();
     std::fs::write(
-        d.path().join("System/slot.state"),
+        d.path().join("Config/slot.state"),
         "cart=Emerald\nbrightness=3\nfrom_a_later_build=7\nblue_light=1\nvolume=40\nmuted=1\n\
          no equals sign at all\nclock_set=1\nutc_offset_min=-300\n",
     )
@@ -171,7 +171,7 @@ fn a_first_boot_rumbles_and_fast_forwards_silently_at_the_default() {
 fn a_card_from_before_the_settings_keeps_all_its_values() {
     let d = tmp_root();
     std::fs::write(
-        d.path().join("System/slot.state"),
+        d.path().join("Config/slot.state"),
         "cart=Emerald\nbrightness=3\nblue_light=1\nvolume=40\nmuted=1\nclock_set=1\nutc_offset_min=-300\n",
     )
     .unwrap();
@@ -209,7 +209,7 @@ fn the_quick_menu_settings_round_trip_as_their_own_lines() {
     };
     write_slot_state(d.path(), &s).unwrap();
     assert_eq!(read_slot_state(d.path()), s);
-    let text = std::fs::read_to_string(d.path().join("System/slot.state")).unwrap();
+    let text = std::fs::read_to_string(d.path().join("Config/slot.state")).unwrap();
     for line in [
         "rumble=0",
         "ff_speed=2",
@@ -231,7 +231,7 @@ fn every_speed_the_row_offers_round_trips_as_its_own_number() {
         };
         write_slot_state(d.path(), &s).unwrap();
         assert_eq!(read_slot_state(d.path()), s, "{speed}x did not come back");
-        let text = std::fs::read_to_string(d.path().join("System/slot.state")).unwrap();
+        let text = std::fs::read_to_string(d.path().join("Config/slot.state")).unwrap();
         let want = format!("ff_speed={speed}");
         assert!(text.lines().any(|l| l == want), "no {want} in {text:?}");
     }
@@ -269,7 +269,7 @@ fn an_out_of_range_setting_falls_back_to_its_default() {
         "ff_speed=8\n",
         "ff_speed=255\n",
     ] {
-        std::fs::write(d.path().join("System/slot.state"), format!("{known}{bad}")).unwrap();
+        std::fs::write(d.path().join("Config/slot.state"), format!("{known}{bad}")).unwrap();
         let s = read_slot_state(d.path());
         assert_eq!(
             (s.rumble, s.ff_speed, s.ff_sound, s.colour_correction),
@@ -300,7 +300,7 @@ fn every_platform_round_trips_as_its_own_line() {
             s,
             "{platform:?} did not come back"
         );
-        let text = std::fs::read_to_string(d.path().join("System/slot.state")).unwrap();
+        let text = std::fs::read_to_string(d.path().join("Config/slot.state")).unwrap();
         let want = format!("cart_platform={}", platform.dir_name().to_lowercase());
         assert!(text.lines().any(|l| l == want), "no {want} in {text:?}");
     }
@@ -314,7 +314,7 @@ fn an_empty_slot_writes_an_empty_platform() {
         ..SlotState::default()
     };
     write_slot_state(d.path(), &s).unwrap();
-    let text = std::fs::read_to_string(d.path().join("System/slot.state")).unwrap();
+    let text = std::fs::read_to_string(d.path().join("Config/slot.state")).unwrap();
     assert!(
         text.lines().any(|l| l == "cart_platform="),
         "no empty cart_platform line in {text:?}"
@@ -335,7 +335,7 @@ fn an_unreadable_platform_reads_as_a_card_that_never_said() {
         ("cart_platform=GBA\n", Some(Platform::Gba)),
         ("cart_platform=Gbc\n", Some(Platform::Gbc)),
     ] {
-        std::fs::write(d.path().join("System/slot.state"), format!("{known}{line}")).unwrap();
+        std::fs::write(d.path().join("Config/slot.state"), format!("{known}{line}")).unwrap();
         let s = read_slot_state(d.path());
         assert_eq!(s.cart_platform, want, "read {line:?} wrong");
         assert_eq!(
@@ -353,7 +353,7 @@ fn an_offset_outside_the_range_of_real_zones_reads_as_default() {
         "cart=\nbrightness=5\nblue_light=0\nvolume=60\nmuted=0\nclock_set=1\nutc_offset_min=900\n",
         "cart=\nbrightness=5\nblue_light=0\nvolume=60\nmuted=0\nclock_set=1\nutc_offset_min=-780\n",
     ] {
-        std::fs::write(d.path().join("System/slot.state"), body).unwrap();
+        std::fs::write(d.path().join("Config/slot.state"), body).unwrap();
         assert_eq!(read_slot_state(d.path()), SlotState::default(), "{body}");
     }
 }

@@ -8,7 +8,15 @@ use tempfile::TempDir;
 
 fn tmp_root() -> TempDir {
     let d = tempfile::tempdir().expect("tempdir");
-    for sub in ["Games", "Games/GBA", "Labels", "Saves", "States", "System"] {
+    for sub in [
+        "Games",
+        "Games/GBA",
+        "Labels",
+        "Saves",
+        "States",
+        "System",
+        "Config",
+    ] {
         std::fs::create_dir(d.path().join(sub)).expect("create content dir");
     }
     d
@@ -238,7 +246,11 @@ fn the_label_does_not_cover_the_whole_shell() {
 
 fn chosen(dir: &str, cgb: u8, code: &str, line: Option<&str>) -> (TempDir, slot_store::Cart) {
     let d = tempfile::tempdir().expect("tempdir");
-    for sub in [format!("Games/{dir}"), "System".to_string()] {
+    for sub in [
+        format!("Games/{dir}"),
+        "System".to_string(),
+        "Config".to_string(),
+    ] {
         std::fs::create_dir_all(d.path().join(sub)).expect("dir");
     }
     let mut rom = vec![0u8; 0x150];
@@ -248,7 +260,7 @@ fn chosen(dir: &str, cgb: u8, code: &str, line: Option<&str>) -> (TempDir, slot_
     std::fs::write(d.path().join(format!("Games/{dir}/Pak.{ext}")), rom).expect("rom");
     if let Some(line) = line {
         std::fs::write(
-            d.path().join("System/cart_shell.ini"),
+            d.path().join("Config/cart_shell.ini"),
             format!("Pak = {line}\n"),
         )
         .expect("ini");

@@ -11,6 +11,7 @@ pub fn tmp_root() -> TempDir {
         "Saves",
         "States",
         "System",
+        "Config",
     ] {
         std::fs::create_dir_all(d.path().join(sub)).expect("create content dir");
     }

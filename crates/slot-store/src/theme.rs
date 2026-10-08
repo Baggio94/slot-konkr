@@ -23,7 +23,7 @@ impl Default for Theme {
 
 impl Theme {
     pub fn read(root: &Path) -> Self {
-        match std::fs::read_to_string(root.join("System").join(THEME_FILE)) {
+        match std::fs::read_to_string(root.join("Config").join(THEME_FILE)) {
             Ok(text) => Self::parse(&text),
             Err(_) => Theme::default(),
         }

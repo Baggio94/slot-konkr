@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use unicode_normalization::UnicodeNormalization;
 
-pub const CART_SHELL_FILE: &str = "System/cart_shell.ini";
+pub const CART_SHELL_FILE: &str = "Config/cart_shell.ini";
 pub const LABELS_SHELL_FILE: &str = "Labels/cart_shell.ini";
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
