@@ -282,6 +282,7 @@ pub struct StubPlatform {
     percent: Arc<AtomicU8>,
     led: Arc<AtomicU8>,
     led_writes: Arc<AtomicUsize>,
+    headphones: Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub fn led_code(state: LedState) -> u8 {
@@ -358,6 +359,7 @@ fn rig_with_led(
         percent: percent.clone(),
         led: led.clone(),
         led_writes: led_writes.clone(),
+        headphones: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
     (
         Power::new(Box::new(platform), timeout),
@@ -439,6 +441,10 @@ impl Platform for StubPlatform {
     }
 
     fn set_rumble(&mut self, _strength: u16) {}
+
+    fn headphones(&self) -> bool {
+        self.headphones.load(Ordering::Relaxed)
+    }
 }
 
 pub fn clocked(root: &Path) {
@@ -454,6 +460,23 @@ pub fn boot(root: &Path) -> App {
 
 pub fn app_playing_in(root: &Path, stem: &str) -> App {
     app_playing_with(root, stem, StubSnapshot::boxed())
+}
+
+pub fn app_playing_with_jack(root: &Path, stem: &str) -> (App, Arc<std::sync::atomic::AtomicBool>) {
+    let mut a = app_playing_with(root, stem, StubSnapshot::boxed());
+    let jack = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let platform = StubPlatform {
+        backlight: Arc::new(AtomicU8::new(0)),
+        root: root.to_path_buf(),
+        clock: Clock::at(CLOCK_IS_SET),
+        charge: Arc::new(AtomicU8::new(0)),
+        percent: Arc::new(AtomicU8::new(50)),
+        led: Arc::new(AtomicU8::new(u8::MAX)),
+        led_writes: Arc::new(AtomicUsize::new(0)),
+        headphones: jack.clone(),
+    };
+    a.set_power(Power::new(Box::new(platform), Duration::from_secs(300)));
+    (a, jack)
 }
 
 pub fn app_playing_with_charge(root: &Path, stem: &str) -> (App, Arc<AtomicU8>, Arc<AtomicU8>) {

@@ -206,6 +206,9 @@ impl Session {
 
     pub fn update(&mut self, dt: f32) {
         self.bridge_link(|app| app.update(dt));
+        if let Some(emu) = &self.emu {
+            emu.set_volume(self.app.output_volume());
+        }
         if let Some((client_id, transport)) = self.app.take_link_transport() {
             match &self.emu {
                 Some(emu) => match self.app.link_player() {

@@ -359,7 +359,18 @@ fn charge_at(dir: &Path) -> Charge {
     }
 }
 
+fn headphones_in(gpio: &str) -> bool {
+    gpio.lines()
+        .find(|l| l.contains("|Headphone detection"))
+        .and_then(|l| l.rsplit_once(')'))
+        .is_some_and(|(_, state)| state.split_whitespace().nth(1) == Some("hi"))
+}
+
 impl Platform for DevicePlatform {
+    fn headphones(&self) -> bool {
+        fs::read_to_string(self.sysfs.join("kernel/debug/gpio")).is_ok_and(|g| headphones_in(&g))
+    }
+
     fn set_backlight(&mut self, step: u8) {
         let Some(backlight) = &self.backlight else {
             return;

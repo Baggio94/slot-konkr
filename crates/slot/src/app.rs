@@ -49,6 +49,7 @@ const BATTERY_CRITICAL: u8 = 5;
 const BATTERY_POLL_MS: Millis = 10_000;
 
 const CHARGE_POLL_MS: Millis = 1_000;
+const HEADPHONES_POLL_MS: Millis = 500;
 
 const BATTERY_LOW: u8 = 20;
 
@@ -330,6 +331,8 @@ pub struct App {
     pending_save: Option<std::thread::JoinHandle<()>>,
     battery_at: Millis,
     charge_at: Millis,
+    headphones: bool,
+    headphones_at: Millis,
     battery: Option<Battery>,
     last_led: Option<LedState>,
     powering_off: bool,
@@ -433,6 +436,8 @@ impl App {
             pending_save: None,
             battery_at: BATTERY_POLL_MS,
             charge_at: CHARGE_POLL_MS,
+            headphones: false,
+            headphones_at: 0,
             battery: None,
             last_led: None,
             powering_off: false,
@@ -885,6 +890,8 @@ impl App {
 
     pub fn set_power(&mut self, mut power: Power) {
         power.set_backlight(self.state.brightness);
+        self.headphones = power.headphones();
+        self.hud.set_headphones(self.headphones);
         let secs = power.now();
         if matches!(self.phase, Phase::SetClock { .. }) || secs < CLOCK_FLOOR {
             self.phase = clock_screen(secs, 0, false);
@@ -1238,8 +1245,8 @@ impl App {
             Action::BrightnessDown => (HudKind::Brightness, s.brightness.saturating_sub(1)),
             Action::BlueLightUp => (HudKind::BlueLight, up(s.blue_light, 1, BLUE_LIGHT_MAX)),
             Action::BlueLightDown => (HudKind::BlueLight, s.blue_light.saturating_sub(1)),
-            Action::VolumeUp => (HudKind::Volume, up(s.volume, VOLUME_STEP, VOLUME_MAX)),
-            Action::VolumeDown => (HudKind::Volume, s.volume.saturating_sub(VOLUME_STEP)),
+            Action::VolumeUp => (HudKind::Volume, up(self.level(), VOLUME_STEP, VOLUME_MAX)),
+            Action::VolumeDown => (HudKind::Volume, self.level().saturating_sub(VOLUME_STEP)),
             _ => return false,
         };
         if kind == HudKind::Volume {
@@ -1248,14 +1255,15 @@ impl App {
         let level = match kind {
             HudKind::Brightness => &mut self.state.brightness,
             HudKind::BlueLight => &mut self.state.blue_light,
+            HudKind::Volume if self.headphones => &mut self.state.volume_hp,
             HudKind::Volume => &mut self.state.volume,
             HudKind::Rewind => return false,
         };
         let moved = *level != value;
         *level = value;
-        let unmuted = kind == HudKind::Volume && std::mem::take(&mut self.state.muted);
+        let unmuted = kind == HudKind::Volume && std::mem::take(self.muted_mut());
         let (shown, now) = (self.hud_value(kind, value), self.now());
-        self.hud.show(kind, shown, self.state.muted, now);
+        self.hud.show(kind, shown, self.muted(), now);
         if let (HudKind::Brightness, Some(power)) = (kind, &mut self.power) {
             power.set_backlight(value);
         }
@@ -1270,7 +1278,7 @@ impl App {
             self.vol_before.remove(0);
         }
         self.vol_before
-            .push((self.state.volume, self.state.muted, self.now()));
+            .push((self.level(), self.muted(), self.now()));
     }
 
     fn mute_toggle(&mut self) {
@@ -1281,13 +1289,14 @@ impl App {
             .find(|(_, _, at)| now.saturating_sub(*at) <= MUTE_CHORD_MS)
             .copied()
         {
-            self.state.volume = volume;
-            self.state.muted = muted;
+            *self.level_mut() = volume;
+            *self.muted_mut() = muted;
         }
         self.vol_before.clear();
-        self.state.muted = !self.state.muted;
+        let muted = !self.muted();
+        *self.muted_mut() = muted;
         self.hud
-            .show(HudKind::Volume, self.output_volume(), self.state.muted, now);
+            .show(HudKind::Volume, self.output_volume(), muted, now);
         self.persist();
     }
 
@@ -1324,18 +1333,46 @@ impl App {
     }
 
     pub fn volume(&self) -> u8 {
-        self.state.volume
+        self.level()
+    }
+
+    fn level(&self) -> u8 {
+        if self.headphones {
+            self.state.volume_hp
+        } else {
+            self.state.volume
+        }
+    }
+
+    fn level_mut(&mut self) -> &mut u8 {
+        if self.headphones {
+            &mut self.state.volume_hp
+        } else {
+            &mut self.state.volume
+        }
     }
 
     pub fn muted(&self) -> bool {
-        self.state.muted
+        if self.headphones {
+            self.state.muted_hp
+        } else {
+            self.state.muted
+        }
+    }
+
+    fn muted_mut(&mut self) -> &mut bool {
+        if self.headphones {
+            &mut self.state.muted_hp
+        } else {
+            &mut self.state.muted
+        }
     }
 
     pub fn output_volume(&self) -> u8 {
-        if self.state.muted {
+        if self.muted() {
             0
         } else {
-            self.state.volume
+            self.level()
         }
     }
 
@@ -1473,6 +1510,17 @@ impl App {
             self.battery = self.power.as_ref().and_then(|p| p.battery());
             if let Some(b) = self.battery {
                 self.on_battery(b);
+            }
+        }
+        if self.now() >= self.headphones_at {
+            self.headphones_at = self.now() + HEADPHONES_POLL_MS;
+            let on = self.power.as_ref().is_some_and(|p| p.headphones());
+            if on != self.headphones {
+                self.headphones = on;
+                self.hud.set_headphones(on);
+                let now = self.now();
+                self.hud
+                    .show(HudKind::Volume, self.output_volume(), self.muted(), now);
             }
         }
         if self.now() >= self.charge_at {

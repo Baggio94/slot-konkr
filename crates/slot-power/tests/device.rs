@@ -313,3 +313,25 @@ fn relinking_adb_without_a_gadget_does_nothing() {
     let mut p = DevicePlatform::probe(d.path(), PathBuf::from("/mnt/sdcard"));
     assert!(!p.relink_adb());
 }
+
+fn with_jack(d: &TempDir, level: &str) {
+    let dir = d.path().join("kernel/debug");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("gpio"),
+        format!(
+            "gpiochip0: GPIOs 0-31, parent: platform/pio, pio:\n gpio-259 (                    |Headphone detection ) in  {level}    \n gpio-260 (                    |usb_id_det          ) in  lo    \n"
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn headphones_follow_the_detection_pin() {
+    let d = sysfs("255", "87");
+    assert!(!platform(&d).headphones(), "no gpio file reads as speaker");
+    with_jack(&d, "hi");
+    assert!(platform(&d).headphones());
+    with_jack(&d, "lo");
+    assert!(!platform(&d).headphones());
+}

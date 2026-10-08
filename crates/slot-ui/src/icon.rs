@@ -19,10 +19,12 @@ pub enum Icon {
     Rewind,
     Alert,
     Charging,
+    Headphones,
+    HeadphonesMuted,
 }
 
 impl Icon {
-    pub const ALL: [Icon; 10] = [
+    pub const ALL: [Icon; 12] = [
         Icon::Volume,
         Icon::VolumeZero,
         Icon::VolumeMuted,
@@ -33,6 +35,8 @@ impl Icon {
         Icon::Rewind,
         Icon::Alert,
         Icon::Charging,
+        Icon::Headphones,
+        Icon::HeadphonesMuted,
     ];
 
     pub fn index(self) -> usize {
@@ -51,6 +55,8 @@ impl Icon {
             Icon::Rewind => '\u{f04a}',
             Icon::Alert => '\u{f0026}',
             Icon::Charging => '\u{f0e7}',
+            Icon::Headphones => '\u{f025}',
+            Icon::HeadphonesMuted => '\u{f07ce}',
         }
     }
 }

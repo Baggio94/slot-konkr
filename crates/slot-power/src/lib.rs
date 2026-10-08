@@ -52,6 +52,10 @@ pub trait Platform: Send {
     fn relink_adb(&mut self) -> bool {
         false
     }
+
+    fn headphones(&self) -> bool {
+        false
+    }
 }
 
 pub trait LidPolicy {

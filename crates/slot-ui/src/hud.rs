@@ -44,10 +44,12 @@ pub enum HudKind {
 }
 
 impl HudKind {
-    pub fn icon(self, value: u8, muted: bool) -> Icon {
+    pub fn icon(self, value: u8, muted: bool, headphones: bool) -> Icon {
         match self {
             HudKind::Brightness => Icon::Brightness,
             HudKind::BlueLight => Icon::BlueLight,
+            HudKind::Volume if headphones && muted => Icon::HeadphonesMuted,
+            HudKind::Volume if headphones => Icon::Headphones,
             HudKind::Volume if muted => Icon::VolumeMuted,
             HudKind::Volume if value == 0 => Icon::VolumeZero,
             HudKind::Volume => Icon::Volume,
@@ -130,6 +132,7 @@ pub struct Hud {
     pub shown_at: Option<Millis>,
     held: bool,
     muted: bool,
+    headphones: bool,
     ff: FfState,
     said: Option<(Toast, Millis)>,
     icons: Vec<TexId>,
@@ -181,7 +184,11 @@ impl Hud {
     }
 
     pub fn glyph(&self) -> Icon {
-        self.kind.icon(self.value, self.muted)
+        self.kind.icon(self.value, self.muted, self.headphones)
+    }
+
+    pub fn set_headphones(&mut self, on: bool) {
+        self.headphones = on;
     }
 
     pub fn badge(&self) -> Option<Icon> {
