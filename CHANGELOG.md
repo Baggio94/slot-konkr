@@ -1,13 +1,13 @@
 # Changelog
 
-## [1.4.0](https://github.com/BrandonKowalski/slot/releases/tag/v1.4.0) - 2026-10-07
+## [1.4.0](https://github.com/BrandonKowalski/slot/releases/tag/v1.4.0)
 
 - The volume bar shows a headphones icon while they are plugged in.
 - Speaker and headphones keep their own volume and mute, and switch the moment you plug / unplug.
 - Settings moved from `System/` to a new `Config/` folder, so replacing `System/` on update no longer resets them. slot moves them on first boot.
 - The quick menu and power menu wrap from the last item to the first, and back.
 
-## [1.3.0](https://github.com/BrandonKowalski/slot/releases/tag/v1.3.0) - 2026-10-07
+## [1.3.0](https://github.com/BrandonKowalski/slot/releases/tag/v1.3.0)
 
 - The SP boots to a slot logo instead of BaseOS's. slot installs `System/bootlogo.bmp` on first run and keeps the original as `bootlogo.baseos.bmp`.
 
