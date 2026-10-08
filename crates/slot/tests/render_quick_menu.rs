@@ -74,17 +74,17 @@ fn the_quick_menu_renders_full_screen() {
     let mut bar_on = QuickRow::ALL[0];
     for (name, selected) in [
         ("fast-forward", QuickRow::FastForward),
-        ("colour-correction", QuickRow::ColourCorrection),
+        ("screen", QuickRow::Screen),
         ("date-time", QuickRow::DateTime),
         ("about", QuickRow::About),
     ] {
-        for _ in bar_on.index()..selected.index() {
+        for _ in bar_on.position()..selected.position() {
             tap(&mut f, &mut input, Btn::Down);
         }
         bar_on = selected;
         let px = composed(&mut f, &mut c, name);
 
-        let top = (QUICK_TOP + QUICK_PITCH * selected.index() as f32) as usize;
+        let top = (QUICK_TOP + QUICK_PITCH * selected.position() as f32) as usize;
         for x in [1, OUT_W as usize - 2] {
             assert_eq!(at(&px, x, top + 26), bar, "{name}: no bar at x {x}");
         }
@@ -103,15 +103,15 @@ fn the_quick_menu_renders_full_screen() {
             "{name}: not on the ground"
         );
 
-        for row in QuickRow::ALL {
-            let top = (QUICK_TOP + QUICK_PITCH * row.index() as f32) as usize;
+        for row in QuickRow::MAIN {
+            let top = (QUICK_TOP + QUICK_PITCH * row.position() as f32) as usize;
             let label = inked(&px, 0..360, top);
             let first = *label.first().expect("a row with no label");
             assert!(
                 (32..=36).contains(&first),
                 "{name}: {row:?}'s label starts at x {first}"
             );
-            if row == QuickRow::About {
+            if matches!(row, QuickRow::About | QuickRow::Screen | QuickRow::Game) {
                 continue;
             }
             let value = inked(&px, 360..OUT_W as usize, top);

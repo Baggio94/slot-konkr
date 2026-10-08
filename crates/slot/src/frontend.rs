@@ -1,11 +1,13 @@
 use std::time::{Duration, Instant};
 
-use slot_gfx::{Compositor, Draw, TexId, OUT_H, OUT_W};
+use slot_gfx::{Compositor, Draw, ScreenEffect, TexId, OUT_H, OUT_W};
+
+const PAPER: &[u8] = include_bytes!("../assets/paper.png");
 use slot_input::{InputSource, Millis};
 use slot_power::{Platform, Power};
 use slot_store::format_stamp;
 use slot_ui::{
-    arrows_hint_face, badge_face, cart_face, cart_shadow, chip_face, chip_shadow_face,
+    arrows_hint_face, badge_face, bezel_face, cart_face, cart_shadow, chip_face, chip_shadow_face,
     date_time_text, gb_cart_shadow, hhmm, hint_face, icon_face, menu_face, photo_face,
     quick_caret_face, quick_label_face, quick_legend_faces, quick_value_face, set_clock_hint_face,
     socket_face, sticker_face, title_face, toast_face, wallpaper_face, word_face, GbShell, Icon,
@@ -108,7 +110,28 @@ impl Frontend {
         }
     }
 
+    fn upload_paper(compositor: &mut Compositor) {
+        let mut dec = png::Decoder::new(std::io::Cursor::new(PAPER));
+        dec.set_transformations(png::Transformations::normalize_to_color8());
+        let Ok(mut reader) = dec.read_info() else {
+            return;
+        };
+        let mut buf = vec![0u8; reader.output_buffer_size()];
+        let Ok(info) = reader.next_frame(&mut buf) else {
+            return;
+        };
+        if info.color_type != png::ColorType::Grayscale || info.width != info.height {
+            return;
+        }
+        let rgba: Vec<u8> = buf[..info.buffer_size()]
+            .iter()
+            .flat_map(|&l| [l, l, l, 255])
+            .collect();
+        compositor.set_paper(info.width, &rgba);
+    }
+
     pub fn upload_faces(&mut self, compositor: &mut Compositor) {
+        Self::upload_paper(compositor);
         let faces = self
             .session
             .app()
@@ -273,15 +296,45 @@ impl Frontend {
         self.session.app_mut().set_wallpaper(id);
     }
 
+    pub fn upload_bezel(&mut self, compositor: &mut Compositor, panel: (u32, u32)) {
+        if !slot_gfx::framed(panel) {
+            return;
+        }
+        slot_ui::set_shelf_slack((OUT_W * panel.1 / panel.0).saturating_sub(OUT_H) as f32);
+        let Some(path) = self
+            .session
+            .app()
+            .root()
+            .and_then(|root| crate::bezel::pick(root, panel))
+        else {
+            return;
+        };
+        if let Some(rgba) = bezel_face(&path, panel.0, panel.1) {
+            compositor.set_bezel(panel.0, panel.1, &rgba);
+            eprintln!("slot: bezel {}", path.display());
+        }
+    }
+
     pub fn render(&mut self, compositor: &mut Compositor, window: (u32, u32)) {
+        compositor.fit(window);
         self.compose(compositor);
         compositor.end_frame(window);
     }
 
     pub fn compose(&mut self, compositor: &mut Compositor) {
         compositor.set_blue_light(self.session.app().blue_light());
+        compositor.set_picture(self.session.app().picture_rect());
+        compositor.set_screen_effect(match self.session.app().screen_shader() {
+            slot_store::Shader::Off => ScreenEffect::None,
+            slot_store::Shader::Lcd3x => ScreenEffect::Lcd3x,
+            slot_store::Shader::Grid => ScreenEffect::Grid,
+            slot_store::Shader::Dot => ScreenEffect::Dot,
+            slot_store::Shader::Simpletex => ScreenEffect::Simpletex,
+        });
         compositor.set_shake(self.session.app().screen_shake());
         compositor.set_screen_power(self.session.app().screen_power());
+        compositor.set_frame_lift(self.session.app().frame_lift());
+        compositor.set_frame_split(self.session.app().frame_split());
         compositor.set_game_source_rect(self.session.app().source_rect());
         compositor.begin_frame();
         if let Some(frame) = self.session.frame() {

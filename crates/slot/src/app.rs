@@ -6,7 +6,7 @@ use slot_input::{Action, Btn, MUTE_CHORD_MS};
 use slot_power::{Battery, Charge, LedState, LidPolicy, Power};
 use slot_retro::LinkChannel;
 use slot_store::{
-    format_stamp, read_slot_state, scan, write_slot_state, Cart, Core, Platform, SlotState,
+    format_stamp, read_slot_state, scan, write_slot_state, Cart, Core, Platform, Shader, SlotState,
     StateEntry, StateRing, Theme, BLUE_LIGHT_MAX, BRIGHTNESS_MAX, FF_SPEEDS, RING_MAX, VOLUME_MAX,
 };
 use slot_ui::{
@@ -322,6 +322,7 @@ pub struct App {
     shelf_clock: slot_ui::Printed,
     hud: Hud,
     screen: f32,
+    lift: f32,
     game_ready: bool,
     clock: f64,
     power: Option<Power>,
@@ -427,6 +428,7 @@ impl App {
             shelf_clock: slot_ui::Printed::default(),
             hud: Hud::new(),
             screen: 0.0,
+            lift: 1.0,
             game_ready: false,
             clock: 0.0,
             power: None,
@@ -620,8 +622,13 @@ impl App {
             QuickRow::FastForward => QuickValue::speed(self.state.ff_speed),
             QuickRow::FastForwardSound => Some(QuickValue::flag(self.state.ff_sound)),
             QuickRow::ColourCorrection => Some(QuickValue::flag(self.state.colour_correction)),
+            QuickRow::GbaShader => Some(shader_value(self.state.shader_gba)),
+            QuickRow::GbShader => Some(shader_value(self.state.shader_gb)),
             QuickRow::Rumble => Some(QuickValue::flag(self.state.rumble)),
-            QuickRow::DateTime | QuickRow::About => None,
+            QuickRow::EjectSave => Some(QuickValue::flag(self.state.eject_save)),
+            QuickRow::Turbo => Some(QuickValue::flag(self.state.turbo)),
+            QuickRow::Rewind => Some(QuickValue::flag(self.state.rewind)),
+            QuickRow::DateTime | QuickRow::About | QuickRow::Screen | QuickRow::Game => None,
         }
     }
 
@@ -809,7 +816,22 @@ impl App {
     }
 
     pub fn may_rewind(&self) -> bool {
-        !self.link_active()
+        self.state.rewind && !self.link_active()
+    }
+
+    pub fn turbo(&self) -> bool {
+        self.state.turbo
+    }
+
+    pub fn records_rewind(&self) -> bool {
+        self.state.rewind
+    }
+
+    pub fn picture_rect(&self) -> [f32; 4] {
+        let (w, h) = self.platform.picture();
+        let (sw, sh) = (slot_gfx::SRC_W as f32, slot_gfx::SRC_H as f32);
+        let (x, y) = ((sw - w as f32) / 2.0, (sh - h as f32) / 2.0);
+        [x / sw, y / sh, (x + w as f32) / sw, (y + h as f32) / sh]
     }
 
     pub fn may_load_state(&self) -> bool {
@@ -918,6 +940,13 @@ impl App {
 
     pub fn ff_sound(&self) -> bool {
         self.state.ff_sound
+    }
+
+    pub fn screen_shader(&self) -> Shader {
+        match self.platform {
+            Platform::Gba => self.state.shader_gba,
+            Platform::Gb | Platform::Gbc => self.state.shader_gb,
+        }
     }
 
     pub fn colour_correction(&self) -> bool {
@@ -1120,10 +1149,10 @@ impl App {
                 Action::GbaDown(Btn::A) => self.play_held = Some(now),
                 Action::GbaUp(Btn::A) => {
                     if self.play_held.take().is_some() {
-                        self.insert(false);
+                        self.insert(!self.state.eject_save);
                     }
                 }
-                Action::Insert => self.insert(false),
+                Action::Insert => self.insert(!self.state.eject_save),
                 Action::GbaDown(Btn::L1) => self.switch_shelf(-1),
                 Action::GbaDown(Btn::R1) => self.switch_shelf(1),
                 _ => {}
@@ -1166,7 +1195,7 @@ impl App {
 
     fn open_quick_menu(&mut self) {
         self.phase = Phase::QuickMenu {
-            row: QuickRow::ALL[0],
+            row: QuickRow::MAIN[0],
         };
     }
 
@@ -1178,7 +1207,10 @@ impl App {
             Action::GbaDown(Btn::Right) => return self.change_setting(row, true),
             Action::GbaDown(Btn::A) => return self.open_quick_row(row),
             Action::GbaDown(Btn::B) | Action::QuickMenu => {
-                self.phase = Phase::Shelf;
+                self.phase = match row.parent() {
+                    Some(row) => Phase::QuickMenu { row },
+                    None => Phase::Shelf,
+                };
                 return;
             }
             _ => return,
@@ -1192,9 +1224,19 @@ impl App {
                 self.phase = clock_screen(self.utc_secs(), self.state.utc_offset_min, true);
             }
             QuickRow::About => self.phase = Phase::About,
-            QuickRow::FastForward
+            QuickRow::Screen | QuickRow::Game => {
+                if let Some(row) = row.child() {
+                    self.phase = Phase::QuickMenu { row };
+                }
+            }
+            QuickRow::EjectSave
+            | QuickRow::Turbo
+            | QuickRow::Rewind
+            | QuickRow::FastForward
             | QuickRow::FastForwardSound
             | QuickRow::ColourCorrection
+            | QuickRow::GbaShader
+            | QuickRow::GbShader
             | QuickRow::Rumble => {}
         }
     }
@@ -1214,8 +1256,25 @@ impl App {
                 s.colour_correction = !s.colour_correction;
                 self.colour_pending = Some(s.colour_correction);
             }
+            QuickRow::GbaShader => {
+                let to = s.shader_gba.step(&Shader::GBA, right);
+                if to == s.shader_gba {
+                    return;
+                }
+                s.shader_gba = to;
+            }
+            QuickRow::GbShader => {
+                let to = s.shader_gb.step(&Shader::GB, right);
+                if to == s.shader_gb {
+                    return;
+                }
+                s.shader_gb = to;
+            }
             QuickRow::Rumble => s.rumble = !s.rumble,
-            QuickRow::DateTime | QuickRow::About => return,
+            QuickRow::EjectSave => s.eject_save = !s.eject_save,
+            QuickRow::Turbo => s.turbo = !s.turbo,
+            QuickRow::Rewind => s.rewind = !s.rewind,
+            QuickRow::DateTime | QuickRow::About | QuickRow::Screen | QuickRow::Game => return,
         }
         self.persist();
     }
@@ -1474,6 +1533,35 @@ impl App {
             -dt / POWER_OFF_S
         };
         self.screen = (self.screen + step).clamp(0.0, 1.0);
+        let docked = self.power_menu.is_none()
+            && matches!(
+                self.phase,
+                Phase::Shelf | Phase::Inserting { .. } | Phase::Ejecting { .. }
+            );
+        let sliding = self.power_menu.is_none()
+            && matches!(
+                self.phase,
+                Phase::Inserting { .. }
+                    | Phase::Playing { .. }
+                    | Phase::Polaroids { .. }
+                    | Phase::Ejecting { .. }
+            );
+        let reach = if sliding { dt / POWER_ON_S } else { 1.0 };
+        self.lift = match docked {
+            true => (self.lift - reach).max(0.0),
+            false => (self.lift + reach).min(1.0),
+        };
+    }
+
+    pub fn frame_split(&self) -> Option<f32> {
+        match (&self.phase, self.power_menu) {
+            (Phase::QuickMenu { .. }, None) => Some(slot_ui::QUICK_SPLIT),
+            _ => None,
+        }
+    }
+
+    pub fn frame_lift(&self) -> f32 {
+        self.lift
     }
 
     pub fn screen_power(&self) -> f32 {
@@ -2236,6 +2324,7 @@ impl App {
             return;
         };
         let (state, sav) = trusted_write(snapshot.as_ref(), state, "eject");
+        let state = state.filter(|_| self.state.eject_save);
         match persist::eject(
             root,
             self.platform,
@@ -3085,6 +3174,16 @@ fn trusted_write(
 
 fn up(level: u8, step: u8, max: u8) -> u8 {
     level.saturating_add(step).min(max)
+}
+
+fn shader_value(shader: Shader) -> QuickValue {
+    match shader {
+        Shader::Off => QuickValue::Off,
+        Shader::Lcd3x => QuickValue::Lcd3x,
+        Shader::Grid => QuickValue::Grid,
+        Shader::Dot => QuickValue::Dot,
+        Shader::Simpletex => QuickValue::Simpletex,
+    }
 }
 
 fn ff_next(from: u8, right: bool) -> u8 {

@@ -1,5 +1,6 @@
 use slot_gfx::{Draw, TexId, OUT_H, OUT_W};
 use slot_store::Cart;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::cart::{cart_box, gb_shell_of, label_colour, label_text, CART_H, CART_W};
 use crate::hud::Millis;
@@ -8,12 +9,24 @@ use crate::slot_chrome::{draw_empty_slot, MOUTH_H};
 
 const SIDE_SCALE: f32 = 0.78;
 const SIDE_ALPHA: f32 = 0.55;
+
+static SLACK: AtomicU32 = AtomicU32::new(0);
+
+pub fn set_shelf_slack(px: f32) {
+    SLACK.store(px.max(0.0).to_bits(), Ordering::Relaxed);
+}
+
+fn raise() -> f32 {
+    f32::from_bits(SLACK.load(Ordering::Relaxed)) / 2.0
+}
+
 pub fn rest_y(h: f32) -> f32 {
-    if h > CART_H as f32 {
+    let y = if h > CART_H as f32 {
         (OUT_H as f32 - MOUTH_H - h) / 2.0
     } else {
         (OUT_H + CART_H) as f32 / 2.0 - h
-    }
+    };
+    y - raise()
 }
 
 pub fn foot_y(h: f32) -> f32 {

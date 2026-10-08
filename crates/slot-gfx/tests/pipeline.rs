@@ -1,5 +1,6 @@
 use slot_gfx::{
-    blue_light_gain, lcd3x_mask, Compositor, Draw, HeadlessSurface, OUT_H, OUT_W, SRC_H, SRC_W,
+    blue_light_gain, lcd3x_factors, lcd3x_mask, Compositor, Draw, HeadlessSurface, OUT_H, OUT_W,
+    SRC_H, SRC_W,
 };
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -50,6 +51,13 @@ fn gb_shaped(inside: impl Fn(usize, usize) -> [u8; 3], margin: [u8; 3]) -> Vec<u
         }
     }
     buf
+}
+
+fn stretched(rgb: [u8; 3], x: usize, y: usize) -> [i32; 3] {
+    let fx = ((x as f32 + 0.5) * GB_W as f32 / OUT_W as f32).fract();
+    let fy = ((y as f32 + 0.5) * GB_H as f32 / OUT_H as f32).fract();
+    let cell = lcd3x_factors(fx, fy);
+    [0, 1, 2].map(|ch| (rgb[ch] as f32 * cell[ch]).round() as i32)
 }
 
 fn masked(rgb: [u8; 3], ox: usize, oy: usize) -> [i32; 3] {
@@ -494,7 +502,7 @@ fn fullscreen_puts_the_pictures_corners_in_the_panels_corners() {
         ("bottom left", (0, last_y), [0, 0, 255]),
         ("bottom right", (last_x, last_y), [255, 255, 0]),
     ] {
-        let cell = masked(rgb, x % 3, y % 3);
+        let cell = stretched(rgb, x, y);
         let got = px(&full, x, y);
         for (ch, want) in cell.iter().enumerate() {
             assert!(
@@ -514,7 +522,7 @@ fn fullscreen_puts_the_pictures_corners_in_the_panels_corners() {
 }
 
 #[test]
-fn the_mask_period_is_three_pixels_in_both_modes() {
+fn the_mask_follows_the_game_pixels_in_both_modes() {
     let Some((_g, _s, mut c)) = compositor() else {
         return;
     };
@@ -546,14 +554,17 @@ fn the_mask_period_is_three_pixels_in_both_modes() {
         "actual size: the grille does not repeat every 3 px down"
     );
 
-    assert_eq!(
-        period_x(&full, 0..OUT_W as usize, 0..OUT_H as usize),
-        Some(3),
-        "fullscreen: the grille does not repeat every 3 px across"
-    );
-    assert_eq!(
-        period_y(&full, 0..OUT_W as usize, 0..OUT_H as usize),
-        Some(3),
-        "fullscreen: the grille does not repeat every 3 px down"
+    let mut worst = 0i32;
+    for y in 0..OUT_H as usize {
+        for x in 0..OUT_W as usize {
+            let got = px(&full, x, y);
+            for (ch, want) in stretched([0x80; 3], x, y).iter().enumerate() {
+                worst = worst.max((want - got[ch] as i32).abs());
+            }
+        }
+    }
+    assert!(
+        worst <= 1,
+        "fullscreen: the grille strays {worst} from the game's pixels"
     );
 }

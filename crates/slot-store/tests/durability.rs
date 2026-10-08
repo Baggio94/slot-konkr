@@ -2,7 +2,7 @@ mod common;
 
 use common::tmp_root;
 use slot_store::{
-    atomic_write, read_slot_state, write_slot_state, Platform, SlotState, FF_SPEEDS,
+    atomic_write, read_slot_state, write_slot_state, Platform, Shader, SlotState, FF_SPEEDS,
     FF_SPEED_DEFAULT,
 };
 use tempfile::tempdir;
@@ -165,6 +165,8 @@ fn a_first_boot_rumbles_and_fast_forwards_silently_at_the_default() {
     assert_eq!(s.ff_speed, FF_SPEED_DEFAULT);
     assert!(!s.ff_sound, "boots with fast forward audible");
     assert!(!s.colour_correction, "boots with the picture tinted");
+    assert_eq!(s.shader_gba, Shader::Grid);
+    assert_eq!(s.shader_gb, Shader::Simpletex);
 }
 
 #[test]
@@ -192,6 +194,11 @@ fn a_card_from_before_the_settings_keeps_all_its_values() {
             ff_speed: FF_SPEED_DEFAULT,
             ff_sound: false,
             colour_correction: false,
+            shader_gba: Shader::Grid,
+            shader_gb: Shader::Simpletex,
+            eject_save: true,
+            turbo: true,
+            rewind: true,
         }
     );
 }
@@ -205,6 +212,11 @@ fn the_quick_menu_settings_round_trip_as_their_own_lines() {
         ff_speed: 2,
         ff_sound: true,
         colour_correction: true,
+        shader_gba: Shader::Dot,
+        shader_gb: Shader::Off,
+        eject_save: false,
+        turbo: false,
+        rewind: false,
         ..SlotState::default()
     };
     write_slot_state(d.path(), &s).unwrap();
@@ -215,6 +227,11 @@ fn the_quick_menu_settings_round_trip_as_their_own_lines() {
         "ff_speed=2",
         "ff_sound=1",
         "colour_correction=1",
+        "shader_gba=dot",
+        "shader_gb=off",
+        "eject_save=0",
+        "turbo=0",
+        "rewind=0",
     ] {
         assert!(text.lines().any(|l| l == line), "no {line} in {text:?}");
     }
