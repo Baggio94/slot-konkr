@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased](https://github.com/BrandonKowalski/slot/compare/v1.4.0...main)
+
+- The speaker no longer buzzes while nothing is playing. slot lets go of the audio device after 3 seconds of silence and takes it back when sound starts. Thanks to flo333 for finding it.
+
 ## [1.4.0](https://github.com/BrandonKowalski/slot/releases/tag/v1.4.0)
 
 - The volume bar shows a headphones icon while they are plugged in.
