@@ -159,6 +159,14 @@
     </div>
 
     <div class="subpanel" id="install-update" role="tabpanel" aria-labelledby="t-install-update" hidden>
+      <aside class="admonition" role="note">
+        <p class="admonition-title">Updating from a version before 1.4.0?</p>
+        <p>Older versions kept settings in <code>System/</code>, so deleting it wipes them.</p>
+        <p>This time, copy the new <code>System/</code> over the old one instead of deleting it. slot will move your settings into a new <code>Config/</code> folder, so future updates can delete <code>System/</code> as normal.</p>
+        <p>Your games, saves and save states aren't affected.</p>
+        <p>Sorry for the hassle! slot started as a throwaway project for my own SP, and I never expected it to need an update procedure.</p>
+      </aside>
+
       <ol class="install-steps">
         <li>
           <h3>Download the latest release</h3>
