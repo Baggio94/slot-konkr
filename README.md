@@ -6,7 +6,7 @@ Has support for GBA, GBC, and GB titles only.
 
 A full user guide can be found at [slot-cfw.fyi](https://slot-cfw.fyi).
 
-What changed in each release can be found in [changelog](CHANGELOG.md).
+Release notes can be found in the [changelog](CHANGELOG.md).
 
 ## AI Disclosure
 
