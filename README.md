@@ -4,6 +4,8 @@ A bespoke, Game Boy-centric frontend for the Anbernic RG SP.
 
 Has support for GBA, GBC, and GB titles only.
 
+ROMs must be unzipped. slot does not read `.zip` or `.7z` files.
+
 A full user guide can be found at [slot-cfw.fyi](https://slot-cfw.fyi).
 
 Release notes can be found in the [changelog](CHANGELOG.md).
