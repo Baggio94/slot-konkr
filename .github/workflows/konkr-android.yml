@@ -60,6 +60,8 @@ jobs:
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           bash scripts/build-gpsp-android.sh
+      - name: Test RetroArch RZIP v1 codec on JVM
+        run: gradle --no-daemon -p android :app:testDebugUnitTest
       - name: Build debug APK
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
