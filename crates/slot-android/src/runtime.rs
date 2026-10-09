@@ -4,6 +4,7 @@ use std::ffi::{c_char, c_void, CString};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use crate::game::GameSession;
+use crate::core_picker::{CorePicker, Press};
 use slot_retro::ButtonMask;
 use slot_gfx::ScreenEffect;
 use jni::{JNIEnv, objects::{JObject, JString}, sys::{jint, jboolean, jshortArray, jstring}};
@@ -13,7 +14,14 @@ use std::time::Instant;
 use slot_gfx::{Compositor, GfxError, Surface, OUT_H, OUT_W};
 use slot_store::{Cart, Platform, Core};
 use crate::library::{carts_by_platform, RomEntry, LIBRARY};
-use slot_ui::{board_face, chip_face, quick_value_face, cart_face_with, cart_shadow, gb_cart_shadow, Draw, GbShell, Shelf, SlotChrome};
+use slot_ui::{
+    board_face, chip_face, chip_shadow_face, socket_face, quick_value_face, cart_face_with,
+    cart_shadow, gb_cart_shadow, board_from, board_zoom, lift_of, shelf_cart_at,
+    on_board, lid_from, grown, draw_empty_slot, Draw, GbShell, Shelf, SlotChrome,
+    BOARD_X, BOARD_W, SOCKET_U, SOCKET_V, SOCKET_W, SOCKET_H,
+    CHIP_U, CHIP_V, CHIP_W, CHIP_H, HOP_LIFT, TURN_PAD, SHADOW_W, SHADOW_H,
+    CART_W,
+};
 
 // Android GLSurfaceView owns EGL context creation, current context and buffer swaps.
 #[link(name = "EGL")]
@@ -101,7 +109,7 @@ enum ShelfOverlay {
     GameMenu { row: usize },
 }
 
-const MENU_TEXT: [&str; 24] = [
+const MENU_TEXT: [&str; 27] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Scraping",                         // 2
@@ -126,6 +134,9 @@ const MENU_TEXT: [&str; 24] = [
     "Save and Eject",                   // 21
     "States (coming soon)",            // 22
     "A Select     B Back",              // 23
+    "B: Back",                          // 24
+    "Left / Right: Swap",               // 25
+    "A: Choose",                        // 26
 ];
 
 struct Engine {
@@ -150,6 +161,11 @@ struct Engine {
     menu_textures: Vec<(slot_gfx::TexId, u32, u32)>,
     board_texture: Option<slot_gfx::TexId>,
     chip_texture: slot_gfx::TexId,
+    picker: Option<CorePicker>,
+    socket_textures: [slot_gfx::TexId; 2],
+    chip_textures: [slot_gfx::TexId; 2],
+    chip_blank: slot_gfx::TexId,
+    chip_shadow: slot_gfx::TexId,
     a_down_at: Option<Instant>,
     fresh_launch: bool,
     mode_down_at: Option<Instant>,
@@ -207,6 +223,19 @@ impl Engine {
         }).collect();
         let chip = chip_face(Some(Core::Mgba));
         let chip_texture = gpu.create_texture(chip.w, chip.h, &chip.rgba);
+        let socket_textures = Core::ALL.map(|core| {
+            let face = socket_face(core);
+            gpu.create_texture(face.w, face.h, &face.rgba)
+        });
+        let chip_textures = Core::ALL.map(|core| {
+            if core == Core::Mgba { return chip_texture; }
+            let face = chip_face(Some(core));
+            gpu.create_texture(face.w, face.h, &face.rgba)
+        });
+        let blank = chip_face(None);
+        let chip_blank = gpu.create_texture(blank.w, blank.h, &blank.rgba);
+        let shadow = chip_shadow_face();
+        let chip_shadow = gpu.create_texture(shadow.w, shadow.h, &shadow.rgba);
 
         // On a GBA-only library do not begin on an empty GB or GBC shelf.
         let active = shelves.iter().position(|s| !s.carts.is_empty()).unwrap_or(0);
@@ -233,6 +262,11 @@ impl Engine {
             menu_textures,
             board_texture: None,
             chip_texture,
+            picker: None,
+            socket_textures,
+            chip_textures,
+            chip_blank,
+            chip_shadow,
             a_down_at: None,
             fresh_launch: false,
             mode_down_at: None,
@@ -246,6 +280,7 @@ impl Engine {
                 self.buttons = 0;
                 self.mode_down_at = None;
                 self.overlay = ShelfOverlay::None;
+                self.picker = None;
                 for shelf in &mut self.shelves {
                     shelf.release_hold();
                 }
@@ -270,6 +305,7 @@ impl Engine {
                 self.awaiting_game = false;
                 self.inserted = false;
                 self.overlay = ShelfOverlay::None;
+                self.picker = None;
                 self.a_down_at = None;
                 self.fresh_launch = false;
                 self.mode_down_at = None;
@@ -407,9 +443,25 @@ impl Engine {
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
-                            ShelfOverlay::Core => match code {
-                                96 | 97 | 109 => self.overlay = ShelfOverlay::None,
-                                _ => {}
+                            ShelfOverlay::Core => {
+                                let now = self.born.elapsed().as_millis() as u64;
+                                if let Some(picker) = self.picker.as_mut() {
+                                    match code {
+                                        21 => { picker.press(Press::Left, now); }
+                                        22 => { picker.press(Press::Right, now); }
+                                        96 => {
+                                            if picker.seat() == Core::Gpsp {
+                                                // Keep the authentic chip-hop animation but never
+                                                // persist/choose a core that is not in the APK.
+                                                set_message("gpSP core is not installed yet".into());
+                                            } else {
+                                                picker.press(Press::Keep, now);
+                                            }
+                                        }
+                                        97 | 109 => { picker.press(Press::Back, now); }
+                                        _ => {}
+                                    }
+                                }
                             },
                             ShelfOverlay::GameMenu { .. } | ShelfOverlay::None => {}
                         }
@@ -435,6 +487,10 @@ impl Engine {
                             } else {
                                 self.board_texture = Some(self.gpu.create_texture(face.w, face.h, &face.rgba));
                             }
+                            let now = self.born.elapsed().as_millis() as u64;
+                            let mut picker = CorePicker::open(Core::Mgba, now);
+                            picker.start(now);
+                            self.picker = Some(picker);
                             self.overlay = ShelfOverlay::Core;
                             return;
                         }
@@ -652,25 +708,87 @@ impl Engine {
                 self.text_fit(23, 152.0, 355.0, 420.0, 0.85, out);
             }
             ShelfOverlay::Core => {
-                out.push(Draw::Rect {
-                    x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
-                    colour: [0.085, 0.085, 0.093, 1.0],
-                });
-                self.text_fit(15, 263.0, 74.0, 355.0, 1.0, out);
-                if let Some(tex) = self.board_texture {
-                    out.push(Draw::Tex {
-                        x: 174.0, y: 131.0, w: 372.0, h: 209.0, tex, alpha: 1.0,
-                    });
-                    out.push(Draw::Tex {
-                        x: 323.0, y: 213.0, w: 63.0, h: 45.0,
-                        tex: self.chip_texture, alpha: 1.0,
-                    });
-                }
-                self.text_fit(16, 265.0, 346.0, 355.0, 1.0, out);
-                self.text_fit(17, 225.0, 389.0, 400.0, 0.46, out);
-                self.text_fit(18, 221.0, 443.0, 410.0, 0.85, out);
+                self.draw_original_core_picker(out);
             }
         }
+    }
+
+    /// Slot's original board/lid/socket/chip geometry and timelines.
+    /// The picker state machine is the unmodified upstream core_picker.rs.
+    fn draw_original_core_picker(&self, out: &mut Vec<Draw>) {
+        let Some(picker) = self.picker else { return };
+        let now = self.born.elapsed().as_millis() as u64;
+        let progress = picker.openness(now);
+        let lift = lift_of(progress);
+        let shelf = &self.shelves[self.active];
+        let (rest, scale) = shelf.selected_at();
+        let cart = shelf_cart_at(rest, scale);
+        let board = board_from(cart, progress);
+        let zoom = board_zoom(board);
+
+        if let Some(tex) = self.board_texture {
+            out.push(Draw::Tex {
+                x: board.x, y: board.y, w: board.w, h: board.h,
+                tex, alpha: 1.0,
+            });
+        }
+        for (i, tex) in self.socket_textures.iter().copied().enumerate() {
+            let (x, y) = on_board(board, SOCKET_U[i], SOCKET_V);
+            out.push(Draw::Tex {
+                x: x.round(), y: y.round(),
+                w: SOCKET_W as f32 * zoom, h: SOCKET_H as f32 * zoom,
+                tex, alpha: 1.0,
+            });
+        }
+
+        let chip = picker.chip(now);
+        let u = CHIP_U[0] + (CHIP_U[1] - CHIP_U[0]) * chip.across;
+        if chip.lift > 0.0 {
+            let (cx, cy) = on_board(board, u + 19.0, CHIP_V + 29.4);
+            let (w, h) = (SHADOW_W as f32 * zoom, SHADOW_H as f32 * zoom);
+            out.push(Draw::Tex {
+                x: cx - w / 2.0, y: cy - h / 2.0, w, h,
+                tex: self.chip_shadow, alpha: 0.6 * chip.lift * lift,
+            });
+        }
+        let tex = chip.seated
+            .map(|core| self.chip_textures[core.index()])
+            .unwrap_or(self.chip_blank);
+        let (x, y) = on_board(board, u, CHIP_V - HOP_LIFT * chip.lift);
+        let body = grown(slot_ui::Placed {
+            x: x + chip.shake, y,
+            w: CHIP_W as f32 * zoom, h: CHIP_H as f32 * zoom,
+        }, TURN_PAD as f32 * zoom);
+        out.push(Draw::Turned {
+            x: body.x.round(), y: body.y.round(),
+            w: body.w, h: body.h, tex, alpha: 1.0, turn: chip.tip,
+        });
+
+        // The original lid slides up first (160ms), lifts and tilts (260ms)
+        // and returns smoothly from any partial openness on B/A (320ms).
+        let (lid, turn) = lid_from(cart, progress);
+        let k = lid.w / slot_ui::lid_at(1.0).0.w;
+        let (w, h) = (168.0 * k, 18.0 * k);
+        out.push(Draw::Tex {
+            x: lid.x + (lid.w - w) / 2.0,
+            y: lid.y + lid.h + 29.0 * k - h / 2.0,
+            w, h,
+            tex: self.chip_shadow,
+            alpha: 0.8 * lift,
+        });
+        if let Some(tex) = shelf.face(shelf.index) {
+            let face = grown(lid, TURN_PAD as f32 * lid.w / CART_W as f32);
+            out.push(Draw::Turned {
+                x: face.x, y: face.y, w: face.w, h: face.h,
+                tex, alpha: 1.0, turn,
+            });
+        }
+
+        // Original Slot bottom three-column legend, fading in with the lift.
+        let right = BOARD_X + BOARD_W as f32;
+        self.text_fit(24, BOARD_X, 387.0, 150.0, lift, out);
+        self.text_fit(25, 293.0, 387.0, 190.0, lift, out);
+        self.text_fit(26, right - 118.0, 387.0, 118.0, lift, out);
     }
 
     fn draw(&mut self) {
@@ -685,6 +803,10 @@ impl Engine {
             .collect();
         for event in events {
             self.handle(event);
+        }
+        if self.picker.is_some_and(|p| p.finished(self.born.elapsed().as_millis() as u64)) {
+            self.picker = None;
+            self.overlay = ShelfOverlay::None;
         }
         // Holding physical MENU saves, ejects, and returns to shelf without
         // requiring a second keypress or sending MENU to libretro.
@@ -785,7 +907,15 @@ impl Engine {
             colour: [0.085, 0.085, 0.093, 1.0],
         }];
         if self.progress == 0.0 {
-            shelf.draw(0.0, &mut commands);
+            if let Some(picker) = self.picker {
+                let t = slot_ui::ease(picker.openness(self.born.elapsed().as_millis() as u64));
+                let dim = 1.0 + (0.614 - 1.0) * t;
+                let selected = shelf.carts.get(shelf.index).map(|c| c.stem.as_str());
+                shelf.draw_row(selected, 0.0, 0.26 * t, dim, &mut commands);
+                draw_empty_slot(&mut commands);
+            } else {
+                shelf.draw(0.0, &mut commands);
+            }
         } else {
             let cart = &shelf.carts[shelf.index];
             let (rest, scale) = shelf.selected_at();
