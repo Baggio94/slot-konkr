@@ -112,3 +112,40 @@ and visibly dimmed until artwork code exists. SELECT shows a GBA cartridge
 board with the installed mGBA chip; gpSP is labeled not installed and is not
 selectable. Unrecognized Android hardware keys are logged (SlotKonkr) so the
 round button beside L2 can be accurately mapped after a physical key probe.
+
+## Physical MENU button verification — 9 October 2026
+
+Observed on the actual KONKR Pocket Advance with ADB `getevent -lt`:
+
+```
+/dev/input/event3  name: "Microsoft X-box 360 pad"
+EV_KEY BTN_MODE DOWN
+EV_KEY BTN_MODE UP
+```
+
+Android normally maps this to `KeyEvent.KEYCODE_BUTTON_MODE` (110), not
+`KEYCODE_HOME`. The Android shell now routes key 110 to Slot's MENU input and
+logs it under tag `SlotKonkr`. The actual app-level delivery still needs a
+physical test: the vendor firmware could intercept `BTN_MODE` before Android
+sends an Activity key event.
+
+The initial MENU implementation: short press on carousel opens a small settings
+menu; short press during a game opens a paused Resume / Save-and-eject menu;
+holding for at least 650 ms saves and ejects. The START+SELECT escape shortcut
+is retained temporarily until physical BTN_MODE delivery is confirmed.
+Original Slot double-tap MENU for state switching and the full quick settings
+remain future milestones, not implemented features.
+
+Test app event delivery with:
+
+```
+ADB="$HOME/Library/Android/sdk/platform-tools/adb"
+SER="BW0308N250009576"
+"$ADB" -s "$SER" logcat -c
+"$ADB" -s "$SER" logcat -s SlotKonkr:I
+```
+
+Press the physical round button while Slot is in the foreground. Look for
+`KONKR MENU BTN_MODE down` and `KONKR MENU BTN_MODE up`. If no such logs appear,
+inspect vendor key interception/key layout before remapping; don't redefine
+the system HOME key or assume `getevent` implies app key delivery.
