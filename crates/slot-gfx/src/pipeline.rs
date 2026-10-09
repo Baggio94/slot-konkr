@@ -126,7 +126,11 @@ impl GamePass {
     }
 
     pub fn draw(&self, quad: &Quad) {
-        self.draw_source(self.game, quad, self.src);
+        let src = match self.effect {
+            ScreenEffect::Grid => whole_scale_source(self.src, self.fbo_scale),
+            _ => self.src,
+        };
+        self.draw_source(self.game, quad, src);
     }
 
     pub fn draw_still(&self, tex: gl::types::GLuint, quad: &Quad) {
@@ -157,6 +161,23 @@ impl GamePass {
         }
         quad.draw();
     }
+}
+
+fn whole_scale_source(src: [f32; 4], fbo: [f32; 2]) -> [f32; 4] {
+    let (x, w) = whole_scale(src[0], src[2], SRC_W as f32, OUT_W as f32 * fbo[0]);
+    let (y, h) = whole_scale(src[1], src[3], SRC_H as f32, OUT_H as f32 * fbo[1]);
+    [x, y, w, h]
+}
+
+fn whole_scale(at: f32, len: f32, texels: f32, out: f32) -> (f32, f32) {
+    let shown = len * texels;
+    let scale = (out / shown).ceil();
+    let trim = scale * shown - out;
+    if trim >= 0.1 * shown {
+        return (at, len);
+    }
+    let top = (trim / 2.0).floor();
+    (at + top / scale / texels, out / scale / texels)
 }
 
 impl Drop for GamePass {

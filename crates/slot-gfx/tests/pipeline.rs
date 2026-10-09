@@ -631,11 +631,7 @@ fn the_grid_marks_every_game_pixel_edge_on_a_4_by_3_panel() {
     assert!(rows.windows(2).all(|p| p[1] - p[0] >= 2), "rows: {rows:?}");
 }
 
-#[test]
-fn the_grid_marks_every_game_boy_pixel_edge_when_stretched() {
-    let Some((_g, _s, mut c)) = compositor() else {
-        return;
-    };
+fn stretched_gb_grid(c: &mut Compositor, window: (u32, u32)) -> (Vec<u8>, usize, usize) {
     c.set_picture([
         GB_RECT[0],
         GB_RECT[1],
@@ -643,14 +639,23 @@ fn the_grid_marks_every_game_boy_pixel_edge_when_stretched() {
         GB_RECT[1] + GB_RECT[3],
     ]);
     c.set_game_source_rect(GB_RECT);
-    c.fit((OUT_W, OUT_H));
+    c.fit(window);
     c.set_screen_effect(ScreenEffect::Grid);
     c.set_screen_power(1.0);
     c.begin_frame();
     c.upload_game(&gb_shaped(|_, _| [0xc0, 0xc0, 0xc0], [0, 0, 0]));
     c.draw_game();
-    let frame = c.read_frame();
-    let (cols, rows) = grid_lines(&frame, OUT_W as usize, OUT_H as usize);
+    let (w, h) = canvas_size(window);
+    (c.read_frame(), w as usize, h as usize)
+}
+
+#[test]
+fn the_grid_marks_every_game_boy_pixel_edge_when_stretched() {
+    let Some((_g, _s, mut c)) = compositor() else {
+        return;
+    };
+    let (frame, w, h) = stretched_gb_grid(&mut c, (OUT_W, OUT_H));
+    let (cols, rows) = grid_lines(&frame, w, h);
     assert_eq!(cols.len(), GB_W, "dark columns: {cols:?}");
     assert_eq!(rows.len(), GB_H, "dark rows: {rows:?}");
     assert!(
@@ -661,4 +666,21 @@ fn the_grid_marks_every_game_boy_pixel_edge_when_stretched() {
         rows.windows(2).all(|p| (3..=4).contains(&(p[1] - p[0]))),
         "rows: {rows:?}"
     );
+}
+
+#[test]
+fn the_grid_keeps_game_boy_rows_even_when_stretched_on_a_4_by_3_panel() {
+    let Some((_g, _s, mut c)) = compositor() else {
+        return;
+    };
+    let (frame, w, h) = stretched_gb_grid(&mut c, (640, 480));
+    assert_eq!((w, h), (640, 427));
+    let (cols, rows) = grid_lines(&frame, w, h);
+    assert_eq!(cols.len(), GB_W, "dark columns: {cols:?}");
+    assert!(
+        cols.windows(2).all(|p| p[1] - p[0] == 4),
+        "columns: {cols:?}"
+    );
+    assert!(rows.windows(2).all(|p| p[1] - p[0] == 3), "rows: {rows:?}");
+    assert_eq!(rows.len(), 142, "dark rows: {rows:?}");
 }
