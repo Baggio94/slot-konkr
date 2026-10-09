@@ -466,3 +466,23 @@ fn y_on_its_own_is_untouched_by_the_colour_chord() {
     assert_eq!(g.feed(Down(Y), 0), vec![GbaDown(Y)]);
     assert_eq!(g.feed(Up(Y), 40), vec![GbaUp(Y)]);
 }
+
+#[test]
+fn select_and_l2_or_r2_steps_the_shader_without_rewinding_or_fast_forwarding() {
+    let mut g = Gestures::new();
+    assert!(g.feed(Down(Select), 0).is_empty());
+    assert_eq!(g.feed(Down(R2), 10), vec![ShaderNext]);
+    assert!(g.feed(Up(R2), 40).is_empty());
+    assert_eq!(g.feed(Down(L2), 60), vec![ShaderPrev]);
+    assert!(g.feed(Up(L2), 90).is_empty());
+    assert!(g.feed(Up(Select), 200).is_empty());
+}
+
+#[test]
+fn l2_and_r2_on_their_own_still_rewind_and_fast_forward() {
+    let mut g = Gestures::new();
+    assert_eq!(g.feed(Down(L2), 0), vec![RewindStart]);
+    assert_eq!(g.feed(Up(L2), 40), vec![RewindStop]);
+    assert!(!g.feed(Down(R2), 60).contains(&ShaderNext));
+    assert!(!g.feed(Up(R2), 90).contains(&ShaderNext));
+}

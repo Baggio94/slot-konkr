@@ -16,10 +16,15 @@ pub enum Toast {
     BiosMismatch,
     ColourOn,
     ColourOff,
+    ShaderOff,
+    ShaderLcd3x,
+    ShaderGrid,
+    ShaderDot,
+    ShaderSimpletex,
 }
 
 impl Toast {
-    pub const ALL: [Toast; 9] = [
+    pub const ALL: [Toast; 14] = [
         Toast::StateSaved,
         Toast::StateLoaded,
         Toast::NeedsGpsp,
@@ -29,6 +34,11 @@ impl Toast {
         Toast::BiosMismatch,
         Toast::ColourOn,
         Toast::ColourOff,
+        Toast::ShaderOff,
+        Toast::ShaderLcd3x,
+        Toast::ShaderGrid,
+        Toast::ShaderDot,
+        Toast::ShaderSimpletex,
     ];
 
     pub fn index(self) -> usize {
@@ -46,6 +56,11 @@ impl Toast {
             Toast::BiosMismatch => "BIOS does not match",
             Toast::ColourOn => "Correction On",
             Toast::ColourOff => "Correction Off",
+            Toast::ShaderOff => "Shader: Off",
+            Toast::ShaderLcd3x => "Shader: LCD3x",
+            Toast::ShaderGrid => "Shader: Grid",
+            Toast::ShaderDot => "Shader: Dot",
+            Toast::ShaderSimpletex => "Shader: Simpletex",
         }
     }
 }

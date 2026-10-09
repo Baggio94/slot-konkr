@@ -1358,9 +1358,36 @@ impl App {
         self.apply(action);
     }
 
+    fn step_shader(&mut self, right: bool) {
+        if !matches!(
+            self.phase,
+            Phase::Inserting { .. } | Phase::Playing { .. } | Phase::Polaroids { .. }
+        ) {
+            return;
+        }
+        let (shader, choices) = match self.platform {
+            Platform::Gba => (&mut self.state.shader_gba, &Shader::GBA[..]),
+            Platform::Gb | Platform::Gbc => (&mut self.state.shader_gb, &Shader::GB[..]),
+        };
+        *shader = shader.step(choices, right);
+        let said = match *shader {
+            Shader::Off => Toast::ShaderOff,
+            Shader::Lcd3x => Toast::ShaderLcd3x,
+            Shader::Grid => Toast::ShaderGrid,
+            Shader::Dot => Toast::ShaderDot,
+            Shader::Simpletex => Toast::ShaderSimpletex,
+        };
+        self.persist();
+        self.hud.toast(said, self.now());
+    }
+
     fn adjust(&mut self, action: Action) -> bool {
         if action == Action::MuteToggle {
             self.mute_toggle();
+            return true;
+        }
+        if let Action::ShaderNext | Action::ShaderPrev = action {
+            self.step_shader(action == Action::ShaderNext);
             return true;
         }
         if action == Action::ColourCorrectionToggle {
