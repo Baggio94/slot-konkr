@@ -13,6 +13,7 @@ pub struct GameSession {
     state: PathBuf,
     last_sram: Instant,
     pub sample_rate: i32,
+    pub fps: f64,
 }
 
 impl GameSession {
@@ -41,9 +42,11 @@ impl GameSession {
             }
         }
         let sample_rate = core.av_info().sample_rate.round() as i32;
+        let fps = core.av_info().fps.clamp(30.0, 120.0);
         Ok(Self {
             core, save, state, last_sram: Instant::now(),
             sample_rate: sample_rate.clamp(8_000, 96_000),
+            fps,
         })
     }
 

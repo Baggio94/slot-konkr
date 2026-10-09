@@ -98,6 +98,7 @@ struct Engine {
     game: Option<GameSession>,
     buttons: u16,
     awaiting_game: bool,
+    game_accum: f64,
 }
 
 impl Engine {
@@ -159,6 +160,7 @@ impl Engine {
             game: None,
             buttons: 0,
             awaiting_game: false,
+            game_accum: 0.0,
         })
     }
 
@@ -205,6 +207,7 @@ impl Engine {
                             self.progress = 1.0;
                             SAMPLE_RATE.store(session.sample_rate, Ordering::Release);
                             self.game = Some(session);
+                            self.game_accum = 0.0;
                             self.gpu.set_screen_effect(ScreenEffect::None);
                             self.gpu.set_screen_power(1.0);
                             PLAYING.store(true, Ordering::Release);
@@ -311,15 +314,23 @@ impl Engine {
         }
 
         if let Some(session) = self.game.as_mut() {
-            session.advance(self.buttons);
-            self.gpu.upload_game(session.frame());
-            let samples = session.take_audio();
-            if !samples.is_empty() {
-                let mut audio = AUDIO.lock().unwrap_or_else(|e| e.into_inner());
-                let overflow = audio.len().saturating_add(samples.len()).saturating_sub(96_000);
-                for _ in 0..overflow.min(audio.len()) { audio.pop_front(); }
-                audio.extend(samples);
+            // Independent from display refresh: a 120 Hz panel must not run mGBA at 2x speed.
+            self.game_accum = (self.game_accum + f64::from(dt)).min(0.10);
+            let period = 1.0 / session.fps;
+            let mut stepped = 0;
+            while self.game_accum >= period && stepped < 4 {
+                session.advance(self.buttons);
+                self.game_accum -= period;
+                stepped += 1;
+                let samples = session.take_audio();
+                if !samples.is_empty() {
+                    let mut audio = AUDIO.lock().unwrap_or_else(|e| e.into_inner());
+                    let overflow = audio.len().saturating_add(samples.len()).saturating_sub(96_000);
+                    for _ in 0..overflow.min(audio.len()) { audio.pop_front(); }
+                    audio.extend(samples);
+                }
             }
+            if stepped > 0 { self.gpu.upload_game(session.frame()); }
             self.gpu.fit(self.size);
             self.gpu.begin_frame();
             self.gpu.draw_list(&[Draw::Game]);
