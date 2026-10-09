@@ -1383,10 +1383,7 @@ impl App {
     }
 
     fn step_shader(&mut self, right: bool) {
-        if !matches!(
-            self.phase,
-            Phase::Inserting { .. } | Phase::Playing { .. } | Phase::Polaroids { .. }
-        ) {
+        if !matches!(self.phase, Phase::Inserting { .. } | Phase::Playing { .. }) {
             return;
         }
         let (shader, choices) = match self.platform {

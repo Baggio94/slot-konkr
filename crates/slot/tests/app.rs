@@ -2227,3 +2227,19 @@ fn the_shader_shortcut_does_nothing_on_the_shelf() {
     );
     assert_eq!(s.app().toast(), None);
 }
+
+#[test]
+fn the_shader_shortcut_does_nothing_in_the_save_state_switcher() {
+    let d = common::tmp_root_with_carts(&["Emerald", "Fusion"]);
+    slot_store::StateRing::new(d.path(), Platform::Gba, Core::Mgba, "Emerald")
+        .push(&[1u8; 64], b"png", "2026-08-09_00-00-00")
+        .unwrap();
+    let mut a = common::app_in_switcher(d.path(), "Emerald");
+    assert!(matches!(a.phase(), Phase::Polaroids { .. }));
+    let before = slot_store::read_slot_state(d.path()).shader_gba;
+    a.apply(Action::ShaderNext);
+    a.apply(Action::ShaderPrev);
+    a.apply(Action::ShaderPrev);
+    assert_eq!(slot_store::read_slot_state(d.path()).shader_gba, before);
+    assert_eq!(a.toast(), None);
+}
