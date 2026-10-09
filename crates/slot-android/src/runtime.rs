@@ -90,10 +90,12 @@ enum ShelfOverlay {
     None,
     Library { row: usize },
     Core,
+    Settings,
+    GameMenu { row: usize },
 }
 
 const MENU_ITEMS: usize = 2; // scrape action is visible but disabled until implemented
-const MENU_TEXT: [&str; 9] = [
+const MENU_TEXT: [&str; 18] = [
     "LIBRARY",
     "Choose ROM folder",
     "Refresh library",
@@ -103,6 +105,15 @@ const MENU_TEXT: [&str; 9] = [
     "mGBA",
     "gpSP (not installed)",
     "A: confirm   B: back",
+    "SETTINGS",
+    "Library settings",
+    "Other options coming later",
+    "A: select   B: back",
+    "GAME MENU",
+    "Resume",
+    "Save and eject",
+    "States (coming soon)",
+    "A: select   B: back",
 ];
 
 struct Engine {
@@ -129,6 +140,7 @@ struct Engine {
     chip_texture: slot_gfx::TexId,
     a_down_at: Option<Instant>,
     fresh_launch: bool,
+    mode_down_at: Option<Instant>,
 }
 
 impl Engine {
@@ -210,6 +222,7 @@ impl Engine {
             chip_texture,
             a_down_at: None,
             fresh_launch: false,
+            mode_down_at: None,
         })
     }
 
@@ -217,6 +230,7 @@ impl Engine {
         match input {
             Input::Reset => {
                 self.buttons = 0;
+                self.mode_down_at = None;
                 self.overlay = ShelfOverlay::None;
                 for shelf in &mut self.shelves {
                     shelf.release_hold();
@@ -242,6 +256,7 @@ impl Engine {
                 self.overlay = ShelfOverlay::None;
                 self.a_down_at = None;
                 self.fresh_launch = false;
+                self.mode_down_at = None;
                 self.requested_uri = None;
                 self.prepared_rom = None;
                 self.seated_frame_seen = false;
@@ -271,6 +286,57 @@ impl Engine {
                 }
             }
             Input::Key(code, pressed) => {
+                // KONKR's top-round controller key emits Linux BTN_MODE. Android
+                // normally delivers that as KEYCODE_BUTTON_MODE (110); this is
+                // separate from the system HOME launcher key.
+                if code == 110 {
+                    if pressed {
+                        if self.mode_down_at.is_none() {
+                            self.mode_down_at = Some(Instant::now());
+                        }
+                    } else if let Some(since) = self.mode_down_at.take() {
+                        if since.elapsed().as_millis() >= 650 {
+                            if self.game.is_some() {
+                                self.handle(Input::Exit);
+                            }
+                        } else if self.game.is_some() {
+                            // Short press: pause and show Slot's in-game menu.
+                            self.buttons = 0;
+                            self.game_accum = 0.0;
+                            AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+                            self.overlay = match self.overlay {
+                                ShelfOverlay::GameMenu { .. } => ShelfOverlay::None,
+                                _ => ShelfOverlay::GameMenu { row: 0 },
+                            };
+                        } else if !self.inserted {
+                            self.overlay = match self.overlay {
+                                ShelfOverlay::Settings => ShelfOverlay::None,
+                                _ => ShelfOverlay::Settings,
+                            };
+                        }
+                    }
+                    return;
+                }
+                if self.game.is_some() && matches!(self.overlay, ShelfOverlay::GameMenu { .. }) {
+                    if pressed {
+                        match self.overlay {
+                            ShelfOverlay::GameMenu { row } => match code {
+                                19 | 20 => {
+                                    let next = if code == 19 { (row + 1) % 2 } else { (row + 1) % 2 };
+                                    self.overlay = ShelfOverlay::GameMenu { row: next };
+                                }
+                                96 => {
+                                    if row == 1 { self.handle(Input::Exit); }
+                                    else { self.overlay = ShelfOverlay::None; }
+                                }
+                                97 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
+                            _ => {}
+                        }
+                    }
+                    return;
+                }
                 if self.game.is_some() {
                     let mask = controls(code);
                     if pressed { self.buttons |= mask; } else { self.buttons &= !mask; }
@@ -300,7 +366,12 @@ impl Engine {
                                 96 | 97 | 109 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
-                            ShelfOverlay::None => {}
+                            ShelfOverlay::Settings => match code {
+                                96 => self.overlay = ShelfOverlay::Library { row: 0 },
+                                97 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
+                            ShelfOverlay::GameMenu { .. } | ShelfOverlay::None => {}
                         }
                     }
                     return;
@@ -466,6 +537,31 @@ impl Engine {
                 }
                 self.add_text(4, 136.0, 347.0, out);
             }
+            ShelfOverlay::Settings => {
+                out.push(Draw::Rect { x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32, colour: [0.0, 0.0, 0.0, 0.82] });
+                out.push(Draw::Rect { x: 95.0, y: 115.0, w: 530.0, h: 255.0, colour: [0.085, 0.085, 0.093, 1.0] });
+                out.push(Draw::Rect { x: 95.0, y: 115.0, w: 530.0, h: 3.0, colour: [0.69, 0.69, 0.72, 1.0] });
+                self.add_text(9, 136.0, 136.0, out);
+                out.push(Draw::Rect { x: 111.0, y: 198.0, w: 498.0, h: 43.0, colour: [0.28, 0.28, 0.32, 1.0] });
+                self.add_text(10, 136.0, 204.0, out);
+                self.add_text_alpha(11, 136.0, 268.0, 0.42, out);
+                self.add_text(12, 136.0, 326.0, out);
+            }
+            ShelfOverlay::GameMenu { row } => {
+                out.push(Draw::Rect { x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32, colour: [0.0, 0.0, 0.0, 0.76] });
+                out.push(Draw::Rect { x: 95.0, y: 115.0, w: 530.0, h: 255.0, colour: [0.085, 0.085, 0.093, 1.0] });
+                out.push(Draw::Rect { x: 95.0, y: 115.0, w: 530.0, h: 3.0, colour: [0.69, 0.69, 0.72, 1.0] });
+                self.add_text(13, 136.0, 136.0, out);
+                for index in 0..2 {
+                    let y = 204.0 + index as f32 * 49.0;
+                    if row == index {
+                        out.push(Draw::Rect { x: 111.0, y: y - 5.0, w: 498.0, h: 43.0, colour: [0.28, 0.28, 0.32, 1.0] });
+                    }
+                    self.add_text(index + 14, 136.0, y, out);
+                }
+                self.add_text_alpha(16, 136.0, 305.0, 0.42, out);
+                self.add_text(17, 136.0, 346.0, out);
+            }
             ShelfOverlay::Core => {
                 out.push(Draw::Rect { x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32, colour: [0.085, 0.085, 0.093, 1.0] });
                 self.add_text(5, 263.0, 74.0, out);
@@ -493,6 +589,14 @@ impl Engine {
         for event in events {
             self.handle(event);
         }
+        // Holding physical MENU saves, ejects, and returns to shelf without
+        // requiring a second keypress or sending MENU to libretro.
+        if self.game.is_some()
+            && self.mode_down_at.is_some_and(|t| t.elapsed().as_millis() >= 650)
+        {
+            self.mode_down_at = None;
+            self.handle(Input::Exit);
+        }
 
         // A long A press skips loading the auto-save state, but preserves SRAM.
         // At least 400ms must pass before treating a held A as a fresh launch.
@@ -513,6 +617,17 @@ impl Engine {
         }
 
         if let Some(session) = self.game.as_mut() {
+            if matches!(self.overlay, ShelfOverlay::GameMenu { .. }) {
+                // Do not advance emulation or consume input while the menu is open.
+                self.game_accum = 0.0;
+                let mut commands = vec![Draw::Game];
+                self.draw_overlay(&mut commands);
+                self.gpu.fit(self.size);
+                self.gpu.begin_frame();
+                self.gpu.draw_list(&commands);
+                self.gpu.end_frame(self.size);
+                return;
+            }
             // Independent from display refresh: a 120 Hz panel must not run mGBA at 2x speed.
             self.game_accum = (self.game_accum + f64::from(dt)).min(0.10);
             let period = 1.0 / session.fps;
