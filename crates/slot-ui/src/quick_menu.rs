@@ -113,7 +113,7 @@ impl QuickRow {
             QuickRow::About => "About",
             QuickRow::GbaShader => "GBA Shader",
             QuickRow::GbShader => "GB / GBC Shader",
-            QuickRow::ColourCorrection => "Colour Correction",
+            QuickRow::ColourCorrection => "Color Correction",
             QuickRow::Game => "Gameplay",
             QuickRow::EjectSave => "Auto Save on Eject",
             QuickRow::Turbo => "Turbo Buttons",
