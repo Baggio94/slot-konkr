@@ -6,6 +6,8 @@ use slot_retro::Rumble;
 use slot_store::Platform;
 use slot_ui::FfState;
 
+pub const RUMBLE_HOLD_MS: Millis = 100;
+
 use crate::app::{App, Phase};
 use crate::audio::{open_sink, AudioSink, Ring, Sfx, GBA_HZ};
 use crate::core::open_core;
@@ -24,6 +26,7 @@ pub struct Session {
     rewinding: bool,
     fast: bool,
     motor: u16,
+    pulse: Option<(Millis, u16)>,
     reloading: bool,
     driven: bool,
 }
@@ -44,6 +47,7 @@ impl Session {
             rewinding: false,
             fast: false,
             motor: 0,
+            pulse: None,
             reloading: false,
             driven: false,
         }
@@ -257,8 +261,19 @@ impl Session {
     }
 
     fn sync_rumble(&mut self) {
-        let want = match &self.emu {
+        let asked = match &self.emu {
             Some(emu) if self.playing() && self.app.rumble_enabled() => emu.rumble().strength(),
+            _ => {
+                self.pulse = None;
+                return self.rumble(0);
+            }
+        };
+        let now = self.app.now();
+        if asked > 0 {
+            self.pulse = Some((now, asked));
+        }
+        let want = match self.pulse {
+            Some((at, strength)) if now.saturating_sub(at) < RUMBLE_HOLD_MS => strength,
             _ => 0,
         };
         self.rumble(want);

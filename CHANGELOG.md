@@ -2,7 +2,8 @@
 
 ## [Unreleased](https://github.com/BrandonKowalski/slot/compare/v1.4.0...main)
 
-- The boot logo is built to the size of the one BaseOS installed, so it fits every panel instead of only 720x480. A logo installed at the wrong size is rebuilt at the right one.
+- Rumble regression fixed.
+- The boot logo is built to the size of the one BaseOS installed, so it fits every panel instead of only 720x480.
 - Runs on the RG35XXSP: the picture fills the 4:3 screen's width and a GBA SP bezel sits underneath while a game plays.
 - Screen shaders chosen per platform: Off, LCD3x, Grid or Dot for GBA, and Off, Grid or Simpletex for Game Boy and Game Boy Color.
 - New settings: auto save on eject, turbo buttons and rewind can each be switched off.
