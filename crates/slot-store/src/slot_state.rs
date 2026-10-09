@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::atomic::atomic_write;
+use crate::gb_palette::GbPalette;
 use crate::platform::Platform;
 
 pub const BRIGHTNESS_MAX: u8 = 9;
@@ -35,6 +36,8 @@ pub struct SlotState {
     pub eject_save: bool,
     pub turbo: bool,
     pub rewind: bool,
+    pub gb_palettes: bool,
+    pub gb_palette: GbPalette,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -105,6 +108,8 @@ impl Default for SlotState {
             eject_save: true,
             turbo: true,
             rewind: true,
+            gb_palettes: false,
+            gb_palette: GbPalette::DEFAULT,
         }
     }
 }
@@ -123,7 +128,7 @@ pub fn read_slot_state(root: &Path) -> SlotState {
 
 pub fn write_slot_state(root: &Path, s: &SlotState) -> std::io::Result<()> {
     let text = format!(
-        "cart={}\ncart_platform={}\nbrightness={}\nblue_light={}\nvolume={}\nvolume_hp={}\nmuted={}\nmuted_hp={}\nclock_set={}\nutc_offset_min={}\nrumble={}\nff_speed={}\nff_sound={}\ncolour_correction={}\nshader_gba={}\nshader_gb={}\neject_save={}\nturbo={}\nrewind={}\n",
+        "cart={}\ncart_platform={}\nbrightness={}\nblue_light={}\nvolume={}\nvolume_hp={}\nmuted={}\nmuted_hp={}\nclock_set={}\nutc_offset_min={}\nrumble={}\nff_speed={}\nff_sound={}\ncolour_correction={}\nshader_gba={}\nshader_gb={}\neject_save={}\nturbo={}\nrewind={}\ngb_palettes={}\ngb_palette={}\n",
         s.cart.as_deref().unwrap_or(""),
         s.cart_platform.map_or(String::new(), platform_key),
         s.brightness,
@@ -142,7 +147,9 @@ pub fn write_slot_state(root: &Path, s: &SlotState) -> std::io::Result<()> {
         s.shader_gb.name(),
         s.eject_save as u8,
         s.turbo as u8,
-        s.rewind as u8
+        s.rewind as u8,
+        s.gb_palettes as u8,
+        s.gb_palette.core_name()
     );
     atomic_write(&state_path(root), text.as_bytes())
 }
@@ -167,6 +174,8 @@ fn parse(text: &str) -> Option<SlotState> {
     let mut eject_save = None;
     let mut turbo = None;
     let mut rewind = None;
+    let mut gb_palettes = None;
+    let mut gb_palette = None;
     for line in text.lines().filter(|l| !l.is_empty()) {
         let Some((key, value)) = line.split_once('=') else {
             continue;
@@ -190,6 +199,8 @@ fn parse(text: &str) -> Option<SlotState> {
             "eject_save" => eject_save = flag(value),
             "turbo" => turbo = flag(value),
             "rewind" => rewind = flag(value),
+            "gb_palettes" => gb_palettes = flag(value),
+            "gb_palette" => gb_palette = GbPalette::parse(value),
             "shader_gb" => shader_gb = Shader::parse(value).filter(|s| Shader::GB.contains(s)),
             _ => {}
         }
@@ -216,6 +227,8 @@ fn parse(text: &str) -> Option<SlotState> {
         eject_save: eject_save.unwrap_or(fallback.eject_save),
         turbo: turbo.unwrap_or(fallback.turbo),
         rewind: rewind.unwrap_or(fallback.rewind),
+        gb_palettes: gb_palettes.unwrap_or(fallback.gb_palettes),
+        gb_palette: gb_palette.unwrap_or(fallback.gb_palette),
     })
 }
 
