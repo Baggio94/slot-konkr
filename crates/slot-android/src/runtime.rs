@@ -601,7 +601,7 @@ impl Engine {
                                     }
                                 }
                             },
-                            ShelfOverlay::GameMenu { .. } | ShelfOverlay::None => {}
+                            ShelfOverlay::GameMenu { .. } | ShelfOverlay::States | ShelfOverlay::None => {}
                         }
                     }
                     return;
