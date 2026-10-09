@@ -413,6 +413,7 @@ impl Session {
             core,
             serial,
             self.app.colour_correction(),
+            None,
             player,
         );
         self.app.set_named_core(opened.named);
