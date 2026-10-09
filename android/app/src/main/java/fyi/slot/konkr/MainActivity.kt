@@ -109,10 +109,10 @@ class MainActivity : Activity() {
                     val target = activeTargets[uri]
                     if (target != null && target.core == core) {
                         gameLoader.execute {
-                            val failures = RetroArchStorage.exportAfterSave(this, target)
+                            val failures = RetroArchStorage.exportAfterSave(this@MainActivity, target)
                             if (failures.isNotEmpty()) {
                                 runOnUiThread {
-                                    if (!isDestroyed) Toast.makeText(this,
+                                    if (!isDestroyed) Toast.makeText(this@MainActivity,
                                         failures.joinToString("; "), Toast.LENGTH_LONG).show()
                                 }
                             }
