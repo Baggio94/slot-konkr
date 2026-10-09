@@ -2,6 +2,7 @@ package fyi.slot.konkr
 
 import java.io.ByteArrayOutputStream
 import java.util.zip.Inflater
+import java.util.zip.Deflater
 
 /** RetroArch libretro-common rzip_stream.c chunk format, strict bounded v1
  * (zlib) decoding. RZIP v2 is zstd, not Android's built-in zlib; preserve it
@@ -14,6 +15,56 @@ internal object RetroArchCompression {
     fun isRzip(data: ByteArray): Boolean =
         data.size >= 20 && marker.indices.all { data[it] == marker[it] } &&
         data[7] == 35.toByte()
+
+    /** RetroArch #RZIPv1# zlib writer: 128 KiB independent chunks.
+     *  Preserve the format of the existing KONKR .state.auto files.
+     */
+    fun encode(data: ByteArray): ByteArray {
+        require(data.isNotEmpty() && data.size <= LIMIT) {
+            "RetroArch state outside supported size limit"
+        }
+        val chunkSize = 131_072
+        val out = ByteArrayOutputStream(data.size / 2 + 64)
+        out.write(byteArrayOf(35,82,90,73,80,118,1,35)) // #RZIPv1#
+        fun write32(value: Long) {
+            require(value in 0..0xffff_ffffL)
+            for (i in 0..3) out.write(((value ushr (i * 8)) and 255).toInt())
+        }
+        write32(chunkSize.toLong())
+        write32(data.size.toLong())
+        write32(0)
+        var offset = 0
+        while (offset < data.size) {
+            val len = minOf(chunkSize, data.size - offset)
+            val deflater = Deflater(6, false)
+            val compressed = ByteArrayOutputStream(len / 2 + 64)
+            try {
+                deflater.setInput(data, offset, len)
+                deflater.finish()
+                val buffer = ByteArray(65536)
+                while (!deflater.finished()) {
+                    val n = deflater.deflate(buffer)
+                    check(n > 0) { "RetroArch compression stalled" }
+                    compressed.write(buffer, 0, n)
+                    check(compressed.size() <= 2 * chunkSize) {
+                        "Oversized compressed RetroArch chunk"
+                    }
+                }
+            } finally {
+                deflater.end()
+            }
+            val chunk = compressed.toByteArray()
+            require(chunk.isNotEmpty())
+            write32(chunk.size.toLong())
+            out.write(chunk)
+            offset += len
+        }
+        val result = out.toByteArray()
+        check(decode(result).contentEquals(data)) {
+            "Compressed RetroArch state failed its round trip"
+        }
+        return result
+    }
 
     fun decode(data: ByteArray): ByteArray {
         if (!isRzip(data)) return data

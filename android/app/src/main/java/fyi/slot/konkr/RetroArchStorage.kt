@@ -102,8 +102,10 @@ internal object RetroArchStorage {
                 require(bytes.size in 16..MAX_STATE && bytes.startsWithRASTATE()) {
                     "Invalid uncompressed RASTATE export"
                 }
+                // Keep the exact #RZIPv1# format used by this KONKR RetroArch.
+                val compressed = RetroArchCompression.encode(bytes)
                 writeSaf(context, target.statesTree, target.core,
-                    target.stem + ".state.auto", bytes, isState = true)
+                    target.stem + ".state.auto", compressed, isState = true)
             } catch (e: Exception) {
                 Log.e(TAG, "RetroArch state export failed", e)
                 failures.add("State sync skipped: " + (e.message ?: "unsupported format"))
