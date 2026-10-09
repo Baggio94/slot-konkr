@@ -15,7 +15,7 @@ Source code is not equivalent to device validation; only call a feature complete
 | Mechanical insert/eject sounds, A short resume / A long fresh | Physically validated | Keep regression tests |
 | SELECT original cart opening and chip animation | Physically validated | Add usable gpSP and persist per-game core |
 | mGBA emulation and save RAM | GBA physically validated | Test GB/GBC core behavior |
-| Original optional BIOS intro | 0.0.6-dev1 source, not yet tested | Load GBA/GB/GBC BIOS via Android SAF |
+| Original optional BIOS intro | **GBA confirmed on physical KONKR in 0.0.6-dev1** | GB/GBC BIOS behavior still to check with games |
 | gpSP second GBA core | 0.0.6-dev2 source + CI pending | Test physical gpSP boot, save RAM, audio and persistent choice |
 | Hand-authored cartridge label PNGs and shell colors | Not implemented | Import Slot Cart Studio labels, respect cart shell colors, cache |
 | Multiple timestamped save states | Only last automatic state | Complete state ring, thumbnails, save/load/delete and undo |
@@ -85,3 +85,8 @@ Do not claim 0.0.6-dev1 validated until the user actually tests on KONKR.
   switch to mGBA and back, restart app to verify per-cart preference persisted.
 - CI arm64 gpSP build and physical tests must complete before marking as done.
 - RetroAchievements is frozen during this parity stage.
+
+
+## gpSP integration outcome (0.0.6-dev2)
+
+GitHub Actions run [38002922667](https://github.com/Baggio94/slot-konkr/actions/runs/38002922667) passed. The generated APK was checked for both ARM64 mGBA and gpSP libraries, original sounds, and gpSP exported libretro symbols. This establishes build integrity **only**, not playability on real hardware. Next device gate is selecting gpSP on a GBA cart, confirming launch/video/audio, returning to shelf, persistence of selected core and correct per-core save state isolation. Upstream BIOS folder 0.0.6-dev1 has been physically confirmed by the user to work; no regression testing of gpSP BIOS yet.
