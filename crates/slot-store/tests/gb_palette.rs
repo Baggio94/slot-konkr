@@ -43,3 +43,13 @@ fn next_walks_the_list_and_wraps() {
     assert_eq!(last.next().core_name(), "Grayscale");
     assert_eq!(GbPalette::parse("not a palette"), None);
 }
+
+#[test]
+fn prev_walks_back_and_wraps() {
+    assert_eq!(GbPalette::DEFAULT.prev().core_name(), "Grayscale");
+    let first = GbPalette::all().next().unwrap();
+    assert_eq!(first.prev().core_name(), "SGB 4-H");
+    for p in GbPalette::all() {
+        assert_eq!(p.next().prev(), p);
+    }
+}

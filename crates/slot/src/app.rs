@@ -1414,9 +1414,12 @@ impl App {
             self.step_shader(action == Action::ShaderNext);
             return true;
         }
-        if action == Action::PaletteNext {
+        if let Action::PaletteNext | Action::PalettePrev = action {
             if self.palette_live && matches!(self.phase, Phase::Playing { .. }) {
-                let to = self.state.gb_palette.next();
+                let to = match action {
+                    Action::PalettePrev => self.state.gb_palette.prev(),
+                    _ => self.state.gb_palette.next(),
+                };
                 self.state.gb_palette = to;
                 self.palette_pending = Some(to);
                 self.persist();

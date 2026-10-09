@@ -7,7 +7,7 @@
 - Runs on the RG35XXSP: the picture fills the 4:3 screen's width and a GBA SP bezel sits underneath while a game plays.
 - Screen shaders chosen per platform: Off, LCD3x, Grid or Dot for GBA, and Off, Grid or Simpletex for Game Boy and Game Boy Color.
 - New settings: auto save on eject, turbo buttons and rewind can each be switched off.
-- Named palettes for Game Boy games: turn on GB Palettes in the Screen settings, then SELECT + X in game steps through mGBA's 48 palettes, Super Game Boy games included.
+- Named palettes for Game Boy games: turn on GB Palettes in the Screen settings, then SELECT + L2 / R2 in game steps back and forth through mGBA's 48 palettes.
 - The speaker no longer buzzes while nothing is playing. slot lets go of the audio device after 3 seconds of silence and takes it back when sound starts. Thanks to flo333 for finding it.
 
 ## [1.4.0](https://github.com/BrandonKowalski/slot/releases/tag/v1.4.0)

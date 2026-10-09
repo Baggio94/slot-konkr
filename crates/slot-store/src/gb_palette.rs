@@ -80,6 +80,10 @@ impl GbPalette {
         GbPalette(((self.index() + 1) % Self::COUNT) as u8)
     }
 
+    pub fn prev(self) -> GbPalette {
+        GbPalette(((self.index() + Self::COUNT - 1) % Self::COUNT) as u8)
+    }
+
     pub fn parse(name: &str) -> Option<GbPalette> {
         Self::all().find(|p| p.core_name() == name)
     }
