@@ -69,7 +69,9 @@ class MainActivity : Activity() {
     external fun nativeReadAudio(): ShortArray
     external fun nativePollMessage(): String?
     external fun nativePollUiAction(): Int
+    external fun nativePollCartSfx(): Int
 
+    private lateinit var cartSounds: CartSounds
     private val scanner = Executors.newSingleThreadExecutor()
     private val gameLoader = Executors.newSingleThreadExecutor()
     private val uiHandler = Handler(Looper.getMainLooper())
@@ -107,6 +109,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         nativeConfigure(filesDir.absolutePath, applicationInfo.nativeLibraryDir)
+        cartSounds = CartSounds(this)
         view = object : GLSurfaceView(this) {
             init {
                 setEGLContextClientVersion(2)
@@ -123,6 +126,12 @@ class MainActivity : Activity() {
                     override fun onDrawFrame(gl: GL10?) {
                         if (ready) {
                             nativeDrawFrame()
+                            // Drain on the render thread for frame-accurate insert/eject clicks.
+                            var kind = nativePollCartSfx()
+                            while (kind != 0) {
+                                cartSounds.play(kind)
+                                kind = nativePollCartSfx()
+                            }
                         } else {
                             GLES20.glClearColor(0f, 0f, 0f, 1f)
                             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
@@ -434,12 +443,14 @@ class MainActivity : Activity() {
         gameLoader.shutdownNow()
         uiHandler.removeCallbacks(pulse)
         stopAudio()
+        cartSounds.release()
         super.onDestroy()
     }
 
     override fun onPause() {
         resumed = false
         stopAudio()
+        cartSounds.pause()
         // Preserve SRAM and automatic resume state while the GL context is still current.
         val complete = CountDownLatch(1)
         view.queueEvent { try { nativeSuspend() } finally { complete.countDown() } }
@@ -456,6 +467,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         resumed = true
+        cartSounds.resume()
         view.onResume()
         immersive()
     }
