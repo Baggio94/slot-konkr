@@ -1,6 +1,17 @@
 package fyi.slot.konkr
 
 import android.app.Activity
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import java.security.MessageDigest
+import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import android.content.Intent
 import android.content.ActivityNotFoundException
 import android.graphics.Color
@@ -34,7 +45,9 @@ class MainActivity : Activity() {
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
             KeyEvent.KEYCODE_BUTTON_L1, KeyEvent.KEYCODE_BUTTON_R1,
-            KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_BUTTON_B
+            KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_BUTTON_B,
+            KeyEvent.KEYCODE_BUTTON_X, KeyEvent.KEYCODE_BUTTON_Y,
+            KeyEvent.KEYCODE_BUTTON_START, KeyEvent.KEYCODE_BUTTON_SELECT
         )
     }
 
@@ -44,8 +57,34 @@ class MainActivity : Activity() {
     external fun nativeKey(code: Int, pressed: Boolean)
     external fun nativeResetInput()
     external fun nativeSetLibrary(json: String): Int
+    external fun nativeConfigure(dataDir: String, libraryDir: String)
+    external fun nativePollLaunchUri(): String?
+    external fun nativeGameReady(path: String)
+    external fun nativeGameError(message: String)
+    external fun nativeExitGame()
+    external fun nativeSuspend()
+    external fun nativeIsPlaying(): Boolean
+    external fun nativeAudioSampleRate(): Int
+    external fun nativeReadAudio(): ShortArray
+    external fun nativePollMessage(): String?
 
     private val scanner = Executors.newSingleThreadExecutor()
+    private val gameLoader = Executors.newSingleThreadExecutor()
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val audioRunning = AtomicBoolean(false)
+    private var audioThread: Thread? = null
+    private val pulse = object : Runnable {
+        override fun run() {
+            val request = nativePollLaunchUri()
+            if (request != null) loadGameFromSaf(request)
+            nativePollMessage()?.let { message ->
+                Log.e(TAG, message)
+                status.visibility = View.VISIBLE
+                status.text = message + " — B returns to the shelf"
+            }
+            if (!isDestroyed) uiHandler.postDelayed(this, 100L)
+        }
+    }
     private val scanSerial = AtomicInteger()
     private lateinit var status: TextView
 
@@ -55,6 +94,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        nativeConfigure(filesDir.absolutePath, applicationInfo.nativeLibraryDir)
         view = object : GLSurfaceView(this) {
             init {
                 setEGLContextClientVersion(2)
@@ -123,6 +163,7 @@ class MainActivity : Activity() {
         )
         setContentView(frame)
         immersive()
+        uiHandler.post(pulse)
         val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)
         if (saved != null) {
             val uri = Uri.parse(saved)
@@ -139,23 +180,30 @@ class MainActivity : Activity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_BUTTON_START && event.repeatCount == 0) {
-            openRomFolderPicker()
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            onBackPressed()
             return true
         }
-        if (keyCode == KeyEvent.KEYCODE_BUTTON_SELECT && event.repeatCount == 0) {
-            val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)
-            if (saved != null) scanFolder(Uri.parse(saved)) else openRomFolderPicker()
-            return true
+        if (!nativeIsPlaying()) {
+            if (keyCode == KeyEvent.KEYCODE_BUTTON_START && event.repeatCount == 0) {
+                openRomFolderPicker()
+                return true
+            }
+            if (keyCode == KeyEvent.KEYCODE_BUTTON_SELECT && event.repeatCount == 0) {
+                val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)
+                if (saved != null) scanFolder(Uri.parse(saved)) else openRomFolderPicker()
+                return true
+            }
+            if (keyCode == KeyEvent.KEYCODE_BUTTON_START || keyCode == KeyEvent.KEYCODE_BUTTON_SELECT) return true
         }
-        if (keyCode in setOf(KeyEvent.KEYCODE_BUTTON_START, KeyEvent.KEYCODE_BUTTON_SELECT)) return true
         if (keyCode !in BUTTONS) return super.onKeyDown(keyCode, event)
         if (event.repeatCount == 0) nativeKey(keyCode, true)
         return true
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
-        if (keyCode in setOf(KeyEvent.KEYCODE_BUTTON_START, KeyEvent.KEYCODE_BUTTON_SELECT)) return true
+        if (keyCode == KeyEvent.KEYCODE_BACK) return true
+        if (!nativeIsPlaying() && keyCode in setOf(KeyEvent.KEYCODE_BUTTON_START, KeyEvent.KEYCODE_BUTTON_SELECT)) return true
         if (keyCode !in BUTTONS) return super.onKeyUp(keyCode, event)
         nativeKey(keyCode, false)
         return true
@@ -163,8 +211,118 @@ class MainActivity : Activity() {
 
     @Deprecated("Android 12 back key")
     override fun onBackPressed() {
-        nativeKey(KeyEvent.KEYCODE_BUTTON_B, true)
-        nativeKey(KeyEvent.KEYCODE_BUTTON_B, false)
+        if (nativeIsPlaying()) {
+            nativeExitGame()
+        } else {
+            nativeKey(KeyEvent.KEYCODE_BUTTON_B, true)
+            nativeKey(KeyEvent.KEYCODE_BUTTON_B, false)
+        }
+    }
+
+    private fun loadGameFromSaf(rawUri: String) {
+        val uri = try { Uri.parse(rawUri) } catch (_: Exception) {
+            nativeGameError("Invalid ROM URI")
+            return
+        }
+        gameLoader.execute {
+            try {
+                val name = uri.lastPathSegment.orEmpty().lowercase()
+                val ext = when {
+                    name.endsWith(".gba") -> "gba"
+                    name.endsWith(".gbc") -> "gbc"
+                    name.endsWith(".gb") -> "gb"
+                    else -> error("Unsupported ROM type")
+                }
+                val digest = MessageDigest.getInstance("SHA-256")
+                    .digest(rawUri.toByteArray(Charsets.UTF_8))
+                    .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+                val dir = File(cacheDir, "rom-cache").apply { mkdirs() }
+                val target = File(dir, "$digest.$ext")
+                // Always open via Android SAF; no assumptions about physical filesystem paths.
+                if (!target.isFile || target.length() < 0x150) {
+                    val temp = File(dir, "$digest.tmp")
+                    try {
+                        contentResolver.openInputStream(uri)?.use { input ->
+                            temp.outputStream().buffered().use { output ->
+                                val buffer = ByteArray(64 * 1024)
+                                var copied = 0L
+                                while (true) {
+                                    val n = input.read(buffer)
+                                    if (n < 0) break
+                                    copied += n
+                                    require(copied <= 64L * 1024 * 1024) { "ROM exceeds 64 MiB" }
+                                    output.write(buffer, 0, n)
+                                }
+                                require(copied >= 0x150) { "ROM too small" }
+                            }
+                        } ?: error("Cannot read this ROM")
+                        check(temp.renameTo(target)) { "Cannot cache ROM" }
+                    } finally { temp.delete() }
+                }
+                nativeGameReady(target.absolutePath)
+            } catch (error: Exception) {
+                Log.e(TAG, "Could not prepare ROM", error)
+                nativeGameError(error.message ?: "Cannot open ROM")
+            }
+        }
+    }
+
+    private fun startAudio() {
+        if (!audioRunning.compareAndSet(false, true)) return
+        audioThread = Thread({
+            var player: AudioTrack? = null
+            var rate = 0
+            try {
+                while (audioRunning.get()) {
+                    val wanted = nativeAudioSampleRate()
+                    if (wanted <= 0) {
+                        player?.pause()
+                        SystemClock.sleep(35)
+                        continue
+                    }
+                    if (player == null || rate != wanted) {
+                        player?.release()
+                        val minBytes = AudioTrack.getMinBufferSize(
+                            wanted, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT
+                        )
+                        if (minBytes <= 0) {
+                            SystemClock.sleep(100)
+                            continue
+                        }
+                        player = AudioTrack.Builder()
+                            .setAudioAttributes(AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_GAME)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+                            .setAudioFormat(AudioFormat.Builder()
+                                .setSampleRate(wanted)
+                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).build())
+                            .setBufferSizeInBytes(maxOf(16384, minBytes * 2))
+                            .setTransferMode(AudioTrack.MODE_STREAM)
+                            .build()
+                        rate = wanted
+                        player.play()
+                    }
+                    val samples = nativeReadAudio()
+                    if (samples.isEmpty()) {
+                        SystemClock.sleep(8)
+                        continue
+                    }
+                    player.write(samples, 0, samples.size, AudioTrack.WRITE_BLOCKING)
+                }
+            } catch (error: Exception) {
+                Log.e(TAG, "Android AudioTrack error", error)
+            } finally {
+                player?.stop()
+                player?.release()
+            }
+        }, "SlotKONKR-Audio").apply { isDaemon = true; start() }
+    }
+
+    private fun stopAudio() {
+        audioRunning.set(false)
+        audioThread?.interrupt()
+        audioThread = null
     }
 
     private fun openRomFolderPicker() {
@@ -236,10 +394,22 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         scanSerial.incrementAndGet()
         scanner.shutdownNow()
+        gameLoader.shutdownNow()
+        uiHandler.removeCallbacks(pulse)
+        stopAudio()
         super.onDestroy()
     }
 
     override fun onPause() {
+        stopAudio()
+        // Preserve SRAM and automatic resume state while the GL context is still current.
+        val complete = CountDownLatch(1)
+        view.queueEvent { try { nativeSuspend() } finally { complete.countDown() } }
+        try {
+            if (!complete.await(2, TimeUnit.SECONDS)) Log.w(TAG, "Suspend save timed out")
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
         view.onPause()
         nativeResetInput()
         super.onPause()
@@ -248,6 +418,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         view.onResume()
+        startAudio()
         immersive()
     }
 
