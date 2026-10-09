@@ -177,3 +177,46 @@ fn every_fast_forward_speed_sits_on_the_rows_right_edge_and_clears_the_label() {
         tap(&mut f, &mut input, Btn::Right);
     }
 }
+
+#[test]
+fn the_screen_page_sets_gb_palettes_in_line_with_the_rows_above() {
+    let Ok(surface) = HeadlessSurface::new() else {
+        return;
+    };
+    let Ok(mut c) = Compositor::new(&surface) else {
+        return;
+    };
+    let d = tmp_root_with_carts(&["Emerald", "Fusion"]);
+    clocked(d.path());
+    let mut f = Frontend::boot(Box::new(SimPlatform::at(d.path().to_path_buf())));
+    f.upload_faces(&mut c);
+    let mut input = Script(VecDeque::new());
+    tap(&mut f, &mut input, Btn::Menu);
+    tap(&mut f, &mut input, Btn::A);
+    for _ in 0..QuickRow::GbPalettes.position() {
+        tap(&mut f, &mut input, Btn::Down);
+    }
+    let px = composed(&mut f, &mut c, "screen-page");
+
+    let top = (QUICK_TOP + QUICK_PITCH * QuickRow::GbPalettes.position() as f32) as usize;
+    assert_eq!(
+        at(&px, 1, top + 26),
+        [0x4d, 0x4d, 0x57],
+        "the bar is not on GB Palettes"
+    );
+    for row in QuickRow::SCREEN {
+        let top = (QUICK_TOP + QUICK_PITCH * row.position() as f32) as usize;
+        let label = inked(&px, 0..360, top);
+        let first = *label.first().expect("a row with no label");
+        assert!(
+            (32..=36).contains(&first),
+            "{row:?}'s label starts at x {first}"
+        );
+        let value = inked(&px, 360..OUT_W as usize, top);
+        let last = *value.last().expect("a row with no value");
+        assert!(
+            (679..=688).contains(&last),
+            "{row:?}'s value ends at x {last}"
+        );
+    }
+}

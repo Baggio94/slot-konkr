@@ -83,7 +83,12 @@ fn the_rows_run_in_the_order_the_user_chose() {
     );
     assert_eq!(
         QuickRow::SCREEN.map(QuickRow::label),
-        ["GBA Shader", "GB / GBC Shader", "Colour Correction"]
+        [
+            "GBA Shader",
+            "GB / GBC Shader",
+            "Colour Correction",
+            "GB Palettes"
+        ]
     );
     assert_eq!(
         QuickRow::GAME.map(QuickRow::label),

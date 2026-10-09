@@ -19,10 +19,11 @@ pub enum QuickRow {
     EjectSave,
     Turbo,
     Rewind,
+    GbPalettes,
 }
 
 impl QuickRow {
-    pub const ALL: [QuickRow; 13] = [
+    pub const ALL: [QuickRow; 14] = [
         QuickRow::FastForward,
         QuickRow::FastForwardSound,
         QuickRow::Screen,
@@ -36,6 +37,7 @@ impl QuickRow {
         QuickRow::EjectSave,
         QuickRow::Turbo,
         QuickRow::Rewind,
+        QuickRow::GbPalettes,
     ];
 
     pub const MAIN: [QuickRow; 4] = [
@@ -45,10 +47,11 @@ impl QuickRow {
         QuickRow::About,
     ];
 
-    pub const SCREEN: [QuickRow; 3] = [
+    pub const SCREEN: [QuickRow; 4] = [
         QuickRow::GbaShader,
         QuickRow::GbShader,
         QuickRow::ColourCorrection,
+        QuickRow::GbPalettes,
     ];
 
     pub const GAME: [QuickRow; 6] = [
@@ -66,9 +69,10 @@ impl QuickRow {
 
     pub fn page(self) -> &'static [QuickRow] {
         match self {
-            QuickRow::GbaShader | QuickRow::GbShader | QuickRow::ColourCorrection => {
-                &QuickRow::SCREEN
-            }
+            QuickRow::GbaShader
+            | QuickRow::GbShader
+            | QuickRow::ColourCorrection
+            | QuickRow::GbPalettes => &QuickRow::SCREEN,
             QuickRow::FastForward
             | QuickRow::FastForwardSound
             | QuickRow::Rewind
@@ -114,6 +118,7 @@ impl QuickRow {
             QuickRow::EjectSave => "Auto Save on Eject",
             QuickRow::Turbo => "Turbo Buttons",
             QuickRow::Rewind => "Rewind",
+            QuickRow::GbPalettes => "GB Palettes",
         }
     }
 

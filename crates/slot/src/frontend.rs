@@ -272,10 +272,10 @@ impl Frontend {
         self.session.app_mut().set_link_step_faces(steps);
         let fails = menu_faces(compositor, LinkFail::SHOWN.iter().map(|f| f.line()));
         self.session.app_mut().set_link_fail_faces(fails);
-        let toasts = Toast::ALL
-            .iter()
+        let toasts = Toast::all()
+            .into_iter()
             .map(|t| {
-                let f = toast_face(*t);
+                let f = toast_face(t);
                 compositor.create_texture(f.w, f.h, &f.rgba)
             })
             .collect();

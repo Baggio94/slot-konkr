@@ -244,6 +244,7 @@ fn screen_opens_a_page_of_its_own_and_b_comes_back_to_it() {
     for want in [
         QuickRow::GbShader,
         QuickRow::ColourCorrection,
+        QuickRow::GbPalettes,
         QuickRow::GbaShader,
     ] {
         press(&mut a, Btn::Down);
@@ -603,4 +604,23 @@ fn only_the_clock_from_the_menu_offers_b_back() {
         !drawn(&out, 400),
         "the first boot clock offers a way back it does not have"
     );
+}
+
+#[test]
+fn gb_palettes_flips_on_either_arrow_and_saves() {
+    let (d, mut a, _) = on_carousel();
+    open_at(&mut a, QuickRow::GbPalettes);
+    assert_eq!(a.quick_value(QuickRow::GbPalettes), Some(QuickValue::Off));
+    for (btn, want) in [(Btn::Right, true), (Btn::Left, false), (Btn::Left, true)] {
+        press(&mut a, btn);
+        assert_eq!(
+            read_slot_state(d.path()).gb_palettes,
+            want,
+            "{btn:?} never reached the card"
+        );
+        assert_eq!(
+            a.quick_value(QuickRow::GbPalettes),
+            Some(QuickValue::flag(want))
+        );
+    }
 }

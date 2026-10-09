@@ -632,6 +632,7 @@ impl App {
             QuickRow::FastForward => QuickValue::speed(self.state.ff_speed),
             QuickRow::FastForwardSound => Some(QuickValue::flag(self.state.ff_sound)),
             QuickRow::ColourCorrection => Some(QuickValue::flag(self.state.colour_correction)),
+            QuickRow::GbPalettes => Some(QuickValue::flag(self.state.gb_palettes)),
             QuickRow::GbaShader => Some(shader_value(self.state.shader_gba)),
             QuickRow::GbShader => Some(shader_value(self.state.shader_gb)),
             QuickRow::Rumble => Some(QuickValue::flag(self.state.rumble)),
@@ -1311,6 +1312,7 @@ impl App {
             | QuickRow::ColourCorrection
             | QuickRow::GbaShader
             | QuickRow::GbShader
+            | QuickRow::GbPalettes
             | QuickRow::Rumble => {}
         }
     }
@@ -1348,6 +1350,7 @@ impl App {
             QuickRow::EjectSave => s.eject_save = !s.eject_save,
             QuickRow::Turbo => s.turbo = !s.turbo,
             QuickRow::Rewind => s.rewind = !s.rewind,
+            QuickRow::GbPalettes => s.gb_palettes = !s.gb_palettes,
             QuickRow::DateTime | QuickRow::About | QuickRow::Screen | QuickRow::Game => return,
         }
         self.persist();
