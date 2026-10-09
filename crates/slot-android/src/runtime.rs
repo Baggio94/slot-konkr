@@ -49,7 +49,7 @@ impl Surface for AndroidSurface {
 enum Input {
     Key(i32, bool),
     Reset,
-    GameReady(String),
+    GameReady { uri: String, path: String },
     GameError(String),
     Exit,
     Suspend,
@@ -98,6 +98,9 @@ struct Engine {
     game: Option<GameSession>,
     buttons: u16,
     awaiting_game: bool,
+    requested_uri: Option<String>,
+    prepared_rom: Option<String>,
+    seated_frame_seen: bool,
     game_accum: f64,
 }
 
@@ -160,6 +163,9 @@ impl Engine {
             game: None,
             buttons: 0,
             awaiting_game: false,
+            requested_uri: None,
+            prepared_rom: None,
+            seated_frame_seen: false,
             game_accum: 0.0,
         })
     }
@@ -189,37 +195,28 @@ impl Engine {
                 self.buttons = 0;
                 self.awaiting_game = false;
                 self.inserted = false;
+                self.requested_uri = None;
+                self.prepared_rom = None;
+                self.seated_frame_seen = false;
                 *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = None;
             }
             Input::GameError(error) => {
+                if !self.inserted { return; }
                 set_message(format!("Cannot open game: {error}"));
                 self.awaiting_game = false;
                 self.inserted = false;
+                self.requested_uri = None;
+                self.prepared_rom = None;
+                self.seated_frame_seen = false;
             }
-            Input::GameReady(local) => {
-                if !self.awaiting_game || !self.inserted { return; }
-                self.awaiting_game = false;
-                let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                if let Some((storage, library)) = paths {
-                    match GameSession::open(Path::new(&local), &library.join("libmgba_libretro.so"), &storage) {
-                        Ok(session) => {
-                            self.buttons = 0;
-                            self.progress = 1.0;
-                            SAMPLE_RATE.store(session.sample_rate, Ordering::Release);
-                            self.game = Some(session);
-                            self.game_accum = 0.0;
-                            self.gpu.set_screen_effect(ScreenEffect::None);
-                            self.gpu.set_screen_power(1.0);
-                            PLAYING.store(true, Ordering::Release);
-                        }
-                        Err(error) => {
-                            set_message(format!("mGBA: {error}"));
-                            self.inserted = false;
-                        }
-                    }
-                } else {
-                    set_message("Android game paths are not configured".into());
-                    self.inserted = false;
+            Input::GameReady { uri, path } => {
+                // ROM preparation is asynchronous: a previously cancelled cart must
+                // never launch after selecting another cartridge.
+                if self.awaiting_game && self.inserted
+                    && self.requested_uri.as_deref() == Some(uri.as_str())
+                {
+                    self.awaiting_game = false;
+                    self.prepared_rom = Some(path);
                 }
             }
             Input::Key(code, pressed) => {
@@ -234,30 +231,37 @@ impl Engine {
                 }
                 if pressed {
                     match code {
-                        102 | 103 => {
-                            self.shelves[self.active].release_hold();
-                            self.active = if code == 102 {
-                                (self.active + self.shelves.len() - 1) % self.shelves.len()
-                            } else {
-                                (self.active + 1) % self.shelves.len()
-                            };
-                            self.inserted = false;
-                            self.progress = 0.0;
+                        102 | 103 if !self.inserted => {
+                            let delta = if code == 102 { -1 } else { 1 };
+                            // An empty platform is never a visible stop.
+                            let next = next_nonempty_shelf(&self.shelves, self.active, delta);
+                            if next != self.active {
+                                self.shelves[self.active].release_hold();
+                                self.active = next;
+                                self.progress = 0.0;
+                            }
                             return;
                         }
                         96 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
                             self.inserted = true;
                             let selected = &self.shelves[self.active].carts[self.shelves[self.active].index];
                             let uri = selected.rom.to_string_lossy();
+                            self.seated_frame_seen = false;
+                            self.prepared_rom = None;
                             if uri.starts_with("content://") {
+                                let uri = uri.into_owned();
+                                self.requested_uri = Some(uri.clone());
                                 self.awaiting_game = true;
-                                *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = Some(uri.into_owned());
+                                *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = Some(uri);
                             }
                             return;
                         }
                         97 => {
                             self.inserted = false;
                             self.awaiting_game = false;
+                            self.prepared_rom = None;
+                            self.requested_uri = None;
+                            self.seated_frame_seen = false;
                             *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = None;
                             return;
                         }
@@ -303,6 +307,32 @@ impl Engine {
         }
     }
 
+    fn start_prepared_game(&mut self, local: &str) {
+        let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some((storage, library)) = paths {
+            match GameSession::open(Path::new(local), &library.join("libmgba_libretro.so"), &storage) {
+                Ok(session) => {
+                    self.buttons = 0;
+                    SAMPLE_RATE.store(session.sample_rate, Ordering::Release);
+                    self.game = Some(session);
+                    self.game_accum = 0.0;
+                    self.gpu.set_screen_effect(ScreenEffect::None);
+                    self.gpu.set_screen_power(1.0);
+                    PLAYING.store(true, Ordering::Release);
+                }
+                Err(error) => {
+                    set_message(format!("mGBA: {error}"));
+                    self.inserted = false;
+                    self.requested_uri = None;
+                }
+            }
+        } else {
+            set_message("Android game paths are not configured".into());
+            self.inserted = false;
+            self.requested_uri = None;
+        }
+    }
+
     fn draw(&mut self) {
         let now = Instant::now();
         let dt = (now - self.last).as_secs_f32().min(0.05);
@@ -315,6 +345,14 @@ impl Engine {
             .collect();
         for event in events {
             self.handle(event);
+        }
+
+        // ROM cache may finish at any time, but core.load() and automatic state
+        // restore only occur AFTER the full 730ms insertion has been displayed.
+        if self.inserted && self.progress >= 1.0 && self.seated_frame_seen {
+            if let Some(local) = self.prepared_rom.take() {
+                self.start_prepared_game(&local);
+            }
         }
 
         if let Some(session) = self.game.as_mut() {
@@ -386,6 +424,44 @@ impl Engine {
         self.gpu.begin_frame();
         self.gpu.draw_list(&commands);
         self.gpu.end_frame(self.size);
+        self.seated_frame_seen = self.inserted && self.progress >= 1.0;
+    }
+}
+
+/// Return the current shelf if it is the only populated one, and never
+/// select an empty GB/GBC/GBA shelf. Safe even if all libraries are empty.
+fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
+    let n = shelves.len();
+    if n == 0 || current >= n { return current; }
+    for step in 1..=n {
+        let candidate = (current as i32 + delta * step as i32).rem_euclid(n as i32) as usize;
+        if !shelves[candidate].carts.is_empty() {
+            return candidate;
+        }
+    }
+    current
+}
+
+#[cfg(test)]
+mod ui_feedback_tests {
+    use super::*;
+    #[test]
+    fn empty_shelves_are_skipped_in_both_directions() {
+        let mut shelves: Vec<Shelf> = (0..3).map(|_| Shelf::new(vec![])).collect();
+        assert_eq!(next_nonempty_shelf(&shelves, 0, 1), 0);
+        shelves[0].carts.push(Cart {
+            platform: Platform::Gba, stem: "Test".into(), title: "Test".into(),
+            code: String::new(), rom: PathBuf::new(), label: None, shell: None,
+        });
+        assert_eq!(next_nonempty_shelf(&shelves, 0, 1), 0);
+        assert_eq!(next_nonempty_shelf(&shelves, 0, -1), 0);
+        shelves[2].carts.push(Cart {
+            platform: Platform::Gbc, stem: "Color".into(), title: "Color".into(),
+            code: String::new(), rom: PathBuf::new(), label: None, shell: None,
+        });
+        assert_eq!(next_nonempty_shelf(&shelves, 0, 1), 2);
+        assert_eq!(next_nonempty_shelf(&shelves, 0, -1), 2);
+        assert_eq!(next_nonempty_shelf(&shelves, 2, 1), 0);
     }
 }
 
@@ -520,10 +596,13 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollLaunchUri(
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeGameReady(
-    mut env: JNIEnv<'_>, _this: JObject<'_>, path: JString<'_>,
+    mut env: JNIEnv<'_>, _this: JObject<'_>, uri: JString<'_>, path: JString<'_>,
 ) {
-    if let Ok(path) = env.get_string(&path) {
-        push(Input::GameReady(path.to_string_lossy().into_owned()));
+    if let (Ok(uri), Ok(path)) = (env.get_string(&uri), env.get_string(&path)) {
+        push(Input::GameReady {
+            uri: uri.to_string_lossy().into_owned(),
+            path: path.to_string_lossy().into_owned(),
+        });
     }
 }
 

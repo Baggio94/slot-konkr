@@ -115,3 +115,18 @@ Controller-only exit: press **START + SELECT** together during gameplay to save
 and return to the original Slot cart shelf. Android BACK also exits. Touchscreen
 taps hold game input across multiple emulated frames instead of getting lost in a
 single JNI queue flush.
+
+
+## UI feedback — isolated branch feat/konkr-ui-feedback
+
+1. Insert animation completes before emulation core is opened and the previous
+save state is deserialized. SAF ROM staging continues concurrently; once the full
+~730 ms original animation is rendered, start the prepared ROM on the GL thread.
+Cancellation by B discards prepared filenames, and late SAF work is matched against
+the requested URI to prevent launch of a previously canceled game.
+2. L1/R1 skip empty platform shelves; with only GBA ROMs both keys stay on GBA.
+No additional empty-screen fallback UI is introduced by these fixes.
+
+No changes to the validated feat/android-bootstrap branch or the experimental
+feat/konkr-retroachievements branch. Remaining UI work: native Menu/Home keycode,
+Start settings menu, Select cart core picker, original hotkeys, Studio-style labels.

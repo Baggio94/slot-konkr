@@ -59,7 +59,7 @@ class MainActivity : Activity() {
     external fun nativeSetLibrary(json: String): Int
     external fun nativeConfigure(dataDir: String, libraryDir: String)
     external fun nativePollLaunchUri(): String?
-    external fun nativeGameReady(path: String)
+    external fun nativeGameReady(uri: String, path: String)
     external fun nativeGameError(message: String)
     external fun nativeExitGame()
     external fun nativeSuspend()
@@ -270,7 +270,7 @@ class MainActivity : Activity() {
                         check(temp.renameTo(target)) { "Cannot cache ROM" }
                     } finally { temp.delete() }
                 }
-                nativeGameReady(target.absolutePath)
+                nativeGameReady(rawUri, target.absolutePath)
             } catch (error: Exception) {
                 Log.e(TAG, "Could not prepare ROM", error)
                 nativeGameError(error.message ?: "Cannot open ROM")
