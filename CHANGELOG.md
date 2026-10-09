@@ -50,7 +50,7 @@
 - Game Boy and Game Boy Color, each on its own shelf. L1 and R1 switch shelves, and carts are drawn at their own size in their own plastics.
 - Two cores, mGBA and gpSP. Press START on a cart to open it and swap the chip.
 - Link play between two RG SPs over WiFi: the link cable and the Wireless Adapter for Pokémon trades and Advance Wars, mGBA's link mode for Mario Kart, and Game Boy link for Tetris.
-- A quick menu on the shelf for fast forward speed and sound, rumble, colour correction, the date and time, and About.
+- A quick menu on the shelf for fast forward speed and sound, rumble, color correction, the date and time, and About.
 - Game Boy games stretch to fill the screen with L1 and go back with R1.
 - The real BIOS boot animation plays when the card has one.
 - Per-cart shell colors, set in `cart_shell.ini`.
