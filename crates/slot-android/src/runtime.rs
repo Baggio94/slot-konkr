@@ -67,6 +67,7 @@ enum Input {
 static INPUT: Mutex<VecDeque<Input>> = Mutex::new(VecDeque::new());
 static REQUEST: Mutex<Option<String>> = Mutex::new(None);
 static UI_ACTION: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
+static SAVE_SYNC: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static CART_SFX: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
 const CART_INSERT_SFX: i32 = 1;
 const CART_EJECT_SFX: i32 = 2;
@@ -279,7 +280,16 @@ impl Engine {
             }
             Input::Suspend => {
                 if let Some(session) = self.game.as_mut() {
-                    session.save(true);
+                    if session.save(true) {
+                        if let Some(uri) = self.requested_uri.as_deref() {
+                            let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                            let core = paths.as_ref().map(|(storage, _)| {
+                                core_selection::selected(storage, uri).as_str()
+                            }).unwrap_or("mgba");
+                            let event = serde_json::json!({"uri": uri, "core": core}).to_string();
+                            SAVE_SYNC.lock().unwrap_or_else(|e| e.into_inner()).push_back(event);
+                        }
+                    }
                 }
                 self.buttons = 0;
                 AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -288,7 +298,17 @@ impl Engine {
                 // The reversed cart animation will emit the original eject sound.
                 if self.progress > 0.0 || self.inserted { self.eject_sound_armed = true; }
                 if let Some(mut session) = self.game.take() {
-                    session.save(true);
+                    let saved = session.save(true);
+                    if saved {
+                        if let Some(uri) = self.requested_uri.as_deref() {
+                            let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                            let core = paths.as_ref().map(|(storage, _)| {
+                                core_selection::selected(storage, uri).as_str()
+                            }).unwrap_or("mgba");
+                            let event = serde_json::json!({"uri": uri, "core": core}).to_string();
+                            SAVE_SYNC.lock().unwrap_or_else(|e| e.into_inner()).push_back(event);
+                        }
+                    }
                 }
                 PLAYING.store(false, Ordering::Release);
                 SAMPLE_RATE.store(0, Ordering::Release);
@@ -1115,6 +1135,30 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeResetInput(
     input.push_back(Input::Reset);
 }
 
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeCoreForUri(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, uri: JString<'_>,
+) -> jni::sys::jstring {
+    let name = env.get_string(&uri).ok()
+        .map(|uri| {
+            let paths=PATHS.lock().unwrap_or_else(|e|e.into_inner()).clone();
+            paths.map(|(storage,_)| core_selection::selected(&storage, &uri.to_string_lossy()))
+                .unwrap_or(Core::Mgba).as_str()
+        }).unwrap_or("mgba");
+    env.new_string(name).map_or(std::ptr::null_mut(), |s| s.into_raw())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollSaveFlush(
+    env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jni::sys::jstring {
+    let item=SAVE_SYNC.lock().unwrap_or_else(|e|e.into_inner()).pop_front();
+    match item.and_then(|s|env.new_string(s).ok()) {
+        Some(s)=>s.into_raw(),
+        None=>std::ptr::null_mut(),
+    }
+}
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollUiAction(

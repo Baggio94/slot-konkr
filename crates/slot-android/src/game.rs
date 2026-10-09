@@ -119,17 +119,23 @@ impl GameSession {
         self.core.take_audio()
     }
 
-    fn save_sram(&mut self) {
-        if let Some(bytes) = self.core.save_ram() {
-            if let Err(err) = atomic_write(&self.save, &bytes) {
-                eprintln!("slot-konkr: SRAM save failed: {err}");
-            }
-        }
+    fn save_sram(&mut self) -> bool {
+        let success = match self.core.save_ram() {
+            Some(bytes) => match atomic_write(&self.save, &bytes) {
+                Ok(()) => true,
+                Err(err) => {
+                    eprintln!("slot-konkr: SRAM save failed: {err}");
+                    false
+                }
+            },
+            None => false,
+        };
         self.last_sram = Instant::now();
+        success
     }
 
-    pub fn save(&mut self, with_state: bool) {
-        self.save_sram();
+    pub fn save(&mut self, with_state: bool) -> bool {
+        let saved_sram = self.save_sram();
         if with_state {
             if let Ok(data) = self.core.serialize() {
                 if let Err(err) = atomic_write(&self.state, &data) {
@@ -143,5 +149,6 @@ impl GameSession {
                 }
             }
         }
+        saved_sram
     }
 }
