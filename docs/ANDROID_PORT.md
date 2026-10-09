@@ -88,3 +88,24 @@ or other app data. This is a one-time preview workaround, NOT an acceptable rele
 keystore protected in GitHub Actions secrets or through a controlled local release process.
 Do not commit private signing keys, release passwords or tokens to this public repository.
 Treat unsigned/differently signed CI builds as non-upgradable until that is resolved.
+
+
+## First playable Android milestone — 0.0.3-dev1
+
+A reproducible Android arm64 mGBA libretro binary is built from a pinned upstream
+libretro/mgba revision by scripts/build-mgba-android.sh. License notices ship in APK assets.
+Android exposes the SAF ROM via a bounded copy into its private cache with the original
+extension, never writing or moving the original. Rust then loads the cache through the
+existing slot-retro libretro host. No external emulator app is launched.
+
+- GB/GBC/GBA: core execution, controller mapping and realtime audio through Android AudioTrack.
+- SRAM persisted as atomic saves every 30 seconds and on ejection/pause.
+- Automatic resume state serialized on exit and pause; failure to restore does not delete files.
+- Original shelf A inserts and starts selected ROM when staged; Android BACK returns to shelf.
+- On shelf START opens SAF folder picker, SELECT refreshes; in game START/SELECT reach emulator.
+- Game video uses original Slot graphics pipeline with an Android-safe RGBA conversion (GLES2).
+- RetroAchievements / RAOfflineProxy are NOT yet implemented in this stage.
+
+This is a developer preview, not a stable emulation release. Physical validation on KONKR
+is still required for input, audio, 3:2 output, save recovery, sleep/resume and battery drain.
+No commercial ROMs, BIOS files or mGBA core binaries are checked into Git.

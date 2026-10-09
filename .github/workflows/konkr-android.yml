@@ -10,9 +10,11 @@ on:
       - 'crates/slot-gfx/**'
       - 'crates/slot-ui/**'
       - 'crates/slot-store/**'
+      - 'crates/slot-retro/**'
       - 'Cargo.*'
       - 'rust-toolchain.toml'
       - 'scripts/build-konkr-android.sh'
+      - 'scripts/build-mgba-android.sh'
       - '.github/workflows/konkr-android.yml'
 
 jobs:
@@ -48,6 +50,10 @@ jobs:
         run: cargo test -p slot-gfx --no-default-features --test konkr
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
+      - name: Build mGBA arm64 libretro core
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          bash scripts/build-mgba-android.sh
       - name: Build debug APK
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
