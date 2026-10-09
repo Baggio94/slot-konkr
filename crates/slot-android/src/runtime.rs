@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use slot_gfx::{Compositor, GfxError, Surface, OUT_H, OUT_W};
 use slot_store::{Cart, Platform};
+use crate::library::{carts_by_platform, RomEntry, LIBRARY};
 use slot_ui::{cart_face_with, cart_shadow, gb_cart_shadow, Draw, GbShell, Shelf, SlotChrome};
 
 // Android GLSurfaceView owns EGL context creation, current context and buffer swaps.
@@ -61,43 +62,40 @@ struct Engine {
     progress: f32,
     born: Instant,
     last: Instant,
+    library_version: u64,
+    texture_cache: VecDeque<(usize, usize, slot_gfx::TexId)>,
 }
 
 impl Engine {
-    fn new() -> Result<Self, String> {
+    fn new(library_version: u64, library: Option<&[RomEntry]>) -> Result<Self, String> {
         let size = (960, 640);
         let mut gpu = Compositor::new(&AndroidSurface { size }).map_err(|e| e.to_string())?;
         let mut shelves = Vec::new();
 
-        // Synthetic labels are deliberate: no commercial ROM/BIOS is bundled.
-        for (platform, titles) in [
-            (Platform::Gba, ["ADVANCE ONE", "ADVANCE TWO", "ADVANCE THREE"]),
-            (Platform::Gb, ["CLASSIC ONE", "CLASSIC TWO", "CLASSIC THREE"]),
-            (Platform::Gbc, ["COLOR ONE", "COLOR TWO", "COLOR THREE"]),
-        ] {
-            let carts: Vec<Cart> = titles
-                .iter()
-                .map(|title| Cart {
-                    platform,
-                    stem: (*title).to_owned(),
-                    rom: PathBuf::new(),
-                    label: None,
-                    title: (*title).to_owned(),
-                    code: String::new(),
-                    shell: None,
+        // None means the user has not chosen a folder yet: retain M1 demo.
+        // Some([]) is an explicitly empty library, not a reason to show fake games.
+        let grouped = match library {
+            Some(entries) => carts_by_platform(entries),
+            None => {
+                [
+                    (Platform::Gba, ["ADVANCE ONE", "ADVANCE TWO", "ADVANCE THREE"]),
+                    (Platform::Gb, ["CLASSIC ONE", "CLASSIC TWO", "CLASSIC THREE"]),
+                    (Platform::Gbc, ["COLOR ONE", "COLOR TWO", "COLOR THREE"]),
+                ].map(|(platform, names)| {
+                    names.into_iter().map(|title| Cart {
+                        platform,
+                        stem: title.to_owned(),
+                        rom: PathBuf::new(),
+                        label: None,
+                        title: title.to_owned(),
+                        code: String::new(),
+                        shell: None,
+                    }).collect()
                 })
-                .collect();
-            let mut shelf = Shelf::new(carts);
-            let faces: Vec<_> = shelf
-                .carts
-                .iter()
-                .map(|cart| {
-                    let face = cart_face_with(cart, None);
-                    gpu.create_texture(face.w, face.h, &face.rgba)
-                })
-                .collect();
-            shelf.set_faces(faces);
-            shelves.push(shelf);
+            }
+        };
+        for carts in grouped {
+            shelves.push(Shelf::new(carts));
         }
 
         let shadow = cart_shadow();
@@ -122,6 +120,8 @@ impl Engine {
             progress: 0.0,
             born: now,
             last: now,
+            library_version,
+            texture_cache: VecDeque::new(),
         })
     }
 
@@ -146,7 +146,7 @@ impl Engine {
                             self.progress = 0.0;
                             return;
                         }
-                        96 => {
+                        96 if !self.shelves[self.active].carts.is_empty() => {
                             self.inserted = true;
                             return;
                         }
@@ -172,6 +172,30 @@ impl Engine {
         }
     }
 
+    // Only rasterize visible cartridges. Recycling at most 42 GPU slots avoids
+    // allocating one image per ROM when users select a large ROMM library.
+    fn prepare_visible(&mut self) {
+        let shelf_id = self.active;
+        let needed = self.shelves[shelf_id].on_screen();
+        for index in needed {
+            if self.shelves[shelf_id].face(index).is_some() {
+                continue;
+            }
+            let face = cart_face_with(&self.shelves[shelf_id].carts[index], None);
+            let texture = if self.texture_cache.len() >= 42 {
+                let (old_shelf, old_index, tex) = self.texture_cache
+                    .pop_front().expect("nonempty texture pool");
+                self.shelves[old_shelf].take_face(old_index);
+                self.gpu.update_texture(tex, face.w, face.h, &face.rgba);
+                tex
+            } else {
+                self.gpu.create_texture(face.w, face.h, &face.rgba)
+            };
+            self.shelves[shelf_id].set_face(index, texture);
+            self.texture_cache.push_back((shelf_id, index, texture));
+        }
+    }
+
     fn draw(&mut self) {
         let now = Instant::now();
         let dt = (now - self.last).as_secs_f32().min(0.05);
@@ -187,9 +211,10 @@ impl Engine {
         }
 
         let ms = self.born.elapsed().as_millis() as u64;
+        self.shelves[self.active].tick(ms);
+        self.shelves[self.active].update(dt);
+        self.prepare_visible();
         let shelf = &mut self.shelves[self.active];
-        shelf.tick(ms);
-        shelf.update(dt);
 
         // Match the upstream ~730 ms cartridge insertion timing.
         let change = dt / 0.73;
@@ -240,7 +265,11 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
 ) -> u8 {
     ENGINE.with(|holder| {
         *holder.borrow_mut() = None;
-        match Engine::new() {
+        let (version, snapshot) = {
+            let state = LIBRARY.lock().unwrap_or_else(|err| err.into_inner());
+            (state.version, state.entries.clone())
+        };
+        match Engine::new(version, snapshot.as_deref()) {
             Ok(engine) => {
                 *holder.borrow_mut() = Some(engine);
                 1
@@ -273,6 +302,27 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
     _activity: *mut c_void,
 ) {
     ENGINE.with(|holder| {
+        let current = holder.borrow().as_ref().map(|engine| engine.library_version);
+        let updated = {
+            let state = LIBRARY.lock().unwrap_or_else(|err| err.into_inner());
+            if current.is_some_and(|version| version != state.version) {
+                Some((state.version, state.entries.clone()))
+            } else {
+                None
+            }
+        };
+        if let Some((version, snapshot)) = updated {
+            // Destruct old GL resources on the GL thread before recreating them.
+            let size = holder.borrow().as_ref().map(|engine| engine.size).unwrap_or((960, 640));
+            *holder.borrow_mut() = None;
+            match Engine::new(version, snapshot.as_deref()) {
+                Ok(mut engine) => {
+                    engine.size = size;
+                    *holder.borrow_mut() = Some(engine);
+                }
+                Err(error) => eprintln!("slot-konkr: could not reload library: {error}"),
+            }
+        }
         if let Some(engine) = holder.borrow_mut().as_mut() {
             engine.draw();
         }
