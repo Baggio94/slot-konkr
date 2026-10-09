@@ -226,6 +226,10 @@ impl Compositor {
     }
 
     pub fn begin_frame(&mut self) {
+        self.game.set_fbo_scale(
+            self.size.0 as f32 / OUT_W as f32,
+            self.size.1 as f32 / OUT_H as f32,
+        );
         unsafe {
             gl::BindFramebuffer(gl::FRAMEBUFFER, self.fbo);
             gl::Viewport(0, 0, self.size.0 as i32, self.size.1 as i32);

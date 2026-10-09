@@ -58,12 +58,14 @@ uniform vec4 u_uv;
 uniform float u_bright;
 uniform float u_mode;
 uniform float u_paper_size;
+uniform vec4 u_rect;
+uniform vec2 u_fbo;
 uniform vec4 u_pic;
 varying vec2 v_uv;
 const vec3 offsets = vec3(3.141592654) * vec3(1.0 / 2.0, 1.0 / 2.0 - 2.0 / 3.0, 1.0 / 2.0 - 4.0 / 3.0);
 const vec3 luma_coeff = vec3(0.2126, 0.7152, 0.0722);
 float dot_weight(vec2 f, vec2 o, float bloom) {
-    return exp(-2.4 * length(f - (o + vec2(0.5))) * bloom);
+    return exp(-4.0 * length(f - (o + vec2(0.5))) * bloom);
 }
 void main() {
     vec2 uv = u_uv.xy + v_uv * u_uv.zw;
@@ -93,13 +95,11 @@ void main() {
                 sum += dot_weight(f, vec2(float(i), float(j)), bloom);
             }
         }
-        c = mix(1.2 * c * mid, c * sum, 0.65);
+        c = mix(1.2 * c * mid, c * sum, 0.85);
     } else if (u_mode > 1.5) {
-        vec2 d = abs(f - 0.5);
-        float y = max(d.x, d.y);
-        y = y * y;
-        float yy = y * y;
-        c *= 1.0 - 14.0 * (yy - 2.7 * yy * y);
+        vec2 hp = 0.5 * u_uv.zw * u_src / (u_rect.zw * u_fbo);
+        vec2 edge = max(step(f - hp, vec2(1e-4)), step(vec2(1.0) + 1e-4, f + hp));
+        c *= 1.0 - 0.75 * max(edge.x, edge.y);
     } else if (u_mode > 0.5) {
         vec2 angle = f * 6.283185307;
         float yfactor = (16.0 + sin(angle.y)) / 17.0;

@@ -4,6 +4,7 @@ https://github.com/libretro/glsl-shaders
 LCD3x by Gigaherz. Public domain.
 
 Dot by Themaister. Public domain.
+Changes: sharper dots (falloff 4.0) and a 0.85 blend.
 
 zfast_lcd_standard by Greg Hogan (SoltanGris42), copyright (C) 2017.
 GNU General Public License version 2 or later.

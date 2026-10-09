@@ -1,6 +1,6 @@
 use slot_gfx::{
-    blue_light_gain, lcd3x_factors, lcd3x_mask, Compositor, Draw, HeadlessSurface, OUT_H, OUT_W,
-    SRC_H, SRC_W,
+    blue_light_gain, canvas_size, lcd3x_factors, lcd3x_mask, Compositor, Draw, HeadlessSurface,
+    ScreenEffect, OUT_H, OUT_W, SRC_H, SRC_W,
 };
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -566,5 +566,99 @@ fn the_mask_follows_the_game_pixels_in_both_modes() {
     assert!(
         worst <= 1,
         "fullscreen: the grille strays {worst} from the game's pixels"
+    );
+}
+
+fn grid_frame(c: &mut Compositor, window: (u32, u32)) -> (Vec<u8>, usize, usize) {
+    c.fit(window);
+    c.set_screen_effect(ScreenEffect::Grid);
+    c.set_screen_power(1.0);
+    c.begin_frame();
+    c.upload_game(&flat_shot([0xc0, 0xc0, 0xc0]));
+    c.draw_game();
+    let (w, h) = canvas_size(window);
+    (c.read_frame(), w as usize, h as usize)
+}
+
+fn grid_lines(frame: &[u8], w: usize, h: usize) -> (Vec<usize>, Vec<usize>) {
+    let g = |x: usize, y: usize| frame[(y * w + x) * 4 + 1];
+    let lit = (0..h)
+        .flat_map(|y| (0..w).map(move |x| (x, y)))
+        .map(|(x, y)| g(x, y))
+        .max()
+        .unwrap();
+    let dark = |v: u8| (v as u32) * 2 < lit as u32;
+    let cols = (0..w)
+        .filter(|&x| (0..h).filter(|&y| dark(g(x, y))).count() == h)
+        .collect();
+    let rows = (0..h)
+        .filter(|&y| (0..w).filter(|&x| dark(g(x, y))).count() == w)
+        .collect();
+    (cols, rows)
+}
+
+#[test]
+fn the_grid_draws_one_dark_line_per_game_pixel_at_3x() {
+    let Some((_g, _s, mut c)) = compositor() else {
+        return;
+    };
+    let (frame, w, h) = grid_frame(&mut c, (OUT_W, OUT_H));
+    assert_eq!((w, h), (OUT_W as usize, OUT_H as usize));
+    let (cols, rows) = grid_lines(&frame, w, h);
+    assert_eq!(cols.len(), SRC_W as usize, "dark columns: {cols:?}");
+    assert_eq!(rows.len(), SRC_H as usize, "dark rows: {rows:?}");
+    assert!(
+        cols.windows(2).all(|p| p[1] - p[0] == 3),
+        "columns: {cols:?}"
+    );
+    assert!(rows.windows(2).all(|p| p[1] - p[0] == 3), "rows: {rows:?}");
+}
+
+#[test]
+fn the_grid_marks_every_game_pixel_edge_on_a_4_by_3_panel() {
+    let Some((_g, _s, mut c)) = compositor() else {
+        return;
+    };
+    let (frame, w, h) = grid_frame(&mut c, (640, 480));
+    assert_eq!((w, h), (640, 427));
+    let (cols, rows) = grid_lines(&frame, w, h);
+    assert_eq!(cols.len(), SRC_W as usize, "dark columns: {cols:?}");
+    assert_eq!(rows.len(), SRC_H as usize, "dark rows: {rows:?}");
+    assert!(
+        cols.windows(2).all(|p| p[1] - p[0] >= 2),
+        "columns: {cols:?}"
+    );
+    assert!(rows.windows(2).all(|p| p[1] - p[0] >= 2), "rows: {rows:?}");
+}
+
+#[test]
+fn the_grid_marks_every_game_boy_pixel_edge_when_stretched() {
+    let Some((_g, _s, mut c)) = compositor() else {
+        return;
+    };
+    c.set_picture([
+        GB_RECT[0],
+        GB_RECT[1],
+        GB_RECT[0] + GB_RECT[2],
+        GB_RECT[1] + GB_RECT[3],
+    ]);
+    c.set_game_source_rect(GB_RECT);
+    c.fit((OUT_W, OUT_H));
+    c.set_screen_effect(ScreenEffect::Grid);
+    c.set_screen_power(1.0);
+    c.begin_frame();
+    c.upload_game(&gb_shaped(|_, _| [0xc0, 0xc0, 0xc0], [0, 0, 0]));
+    c.draw_game();
+    let frame = c.read_frame();
+    let (cols, rows) = grid_lines(&frame, OUT_W as usize, OUT_H as usize);
+    assert_eq!(cols.len(), GB_W, "dark columns: {cols:?}");
+    assert_eq!(rows.len(), GB_H, "dark rows: {rows:?}");
+    assert!(
+        cols.windows(2).all(|p| (4..=5).contains(&(p[1] - p[0]))),
+        "columns: {cols:?}"
+    );
+    assert!(
+        rows.windows(2).all(|p| (3..=4).contains(&(p[1] - p[0]))),
+        "rows: {rows:?}"
     );
 }

@@ -18,6 +18,8 @@ pub struct GamePass {
     u_uv: gl::types::GLint,
     u_mode: gl::types::GLint,
     u_paper_size: gl::types::GLint,
+    u_fbo: gl::types::GLint,
+    fbo_scale: [f32; 2],
     u_pic: gl::types::GLint,
     pic: [f32; 4],
     paper: gl::types::GLuint,
@@ -32,7 +34,7 @@ impl GamePass {
         let prog = crate::shaders::program(RECT_VERT, GAME_FRAG)?;
         let game = crate::gl::texture(SRC_W, SRC_H, gl::NEAREST, gl::CLAMP_TO_EDGE, gl::BGRA, None);
         let paper = crate::gl::texture(1, 1, gl::NEAREST, gl::REPEAT, gl::RGBA, Some(&[255; 4]));
-        let (u_rect, u_bright, u_uv, u_mode, u_paper_size, u_pic);
+        let (u_rect, u_bright, u_uv, u_mode, u_paper_size, u_pic, u_fbo);
         unsafe {
             gl::UseProgram(prog);
             gl::Uniform1i(crate::gl::uniform_location(prog, "u_game"), 0);
@@ -52,6 +54,7 @@ impl GamePass {
             gl::Uniform1i(crate::gl::uniform_location(prog, "u_paper"), 1);
             u_mode = crate::gl::uniform_location(prog, "u_mode");
             u_paper_size = crate::gl::uniform_location(prog, "u_paper_size");
+            u_fbo = crate::gl::uniform_location(prog, "u_fbo");
             u_pic = crate::gl::uniform_location(prog, "u_pic");
         }
         Ok(GamePass {
@@ -62,6 +65,8 @@ impl GamePass {
             u_uv,
             u_mode,
             u_paper_size,
+            u_fbo,
+            fbo_scale: [1.0, 1.0],
             u_pic,
             pic: WHOLE_TEXTURE,
             paper,
@@ -78,6 +83,10 @@ impl GamePass {
 
     pub fn set_picture(&mut self, rect: [f32; 4]) {
         self.pic = rect;
+    }
+
+    pub fn set_fbo_scale(&mut self, x: f32, y: f32) {
+        self.fbo_scale = [x, y];
     }
 
     pub fn set_effect(&mut self, effect: ScreenEffect) {
@@ -133,6 +142,7 @@ impl GamePass {
             gl::Uniform1f(self.u_bright, screen_brightness(self.power));
             gl::Uniform1f(self.u_mode, self.effect.mode());
             gl::Uniform1f(self.u_paper_size, self.paper_size);
+            gl::Uniform2f(self.u_fbo, self.fbo_scale[0], self.fbo_scale[1]);
             gl::Uniform4f(
                 self.u_pic,
                 self.pic[0],
