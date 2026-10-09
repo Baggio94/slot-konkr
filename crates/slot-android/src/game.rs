@@ -147,20 +147,22 @@ impl GameSession {
 
     pub fn save(&mut self, with_state: bool) -> bool {
         let saved_sram = self.save_sram();
+        let mut state_written = false;
         if with_state {
             if let Ok(data) = self.core.serialize() {
                 if let Err(err) = atomic_write(&self.state, &data) {
                     eprintln!("slot-konkr: state save failed: {err}");
                 }
                 match retroarch_state::encode(&data) {
-                    Ok(container) => if let Err(error) = atomic_write(&self.retroarch_export, &container) {
-                        eprintln!("slot-konkr: RetroArch state export failed: {error}");
+                    Ok(container) => match atomic_write(&self.retroarch_export, &container) {
+                        Ok(()) => state_written = true,
+                        Err(error) => eprintln!("slot-konkr: RetroArch state export failed: {error}"),
                     },
                     Err(error) => eprintln!("slot-konkr: RetroArch container error: {error}"),
                 }
             }
         }
-        saved_sram
+        saved_sram || state_written
     }
     /// Original Slot ring: 10 timestamped states per ROM/core, each with
     /// a 240×160 PNG thumbnail. Independent from RetroArch's manual slots.

@@ -319,7 +319,16 @@ class MainActivity : Activity() {
                 val saves = prefs.getString(SAVE_ROOT, null)?.let(Uri::parse)
                 val states = prefs.getString(STATE_ROOT, null)?.let(Uri::parse)
                 val shared = RetroArchStorage.target(this, rawUri, core, saves, states)
-                RetroArchStorage.importBeforeLaunch(this, shared)
+                try {
+                    RetroArchStorage.importBeforeLaunch(this@MainActivity, shared)
+                } catch (error: Exception) {
+                    Log.w(TAG, "RetroArch SAF import skipped, keeping private saves", error)
+                    runOnUiThread {
+                        if (!isDestroyed) Toast.makeText(this@MainActivity,
+                            "RetroArch import unavailable — check Save/State folders",
+                            Toast.LENGTH_LONG).show()
+                    }
+                }
                 activeTargets[rawUri] = shared
                 nativeGameReady(rawUri, target.absolutePath)
             } catch (error: Exception) {
