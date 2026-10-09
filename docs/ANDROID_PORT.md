@@ -71,3 +71,20 @@ RetroAchievements architecture (not yet implemented):
 
 Physical tests: choose ROM folder via START, verify GB/GBC/GBA shelves with L1/R1, A/B insertion,
 relaunch for persisted access, SELECT rescan, empty folder handling, and no crash.
+
+## Debug APK signing
+
+GitHub-hosted builds currently use a fresh automatically generated Android debug signing key.
+**0.0.1-dev and 0.0.2-dev1 have different signing certificates**, so Android cannot apply
+0.0.2-dev1 as an in-place update of the earlier preview. Because 0.0.1-dev only contained
+synthetic cartridges and no user library, uninstall its package before installing 0.0.2-dev1:
+
+    adb -s BW0308N250009576 uninstall fyi.slot.konkr
+
+This clears only Slot KONKR's own preview preferences, not the user's ROMs, ES-DE, RetroArch
+or other app data. This is a one-time preview workaround, NOT an acceptable release update policy.
+
+**Before 0.0.2-dev1 is used to store important data**, establish a persistent signing
+keystore protected in GitHub Actions secrets or through a controlled local release process.
+Do not commit private signing keys, release passwords or tokens to this public repository.
+Treat unsigned/differently signed CI builds as non-upgradable until that is resolved.
