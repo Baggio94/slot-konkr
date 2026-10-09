@@ -1,7 +1,7 @@
-//! Native libretro mGBA game session. All core calls occur on GLSurfaceView's GL thread.
+//! Native libretro mGBA / gpSP game session. All core calls occur on GLSurfaceView's GL thread.
 //! Android's SAF bridge materializes a **bounded private cache** copy of each selected ROM.
 use slot_retro::{ButtonMask, LibretroCore, RetroCore};
-use slot_store::atomic_write;
+use slot_store::{atomic_write, Core};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -17,9 +17,10 @@ pub struct GameSession {
 }
 
 impl GameSession {
-    pub fn open(rom: &Path, core_file: &Path, storage: &Path, resume_state: bool) -> Result<Self, String> {
+    pub fn open(rom: &Path, core_file: &Path, storage: &Path,
+                which: Core, resume_state: bool) -> Result<Self, String> {
         if !rom.exists() || !core_file.exists() {
-            return Err("ROM cache or mGBA core missing".into());
+            return Err(format!("ROM cache or {} core missing", which.text()));
         }
         let root = storage.join("Saves");
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
@@ -27,7 +28,10 @@ impl GameSession {
             .filter(|v| !v.is_empty() && v.bytes().all(|c| c.is_ascii_hexdigit()))
             .ok_or_else(|| "Unsafe ROM cache file name".to_owned())?;
         let save = root.join(format!("{id}.srm"));
-        let state = root.join(format!("{id}.state"));
+        // Save states belong to their specific emulator core. Incompatible
+        // mGBA/gpSP states must never be deserialized in the other core.
+        // Legacy single-core .state files are still readable by mGBA only.
+        let state = root.join(format!("{id}.{}.state", which.as_str()));
         // mGBA's libretro core looks for gba_bios.bin / gb_bios.bin /
         // gbc_bios.bin in RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY.
         // Keep the user-selected SAF folder external and read-only: Android
@@ -36,8 +40,16 @@ impl GameSession {
         std::fs::create_dir_all(&bios).map_err(|e| e.to_string())?;
         let mut core = LibretroCore::open_with(core_file, &bios, &root)
             .map_err(|e| e.to_string())?;
-        core.set_option("mgba_use_bios", "ON");
-        core.set_option("mgba_skip_bios", "OFF");
+        match which {
+            Core::Mgba => {
+                core.set_option("mgba_use_bios", "ON");
+                core.set_option("mgba_skip_bios", "OFF");
+            }
+            Core::Gpsp => {
+                core.set_option("gpsp_bios", "auto");
+                core.set_option("gpsp_boot_mode", "bios");
+            }
+        }
         core.load(rom).map_err(|e| e.to_string())?;
         if let Ok(ram) = std::fs::read(&save) {
             if let Err(error) = core.load_save_ram(&ram) {
@@ -45,9 +57,16 @@ impl GameSession {
             }
         }
         if resume_state {
-            if let Ok(bytes) = std::fs::read(&state) {
+            let bytes = std::fs::read(&state).or_else(|err| {
+                if which == Core::Mgba && err.kind() == std::io::ErrorKind::NotFound {
+                    std::fs::read(root.join(format!("{id}.state")))
+                } else {
+                    Err(err)
+                }
+            });
+            if let Ok(bytes) = bytes {
                 if let Err(error) = core.unserialize(&bytes) {
-                    eprintln!("slot-konkr: state resume skipped: {error}");
+                    eprintln!("slot-konkr: {} state resume skipped: {error}", which.text());
                 }
             }
         }
