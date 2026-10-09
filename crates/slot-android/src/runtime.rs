@@ -13,7 +13,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use slot_gfx::{Compositor, GfxError, Surface, OUT_H, OUT_W};
-use slot_store::{Cart, Platform, Core};
+use slot_store::{Cart, Platform, Core, stamp_now};
 use crate::library::{carts_by_platform, RomEntry, LIBRARY};
 use slot_ui::{
     board_face, chip_face, chip_shadow_face, socket_face, quick_value_face, cart_face_with,
@@ -21,7 +21,7 @@ use slot_ui::{
     on_board, lid_from, grown, draw_empty_slot, Draw, GbShell, Shelf, SlotChrome,
     BOARD_X, BOARD_W, SOCKET_U, SOCKET_V, SOCKET_W, SOCKET_H,
     CHIP_U, CHIP_V, CHIP_W, CHIP_H, HOP_LIFT, TURN_PAD, SHADOW_W, SHADOW_H,
-    CART_W, hint_face, arrows_hint_face, HINT_H, HINT_EDGE,
+    CART_W, hint_face, arrows_hint_face, title_face, photo_face, Polaroids, Printed, HINT_H, HINT_EDGE,
 };
 
 // Android GLSurfaceView owns EGL context creation, current context and buffer swaps.
@@ -109,6 +109,7 @@ enum ShelfOverlay {
     Achievements,
     Core,
     GameMenu { row: usize },
+    States,
 }
 
 const MENU_TEXT: [&str; 25] = [
@@ -134,7 +135,7 @@ const MENU_TEXT: [&str; 25] = [
     "GAME MENU",                        // 19
     "Resume",                           // 20
     "Save and Eject",                   // 21
-    "States (coming soon)",            // 22
+    "Save States",                      // 22
     "A Select     B Back",              // 23
     "Choose BIOS Folder",               // 24
 ];
@@ -171,6 +172,10 @@ struct Engine {
     fresh_launch: bool,
     mode_down_at: Option<Instant>,
     eject_sound_armed: bool,
+    mode_last_tap: Option<Instant>,
+    polaroids: Option<Polaroids>,
+    photo_textures: Vec<slot_gfx::TexId>,
+    polaroid_title_texture: Option<slot_gfx::TexId>,
 }
 
 impl Engine {
@@ -264,6 +269,10 @@ impl Engine {
             fresh_launch: false,
             mode_down_at: None,
             eject_sound_armed: false,
+            mode_last_tap: None,
+            polaroids: None,
+            photo_textures: Vec::new(),
+            polaroid_title_texture: None,
         })
     }
 
@@ -272,6 +281,8 @@ impl Engine {
             Input::Reset => {
                 self.buttons = 0;
                 self.mode_down_at = None;
+                self.mode_last_tap = None;
+                self.polaroids = None;
                 self.overlay = ShelfOverlay::None;
                 self.picker = None;
                 for shelf in &mut self.shelves {
@@ -321,6 +332,8 @@ impl Engine {
                 self.a_down_at = None;
                 self.fresh_launch = false;
                 self.mode_down_at = None;
+                self.mode_last_tap = None;
+                self.polaroids = None;
                 self.requested_uri = None;
                 self.prepared_rom = None;
                 self.seated_frame_seen = false;
@@ -360,35 +373,111 @@ impl Engine {
                         }
                     } else if let Some(since) = self.mode_down_at.take() {
                         if since.elapsed().as_millis() >= 650 {
-                            if self.game.is_some() {
-                                self.handle(Input::Exit);
-                            }
+                            self.mode_last_tap = None;
+                            if self.game.is_some() { self.handle(Input::Exit); }
                         } else if self.game.is_some() {
-                            // Short press: pause and show Slot's in-game menu.
-                            self.buttons = 0;
-                            self.game_accum = 0.0;
-                            AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
-                            self.overlay = match self.overlay {
-                                ShelfOverlay::GameMenu { .. } => ShelfOverlay::None,
-                                _ => ShelfOverlay::GameMenu { row: 0 },
-                            };
+                            let is_double=self.mode_last_tap.take()
+                                .is_some_and(|t|t.elapsed().as_millis()<360);
+                            self.buttons=0;
+                            self.game_accum=0.0;
+                            AUDIO.lock().unwrap_or_else(|e|e.into_inner()).clear();
+                            if is_double {
+                                self.open_polaroids();
+                            } else {
+                                self.mode_last_tap=Some(Instant::now());
+                                self.overlay=match self.overlay {
+                                    ShelfOverlay::GameMenu { .. }=>ShelfOverlay::None,
+                                    ShelfOverlay::States=>ShelfOverlay::None,
+                                    _=>ShelfOverlay::GameMenu {row:0},
+                                };
+                            }
                         }
-                        // On the carousel, START is the sole menu shortcut;
-                        // the physical MENU key is reserved for in-game actions.
+                        // START remains the ONLY menu key on the carousel.
                     }
                     return;
                 }
-                if self.game.is_some() && matches!(self.overlay, ShelfOverlay::GameMenu { .. }) {
+                if self.game.is_some() && matches!(self.overlay, ShelfOverlay::States) {
+                    if pressed {
+                        match code {
+                            21 => {
+                                if let Some(p) = self.polaroids.as_mut() { p.left(); }
+                                self.update_polaroid_title();
+                            }
+                            22 => {
+                                if let Some(p) = self.polaroids.as_mut() { p.right(); }
+                                self.update_polaroid_title();
+                            }
+                            96 => {
+                                if let (Some(game),Some(p))=(self.game.as_mut(),self.polaroids.as_ref()) {
+                                    if let Some(entry)=p.selected() {
+                                        if let Err(err)=game.load_manual(&entry.stamp) {
+                                            set_message(format!("State load failed: {err}"));
+                                        }
+                                    }
+                                }
+                                self.overlay=ShelfOverlay::None;
+                            }
+                            100 => { // Y deletes one Slot history entry only.
+                                if let (Some(game),Some(p))=(self.game.as_mut(),self.polaroids.as_mut()) {
+                                    if let Some(entry)=p.selected() {
+                                        if let Err(err)=game.delete_manual(&entry.stamp) {
+                                            set_message(format!("State delete failed: {err}"));
+                                        } else {
+                                            p.remove_selected();
+                                        }
+                                    }
+                                }
+                                if self.polaroids.as_ref().is_some_and(|p|p.is_empty()) {
+                                    self.overlay=ShelfOverlay::None;
+                                } else {
+                                    self.update_polaroid_title();
+                                }
+                            }
+                            99 => { // X: original Slot's 30-second undo.
+                                if let Some(game)=self.game.as_mut() {
+                                    if let Err(err)=game.undo_manual() { set_message(err); }
+                                }
+                                self.overlay=ShelfOverlay::None;
+                            }
+                            97=>self.overlay=ShelfOverlay::None,
+                            _=>{}
+                        }
+                    }
+                    return;
+                }
+                if self.game.is_some() && matches!(self.overlay, ShelfOverlay::States) {
+            // Slot's original Polaroid state browser, including photo previews,
+            // timestamp, dots, back/delete/load/undo key hints.
+            self.game_accum=0.0;
+            let mut draw=Vec::new();
+            if let Some(p)=self.polaroids.as_mut() {
+                if self.game.as_ref().is_some_and(|game|game.undo_available()) {
+                    p.set_undo(Some("undo"));
+                } else {
+                    p.set_undo(None);
+                }
+                p.draw(None,Printed::default(),None,Printed::default(),&mut draw);
+            }
+            self.gpu.fit(self.size);
+            self.gpu.begin_frame();
+            self.gpu.draw_list(&draw);
+            self.gpu.end_frame(self.size);
+            return;
+        }
+        if self.game.is_some() && matches!(self.overlay, ShelfOverlay::GameMenu { .. }) {
                     if pressed {
                         match self.overlay {
                             ShelfOverlay::GameMenu { row } => match code {
                                 19 | 20 => {
-                                    let next = (row + 1) % 2;
+                                    let next = (row + 1) % 3;
                                     self.overlay = ShelfOverlay::GameMenu { row: next };
                                 }
                                 96 => {
-                                    if row == 1 { self.handle(Input::Exit); }
-                                    else { self.overlay = ShelfOverlay::None; }
+                                    match row {
+                                        1=>self.handle(Input::Exit),
+                                        2=>self.open_polaroids(),
+                                        _=>self.overlay=ShelfOverlay::None,
+                                    }
                                 }
                                 97 => self.overlay = ShelfOverlay::None,
                                 _ => {}
@@ -399,6 +488,27 @@ impl Engine {
                     return;
                 }
                 if self.game.is_some() {
+                    // Restore upstream SELECT+R1/L1 save/load shortcuts.
+                    if pressed && self.buttons & ButtonMask::SELECT != 0 {
+                        if code == 103 {
+                            if let Some(game)=self.game.as_mut() {
+                                if let Err(err)=game.save_manual() {
+                                    set_message(format!("Cannot save state: {err}"));
+                                }
+                            }
+                            return;
+                        }
+                        if code == 102 {
+                            if let Some(game)=self.game.as_mut() {
+                                if let Err(err)=game.load_latest() {
+                                    set_message(format!("Cannot load state: {err}"));
+                                }
+                            }
+                            return;
+                        }
+                    }
+                    if !pressed && (code==102 || code==103)
+                        && self.buttons & ButtonMask::SELECT != 0 {return;}
                     let mask = controls(code);
                     if pressed { self.buttons |= mask; } else { self.buttons &= !mask; }
                     return;
@@ -630,7 +740,10 @@ impl Engine {
                 Core::Mgba
             };
             let core_file = library.join(format!("lib{}_libretro.so", core.as_str()));
-            match GameSession::open(Path::new(local), &core_file, &storage, core, !self.fresh_launch) {
+            let platform = self.shelves[self.active].carts
+                .get(self.shelves[self.active].index)
+                .map_or(Platform::Gba, |cart|cart.platform);
+            match GameSession::open(Path::new(local), &core_file, &storage, core, platform, !self.fresh_launch) {
                 Ok(session) => {
                     self.buttons = 0;
                     SAMPLE_RATE.store(session.sample_rate, Ordering::Release);
@@ -740,8 +853,8 @@ impl Engine {
             ShelfOverlay::GameMenu { row } => {
                 self.modal(117.0, 80.0, 486.0, 320.0, out, 0.75);
                 self.text_fit(19, 148.0, 103.0, 400.0, 1.0, out);
-                for index in 0..2 {
-                    let y = 162.0 + index as f32 * 61.0;
+                for index in 0..3 {
+                    let y = 155.0 + index as f32 * 54.0;
                     if index == row {
                         out.push(Draw::Rect {
                             x: 135.0, y: y - 7.0, w: 450.0, h: 45.0,
@@ -750,11 +863,13 @@ impl Engine {
                     }
                     self.text_fit(index + 20, 152.0, y, 406.0, 1.0, out);
                 }
-                self.text_fit(22, 152.0, 291.0, 420.0, 0.42, out);
                 self.text_fit(23, 152.0, 355.0, 420.0, 0.85, out);
             }
             ShelfOverlay::Core => {
                 self.draw_original_core_picker(out);
+            }
+            ShelfOverlay::States => {
+                // Rendered separately as full-screen original Slot Polaroids.
             }
         }
     }
@@ -847,6 +962,57 @@ impl Engine {
                 alpha: lift,
             });
         }
+    }
+
+    fn update_polaroid_title(&mut self) {
+        let Some(p)=self.polaroids.as_mut() else {return;};
+        let face=title_face(&p.title(&stamp_now()));
+        let tex=match self.polaroid_title_texture {
+            Some(tex)=>{
+                self.gpu.update_texture(tex,face.w,face.h,&face.rgba);
+                tex
+            }
+            None=>{
+                let tex=self.gpu.create_texture(face.w,face.h,&face.rgba);
+                self.polaroid_title_texture=Some(tex);
+                tex
+            }
+        };
+        p.set_title_face(Some(tex));
+    }
+
+    fn open_polaroids(&mut self) {
+        let Some(game)=self.game.as_ref() else {return;};
+        let entries=game.history();
+        if entries.is_empty() {
+            set_message("No saved states yet — SELECT + R1 to save".into());
+            return;
+        }
+        let mut polaroids=Polaroids::new(entries);
+        let mut faces=Vec::new();
+        for (index,entry) in polaroids.entries.iter().enumerate() {
+            let face=photo_face(entry);
+            let tex=if let Some(tex)=self.photo_textures.get(index).copied() {
+                self.gpu.update_texture(tex,face.w,face.h,&face.rgba);
+                tex
+            } else {
+                let tex=self.gpu.create_texture(face.w,face.h,&face.rgba);
+                self.photo_textures.push(tex);
+                tex
+            };
+            faces.push(tex);
+        }
+        polaroids.set_faces(faces);
+        let hints=[("B","Back"),("Y","Delete"),("A","Load"),("X","Undo")];
+        let hint_faces=hints.map(|(key,label)| {
+            let face=hint_face(key,label);
+            self.gpu.create_texture(face.w,face.h,&face.rgba)
+        });
+        polaroids.set_hint_faces(hint_faces.to_vec());
+        if game.undo_available() {polaroids.set_undo(Some("undo"));}
+        self.polaroids=Some(polaroids);
+        self.update_polaroid_title();
+        self.overlay=ShelfOverlay::States;
     }
 
     fn draw(&mut self) {
