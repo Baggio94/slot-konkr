@@ -47,7 +47,8 @@ class MainActivity : Activity() {
             KeyEvent.KEYCODE_BUTTON_L1, KeyEvent.KEYCODE_BUTTON_R1,
             KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_BUTTON_B,
             KeyEvent.KEYCODE_BUTTON_X, KeyEvent.KEYCODE_BUTTON_Y,
-            KeyEvent.KEYCODE_BUTTON_START, KeyEvent.KEYCODE_BUTTON_SELECT
+            KeyEvent.KEYCODE_BUTTON_START, KeyEvent.KEYCODE_BUTTON_SELECT,
+            KeyEvent.KEYCODE_BUTTON_MODE
         )
     }
 
@@ -200,6 +201,10 @@ class MainActivity : Activity() {
             onBackPressed()
             return true
         }
+        if (keyCode == KeyEvent.KEYCODE_BUTTON_MODE && event.repeatCount == 0) {
+            Log.i(TAG, "KONKR MENU BTN_MODE down: Android code=" + keyCode +
+                " scan=" + event.scanCode + " device=" + event.deviceId)
+        }
         // START / SELECT on the shelf are now rendered by Slot itself.
         // Log any otherwise unrecognized physical key so the KONKR's top-round
         // key can be mapped from real device evidence, not a guessed keycode.
@@ -217,6 +222,9 @@ class MainActivity : Activity() {
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK) return true
+        if (keyCode == KeyEvent.KEYCODE_BUTTON_MODE) {
+            Log.i(TAG, "KONKR MENU BTN_MODE up: Android code=" + keyCode)
+        }
         if (keyCode !in BUTTONS) return super.onKeyUp(keyCode, event)
         nativeKey(keyCode, false)
         return true
