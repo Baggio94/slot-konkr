@@ -11,9 +11,9 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use slot_gfx::{Compositor, GfxError, Surface, OUT_H, OUT_W};
-use slot_store::{Cart, Platform};
+use slot_store::{Cart, Platform, Core};
 use crate::library::{carts_by_platform, RomEntry, LIBRARY};
-use slot_ui::{cart_face_with, cart_shadow, gb_cart_shadow, Draw, GbShell, Shelf, SlotChrome};
+use slot_ui::{board_face, chip_face, quick_value_face, cart_face_with, cart_shadow, gb_cart_shadow, Draw, GbShell, Shelf, SlotChrome};
 
 // Android GLSurfaceView owns EGL context creation, current context and buffer swaps.
 #[link(name = "EGL")]
@@ -57,6 +57,7 @@ enum Input {
 
 static INPUT: Mutex<VecDeque<Input>> = Mutex::new(VecDeque::new());
 static REQUEST: Mutex<Option<String>> = Mutex::new(None);
+static UI_ACTION: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
 static MESSAGE: Mutex<Option<String>> = Mutex::new(None);
 static PATHS: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
 static AUDIO: Mutex<VecDeque<i16>> = Mutex::new(VecDeque::new());
@@ -84,6 +85,26 @@ thread_local! {
     static ENGINE: RefCell<Option<Engine>> = const { RefCell::new(None) };
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum ShelfOverlay {
+    None,
+    Library { row: usize },
+    Core,
+}
+
+const MENU_ITEMS: usize = 2; // scrape action is visible but disabled until implemented
+const MENU_TEXT: [&str; 9] = [
+    "LIBRARY",
+    "Choose ROM folder",
+    "Refresh library",
+    "Scrape labels (coming later)",
+    "A: select   B: back",
+    "SELECT CORE",
+    "mGBA",
+    "gpSP (not installed)",
+    "A: confirm   B: back",
+];
+
 struct Engine {
     gpu: Compositor,
     size: (u32, u32),
@@ -102,6 +123,10 @@ struct Engine {
     prepared_rom: Option<String>,
     seated_frame_seen: bool,
     game_accum: f64,
+    overlay: ShelfOverlay,
+    menu_textures: Vec<(slot_gfx::TexId, u32, u32)>,
+    board_texture: Option<slot_gfx::TexId>,
+    chip_texture: slot_gfx::TexId,
 }
 
 impl Engine {
@@ -148,12 +173,22 @@ impl Engine {
             shelf.set_gb_shadow(GbShell::Rounded, gbc);
         }
 
+        let menu_textures = MENU_TEXT.iter().map(|label| {
+            let face = quick_value_face(label, true);
+            let tex = gpu.create_texture(face.w, face.h, &face.rgba);
+            (tex, face.w, face.h)
+        }).collect();
+        let chip = chip_face(Some(Core::Mgba));
+        let chip_texture = gpu.create_texture(chip.w, chip.h, &chip.rgba);
+
+        // On a GBA-only library do not begin on an empty GB or GBC shelf.
+        let active = shelves.iter().position(|s| !s.carts.is_empty()).unwrap_or(0);
         let now = Instant::now();
         Ok(Self {
             gpu,
             size,
             shelves,
-            active: 0,
+            active,
             inserted: false,
             progress: 0.0,
             born: now,
@@ -167,6 +202,10 @@ impl Engine {
             prepared_rom: None,
             seated_frame_seen: false,
             game_accum: 0.0,
+            overlay: ShelfOverlay::None,
+            menu_textures,
+            board_texture: None,
+            chip_texture,
         })
     }
 
@@ -174,6 +213,7 @@ impl Engine {
         match input {
             Input::Reset => {
                 self.buttons = 0;
+                self.overlay = ShelfOverlay::None;
                 for shelf in &mut self.shelves {
                     shelf.release_hold();
                 }
@@ -195,6 +235,7 @@ impl Engine {
                 self.buttons = 0;
                 self.awaiting_game = false;
                 self.inserted = false;
+                self.overlay = ShelfOverlay::None;
                 self.requested_uri = None;
                 self.prepared_rom = None;
                 self.seated_frame_seen = false;
@@ -233,8 +274,53 @@ impl Engine {
                     }
                     return;
                 }
+                if self.overlay != ShelfOverlay::None {
+                    if pressed {
+                        match self.overlay {
+                            ShelfOverlay::Library { row } => match code {
+                                19 | 20 => {
+                                    let next = if code == 19 { row + MENU_ITEMS - 1 } else { row + 1 };
+                                    self.overlay = ShelfOverlay::Library { row: next % MENU_ITEMS };
+                                }
+                                96 => {
+                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
+                                        .push_back(if row == 0 { 1 } else { 2 });
+                                    self.overlay = ShelfOverlay::None;
+                                }
+                                97 | 108 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
+                            ShelfOverlay::Core => match code {
+                                96 | 97 | 109 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
+                            ShelfOverlay::None => {}
+                        }
+                    }
+                    return;
+                }
                 if pressed {
                     match code {
+                        108 if !self.inserted => {
+                            self.shelves[self.active].release_hold();
+                            self.overlay = ShelfOverlay::Library { row: 0 };
+                            return;
+                        }
+                        109 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
+                            let selected = &self.shelves[self.active].carts[self.shelves[self.active].index];
+                            if selected.platform != Platform::Gba {
+                                set_message("mGBA is the only installed GB/GBC core".into());
+                                return;
+                            }
+                            let face = board_face(selected);
+                            if let Some(texture) = self.board_texture {
+                                self.gpu.update_texture(texture, face.w, face.h, &face.rgba);
+                            } else {
+                                self.board_texture = Some(self.gpu.create_texture(face.w, face.h, &face.rgba));
+                            }
+                            self.overlay = ShelfOverlay::Core;
+                            return;
+                        }
                         102 | 103 if !self.inserted => {
                             let delta = if code == 102 { -1 } else { 1 };
                             // An empty platform is never a visible stop.
@@ -337,6 +423,42 @@ impl Engine {
         }
     }
 
+    fn add_text(&self, index: usize, x: f32, y: f32, out: &mut Vec<Draw>) {
+        let (tex, w, h) = self.menu_textures[index];
+        out.push(Draw::Tex { x, y, w: w as f32, h: h as f32, tex, alpha: 1.0 });
+    }
+
+    fn draw_overlay(&self, out: &mut Vec<Draw>) {
+        match self.overlay {
+            ShelfOverlay::None => {}
+            ShelfOverlay::Library { row } => {
+                out.push(Draw::Rect { x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32, colour: [0.0, 0.0, 0.0, 0.82] });
+                out.push(Draw::Rect { x: 95.0, y: 99.0, w: 530.0, h: 287.0, colour: [0.085, 0.085, 0.093, 1.0] });
+                out.push(Draw::Rect { x: 95.0, y: 99.0, w: 530.0, h: 3.0, colour: [0.69, 0.69, 0.72, 1.0] });
+                self.add_text(0, 124.0, 116.0, out);
+                for index in 0..3 {
+                    let y = 178.0 + index as f32 * 51.0;
+                    if index == row {
+                        out.push(Draw::Rect { x: 111.0, y: y - 2.0, w: 498.0, h: 43.0, colour: [0.28, 0.28, 0.32, 1.0] });
+                    }
+                    self.add_text(index + 1, 136.0, y, out);
+                }
+                self.add_text(4, 136.0, 347.0, out);
+            }
+            ShelfOverlay::Core => {
+                out.push(Draw::Rect { x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32, colour: [0.085, 0.085, 0.093, 1.0] });
+                self.add_text(5, 263.0, 74.0, out);
+                if let Some(tex) = self.board_texture {
+                    out.push(Draw::Tex { x: 174.0, y: 131.0, w: 372.0, h: 209.0, tex, alpha: 1.0 });
+                    out.push(Draw::Tex { x: 323.0, y: 213.0, w: 63.0, h: 45.0, tex: self.chip_texture, alpha: 1.0 });
+                }
+                self.add_text(6, 265.0, 346.0, out);
+                self.add_text(7, 225.0, 389.0, out);
+                self.add_text(8, 221.0, 443.0, out);
+            }
+        }
+    }
+
     fn draw(&mut self) {
         let now = Instant::now();
         let dt = (now - self.last).as_secs_f32().min(0.05);
@@ -424,6 +546,7 @@ impl Engine {
             }
             .draw(&mut commands);
         }
+        self.draw_overlay(&mut commands);
         self.gpu.fit(self.size);
         self.gpu.begin_frame();
         self.gpu.draw_list(&commands);
@@ -565,6 +688,13 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeResetInput(
     input.push_back(Input::Reset);
 }
 
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollUiAction(
+    _env: *mut c_void, _this: *mut c_void,
+) -> jint {
+    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).pop_front().unwrap_or(0)
+}
 
 fn push(input: Input) {
     INPUT.lock().unwrap_or_else(|e| e.into_inner()).push_back(input);
