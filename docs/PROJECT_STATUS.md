@@ -122,3 +122,8 @@ pause/resume, proper volume and no duplicate cues. Not yet physically tested.
   ends at ~720ms, near the visual 730ms completion; eject PCM unchanged.
 - SELECT exact original cart-board opening animation remains a separate task,
   not yet claimed complete. Original sound and menu require physical validation.
+
+
+## Confirmed integration checkpoint
+
+The 0.0.4-dev2 user interface, input and original cart sound were physically accepted on the KONKR. Integration branch `feat/konkr-integration` was created from that exact UI HEAD. RetroAchievements discovery and network configuration have been merged without replacing the newer UI MainActivity. Read-only RAOfflineProxy diagnostics are found under START > Menu > RetroAchievements, not on shelf X. This is NOT achievement evaluation, login or offline unlocking. Next tasks: reproduce exact upstream Slot `CorePicker` animation with original Rust timing, then validate merged app and implement rcheevos GBA + RAOfflineProxy transport in successive controlled milestones.

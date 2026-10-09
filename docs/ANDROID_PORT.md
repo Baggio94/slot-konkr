@@ -130,3 +130,12 @@ No additional empty-screen fallback UI is introduced by these fixes.
 No changes to the validated feat/android-bootstrap branch or the experimental
 feat/konkr-retroachievements branch. Remaining UI work: native Menu/Home keycode,
 Start settings menu, Select cart core picker, original hotkeys, Studio-style labels.
+
+
+## Integration from RA branch (October 2026)
+
+The `feat/konkr-integration` branch contains all the validated 0.0.4-dev2 UI work PLUS the READ-ONLY RAOfflineProxy Android ContentProvider discovery, local-only networking security config and backup script from `feat/konkr-retroachievements`. The original branch remains unchanged.
+
+Navigate START > Menu > RetroAchievements > A to check proxy status. It does NOT authenticate to RA, award achievements, change proxy configuration, or select a transport yet. The app will later support OFF, DIRECT and PROXY modes. In PROXY mode, RAOfflineProxy will be the sole owner of queued offline Softcore awards. No direct fallback if local proxy is unavailable.
+
+The `X` diagnostic from the original RA exploratory branch is intentionally moved into the RetroAchievements submenu to avoid conflicting with controller conventions. Upstream `core_picker.rs` animation and frame-based rcheevos evaluation are separate follow-on milestones.

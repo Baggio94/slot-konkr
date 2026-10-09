@@ -90,6 +90,7 @@ class MainActivity : Activity() {
             when (nativePollUiAction()) {
                 1 -> openRomFolderPicker()
                 2 -> refreshLibrary()
+                3 -> checkRaOfflineProxy()
             }
             nativePollMessage()?.let { message ->
                 Log.e(TAG, message)
@@ -353,6 +354,24 @@ class MainActivity : Activity() {
         audioRunning.set(false)
         audioThread?.interrupt()
         audioThread = null
+    }
+
+    private fun checkRaOfflineProxy() {
+        scanner.execute {
+            val proxy = RaEndpoint.discover(applicationContext)
+            val message = when {
+                proxy == null -> "RAOfflineProxy unavailable"
+                !proxy.running -> "RAOfflineProxy stopped"
+                proxy.base() == null -> "RAOfflineProxy address invalid"
+                else -> "RAOfflineProxy :" + proxy.port +
+                    ", online=" + proxy.online + ", pending=" + (proxy.pendingAwards ?: "?")
+            }
+            runOnUiThread {
+                if (!isDestroyed) {
+                    Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 
     private fun refreshLibrary() {

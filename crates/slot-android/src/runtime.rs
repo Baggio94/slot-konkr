@@ -116,7 +116,7 @@ const MENU_TEXT: [&str; 24] = [
     "SCRAPING",                         // 11
     "Artwork scraping coming soon",    // 12
     "RETROACHIEVEMENTS",               // 13
-    "RA integration coming soon",      // 14
+    "A: Check RAOfflineProxy status",    // 14
     "SELECT CORE",                      // 15
     "mGBA",                             // 16
     "gpSP (not installed)",            // 17
@@ -398,6 +398,9 @@ impl Engine {
                                 _ => {}
                             },
                             ShelfOverlay::Scraping | ShelfOverlay::Achievements => match code {
+                                96 if matches!(self.overlay, ShelfOverlay::Achievements) => {
+                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(3);
+                                }
                                 97 => self.overlay = ShelfOverlay::Menu {
                                     row: if matches!(self.overlay, ShelfOverlay::Scraping) { 1 } else { 2 },
                                 },
