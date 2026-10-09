@@ -195,3 +195,16 @@ work on KONKR. The next iteration adds real ARM64 gpSP to the APK, per-ROM
 core selection in the original chip picker, and separate mGBA/gpSP
 savestates. CI and on-device tests are required; do not claim gpSP playable
 until tested on the KONKR. RetroAchievements remains paused.
+
+
+## Active Save Stage — 0.0.7-dev1
+
+The user accepted gpSP physically and requested RetroArch shared per-core saves
+and states, original Slot's 10-state Polaroids thumbnails/undo, and removed all
+initial demo carts, touch interaction, mismatched top banner and START+SELECT.
+All four UX corrections were committed in branch
+`feat/konkr-save-parity`. Rust and Kotlin wiring for explicit Save and State
+SAF directories, RASTATE v1 wrapper, RZIP v1 decode, original Slot StateRing
+and Polaroids are in source and still require CI and physical acceptance.
+Current RetroArch state sync is .state.auto only; sharing manual numbered slots
+is a known remaining feature. RetroAchievements remains paused.

@@ -166,3 +166,16 @@ SELECT opens the original CorePicker to the saved choice; LEFT/RIGHT swap
 chips and A stores the preference. The selected libretro .so is loaded on the
 next launch. BIOS import is shared, but save states use core-specific file
 names. No RetroAchievements integration advances in this build.
+
+
+## Save Stage 0.0.7-dev1 (experimental)
+
+Android SAF read/write folder pickers select existing RetroArch SAVES and STATES
+root dirs. Slot uses per-core mGBA and gpSP folders with exact ROM stems.
+Existing saves read before game boot; exit/suspend queue a background flush
+and verify external output. External original file is backed up as
+`.before-slot` before first overwrite. ROMs and BIOS folders remain read-only.
+Original Slot StateRing, PNG thumbnail and Polaroids UI are built in but not
+validated. RASTATE v1 uncompressed and RZIP v1 deflate decoder are supported,
+RZIP v2 zstd remains protected as unsupported, manual numbered RetroArch state
+slots are future work. Do not treat a green CI as proof of round-trip safety.

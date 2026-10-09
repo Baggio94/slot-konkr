@@ -90,3 +90,47 @@ Do not claim 0.0.6-dev1 validated until the user actually tests on KONKR.
 ## gpSP integration outcome (0.0.6-dev2)
 
 GitHub Actions run [38002922667](https://github.com/Baggio94/slot-konkr/actions/runs/38002922667) passed. The generated APK was checked for both ARM64 mGBA and gpSP libraries, original sounds, and gpSP exported libretro symbols. This establishes build integrity **only**, not playability on real hardware. Next device gate is selecting gpSP on a GBA cart, confirming launch/video/audio, returning to shelf, persistence of selected core and correct per-core save state isolation. Upstream BIOS folder 0.0.6-dev1 has been physically confirmed by the user to work; no regression testing of gpSP BIOS yet.
+
+
+## Save parity development — 0.0.7-dev1 (NOT physically validated)
+
+Experimental branch `feat/konkr-save-parity` extends the user-confirmed
+0.0.6-dev2. Four explicit user UI decisions: **no synthetic demo carts on
+first launch**, **no touchscreen interaction inside Slot**, **transparent top
+text backdrop**, **no START+SELECT exit** (hold physical HOME/MENU instead).
+
+Shared RetroArch folders: START > Menu > Library > Choose Save Folder / Choose
+Save State Folder use persisted Android SAF READ+WRITE grants. The user should
+choose the *root* RetroArch `saves` and `states` directories. Inside them
+Slot uses the same per-core directory names `mGBA` or `gpSP`, then the
+original ROM filename without extension, e.g. `mGBA/Advance Wars.srm` and
+`mGBA/Advance Wars.state.auto`. These are distinct save formats:
+- Save RAM `.srm`: same raw libretro battery RAM, imported before core boot;
+  written back on successful suspend/eject. A `.before-slot` copy of any
+  overwritten user file is retained, and write verified by reread.
+- RetroArch state `.state.auto`: RetroArch 1 `RASTATE` block wrapper around
+  core-specific serialized data. Existing `#RZIPv1#` deflate archives are
+  decoded in a bounded Android worker; `#RZIPv2#` zstd is intentionally
+  REFUSED/PRESERVED until an interoperable zstd decoder exists. A state produced
+  by gpSP must not be loaded by mGBA or vice versa. Do not force-load an
+  unrecognized or corrupted state. Export of valid uncompressed RetroArch
+  state is available on exit, with backup before replacement.
+- **RetroArch manual state slots (.state, .state1 etc.) are NOT yet imported
+  into Slot's polaroid history or written by SELECT+R1.** This is a remaining
+  integration task, not supported merely by choosing a shared folder. Original
+  Slot local polaroids are independent from RetroArch files.
+- Two applications should not write to the same save file simultaneously;
+  concurrent RA changes need conflict-detection and recovery before full parity.
+
+Original Slot save history: reuse `slot-store::StateRing` (10 stamped states
+per ROM, per platform/core, evicts oldest only), original `thumb::png` capture
+(240×160), `slot-ui::Polaroids` visual UI and dated/title captions, undo for
+save/load for 30 seconds. SELECT+R1 creates a stamped history state; SELECT+L1
+loads latest; short HOME opens game menu, double HOME opens Polaroids, B back,
+A load, Y delete, X undo. Confirm these on real KONKR before declaring done.
+
+Validation gates: Android+Rust CI (still in progress), then ROM/mGBA/gpSP
+regression, initial empty shelf, transparence, controller-only input, exit
+combo removed, long MENU exit, RA SAF folder access and permissions, SRAM
+round trip RA→Slot→RA, state RASTATE round trip, v1 RZIP decode, v2 zstd
+preservation, Slot history/undo. Do NOT distribute as stable until tested.
