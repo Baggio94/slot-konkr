@@ -30,8 +30,12 @@ Release notes can be found in the [changelog](CHANGELOG.md).
 # What does it look like?
 
 <p align="center">
-<img src=".github/resources/screenshots/link.gif" width="64%" alt="Two SPs racing in Mario Kart over the emulated link">
-<img src=".github/resources/screenshots/core-picker.gif" width="31.5%" alt="Flipping a cart to its circuit board to choose mGBA or gpSP">
+<img src=".github/resources/screenshots/carousel.gif" width="48%" alt="Scrolling the cart carousel across the Game Boy Advance, Game Boy and Game Boy Color shelves">
+<img src=".github/resources/screenshots/core-picker.gif" width="48%" alt="Flipping a cart to its circuit board to choose mGBA or gpSP">
+</p>
+
+<p align="center">
+<img src=".github/resources/screenshots/link.gif" width="96.5%" alt="Two SPs racing in Mario Kart over the emulated link">
 </p>
 
 ---
