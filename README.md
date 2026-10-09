@@ -1,16 +1,43 @@
-# slot.
+<div align="center">
+
+<img src=".github/resources/banner.svg" width="100%" alt="slot. A bespoke, Game Boy-centric frontend for the Anbernic RG SP.">
+
+<a href="LICENSE"><img src="https://img.shields.io/github/license/BrandonKowalski/slot?style=for-the-badge&labelColor=242429&color=4d4d57" height="36" alt="License"></a>
+<a href="https://github.com/BrandonKowalski/slot/stargazers"><img src="https://img.shields.io/github/stars/BrandonKowalski/slot?style=for-the-badge&labelColor=242429&color=4d4d57" height="36" alt="Stars"></a>
+<a href="https://github.com/BrandonKowalski/slot/releases"><img src="https://img.shields.io/github/downloads/BrandonKowalski/slot/total?style=for-the-badge&labelColor=242429&color=4d4d57" height="36" alt="Downloads"></a>
+<a href="https://slot-cfw.fyi"><img src="https://img.shields.io/badge/Guide-slot--cfw.fyi-4d4d57?style=for-the-badge&labelColor=242429" height="36" alt="Guide"></a>
+<a href="CHANGELOG.md"><img src="https://img.shields.io/badge/Changelog-4d4d57?style=for-the-badge&labelColor=242429" height="36" alt="Changelog"></a>
+
+</div>
+
+---
+
+# What is slot?
 
 A bespoke, Game Boy-centric frontend for the Anbernic RG SP.
 
 Has support for GBA, GBC, and GB titles only.
 
-ROMs must be unzipped. slot does not read `.zip` or `.7z` files.
+> [!IMPORTANT]
+> ROMs must be unzipped. slot does not read `.zip` or `.7z` files.
 
 A full user guide can be found at [slot-cfw.fyi](https://slot-cfw.fyi).
 
 Release notes can be found in the [changelog](CHANGELOG.md).
 
-## Supported Devices
+---
+
+# What does it look like?
+
+<p align="center">
+<a href=".github/resources/screenshots/main.png"><img src=".github/resources/screenshots/main.png" width="30%"></a>
+<a href=".github/resources/screenshots/palettes.png"><img src=".github/resources/screenshots/palettes.png" width="30%"></a>
+<a href=".github/resources/screenshots/link.png"><img src=".github/resources/screenshots/link.png" width="30%"></a>
+</p>
+
+---
+
+# Supported Devices
 
 | Device | Supported | Since Version |
 | --- | --- | --- |
@@ -23,7 +50,9 @@ The RG34XX will likely work from 1.4.0. The RG34XXSP may not map its sticks corr
 
 If you have one of the Untested devices, or have tried slot on a device not listed, please [open an issue on GitHub](https://github.com/BrandonKowalski/slot/issues) and let me know how it went.
 
-## AI Disclosure
+---
+
+# AI Disclosure
 
 The Rust frontend was put together by Claude Opus. I reviewed everything that was
 produced. All documentation is 100% free-range, meatbag prose.
