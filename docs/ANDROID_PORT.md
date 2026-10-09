@@ -46,3 +46,28 @@ Official website: https://slot-cfw.fyi/#hero
 Original author: Brandon Kowalski
 Video reference supplied by project owner: https://www.youtube.com/watch?v=vndbnpH0QoE
 RetroAchievements implementation reference: https://github.com/RetroAchievements/rcheevos
+
+
+## KONKR ROM library integration — 0.0.2-dev1
+
+This build introduces read-only Storage Access Framework folder selection:
+- Press START to choose the /ROMs directory or a parent of GB/GBC/GBA folders.
+- Press SELECT to rescan the current folder; START selects a different folder.
+- Android retains a persistent read-only grant. No root access, broad storage grant or ROM duplication.
+- Scanning runs on a background executor with a maximum of 5,000 ROMs and bounded traversal.
+- Supports raw .gba, .gb and .gbc. ZIP/7z and artwork scraping are not supported in this milestone.
+- Original Slot renders generated label placeholders from ROM file names; artwork is later.
+- Empty folders show empty shelves, not synthetic display cartridges.
+- Cartridges are rasterized only when visible using a bounded pool of 42 GPU textures.
+- SAF content URIs are opaque; Rust cannot read them through normal filesystem APIs.
+
+The build still DOES NOT emulate or play games. Press A to see cartridge insertion.
+
+RetroAchievements architecture (not yet implemented):
+- Direct mode: native RetroAchievements HTTPS transport, optional local queue only after validation.
+- RAOfflineProxy mode: localhost HTTP transport and proxy as the SOLE owner of offline awards, no double queuing.
+- Proxy remains the HTTP endpoint while online to prepare its offline cache.
+- Login, transport selection, unlocks, and emulator RAM integration will come in later releases.
+
+Physical tests: choose ROM folder via START, verify GB/GBC/GBA shelves with L1/R1, A/B insertion,
+relaunch for persisted access, SELECT rescan, empty folder handling, and no crash.
