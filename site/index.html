@@ -251,6 +251,11 @@
         <h3>Commit Aspect Ratio Crimes</h3>
         <p>Just like the OG, <kbd>L1</kbd> stretches GB and GBC games.<br><kbd>R1</kbd> puts them back to their original size.</p>
       </li>
+      <li class="step" id="screen" data-clip="screen.mp4">
+        <h3>Shaders and Palettes</h3>
+        <p><kbd>SELECT</kbd> + <kbd>B</kbd> / <kbd>A</kbd> steps through the screen shaders.<br><kbd>SELECT</kbd> + <kbd>Y</kbd> toggles colour correction.</p>
+        <p>Turn on GB Palettes in the Screen settings, then <kbd>SELECT</kbd> + <kbd>L2</kbd> / <kbd>R2</kbd> steps through named palettes in original Game Boy games. The setting applies from the next game you insert, and a game resumed from a save state made before you turned it on keeps its old colours until you start it fresh.</p>
+      </li>
       <li class="step" id="link" data-clip="link.mp4" data-pair="link-join.mp4">
         <h3>Link Up</h3>
         <p><kbd>SELECT</kbd> + <kbd>MENU</kbd> opens the link screen.<br>Host on one SP, Join on the other.<br>The link is hosted over an Ad Hoc network.</p>
@@ -258,7 +263,6 @@
       <li class="step" id="settings" data-clip="settings.mp4">
         <h3>Settings</h3>
         <p><kbd>MENU</kbd> on the carousel opens the settings.</p>
-        <p>GB Palettes, on the Screen page, turns on named palettes for original Game Boy games. Press <kbd>SELECT</kbd> + <kbd>L2</kbd> / <kbd>R2</kbd> in game to step back and forth through them. Changing the setting applies from the next game you insert, and a game resumed from a save state made before you turned it on keeps its old colours until you start it fresh.</p>
       </li>
       <li class="step" id="brightness" data-clip="brightness.mp4">
         <h3>Brightness and Blue Light</h3>
@@ -367,6 +371,10 @@
         <div class="key">
           <dt><kbd>SELECT</kbd> + <kbd>B</kbd> / <kbd>A</kbd></dt>
           <dd>Previous / next screen shader.</dd>
+        </div>
+        <div class="key">
+          <dt><kbd>SELECT</kbd> + <kbd>Y</kbd></dt>
+          <dd>Toggle colour correction.</dd>
         </div>
         <div class="key">
           <dt><kbd>SELECT</kbd> + <kbd>L2</kbd> / <kbd>R2</kbd></dt>
@@ -507,6 +515,10 @@
         <div class="qa">
           <dt>Where do the games come from?</dt>
           <dd>Your own legally obtained backups.</dd>
+        </div>
+        <div class="qa">
+          <dt>Why doesn't the GBA soft reset work?</dt>
+          <dd>slot uses <kbd>SELECT</kbd> + <kbd>A</kbd> and <kbd>SELECT</kbd> + <kbd>B</kbd> to change the screen shader, so the game never sees <kbd>A</kbd> + <kbd>B</kbd> + <kbd>START</kbd> + <kbd>SELECT</kbd>, or any combo of its own that holds <kbd>SELECT</kbd> with <kbd>A</kbd> or <kbd>B</kbd>. Hold <kbd>A</kbd> on the carousel to start a game fresh instead.</dd>
         </div>
       </dl>
     </div>
