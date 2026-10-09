@@ -31,7 +31,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<u8>, String> {
     if bytes.is_empty() || bytes.len() > MAX_CORE_STATE + 1024 * 1024 {
         return Err("Empty or oversized RetroArch state".into());
     }
-    if bytes.starts_with(b"RZIP") || bytes.starts_with(b"RZ") {
+    if bytes.starts_with(b"#RZIPv") {
         return Err("Compressed RetroArch state is not supported yet".into());
     }
     if bytes.len() >= 7 && &bytes[..7] == b"RASTATE" {
@@ -84,7 +84,7 @@ mod tests {
     fn truncated_unknown_corrupt_and_compressed_are_refused() {
         assert!(decode(b"RASTATE\x01").is_err());
         assert!(decode(b"RASTATE\x02MEM ").is_err());
-        assert!(decode(b"RZIPNOT_SUPPORTED").is_err());
+        assert!(decode(b"#RZIPv\x01#NOT_SUPPORTED").is_err());
         assert!(decode(b"RASTATE\x01MEM \xff\xff\xff\x7f").is_err());
     }
     #[test]
