@@ -154,3 +154,15 @@ Import runs on the same worker as ROM copy, so a restart must stage BIOS
 before first core load. Valid BIOS apply on the next game boot.
 Save and Save State folder choosers remain disabled until their underlying
 Android file writes are fully implemented. RetroAchievements is on hold.
+
+
+## 0.0.6-dev2 — gpSP libretro
+
+The bundled mGBA and gpSP cores run through the same Rust libretro runtime,
+with Android GLSurfaceView rendering and AudioTrack. The selected core for
+each SAF ROM URI is atomically stored in `Config/selected_core.ini` via a
+stable hash, not ROM title (duplicates across folders are allowed).
+SELECT opens the original CorePicker to the saved choice; LEFT/RIGHT swap
+chips and A stores the preference. The selected libretro .so is loaded on the
+next launch. BIOS import is shared, but save states use core-specific file
+names. No RetroAchievements integration advances in this build.

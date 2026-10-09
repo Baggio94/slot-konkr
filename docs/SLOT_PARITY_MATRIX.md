@@ -16,7 +16,7 @@ Source code is not equivalent to device validation; only call a feature complete
 | SELECT original cart opening and chip animation | Physically validated | Add usable gpSP and persist per-game core |
 | mGBA emulation and save RAM | GBA physically validated | Test GB/GBC core behavior |
 | Original optional BIOS intro | 0.0.6-dev1 source, not yet tested | Load GBA/GB/GBC BIOS via Android SAF |
-| gpSP second GBA core | Not installed | Bundle/test core, per-ROM choice |
+| gpSP second GBA core | 0.0.6-dev2 source + CI pending | Test physical gpSP boot, save RAM, audio and persistent choice |
 | Hand-authored cartridge label PNGs and shell colors | Not implemented | Import Slot Cart Studio labels, respect cart shell colors, cache |
 | Multiple timestamped save states | Only last automatic state | Complete state ring, thumbnails, save/load/delete and undo |
 | Double MENU save-state switcher | Not implemented | A/B/X/Y switcher shortcuts and UI |
@@ -64,3 +64,24 @@ when ROMs available, sound/controllers/save states unaffected.
 
 **States of completion:** source updated => CI green => user physically tests => mark accepted.
 Do not claim 0.0.6-dev1 validated until the user actually tests on KONKR.
+
+
+## gpSP second core — 0.0.6-dev2 integration gate
+
+- Pinned source: libretro/gpsp at commit `5819380c2ffb0900219d700a382ee68c464ebb99`.
+- `scripts/build-gpsp-android.sh` builds arm64 libretro core with Android NDK
+  and packages `libgpsp_libretro.so` into the APK alongside mGBA.
+- Slot original SELECT -> Left/Right chip hop -> A now persists *per opaque
+  SAF ROM URI*; returning to SELECT shows the previously selected socket.
+- Launch uses the core associated with this ROM; all other consoles GB/GBC
+  continue to use mGBA. No extra Android emulator or file manager launches.
+- gpSP uses the same private BIOS location as mGBA with its own libretro BIOS
+  and boot-mode options. User-supplied BIOS from 0.0.6-dev1 is reused.
+- Common cartridge SRAM is preserved, while emulator-specific savestates are
+  kept separate as `.mgba.state` and `.gpsp.state` to avoid corrupt loads.
+  Legacy `.state` files are still readable by mGBA.
+- Physical validation: SELECT on GBA displays mGBA and gpSP chip/sockets;
+  choose gpSP and confirm full cart closure, GBA boot, audio/D-pad, save/reopen,
+  switch to mGBA and back, restart app to verify per-cart preference persisted.
+- CI arm64 gpSP build and physical tests must complete before marking as done.
+- RetroAchievements is frozen during this parity stage.

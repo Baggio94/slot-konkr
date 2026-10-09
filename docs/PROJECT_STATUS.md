@@ -186,3 +186,12 @@ BIOS loading options are enabled for a real boot intro. Other original Slot
 features are tracked in [SLOT_PARITY_MATRIX.md](SLOT_PARITY_MATRIX.md).
 RA/rcheevos work is paused at user request. This build is **not physically
 validated** until tested on KONKR.
+
+
+## 0.0.6-dev2 — real gpSP second core (physical verification pending)
+
+The user confirmed the 0.0.6-dev1 BIOS folder and original GBA boot intro
+work on KONKR. The next iteration adds real ARM64 gpSP to the APK, per-ROM
+core selection in the original chip picker, and separate mGBA/gpSP
+savestates. CI and on-device tests are required; do not claim gpSP playable
+until tested on the KONKR. RetroAchievements remains paused.
