@@ -1,0 +1,16 @@
+[package]
+name = "slot-android"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "slot_android"
+crate-type = ["cdylib"]
+
+[dependencies]
+slot-gfx = { path = "../slot-gfx", default-features = false }
+slot-store = { path = "../slot-store" }
+slot-ui = { path = "../slot-ui" }
