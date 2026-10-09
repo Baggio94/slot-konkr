@@ -9,10 +9,10 @@ import java.util.Base64
  */
 class RetroArchCompressionTest {
     private val raw = Base64.getDecoder().decode(
-        "UkFTVEFURQFNRU0gBAAAAFRFU1RFTkQgAAAAAA=="
+        "UkFTVEFURQFNRU0gBAAAAFRFU1QAAAAARU5EIAAAAAA="
     )
     private val fixture = Base64.getDecoder().decode(
-        "I1JaSVB2ASMAAAIAHAAAAAAAAAAiAAAAeJwLcgwOcQxxZfR19VVgYWBgCHENDnH1c1EAMhkAWsAFUA=="
+        "I1JaSVB2ASMAAAIAIAAAAAAAAAAkAAAAeJwLcgwOcQxxZfR19VVgYWBgCHENDgFSDK5+LgogGgBsJAVQ"
     )
 
     @Test fun independentRzipV1FixtureDecodes() {
