@@ -1,7 +1,12 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ffi::{c_char, c_void, CString};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use crate::game::GameSession;
+use slot_retro::ButtonMask;
+use slot_gfx::ScreenEffect;
+use jni::{JNIEnv, objects::{JObject, JString}, sys::{jint, jboolean, jshortArray, jstring}};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -40,13 +45,39 @@ impl Surface for AndroidSurface {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Input {
     Key(i32, bool),
     Reset,
+    GameReady(String),
+    GameError(String),
+    Exit,
+    Suspend,
 }
 
 static INPUT: Mutex<VecDeque<Input>> = Mutex::new(VecDeque::new());
+static REQUEST: Mutex<Option<String>> = Mutex::new(None);
+static MESSAGE: Mutex<Option<String>> = Mutex::new(None);
+static PATHS: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
+static AUDIO: Mutex<VecDeque<i16>> = Mutex::new(VecDeque::new());
+static PLAYING: AtomicBool = AtomicBool::new(false);
+static SAMPLE_RATE: AtomicI32 = AtomicI32::new(0);
+
+fn controls(code: i32) -> u16 {
+    match code {
+        97 => ButtonMask::B, 100 => ButtonMask::Y, 109 => ButtonMask::SELECT,
+        108 => ButtonMask::START, 19 => ButtonMask::UP, 20 => ButtonMask::DOWN,
+        21 => ButtonMask::LEFT, 22 => ButtonMask::RIGHT,
+        96 => ButtonMask::A, 99 => ButtonMask::X,
+        102 => ButtonMask::L, 103 => ButtonMask::R,
+        _ => 0,
+    }
+}
+
+fn set_message(message: String) {
+    *MESSAGE.lock().unwrap_or_else(|e| e.into_inner()) = Some(message);
+}
+
 
 // All engine / OpenGL work occurs on GLSurfaceView's dedicated GL thread.
 thread_local! {
@@ -64,6 +95,9 @@ struct Engine {
     last: Instant,
     library_version: u64,
     texture_cache: VecDeque<(usize, usize, slot_gfx::TexId)>,
+    game: Option<GameSession>,
+    buttons: u16,
+    awaiting_game: bool,
 }
 
 impl Engine {
@@ -122,17 +156,75 @@ impl Engine {
             last: now,
             library_version,
             texture_cache: VecDeque::new(),
+            game: None,
+            buttons: 0,
+            awaiting_game: false,
         })
     }
 
     fn handle(&mut self, input: Input) {
         match input {
             Input::Reset => {
+                self.buttons = 0;
                 for shelf in &mut self.shelves {
                     shelf.release_hold();
                 }
             }
+            Input::Suspend => {
+                if let Some(session) = self.game.as_mut() {
+                    session.save(true);
+                }
+                self.buttons = 0;
+                AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            }
+            Input::Exit => {
+                if let Some(mut session) = self.game.take() {
+                    session.save(true);
+                }
+                PLAYING.store(false, Ordering::Release);
+                SAMPLE_RATE.store(0, Ordering::Release);
+                AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+                self.buttons = 0;
+                self.awaiting_game = false;
+                self.inserted = false;
+                *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            }
+            Input::GameError(error) => {
+                set_message(format!("Cannot open game: {error}"));
+                self.awaiting_game = false;
+                self.inserted = false;
+            }
+            Input::GameReady(local) => {
+                if !self.awaiting_game || !self.inserted { return; }
+                self.awaiting_game = false;
+                let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                if let Some((storage, library)) = paths {
+                    match GameSession::open(Path::new(&local), &library.join("libmgba_libretro.so"), &storage) {
+                        Ok(session) => {
+                            self.buttons = 0;
+                            self.progress = 1.0;
+                            SAMPLE_RATE.store(session.sample_rate, Ordering::Release);
+                            self.game = Some(session);
+                            self.gpu.set_screen_effect(ScreenEffect::None);
+                            self.gpu.set_screen_power(1.0);
+                            PLAYING.store(true, Ordering::Release);
+                        }
+                        Err(error) => {
+                            set_message(format!("mGBA: {error}"));
+                            self.inserted = false;
+                        }
+                    }
+                } else {
+                    set_message("Android game paths are not configured".into());
+                    self.inserted = false;
+                }
+            }
             Input::Key(code, pressed) => {
+                if self.game.is_some() {
+                    let mask = controls(code);
+                    if pressed { self.buttons |= mask; } else { self.buttons &= !mask; }
+                    return;
+                }
                 if pressed {
                     match code {
                         102 | 103 => {
@@ -146,12 +238,20 @@ impl Engine {
                             self.progress = 0.0;
                             return;
                         }
-                        96 if !self.shelves[self.active].carts.is_empty() => {
+                        96 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
                             self.inserted = true;
+                            let selected = &self.shelves[self.active].carts[self.shelves[self.active].index];
+                            let uri = selected.rom.to_string_lossy();
+                            if uri.starts_with("content://") {
+                                self.awaiting_game = true;
+                                *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = Some(uri.into_owned());
+                            }
                             return;
                         }
                         97 => {
                             self.inserted = false;
+                            self.awaiting_game = false;
+                            *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = None;
                             return;
                         }
                         _ => {}
@@ -210,6 +310,23 @@ impl Engine {
             self.handle(event);
         }
 
+        if let Some(session) = self.game.as_mut() {
+            session.advance(self.buttons);
+            self.gpu.upload_game(session.frame());
+            let samples = session.take_audio();
+            if !samples.is_empty() {
+                let mut audio = AUDIO.lock().unwrap_or_else(|e| e.into_inner());
+                let overflow = audio.len().saturating_add(samples.len()).saturating_sub(96_000);
+                for _ in 0..overflow.min(audio.len()) { audio.pop_front(); }
+                audio.extend(samples);
+            }
+            self.gpu.fit(self.size);
+            self.gpu.begin_frame();
+            self.gpu.draw_list(&[Draw::Game]);
+            self.gpu.end_frame(self.size);
+            return;
+        }
+
         let ms = self.born.elapsed().as_millis() as u64;
         self.shelves[self.active].tick(ms);
         self.shelves[self.active].update(dt);
@@ -265,6 +382,8 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
 ) -> u8 {
     ENGINE.with(|holder| {
         *holder.borrow_mut() = None;
+        PLAYING.store(false, Ordering::Release);
+        SAMPLE_RATE.store(0, Ordering::Release);
         let (version, snapshot) = {
             let state = LIBRARY.lock().unwrap_or_else(|err| err.into_inner());
             (state.version, state.entries.clone())
@@ -312,6 +431,12 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
             }
         };
         if let Some((version, snapshot)) = updated {
+            // Saving an in-progress game on library replacement is mandatory.
+            if let Some(engine) = holder.borrow_mut().as_mut() {
+                if let Some(mut session) = engine.game.take() { session.save(true); }
+            }
+            PLAYING.store(false, Ordering::Release);
+            SAMPLE_RATE.store(0, Ordering::Release);
             // Destruct old GL resources on the GL thread before recreating them.
             let size = holder.borrow().as_ref().map(|engine| engine.size).unwrap_or((960, 640));
             *holder.borrow_mut() = None;
@@ -350,4 +475,95 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeResetInput(
     let mut input = INPUT.lock().unwrap_or_else(|poison| poison.into_inner());
     input.clear();
     input.push_back(Input::Reset);
+}
+
+
+fn push(input: Input) {
+    INPUT.lock().unwrap_or_else(|e| e.into_inner()).push_back(input);
+}
+
+/// App-private files directory and nativeLibraryDir (where mGBA is packaged).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeConfigure(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, root: JString<'_>, libraries: JString<'_>,
+) {
+    if let (Ok(root), Ok(libraries)) = (env.get_string(&root), env.get_string(&libraries)) {
+        *PATHS.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some((PathBuf::from(root.to_string_lossy().as_ref()), PathBuf::from(libraries.to_string_lossy().as_ref())));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollLaunchUri(
+    env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jstring {
+    let next = REQUEST.lock().unwrap_or_else(|e| e.into_inner()).take();
+    match next.and_then(|v| env.new_string(v).ok()) {
+        Some(v) => v.into_raw(), None => std::ptr::null_mut(),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeGameReady(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, path: JString<'_>,
+) {
+    if let Ok(path) = env.get_string(&path) {
+        push(Input::GameReady(path.to_string_lossy().into_owned()));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeGameError(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, message: JString<'_>,
+) {
+    if let Ok(message) = env.get_string(&message) {
+        push(Input::GameError(message.to_string_lossy().into_owned()));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeExitGame(
+    _env: *mut c_void, _this: *mut c_void,
+) { push(Input::Exit); }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSuspend(
+    _env: *mut c_void, _this: *mut c_void,
+) {
+    ENGINE.with(|holder| {
+        if let Some(engine) = holder.borrow_mut().as_mut() { engine.handle(Input::Suspend); }
+    });
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeIsPlaying(
+    _env: *mut c_void, _this: *mut c_void,
+) -> jboolean { PLAYING.load(Ordering::Acquire) as jboolean }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeAudioSampleRate(
+    _env: *mut c_void, _this: *mut c_void,
+) -> jint { SAMPLE_RATE.load(Ordering::Acquire) }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeReadAudio(
+    mut env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jshortArray {
+    let samples: Vec<i16> = {
+        let mut audio = AUDIO.lock().unwrap_or_else(|e| e.into_inner());
+        let n = audio.len().min(4096);
+        audio.drain(..n).collect()
+    };
+    let Ok(out) = env.new_short_array(samples.len() as i32) else { return std::ptr::null_mut(); };
+    let _ = env.set_short_array_region(&out, 0, &samples);
+    out.into_raw()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollMessage(
+    env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jstring {
+    match MESSAGE.lock().unwrap_or_else(|e| e.into_inner()).take().and_then(|v| env.new_string(v).ok()) {
+        Some(v) => v.into_raw(), None => std::ptr::null_mut(),
+    }
 }
