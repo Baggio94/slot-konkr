@@ -38,12 +38,9 @@ impl QuickRow {
         QuickRow::Rewind,
     ];
 
-    pub const MAIN: [QuickRow; 7] = [
-        QuickRow::FastForward,
-        QuickRow::FastForwardSound,
+    pub const MAIN: [QuickRow; 4] = [
         QuickRow::Screen,
         QuickRow::Game,
-        QuickRow::Rumble,
         QuickRow::DateTime,
         QuickRow::About,
     ];
@@ -54,7 +51,14 @@ impl QuickRow {
         QuickRow::ColourCorrection,
     ];
 
-    pub const GAME: [QuickRow; 3] = [QuickRow::EjectSave, QuickRow::Turbo, QuickRow::Rewind];
+    pub const GAME: [QuickRow; 6] = [
+        QuickRow::FastForward,
+        QuickRow::FastForwardSound,
+        QuickRow::Rewind,
+        QuickRow::Turbo,
+        QuickRow::Rumble,
+        QuickRow::EjectSave,
+    ];
 
     pub fn index(self) -> usize {
         self as usize
@@ -65,7 +69,12 @@ impl QuickRow {
             QuickRow::GbaShader | QuickRow::GbShader | QuickRow::ColourCorrection => {
                 &QuickRow::SCREEN
             }
-            QuickRow::EjectSave | QuickRow::Turbo | QuickRow::Rewind => &QuickRow::GAME,
+            QuickRow::FastForward
+            | QuickRow::FastForwardSound
+            | QuickRow::Rewind
+            | QuickRow::Turbo
+            | QuickRow::Rumble
+            | QuickRow::EjectSave => &QuickRow::GAME,
             _ => &QuickRow::MAIN,
         }
     }
@@ -73,7 +82,7 @@ impl QuickRow {
     pub fn parent(self) -> Option<QuickRow> {
         match self.page()[0] {
             QuickRow::GbaShader => Some(QuickRow::Screen),
-            QuickRow::EjectSave => Some(QuickRow::Game),
+            QuickRow::FastForward => Some(QuickRow::Game),
             _ => None,
         }
     }

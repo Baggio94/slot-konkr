@@ -71,10 +71,10 @@ fn the_quick_menu_renders_full_screen() {
 
     let bar = [0x4d, 0x4d, 0x57];
     let ground = [0x05, 0x05, 0x08];
-    let mut bar_on = QuickRow::ALL[0];
+    let mut bar_on = QuickRow::MAIN[0];
     for (name, selected) in [
-        ("fast-forward", QuickRow::FastForward),
         ("screen", QuickRow::Screen),
+        ("game", QuickRow::Game),
         ("date-time", QuickRow::DateTime),
         ("about", QuickRow::About),
     ] {
@@ -146,10 +146,12 @@ fn every_fast_forward_speed_sits_on_the_rows_right_edge_and_clears_the_label() {
     f.upload_faces(&mut c);
     let mut input = Script(VecDeque::new());
     tap(&mut f, &mut input, Btn::Menu);
+    tap(&mut f, &mut input, Btn::Down);
+    tap(&mut f, &mut input, Btn::A);
     tap(&mut f, &mut input, Btn::Left);
     tap(&mut f, &mut input, Btn::Left);
 
-    let top = QUICK_TOP as usize;
+    let top = ((OUT_H as f32 - QUICK_PITCH * QuickRow::GAME.len() as f32) / 2.0) as usize;
     for name in ["2x", "3x", "4x", "6x", "8x"] {
         let px = composed(&mut f, &mut c, name);
         let value = inked(&px, 360..OUT_W as usize, top);

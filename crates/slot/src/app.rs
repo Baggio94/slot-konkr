@@ -3187,9 +3187,13 @@ fn shader_value(shader: Shader) -> QuickValue {
 }
 
 fn ff_next(from: u8, right: bool) -> u8 {
+    let n = FF_SPEEDS.len();
     let at = FF_SPEEDS.iter().position(|&v| v == from).unwrap_or(0);
-    let to = if right { at + 1 } else { at.saturating_sub(1) };
-    FF_SPEEDS[to.min(FF_SPEEDS.len() - 1)]
+    FF_SPEEDS[if right {
+        (at + 1) % n
+    } else {
+        (at + n - 1) % n
+    }]
 }
 
 fn clock_screen(utc: i64, offset_min: i16, from_menu: bool) -> Phase {

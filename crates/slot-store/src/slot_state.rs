@@ -73,9 +73,13 @@ impl Shader {
     }
 
     pub fn step(self, choices: &[Shader], right: bool) -> Shader {
+        let n = choices.len();
         let at = choices.iter().position(|&s| s == self).unwrap_or(0);
-        let to = if right { at + 1 } else { at.saturating_sub(1) };
-        choices[to.min(choices.len() - 1)]
+        choices[if right {
+            (at + 1) % n
+        } else {
+            (at + n - 1) % n
+        }]
     }
 }
 

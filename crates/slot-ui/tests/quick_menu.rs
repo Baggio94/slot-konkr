@@ -79,15 +79,7 @@ fn the_fast_forward_row_offers_the_four_ceilings_the_card_can_hold() {
 fn the_rows_run_in_the_order_the_user_chose() {
     assert_eq!(
         QuickRow::MAIN.map(QuickRow::label),
-        [
-            "Fast Forward",
-            "Fast Forward Sound",
-            "Screen",
-            "Game",
-            "Rumble",
-            "Date & Time",
-            "About"
-        ]
+        ["Screen", "Game", "Date & Time", "About"]
     );
     assert_eq!(
         QuickRow::SCREEN.map(QuickRow::label),
@@ -95,7 +87,14 @@ fn the_rows_run_in_the_order_the_user_chose() {
     );
     assert_eq!(
         QuickRow::GAME.map(QuickRow::label),
-        ["Auto Save on Eject", "Turbo Buttons", "Rewind"]
+        [
+            "Fast Forward",
+            "Fast Forward Sound",
+            "Rewind",
+            "Turbo Buttons",
+            "Rumble",
+            "Auto Save on Eject"
+        ]
     );
     let opens: Vec<QuickRow> = QuickRow::ALL.into_iter().filter(|r| r.opens()).collect();
     assert_eq!(
