@@ -20,8 +20,8 @@ pub struct RomEntry {
 
 pub struct LibraryState {
     pub version: u64,
-    /// None: picker not used yet, show only the original synthetic demonstration.
-    /// Some([]): folder chosen but no supported games found, show empty shelves.
+    /// None: no folder selected yet, show empty shelf and onboarding.
+    /// Some([]): scanned folder has no supported games; show empty shelf.
     pub entries: Option<Vec<RomEntry>>,
 }
 

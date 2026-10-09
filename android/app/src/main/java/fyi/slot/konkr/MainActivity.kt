@@ -28,11 +28,9 @@ import android.opengl.GLSurfaceView
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.View
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
-import kotlin.math.abs
 
 /** Android owns EGL, lifecycle and physical input; Rust owns Slot rendering. */
 class MainActivity : Activity() {
@@ -108,8 +106,6 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
 
     private lateinit var view: GLSurfaceView
-    private var startX = 0f
-    private var startY = 0f
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -148,45 +144,16 @@ class MainActivity : Activity() {
                 requestFocus()
             }
 
-            override fun onTouchEvent(event: MotionEvent): Boolean {
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        startX = event.x
-                        startY = event.y
-                        return true
-                    }
-                    MotionEvent.ACTION_UP -> {
-                        val dx = event.x - startX
-                        val dy = event.y - startY
-                        val code = if (abs(dx) > 50 && abs(dx) > abs(dy)) {
-                            if (dx < 0) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT
-                        } else if (abs(dy) > 50) {
-                            if (dy < 0) KeyEvent.KEYCODE_DPAD_DOWN else KeyEvent.KEYCODE_DPAD_UP
-                        } else {
-                            KeyEvent.KEYCODE_BUTTON_A
-                        }
-                        nativeKey(code, true)
-                        // A single touch cannot be press+release in the same emulated frame.
-                        if (nativeIsPlaying()) {
-                            postDelayed({ nativeKey(code, false) }, 90L)
-                        } else {
-                            nativeKey(code, false)
-                        }
-                        return true
-                    }
-                }
-                return true
-            }
+
         }
         val frame = FrameLayout(this)
         frame.addView(view, FrameLayout.LayoutParams(-1, -1))
         status = TextView(this).apply {
             setTextColor(Color.WHITE)
-            setBackgroundColor(Color.argb(212, 20, 20, 24))
+            setBackgroundColor(Color.TRANSPARENT)
             textSize = 15f
             gravity = Gravity.CENTER
             setPadding(12, 12, 12, 12)
-            setOnClickListener { openRomFolderPicker() }
         }
         frame.addView(
             status,

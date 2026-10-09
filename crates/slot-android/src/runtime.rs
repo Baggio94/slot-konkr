@@ -178,28 +178,9 @@ impl Engine {
         let mut gpu = Compositor::new(&AndroidSurface { size }).map_err(|e| e.to_string())?;
         let mut shelves = Vec::new();
 
-        // None means the user has not chosen a folder yet: retain M1 demo.
-        // Some([]) is an explicitly empty library, not a reason to show fake games.
-        let grouped = match library {
-            Some(entries) => carts_by_platform(entries),
-            None => {
-                [
-                    (Platform::Gba, ["ADVANCE ONE", "ADVANCE TWO", "ADVANCE THREE"]),
-                    (Platform::Gb, ["CLASSIC ONE", "CLASSIC TWO", "CLASSIC THREE"]),
-                    (Platform::Gbc, ["COLOR ONE", "COLOR TWO", "COLOR THREE"]),
-                ].map(|(platform, names)| {
-                    names.into_iter().map(|title| Cart {
-                        platform,
-                        stem: title.to_owned(),
-                        rom: PathBuf::new(),
-                        label: None,
-                        title: title.to_owned(),
-                        code: String::new(),
-                        shell: None,
-                    }).collect()
-                })
-            }
-        };
+        // First-run empty shelf: never synthesize fake demo cartridges.
+        let grouped = library.map(carts_by_platform)
+            .unwrap_or_else(|| std::array::from_fn(|_| Vec::new()));
         for carts in grouped {
             shelves.push(Shelf::new(carts));
         }
@@ -400,10 +381,6 @@ impl Engine {
                 if self.game.is_some() {
                     let mask = controls(code);
                     if pressed { self.buttons |= mask; } else { self.buttons &= !mask; }
-                    let exit_combo = ButtonMask::START | ButtonMask::SELECT;
-                    if pressed && (self.buttons & exit_combo) == exit_combo {
-                        self.handle(Input::Exit);
-                    }
                     return;
                 }
                 if self.overlay != ShelfOverlay::None {
