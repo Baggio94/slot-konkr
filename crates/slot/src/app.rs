@@ -340,6 +340,16 @@ pub struct App {
     radio: Box<dyn RadioJobs>,
 }
 
+const FACE_AHEAD: i32 = 8;
+const FACE_KEEP: i32 = 12;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct FaceWant {
+    pub shelf: usize,
+    pub index: usize,
+    pub on_screen: bool,
+}
+
 fn shelves_of(carts: Vec<Cart>) -> Vec<(Platform, Shelf)> {
     let mut rows: Vec<(Platform, Vec<Cart>)> =
         Platform::ALL.iter().map(|p| (*p, Vec::new())).collect();
@@ -729,6 +739,70 @@ impl App {
             let n = shelf.carts.len();
             shelf.set_faces(faces.by_ref().take(n).collect());
         }
+    }
+
+    pub fn face_wants(&self) -> Vec<FaceWant> {
+        let here = self.shelf();
+        let screen = here.on_screen();
+        let mut wants: Vec<(usize, usize)> = screen.iter().map(|i| (self.shelf_at, *i)).collect();
+        for at in self.neighbour_shelves() {
+            wants.extend(self.shelves[at].1.on_screen().into_iter().map(|i| (at, i)));
+        }
+        wants.extend(
+            here.around(FACE_AHEAD)
+                .into_iter()
+                .filter(|i| !screen.contains(i))
+                .map(|i| (self.shelf_at, i)),
+        );
+        wants
+            .into_iter()
+            .filter(|(at, i)| self.shelves[*at].1.face(*i).is_none())
+            .map(|(shelf, index)| FaceWant {
+                shelf,
+                index,
+                on_screen: shelf == self.shelf_at && screen.contains(&index),
+            })
+            .collect()
+    }
+
+    pub fn face_cart(&self, shelf: usize, index: usize) -> Option<&Cart> {
+        self.shelves.get(shelf)?.1.carts.get(index)
+    }
+
+    pub fn set_cart_face(&mut self, shelf: usize, index: usize, tex: TexId) -> Option<TexId> {
+        self.shelves.get_mut(shelf)?.1.set_face(index, tex)
+    }
+
+    pub fn shed_faces(&mut self) -> Vec<TexId> {
+        let neighbours = self.neighbour_shelves();
+        let mut shed = Vec::new();
+        for (at, (_, shelf)) in self.shelves.iter_mut().enumerate() {
+            let keep = if at == self.shelf_at {
+                shelf.around(FACE_KEEP)
+            } else if neighbours.contains(&at) {
+                shelf.on_screen()
+            } else {
+                Vec::new()
+            };
+            for i in 0..shelf.carts.len() {
+                if !keep.contains(&i) {
+                    shed.extend(shelf.take_face(i));
+                }
+            }
+        }
+        shed
+    }
+
+    fn neighbour_shelves(&self) -> Vec<usize> {
+        let mut out = Vec::new();
+        for by in [1, -1] {
+            if let Some(at) = self.next_shelf(by) {
+                if !out.contains(&at) {
+                    out.push(at);
+                }
+            }
+        }
+        out
     }
 
     pub fn set_snapshot(&mut self, snapshot: Box<dyn Snapshot>) {

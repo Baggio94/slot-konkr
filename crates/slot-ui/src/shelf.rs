@@ -20,6 +20,10 @@ fn raise() -> f32 {
     f32::from_bits(SLACK.load(Ordering::Relaxed)) / 2.0
 }
 
+pub fn panel_middle_y() -> f32 {
+    OUT_H as f32 / 2.0 + raise()
+}
+
 pub fn rest_y(h: f32) -> f32 {
     let y = if h > CART_H as f32 {
         (OUT_H as f32 - MOUTH_H - h) / 2.0
@@ -44,7 +48,7 @@ pub struct Shelf {
     pub carts: Vec<Cart>,
     pub index: usize,
     pub scroll: f32,
-    faces: Vec<TexId>,
+    faces: Vec<Option<TexId>>,
     shadow: Option<TexId>,
     gb_shadow: Option<TexId>,
     gbc_shadow: Option<TexId>,
@@ -58,10 +62,10 @@ impl Shelf {
     pub fn new(carts: Vec<Cart>) -> Self {
         Shelf {
             shells: carts.iter().map(gb_shell_of).collect(),
+            faces: vec![None; carts.len()],
             carts,
             index: 0,
             scroll: 0.0,
-            faces: Vec::new(),
             shadow: None,
             gb_shadow: None,
             gbc_shadow: None,
@@ -90,12 +94,45 @@ impl Shelf {
     }
 
     pub fn set_faces(&mut self, faces: Vec<TexId>) {
-        self.faces = faces;
+        let mut faces = faces.into_iter();
+        for face in &mut self.faces {
+            *face = faces.next();
+        }
+    }
+
+    pub fn face(&self, i: usize) -> Option<TexId> {
+        self.faces.get(i).copied().flatten()
+    }
+
+    pub fn set_face(&mut self, i: usize, tex: TexId) -> Option<TexId> {
+        self.faces.get_mut(i).and_then(|f| f.replace(tex))
+    }
+
+    pub fn take_face(&mut self, i: usize) -> Option<TexId> {
+        self.faces.get_mut(i).and_then(Option::take)
+    }
+
+    pub fn on_screen(&self) -> Vec<usize> {
+        self.around(SLOTS)
+    }
+
+    pub fn around(&self, radius: i32) -> Vec<usize> {
+        let mut out = Vec::new();
+        for step in 0..=radius {
+            for off in [step, -step] {
+                if let Some(i) = self.cart_at_offset(off) {
+                    if !out.contains(&i) {
+                        out.push(i);
+                    }
+                }
+            }
+        }
+        out
     }
 
     pub fn find(&self, stem: &str) -> Option<(&Cart, Option<TexId>)> {
         let i = self.carts.iter().position(|c| c.stem == stem)?;
-        Some((&self.carts[i], self.faces.get(i).copied()))
+        Some((&self.carts[i], self.face(i)))
     }
 
     pub fn left(&mut self) {
@@ -313,13 +350,13 @@ impl Shelf {
                     });
                 }
             }
-            out.push(match self.faces.get(i) {
+            out.push(match self.face(i) {
                 Some(tex) => Draw::Tex {
                     x,
                     y,
                     w,
                     h,
-                    tex: *tex,
+                    tex,
                     alpha: alpha * dim,
                 },
                 None => {
