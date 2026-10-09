@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src=".github/resources/banner.svg" width="100%" alt="slot. A bespoke, Game Boy-centric frontend for the Anbernic RG SP.">
+<img src=".github/resources/banner.png" width="100%" alt="slot. A bespoke, Game Boy-centric frontend for the Anbernic RG SP.">
 
 <a href="LICENSE"><img src="https://img.shields.io/github/license/BrandonKowalski/slot?style=for-the-badge&labelColor=242429&color=4d4d57" height="36" alt="License"></a>
 <a href="https://github.com/BrandonKowalski/slot/stargazers"><img src="https://img.shields.io/github/stars/BrandonKowalski/slot?style=for-the-badge&labelColor=242429&color=4d4d57" height="36" alt="Stars"></a>
@@ -30,9 +30,8 @@ Release notes can be found in the [changelog](CHANGELOG.md).
 # What does it look like?
 
 <p align="center">
-<a href=".github/resources/screenshots/main.png"><img src=".github/resources/screenshots/main.png" width="30%"></a>
-<a href=".github/resources/screenshots/palettes.png"><img src=".github/resources/screenshots/palettes.png" width="30%"></a>
-<a href=".github/resources/screenshots/link.png"><img src=".github/resources/screenshots/link.png" width="30%"></a>
+<img src=".github/resources/screenshots/link.gif" width="64%" alt="Two SPs racing in Mario Kart over the emulated link">
+<img src=".github/resources/screenshots/core-picker.gif" width="31.5%" alt="Flipping a cart to its circuit board to choose mGBA or gpSP">
 </p>
 
 ---
