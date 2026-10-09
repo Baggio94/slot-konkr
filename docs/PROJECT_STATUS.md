@@ -149,3 +149,22 @@ The RA-only branch has been merged into this integration branch with a
 read-only RAOfflineProxy status check reachable from the nested Menu >
 RetroAchievements section. The actual RA hash, account, rcheevos memory
 callbacks, Softcore unlocks and offline forwarding are NEXT, not done.
+
+
+## KONKR physical acceptance — 0.0.5-dev1
+
+User physically confirmed 0.0.5-dev1: game works, full original cartridge
+core picker opening/closing and chip swapping animations work, and the
+read-only RAOfflineProxy status diagnostic works (localhost port 8080, online=true).
+However, the picker footer had three text labels rendered from oversized
+quick-menu font bitmaps; their x positions overlapped severely at 720x480
+logical resolution. Fixed in 0.0.5-dev2 by using upstream slot-ui::hint_face
+and arrows_hint_face to draw the original white keycaps plus properly sized
+legends (B Cancel, left/right Swap, A Choose). Layout calculation constrains
+spacing across widths; geometry and timing of CorePicker remain unchanged.
+
+The status toast previously showed pending=? because pendingAwards.count was
+missing in the queried provider JSON. Changed to `Pending awards: not reported`.
+This is not the same as zero pending awards; the proxy is otherwise reachable
+and online. RetroAchievements evaluation/unlocking remains unimplemented.
+Physical 0.0.5-dev2 display acceptance remains pending.

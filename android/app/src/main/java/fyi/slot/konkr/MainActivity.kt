@@ -363,8 +363,15 @@ class MainActivity : Activity() {
                 proxy == null -> "RAOfflineProxy unavailable"
                 !proxy.running -> "RAOfflineProxy stopped"
                 proxy.base() == null -> "RAOfflineProxy address invalid"
-                else -> "RAOfflineProxy :" + proxy.port +
-                    ", online=" + proxy.online + ", pending=" + (proxy.pendingAwards ?: "?")
+                else -> {
+                    val state = when (proxy.online) {
+                        true -> "Online"
+                        false -> "Offline"
+                        null -> "Connectivity unknown"
+                    }
+                    val pending = proxy.pendingAwards?.toString() ?: "not reported"
+                    "RAOfflineProxy: $state (port ${proxy.port})\nPending awards: $pending"
+                }
             }
             runOnUiThread {
                 if (!isDestroyed) {

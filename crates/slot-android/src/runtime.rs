@@ -20,7 +20,7 @@ use slot_ui::{
     on_board, lid_from, grown, draw_empty_slot, Draw, GbShell, Shelf, SlotChrome,
     BOARD_X, BOARD_W, SOCKET_U, SOCKET_V, SOCKET_W, SOCKET_H,
     CHIP_U, CHIP_V, CHIP_W, CHIP_H, HOP_LIFT, TURN_PAD, SHADOW_W, SHADOW_H,
-    CART_W,
+    CART_W, hint_face, arrows_hint_face, HINT_H, HINT_EDGE,
 };
 
 // Android GLSurfaceView owns EGL context creation, current context and buffer swaps.
@@ -109,7 +109,7 @@ enum ShelfOverlay {
     GameMenu { row: usize },
 }
 
-const MENU_TEXT: [&str; 27] = [
+const MENU_TEXT: [&str; 24] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Scraping",                         // 2
@@ -134,9 +134,6 @@ const MENU_TEXT: [&str; 27] = [
     "Save and Eject",                   // 21
     "States (coming soon)",            // 22
     "A Select     B Back",              // 23
-    "B: Back",                          // 24
-    "Left / Right: Swap",               // 25
-    "A: Choose",                        // 26
 ];
 
 struct Engine {
@@ -166,6 +163,7 @@ struct Engine {
     chip_textures: [slot_gfx::TexId; 2],
     chip_blank: slot_gfx::TexId,
     chip_shadow: slot_gfx::TexId,
+    core_legend_faces: [(slot_gfx::TexId, u32); 3],
     a_down_at: Option<Instant>,
     fresh_launch: bool,
     mode_down_at: Option<Instant>,
@@ -236,6 +234,16 @@ impl Engine {
         let chip_blank = gpu.create_texture(blank.w, blank.h, &blank.rgba);
         let shadow = chip_shadow_face();
         let chip_shadow = gpu.create_texture(shadow.w, shadow.h, &shadow.rgba);
+        // The actual Slot legend is a set of three compact keycaps, not
+        // oversized menu labels. These are the original Slot UI generators.
+        let core_legend_faces = [
+            hint_face("B", "Cancel"),
+            arrows_hint_face("Swap"),
+            hint_face("A", "Choose"),
+        ].map(|face| {
+            let texture = gpu.create_texture(face.w, face.h, &face.rgba);
+            (texture, face.w)
+        });
 
         // On a GBA-only library do not begin on an empty GB or GBC shelf.
         let active = shelves.iter().position(|s| !s.carts.is_empty()).unwrap_or(0);
@@ -267,6 +275,7 @@ impl Engine {
             chip_textures,
             chip_blank,
             chip_shadow,
+            core_legend_faces,
             a_down_at: None,
             fresh_launch: false,
             mode_down_at: None,
@@ -784,11 +793,23 @@ impl Engine {
             });
         }
 
-        // Original Slot bottom three-column legend, fading in with the lift.
-        let right = BOARD_X + BOARD_W as f32;
-        self.text_fit(24, BOARD_X, 387.0, 150.0, lift, out);
-        self.text_fit(25, 293.0, 387.0, 190.0, lift, out);
-        self.text_fit(26, right - 118.0, 387.0, 118.0, lift, out);
+        // Restore the original Slot keycap legends. The original positions
+        // anchor Cancel to the board's left edge, Swap in the centre and
+        // Choose to the board's right edge. Shrink uniformly only if needed
+        // to preserve >=12px spacing on small screens / font changes.
+        let widths = self.core_legend_faces.map(|(_, w)| w.saturating_sub(HINT_EDGE));
+        let positions = crate::core_legend::positions(widths);
+        for ((tex, w), (x, scale)) in self.core_legend_faces.into_iter().zip(positions) {
+            let height = HINT_H as f32 * scale;
+            out.push(Draw::Tex {
+                x: x.round(),
+                y: 386.0 + (HINT_H as f32 - height) / 2.0,
+                w: w as f32 * scale,
+                h: height,
+                tex,
+                alpha: lift,
+            });
+        }
     }
 
     fn draw(&mut self) {
