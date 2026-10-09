@@ -146,7 +146,12 @@ class MainActivity : Activity() {
                             KeyEvent.KEYCODE_BUTTON_A
                         }
                         nativeKey(code, true)
-                        nativeKey(code, false)
+                        // A single touch cannot be press+release in the same emulated frame.
+                        if (nativeIsPlaying()) {
+                            postDelayed({ nativeKey(code, false) }, 90L)
+                        } else {
+                            nativeKey(code, false)
+                        }
                         return true
                     }
                 }

@@ -226,6 +226,10 @@ impl Engine {
                 if self.game.is_some() {
                     let mask = controls(code);
                     if pressed { self.buttons |= mask; } else { self.buttons &= !mask; }
+                    let exit_combo = ButtonMask::START | ButtonMask::SELECT;
+                    if pressed && (self.buttons & exit_combo) == exit_combo {
+                        self.handle(Input::Exit);
+                    }
                     return;
                 }
                 if pressed {

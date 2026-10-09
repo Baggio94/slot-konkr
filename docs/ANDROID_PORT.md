@@ -109,3 +109,9 @@ existing slot-retro libretro host. No external emulator app is launched.
 This is a developer preview, not a stable emulation release. Physical validation on KONKR
 is still required for input, audio, 3:2 output, save recovery, sleep/resume and battery drain.
 No commercial ROMs, BIOS files or mGBA core binaries are checked into Git.
+
+
+Controller-only exit: press **START + SELECT** together during gameplay to save
+and return to the original Slot cart shelf. Android BACK also exits. Touchscreen
+taps hold game input across multiple emulated frames instead of getting lost in a
+single JNI queue flush.
