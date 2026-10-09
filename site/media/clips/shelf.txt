@@ -1,10 +1,10 @@
 # cart:
-# On the shelf: the settings, into the Screen and Gameplay pages, down to About and open, then brightness and blue light.
+# On the shelf: the settings, already open, into the Screen and Gameplay pages, down to About and open, then brightness and blue light.
 wait 180
-rec settings
-wait 10
 tap menu
 wait 50
+rec settings
+wait 30
 tap a
 wait 40
 tap down
