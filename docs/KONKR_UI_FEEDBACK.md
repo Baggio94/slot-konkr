@@ -104,3 +104,11 @@ must not require a Raspberry Pi or external library server.
 Implemented in latest UI branch: tap A resumes saved state; holding A for
 400ms or more starts the game without auto-state restoration (in-game SRAM is
 still loaded). Cart insertion remains animated before either path starts.
+
+
+UI iteration version: 0.0.4-dev1 (versionCode 4). Native START menu
+implements Choose ROM folder and Refresh Library; Scrape Labels is disabled
+and visibly dimmed until artwork code exists. SELECT shows a GBA cartridge
+board with the installed mGBA chip; gpSP is labeled not installed and is not
+selectable. Unrecognized Android hardware keys are logged (SlotKonkr) so the
+round button beside L2 can be accurately mapped after a physical key probe.

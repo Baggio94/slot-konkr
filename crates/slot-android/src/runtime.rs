@@ -440,8 +440,12 @@ impl Engine {
     }
 
     fn add_text(&self, index: usize, x: f32, y: f32, out: &mut Vec<Draw>) {
+        self.add_text_alpha(index, x, y, 1.0, out);
+    }
+
+    fn add_text_alpha(&self, index: usize, x: f32, y: f32, alpha: f32, out: &mut Vec<Draw>) {
         let (tex, w, h) = self.menu_textures[index];
-        out.push(Draw::Tex { x, y, w: w as f32, h: h as f32, tex, alpha: 1.0 });
+        out.push(Draw::Tex { x, y, w: w as f32, h: h as f32, tex, alpha });
     }
 
     fn draw_overlay(&self, out: &mut Vec<Draw>) {
@@ -457,7 +461,8 @@ impl Engine {
                     if index == row {
                         out.push(Draw::Rect { x: 111.0, y: y - 2.0, w: 498.0, h: 43.0, colour: [0.28, 0.28, 0.32, 1.0] });
                     }
-                    self.add_text(index + 1, 136.0, y, out);
+                    self.add_text_alpha(index + 1, 136.0, y,
+                        if index == 2 { 0.42 } else { 1.0 }, out);
                 }
                 self.add_text(4, 136.0, 347.0, out);
             }
