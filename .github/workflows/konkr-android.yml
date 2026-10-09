@@ -27,9 +27,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
-      - name: Android packages
-        run: sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+      - name: Android SDK packages
+        run: |
+          # GitHub hosted ubuntu includes Android SDK command-line tools.
+          # setup-android@v3 currently tries to install removed "tools" package.
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: '1.96.0'
@@ -37,6 +39,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
+      - name: Test KONKR 3:2 scaling
+        run: cargo test -p slot-gfx --no-default-features --test konkr
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
       - name: Build debug APK
