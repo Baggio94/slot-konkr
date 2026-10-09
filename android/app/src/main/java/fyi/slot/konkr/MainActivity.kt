@@ -20,6 +20,7 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
 import android.net.Uri
+import android.provider.DocumentsContract
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import android.opengl.GLES20
@@ -39,8 +40,10 @@ class MainActivity : Activity() {
         init { System.loadLibrary("slot_android") }
         private const val TAG = "SlotKonkr"
         private const val FOLDER_REQUEST = 4701
+        private const val BIOS_REQUEST = 4702
         private const val PREFS = "slot_konkr_library"
         private const val ROM_ROOT = "rom_root_uri"
+        private const val BIOS_ROOT = "bios_root_uri"
         private val BUTTONS = setOf(
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
@@ -91,6 +94,7 @@ class MainActivity : Activity() {
                 1 -> openRomFolderPicker()
                 2 -> refreshLibrary()
                 3 -> checkRaOfflineProxy()
+                4 -> openBiosFolderPicker()
             }
             nativePollMessage()?.let { message ->
                 Log.e(TAG, message)
@@ -191,6 +195,19 @@ class MainActivity : Activity() {
         setContentView(frame)
         immersive()
         uiHandler.post(pulse)
+        // Stage BIOS files before the first queued ROM launch, using the same
+        // worker that loads ROMs; no race between BIOS import and core startup.
+        getSharedPreferences(PREFS, MODE_PRIVATE).getString(BIOS_ROOT, null)
+            ?.let { savedBios ->
+                val uri = Uri.parse(savedBios)
+                if (contentResolver.persistedUriPermissions.any { perm ->
+                        perm.uri == uri && perm.isReadPermission
+                    }) {
+                    importBiosFolder(uri, persistSelection = false)
+                } else {
+                    Log.w(TAG, "BIOS folder access expired; choose it again")
+                }
+            }
         val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)
         if (saved != null) {
             val uri = Uri.parse(saved)
@@ -397,6 +414,52 @@ class MainActivity : Activity() {
         scanFolder(uri)
     }
 
+    private fun openBiosFolderPicker() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+            )
+        }
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, BIOS_REQUEST)
+        } catch (error: ActivityNotFoundException) {
+            Toast.makeText(this, "Android BIOS folder picker unavailable", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** Runs sequentially with ROM materialization, never on the UI/GL thread. */
+    private fun importBiosFolder(uri: Uri, persistSelection: Boolean) {
+        gameLoader.execute {
+            try {
+                val imported = BiosLibrary.importFrom(this, uri)
+                if (persistSelection) {
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                        .putString(BIOS_ROOT, uri.toString()).apply()
+                }
+                runOnUiThread {
+                    if (!isDestroyed) {
+                        Toast.makeText(
+                            this,
+                            "BIOS ready: " + imported.joinToString(", ") +
+                                " (next game launch)",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            } catch (error: Exception) {
+                Log.e(TAG, "BIOS folder import failed", error)
+                runOnUiThread {
+                    if (!isDestroyed) {
+                        Toast.makeText(this, "BIOS import failed: " +
+                            (error.message ?: "check folder files"), Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+    }
+
     private fun openRomFolderPicker() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             addFlags(
@@ -415,18 +478,28 @@ class MainActivity : Activity() {
     @Deprecated("Android 12 SAF activity result")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != FOLDER_REQUEST || resultCode != RESULT_OK) return
+        if (requestCode !in setOf(FOLDER_REQUEST, BIOS_REQUEST) ||
+            resultCode != RESULT_OK) return
         val uri = data?.data ?: return
         try {
             contentResolver.takePersistableUriPermission(
                 uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
             )
-            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                .putString(ROM_ROOT, uri.toString()).apply()
-            scanFolder(uri)
+            when (requestCode) {
+                FOLDER_REQUEST -> {
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                        .putString(ROM_ROOT, uri.toString()).apply()
+                    scanFolder(uri)
+                }
+                BIOS_REQUEST -> importBiosFolder(uri, persistSelection = true)
+            }
         } catch (error: SecurityException) {
-            status.text = "Cannot keep ROM folder permission — choose another folder"
-            Log.e(TAG, "ROM folder permission error", error)
+            if (requestCode == FOLDER_REQUEST) {
+                status.text = "Cannot keep ROM folder permission — choose another folder"
+            } else {
+                Toast.makeText(this, "Cannot access that BIOS folder", Toast.LENGTH_LONG).show()
+            }
+            Log.e(TAG, "Android folder permission error", error)
         }
     }
 

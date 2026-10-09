@@ -109,7 +109,7 @@ enum ShelfOverlay {
     GameMenu { row: usize },
 }
 
-const MENU_TEXT: [&str; 24] = [
+const MENU_TEXT: [&str; 25] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Scraping",                         // 2
@@ -134,6 +134,7 @@ const MENU_TEXT: [&str; 24] = [
     "Save and Eject",                   // 21
     "States (coming soon)",            // 22
     "A Select     B Back",              // 23
+    "Choose BIOS Folder",               // 24
 ];
 
 struct Engine {
@@ -424,18 +425,24 @@ impl Engine {
                             },
                             ShelfOverlay::Library { row } => match code {
                                 19 | 20 => {
-                                    let next = if code == 19 { (row + 3) % 4 } else { (row + 1) % 4 };
+                                    let next = if code == 19 { (row + 4) % 5 } else { (row + 1) % 5 };
                                     self.overlay = ShelfOverlay::Library { row: next };
                                 }
                                 96 => match row {
-                                    0 | 3 => {
+                                    0 | 1 | 4 => {
+                                        // ROM folder, BIOS folder, Refresh library.
+                                        // Save/State pickers stay disabled until their
+                                        // actual file persistence is fully supported.
+                                        let action = match row {
+                                            0 => 1,
+                                            1 => 4,
+                                            _ => 2,
+                                        };
                                         UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
-                                            .push_back(if row == 0 { 1 } else { 2 });
+                                            .push_back(action);
                                         self.overlay = ShelfOverlay::None;
                                     }
-                                    // Save and save-state folder pickers will be
-                                    // enabled together with real SAF save routing.
-                                    1 | 2 => {}
+                                    2 | 3 => {}
                                     _ => {}
                                 },
                                 97 => self.overlay = ShelfOverlay::Menu { row: 0 },
@@ -675,19 +682,22 @@ impl Engine {
             ShelfOverlay::Library { row } => {
                 self.modal(105.0, 41.0, 510.0, 400.0, out, 0.78);
                 self.text_fit(5, 136.0, 63.0, 445.0, 1.0, out);
-                for index in 0..4 {
-                    let y = 131.0 + index as f32 * 56.0;
+                // Five settings in a 720x480 3:2 modal, no overlap with footer.
+                // Leave disabled Save/State folders visibly distinct.
+                let labels = [6, 24, 7, 8, 9];
+                for index in 0..5 {
+                    let y = 112.0 + index as f32 * 47.0;
                     if index == row {
                         out.push(Draw::Rect {
-                            x: 125.0, y: y - 7.0, w: 470.0, h: 43.0,
+                            x: 125.0, y: y - 6.0, w: 470.0, h: 39.0,
                             colour: [0.28, 0.28, 0.32, 1.0],
                         });
                     }
-                    self.text_fit(index + 6, 145.0, y, 430.0,
-                        if index == 1 || index == 2 { 0.4 } else { 1.0 }, out);
+                    self.text_fit(labels[index], 145.0, y, 430.0,
+                        if index == 2 || index == 3 { 0.4 } else { 1.0 }, out);
                 }
-                self.text_fit(10, 145.0, 359.0, 440.0, 0.5, out);
-                self.text_fit(4, 145.0, 409.0, 440.0, 0.85, out);
+                self.text_fit(10, 145.0, 363.0, 440.0, 0.5, out);
+                self.text_fit(4, 145.0, 412.0, 440.0, 0.85, out);
             }
             ShelfOverlay::Scraping | ShelfOverlay::Achievements => {
                 self.modal(110.0, 127.0, 500.0, 227.0, out, 0.78);

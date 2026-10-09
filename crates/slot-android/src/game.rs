@@ -28,8 +28,16 @@ impl GameSession {
             .ok_or_else(|| "Unsafe ROM cache file name".to_owned())?;
         let save = root.join(format!("{id}.srm"));
         let state = root.join(format!("{id}.state"));
-        let mut core = LibretroCore::open_with(core_file, storage, &root)
+        // mGBA's libretro core looks for gba_bios.bin / gb_bios.bin /
+        // gbc_bios.bin in RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY.
+        // Keep the user-selected SAF folder external and read-only: Android
+        // has already staged only allowed BIOS files into this private folder.
+        let bios = storage.join("BIOS");
+        std::fs::create_dir_all(&bios).map_err(|e| e.to_string())?;
+        let mut core = LibretroCore::open_with(core_file, &bios, &root)
             .map_err(|e| e.to_string())?;
+        core.set_option("mgba_use_bios", "ON");
+        core.set_option("mgba_skip_bios", "OFF");
         core.load(rom).map_err(|e| e.to_string())?;
         if let Ok(ram) = std::fs::read(&save) {
             if let Err(error) = core.load_save_ram(&ram) {
