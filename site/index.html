@@ -152,6 +152,7 @@
           <p>Drop your legally obtained ROM files into their corresponding platform's folder in <code>Games/</code>. You may optionally place labels into the matching platform folder found in
              <code>Labels/</code>.</p>
           <p><strong>ROMs must be unzipped!</strong> slot does not read <code>.zip</code> or <code>.7z</code> files.</p>
+        </li>
         <li>
           <h3>Put the second card into <code>SD2</code> and boot!</h3>
           <p>I hope you enjoy using slot!</p>
@@ -430,12 +431,31 @@
     <div class="subpanel" id="faq" role="tabpanel" aria-labelledby="t-faq">
       <dl>
         <div class="qa">
+          <dt>Which devices does slot run on?</dt>
+          <dd>
+            <table class="devices">
+              <thead><tr><th>Device</th><th>Supported</th><th>First Version</th></tr></thead>
+              <tbody>
+                <tr><td>Anbernic RG&nbsp;SP</td><td>Yes</td><td>Always</td></tr>
+                <tr><td>Anbernic RG34XX</td><td>Unknown</td><td>1.4.0</td></tr>
+                <tr><td>Anbernic RG34XXSP</td><td>Unknown (Stick mapping questionable)</td><td>N/A</td></tr>
+                <tr><td>Anbernic RG35XXSP</td><td>Yes</td><td>1.5.0</td></tr>
+              </tbody>
+            </table>
+            <p>If you have one of the Unknown devices, or have tried slot on a device not listed, please <a href="https://github.com/BrandonKowalski/slot/issues">open an issue on GitHub</a> and let me know how it went.</p>
+          </dd>
+        </div>
+        <div class="qa">
           <dt>Will slot run anything other than GBA?</dt>
           <dd>Yes. You can bring your GB and GBC carts to the party.</dd>
         </div>
         <div class="qa">
           <dt>This is almost perfect but needs more systems. Will you add them?</dt>
           <dd>No. I want to recreate the feeling I had playing my GBA SP as a child.</dd>
+        </div>
+        <div class="qa">
+          <dt>RetroAchievements and cheats would make this perfect. Will you add them?</dt>
+          <dd>These are a pair of features I do not want to support. One of the many forks have added this in if it is important to you.</dd>
         </div>
         <div class="qa">
           <dt>Does slot allow you to pair Bluetooth headphones?</dt>
