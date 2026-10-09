@@ -72,9 +72,15 @@ class MainActivity : Activity() {
     private val gameLoader = Executors.newSingleThreadExecutor()
     private val uiHandler = Handler(Looper.getMainLooper())
     private val audioRunning = AtomicBoolean(false)
+    @Volatile private var resumed = false
     private var audioThread: Thread? = null
     private val pulse = object : Runnable {
         override fun run() {
+            if (resumed && nativeIsPlaying()) {
+                if (!audioRunning.get()) startAudio()
+            } else if (audioRunning.get()) {
+                stopAudio()
+            }
             val request = nativePollLaunchUri()
             if (request != null) loadGameFromSaf(request)
             nativePollMessage()?.let { message ->
@@ -401,6 +407,7 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        resumed = false
         stopAudio()
         // Preserve SRAM and automatic resume state while the GL context is still current.
         val complete = CountDownLatch(1)
@@ -417,8 +424,8 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        resumed = true
         view.onResume()
-        startAudio()
         immersive()
     }
 
