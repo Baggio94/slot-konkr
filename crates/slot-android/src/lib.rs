@@ -11,3 +11,37 @@ mod runtime;
 // 180ms chip hop, 320ms close and refusal shake.
 #[path = "../../slot/src/core_picker.rs"]
 mod core_picker;
+
+#[cfg(test)]
+mod original_picker_integration_tests {
+    use super::core_picker::{CorePicker, Outcome, Press, OPEN_MS, SLIDE_MS, LIFT_MS, HOP_MS, CLOSE_MS};
+    use slot_store::Core;
+
+    #[test]
+    fn uses_upstream_open_slide_lift_and_close_timing() {
+        assert_eq!(OPEN_MS, 420);
+        assert_eq!(SLIDE_MS, 160);
+        assert_eq!(LIFT_MS, 260);
+        assert_eq!(HOP_MS, 180);
+        assert_eq!(CLOSE_MS, 320);
+        let mut picker = CorePicker::open(Core::Mgba, 0);
+        picker.start(0);
+        assert_eq!(picker.openness(210), 0.5);
+        assert_eq!(picker.openness(420), 1.0);
+        assert_eq!(picker.press(Press::Back, 420), Outcome::Nothing);
+        assert!(!picker.finished(600));
+        assert!(picker.finished(740));
+    }
+
+    #[test]
+    fn hopping_chip_reaches_the_other_original_socket() {
+        let mut picker = CorePicker::open(Core::Mgba, 0);
+        picker.start(0);
+        assert_eq!(picker.press(Press::Right, 500), Outcome::Nothing);
+        assert_eq!(picker.seat(), Core::Gpsp);
+        let chip = picker.chip(500 + HOP_MS / 2);
+        assert!(chip.lift > 0.9);
+        assert!(chip.seated.is_none());
+        assert_eq!(picker.chip(500 + HOP_MS).seated, Some(Core::Gpsp));
+    }
+}

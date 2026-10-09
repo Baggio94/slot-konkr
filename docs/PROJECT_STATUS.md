@@ -127,3 +127,25 @@ pause/resume, proper volume and no duplicate cues. Not yet physically tested.
 ## Confirmed integration checkpoint
 
 The 0.0.4-dev2 user interface, input and original cart sound were physically accepted on the KONKR. Integration branch `feat/konkr-integration` was created from that exact UI HEAD. RetroAchievements discovery and network configuration have been merged without replacing the newer UI MainActivity. Read-only RAOfflineProxy diagnostics are found under START > Menu > RetroAchievements, not on shelf X. This is NOT achievement evaluation, login or offline unlocking. Next tasks: reproduce exact upstream Slot `CorePicker` animation with original Rust timing, then validate merged app and implement rcheevos GBA + RAOfflineProxy transport in successive controlled milestones.
+
+
+## Integration 0.0.5-dev1: SELECT original mechanical core picker
+
+The integration branch now directly compiles the upstream Slot
+`crates/slot/src/core_picker.rs` source via a relative Rust module path;
+no reimplementation or time approximations for the selector's state machine:
+slide 160 ms + lift 260 ms (open 420 ms), chip hop 180 ms, reverse close
+320 ms, refusal shake and original chip physics. The rendering uses the
+unchanged `slot-ui::board_from`, `lid_from`, `on_board`, socket and chip
+rasterizers, `Draw::Turned` with the shared GPU backend. SELECT opens it
+only for GBA, LEFT/RIGHT moves between sockets, A confirms, B reverses
+and closes. Since mGBA is the *only installed core*, A on gpSP is refused:
+the gpSP slot is drawn faithfully but not persisted or run until installed.
+The original Slot legend has been ported with small text on the 720x480
+logical canvas. Native physical tests and frame-by-frame visual comparison
+are still required before saying the rendering is pixel-identical.
+
+The RA-only branch has been merged into this integration branch with a
+read-only RAOfflineProxy status check reachable from the nested Menu >
+RetroAchievements section. The actual RA hash, account, rcheevos memory
+callbacks, Softcore unlocks and offline forwarding are NEXT, not done.
