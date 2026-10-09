@@ -4,6 +4,7 @@ use std::ffi::{c_char, c_void, CString};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use crate::game::GameSession;
+use crate::core_selection;
 use crate::core_picker::{CorePicker, Press};
 use slot_retro::ButtonMask;
 use slot_gfx::ScreenEffect;
@@ -127,7 +128,7 @@ const MENU_TEXT: [&str; 25] = [
     "A: Check RAOfflineProxy status",    // 14
     "SELECT CORE",                      // 15
     "mGBA",                             // 16
-    "gpSP (not installed)",            // 17
+    "gpSP",                            // 17
     "A Confirm     B Back",             // 18
     "GAME MENU",                        // 19
     "Resume",                           // 20
@@ -466,12 +467,27 @@ impl Engine {
                                         21 => { picker.press(Press::Left, now); }
                                         22 => { picker.press(Press::Right, now); }
                                         96 => {
-                                            if picker.seat() == Core::Gpsp {
-                                                // Keep the authentic chip-hop animation but never
-                                                // persist/choose a core that is not in the APK.
-                                                set_message("gpSP core is not installed yet".into());
-                                            } else {
-                                                picker.press(Press::Keep, now);
+                                            let core = picker.seat();
+                                            let uri = self.shelves[self.active].carts
+                                                [self.shelves[self.active].index]
+                                                .rom.to_string_lossy().into_owned();
+                                            let paths = PATHS.lock()
+                                                .unwrap_or_else(|e| e.into_inner()).clone();
+                                            if let Some((storage, library)) = paths {
+                                                let core_file = library.join(
+                                                    format!("lib{}_libretro.so", core.as_str()));
+                                                if !core_file.is_file() {
+                                                    set_message(format!(
+                                                        "{} core is not installed", core.text()));
+                                                } else {
+                                                    match core_selection::set(&storage, &uri, core) {
+                                                        Ok(()) => {
+                                                            picker.press(Press::Keep, now);
+                                                        }
+                                                        Err(err) => set_message(format!(
+                                                            "Cannot save core selection: {err}")),
+                                                    }
+                                                }
                                             }
                                         }
                                         97 | 109 => { picker.press(Press::Back, now); }
@@ -504,7 +520,13 @@ impl Engine {
                                 self.board_texture = Some(self.gpu.create_texture(face.w, face.h, &face.rgba));
                             }
                             let now = self.born.elapsed().as_millis() as u64;
-                            let mut picker = CorePicker::open(Core::Mgba, now);
+                            let current_core = PATHS.lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .as_ref()
+                                .map(|(storage, _)| core_selection::selected(
+                                    storage, &selected.rom.to_string_lossy()))
+                                .unwrap_or(Core::Mgba);
+                            let mut picker = CorePicker::open(current_core, now);
                             picker.start(now);
                             self.picker = Some(picker);
                             self.overlay = ShelfOverlay::Core;
@@ -602,7 +624,17 @@ impl Engine {
     fn start_prepared_game(&mut self, local: &str) {
         let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some((storage, library)) = paths {
-            match GameSession::open(Path::new(local), &library.join("libmgba_libretro.so"), &storage, !self.fresh_launch) {
+            let uri = self.requested_uri.as_deref().unwrap_or_default();
+            let is_gba = self.shelves[self.active].carts
+                .get(self.shelves[self.active].index)
+                .is_some_and(|c| c.platform == Platform::Gba);
+            let core = if is_gba {
+                core_selection::selected(&storage, uri)
+            } else {
+                Core::Mgba
+            };
+            let core_file = library.join(format!("lib{}_libretro.so", core.as_str()));
+            match GameSession::open(Path::new(local), &core_file, &storage, core, !self.fresh_launch) {
                 Ok(session) => {
                     self.buttons = 0;
                     SAMPLE_RATE.store(session.sample_rate, Ordering::Release);
@@ -613,7 +645,7 @@ impl Engine {
                     PLAYING.store(true, Ordering::Release);
                 }
                 Err(error) => {
-                    set_message(format!("mGBA: {error}"));
+                    set_message(format!("{}: {error}", core.text()));
                     self.inserted = false;
                     self.requested_uri = None;
                 }
