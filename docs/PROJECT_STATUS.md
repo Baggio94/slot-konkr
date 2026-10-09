@@ -99,3 +99,26 @@ thread rather than through the slower UI action timer.
 Acceptance: CI build and APK asset presence; physical KONKR sound during
 insert, game eject, cancelled insert, long MENU, repeated A/B, Android
 pause/resume, proper volume and no duplicate cues. Not yet physically tested.
+
+
+## 0.0.4-dev2 — revised user-approved menu copy and navigation
+
+- Only ONE onboarding sentence, displayed at TOP on first open:
+  `Press START to open the menu and add your ROMs.`
+- START on carousel opens MENU, not LIBRARY. HOME/BTN_MODE does NOTHING
+  on carousel and remains reserved for game pause/exit.
+- MENU items: Library, Scraping, RetroAchievements. B navigates back.
+- LIBRARY submenu: Choose ROM Folder, Choose Save Folder,
+  Choose Save State Folder, Refresh Library.
+- Choose ROM Folder and Refresh Library work. Save and Save State folders are
+  visible but disabled with a 'Save locations coming soon' note until the
+  emulator's actual read/write pipeline uses the user-selected SAF folders.
+  Never pretend picker selection changes actual saves before wiring access.
+- Scraping and RetroAchievements submenus are placeholders that clearly
+  say integration is in progress, not false claims of functional scraping/RA.
+- Replaced oversized overlays with constrained 720x480 logical content,
+  compact modal windows and fitted typography to prevent screen clipping.
+- Retimed original 240ms insertion PCM to start ~480ms into animation so it
+  ends at ~720ms, near the visual 730ms completion; eject PCM unchanged.
+- SELECT exact original cart-board opening animation remains a separate task,
+  not yet claimed complete. Original sound and menu require physical validation.

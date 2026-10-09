@@ -61,7 +61,7 @@ static UI_ACTION: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
 static CART_SFX: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
 const CART_INSERT_SFX: i32 = 1;
 const CART_EJECT_SFX: i32 = 2;
-const INSERT_SOUND_PROGRESS: f32 = 0.353 / 0.730;
+const INSERT_SOUND_PROGRESS: f32 = 0.480 / 0.730;
 const EJECT_SOUND_PROGRESS: f32 = 1.0 - (0.350 / 0.730);
 static MESSAGE: Mutex<Option<String>> = Mutex::new(None);
 static PATHS: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
@@ -753,8 +753,8 @@ impl Engine {
         self.prepare_visible();
         let shelf = &mut self.shelves[self.active];
 
-        // Upstream Slot triggers the mechanical insertion sound 353 ms after
-        // insertion begins: SEATED_AT (450ms) minus the recording's 97ms lead.
+        // Original Slot's mechanical PCM is kept intact; move its onset to
+        // 480ms so the 240ms clip finishes as the 730ms cart seats on KONKR.
         // The ejection effect follows the upstream 350ms hold. Keep this
         // independent of the game AudioTrack: no emulator needs to be running.
         let previous_progress = self.progress;

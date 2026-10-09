@@ -185,7 +185,7 @@ class MainActivity : Activity() {
         }
         frame.addView(
             status,
-            FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM)
+            FrameLayout.LayoutParams(-1, -2, Gravity.TOP)
         )
         setContentView(frame)
         immersive()
@@ -201,7 +201,7 @@ class MainActivity : Activity() {
                 status.text = "ROM folder permission expired — START to choose again"
             }
         } else {
-            status.text = "Press START for Library — select your ROM folder"
+            status.text = "Press START to open the menu and add your ROMs."
         }
     }
 
