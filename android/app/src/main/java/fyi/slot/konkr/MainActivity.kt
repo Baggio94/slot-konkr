@@ -20,6 +20,8 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
 import android.net.Uri
+import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 import android.provider.DocumentsContract
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -39,9 +41,13 @@ class MainActivity : Activity() {
         private const val TAG = "SlotKonkr"
         private const val FOLDER_REQUEST = 4701
         private const val BIOS_REQUEST = 4702
+        private const val SAVE_REQUEST = 4703
+        private const val STATE_REQUEST = 4704
         private const val PREFS = "slot_konkr_library"
         private const val ROM_ROOT = "rom_root_uri"
         private const val BIOS_ROOT = "bios_root_uri"
+        private const val SAVE_ROOT = "saves_root_uri"
+        private const val STATE_ROOT = "states_root_uri"
         private val BUTTONS = setOf(
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
@@ -71,10 +77,13 @@ class MainActivity : Activity() {
     external fun nativePollMessage(): String?
     external fun nativePollUiAction(): Int
     external fun nativePollCartSfx(): Int
+    external fun nativeCoreForUri(uri: String): String
+    external fun nativePollSaveFlush(): String?
 
     private lateinit var cartSounds: CartSounds
     private val scanner = Executors.newSingleThreadExecutor()
     private val gameLoader = Executors.newSingleThreadExecutor()
+    private val activeTargets = ConcurrentHashMap<String, RetroArchStorage.Target>()
     private val uiHandler = Handler(Looper.getMainLooper())
     private val audioRunning = AtomicBoolean(false)
     @Volatile private var resumed = false
@@ -86,6 +95,34 @@ class MainActivity : Activity() {
             } else if (audioRunning.get()) {
                 stopAudio()
             }
+            // Flush requests before accepting a new ROM launch to preserve
+            // save-before-load ordering on the single storage worker.
+            var completed = nativePollSaveFlush()
+            while (completed != null) {
+                try {
+                    val payload = JSONObject(completed)
+                    val uri = payload.getString("uri")
+                    val core = when (payload.getString("core")) {
+                        "gpsp" -> "gpSP"
+                        else -> "mGBA"
+                    }
+                    val target = activeTargets[uri]
+                    if (target != null && target.core == core) {
+                        gameLoader.execute {
+                            val failures = RetroArchStorage.exportAfterSave(this, target)
+                            if (failures.isNotEmpty()) {
+                                runOnUiThread {
+                                    if (!isDestroyed) Toast.makeText(this,
+                                        failures.joinToString("; "), Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    }
+                } catch (error: Exception) {
+                    Log.e(TAG, "Invalid save sync notification", error)
+                }
+                completed = nativePollSaveFlush()
+            }
             val request = nativePollLaunchUri()
             if (request != null) loadGameFromSaf(request)
             when (nativePollUiAction()) {
@@ -93,6 +130,8 @@ class MainActivity : Activity() {
                 2 -> refreshLibrary()
                 3 -> checkRaOfflineProxy()
                 4 -> openBiosFolderPicker()
+                5 -> openSharedFolderPicker(SAVE_REQUEST)
+                6 -> openSharedFolderPicker(STATE_REQUEST)
             }
             nativePollMessage()?.let { message ->
                 Log.e(TAG, message)
@@ -274,6 +313,14 @@ class MainActivity : Activity() {
                         check(temp.renameTo(target)) { "Cannot cache ROM" }
                     } finally { temp.delete() }
                 }
+                val savedCore = nativeCoreForUri(rawUri)
+                val core = if (savedCore == "gpsp" && ext == "gba") "gpSP" else "mGBA"
+                val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+                val saves = prefs.getString(SAVE_ROOT, null)?.let(Uri::parse)
+                val states = prefs.getString(STATE_ROOT, null)?.let(Uri::parse)
+                val shared = RetroArchStorage.target(this, rawUri, core, saves, states)
+                RetroArchStorage.importBeforeLaunch(this, shared)
+                activeTargets[rawUri] = shared
                 nativeGameReady(rawUri, target.absolutePath)
             } catch (error: Exception) {
                 Log.e(TAG, "Could not prepare ROM", error)
@@ -381,6 +428,21 @@ class MainActivity : Activity() {
         scanFolder(uri)
     }
 
+    private fun openSharedFolderPicker(requestCode: Int) {
+        check(requestCode == SAVE_REQUEST || requestCode == STATE_REQUEST)
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, requestCode)
+        } catch (error: ActivityNotFoundException) {
+            Toast.makeText(this, "Android folder picker unavailable", Toast.LENGTH_LONG).show()
+        }
+    }
+
     private fun openBiosFolderPicker() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             addFlags(
@@ -445,13 +507,17 @@ class MainActivity : Activity() {
     @Deprecated("Android 12 SAF activity result")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode !in setOf(FOLDER_REQUEST, BIOS_REQUEST) ||
-            resultCode != RESULT_OK) return
+        if (requestCode !in setOf(FOLDER_REQUEST, BIOS_REQUEST,
+                SAVE_REQUEST, STATE_REQUEST) || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
         try {
-            contentResolver.takePersistableUriPermission(
-                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
+            val writable = requestCode == SAVE_REQUEST || requestCode == STATE_REQUEST
+            val flags = if (writable) {
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            } else {
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            }
+            contentResolver.takePersistableUriPermission(uri, flags)
             when (requestCode) {
                 FOLDER_REQUEST -> {
                     getSharedPreferences(PREFS, MODE_PRIVATE).edit()
@@ -459,12 +525,21 @@ class MainActivity : Activity() {
                     scanFolder(uri)
                 }
                 BIOS_REQUEST -> importBiosFolder(uri, persistSelection = true)
+                SAVE_REQUEST, STATE_REQUEST -> {
+                    val key = if (requestCode == SAVE_REQUEST) SAVE_ROOT else STATE_ROOT
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                        .putString(key, uri.toString()).apply()
+                    val kind = if (requestCode == SAVE_REQUEST) "Save" else "Save State"
+                    Toast.makeText(this,
+                        "$kind folder selected. RetroArch core subfolders will be used.",
+                        Toast.LENGTH_LONG).show()
+                }
             }
         } catch (error: SecurityException) {
             if (requestCode == FOLDER_REQUEST) {
                 status.text = "Cannot keep ROM folder permission — choose another folder"
             } else {
-                Toast.makeText(this, "Cannot access that BIOS folder", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Folder requires Android read/write access", Toast.LENGTH_LONG).show()
             }
             Log.e(TAG, "Android folder permission error", error)
         }

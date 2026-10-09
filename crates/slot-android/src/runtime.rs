@@ -122,7 +122,7 @@ const MENU_TEXT: [&str; 25] = [
     "Choose Save Folder",              // 7
     "Choose Save State Folder",        // 8
     "Refresh Library",                 // 9
-    "Save locations coming soon",      // 10
+    "RetroArch core folders",           // 10
     "SCRAPING",                         // 11
     "Artwork scraping coming soon",    // 12
     "RETROACHIEVEMENTS",               // 13
@@ -427,20 +427,19 @@ impl Engine {
                                     self.overlay = ShelfOverlay::Library { row: next };
                                 }
                                 96 => match row {
-                                    0 | 1 | 4 => {
-                                        // ROM folder, BIOS folder, Refresh library.
-                                        // Save/State pickers stay disabled until their
-                                        // actual file persistence is fully supported.
+                                    0..=4 => {
+                                        // ROM, BIOS, SRAM root, State root, Refresh.
                                         let action = match row {
                                             0 => 1,
                                             1 => 4,
+                                            2 => 5,
+                                            3 => 6,
                                             _ => 2,
                                         };
                                         UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
                                             .push_back(action);
                                         self.overlay = ShelfOverlay::None;
                                     }
-                                    2 | 3 => {}
                                     _ => {}
                                 },
                                 97 => self.overlay = ShelfOverlay::Menu { row: 0 },
@@ -722,8 +721,7 @@ impl Engine {
                             colour: [0.28, 0.28, 0.32, 1.0],
                         });
                     }
-                    self.text_fit(labels[index], 145.0, y, 430.0,
-                        if index == 2 || index == 3 { 0.4 } else { 1.0 }, out);
+                    self.text_fit(labels[index], 145.0, y, 430.0, 1.0, out);
                 }
                 self.text_fit(10, 145.0, 363.0, 440.0, 0.5, out);
                 self.text_fit(4, 145.0, 412.0, 440.0, 0.85, out);
