@@ -99,3 +99,8 @@ must not require a Raspberry Pi or external library server.
 - Match button round beside L2 to a valid nonreserved key event.
 - Once input router is implemented: long/short/double presses and chords do
   not leak gameplay input, no accidental app exit or Android launcher switch.
+
+
+Implemented in latest UI branch: tap A resumes saved state; holding A for
+400ms or more starts the game without auto-state restoration (in-game SRAM is
+still loaded). Cart insertion remains animated before either path starts.

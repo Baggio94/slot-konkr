@@ -17,7 +17,7 @@ pub struct GameSession {
 }
 
 impl GameSession {
-    pub fn open(rom: &Path, core_file: &Path, storage: &Path) -> Result<Self, String> {
+    pub fn open(rom: &Path, core_file: &Path, storage: &Path, resume_state: bool) -> Result<Self, String> {
         if !rom.exists() || !core_file.exists() {
             return Err("ROM cache or mGBA core missing".into());
         }
@@ -36,9 +36,11 @@ impl GameSession {
                 eprintln!("slot-konkr: SRAM restore skipped: {error}");
             }
         }
-        if let Ok(bytes) = std::fs::read(&state) {
-            if let Err(error) = core.unserialize(&bytes) {
-                eprintln!("slot-konkr: state resume skipped: {error}");
+        if resume_state {
+            if let Ok(bytes) = std::fs::read(&state) {
+                if let Err(error) = core.unserialize(&bytes) {
+                    eprintln!("slot-konkr: state resume skipped: {error}");
+                }
             }
         }
         let sample_rate = core.av_info().sample_rate.round() as i32;

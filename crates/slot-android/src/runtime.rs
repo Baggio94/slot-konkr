@@ -127,6 +127,8 @@ struct Engine {
     menu_textures: Vec<(slot_gfx::TexId, u32, u32)>,
     board_texture: Option<slot_gfx::TexId>,
     chip_texture: slot_gfx::TexId,
+    a_down_at: Option<Instant>,
+    fresh_launch: bool,
 }
 
 impl Engine {
@@ -206,6 +208,8 @@ impl Engine {
             menu_textures,
             board_texture: None,
             chip_texture,
+            a_down_at: None,
+            fresh_launch: false,
         })
     }
 
@@ -236,6 +240,8 @@ impl Engine {
                 self.awaiting_game = false;
                 self.inserted = false;
                 self.overlay = ShelfOverlay::None;
+                self.a_down_at = None;
+                self.fresh_launch = false;
                 self.requested_uri = None;
                 self.prepared_rom = None;
                 self.seated_frame_seen = false;
@@ -338,6 +344,8 @@ impl Engine {
                             let uri = selected.rom.to_string_lossy();
                             self.seated_frame_seen = false;
                             self.prepared_rom = None;
+                            self.a_down_at = Some(Instant::now());
+                            self.fresh_launch = false;
                             if uri.starts_with("content://") {
                                 let uri = uri.into_owned();
                                 self.requested_uri = Some(uri.clone());
@@ -348,6 +356,8 @@ impl Engine {
                         }
                         97 => {
                             self.inserted = false;
+                            self.a_down_at = None;
+                            self.fresh_launch = false;
                             self.awaiting_game = false;
                             self.prepared_rom = None;
                             self.requested_uri = None;
@@ -357,6 +367,12 @@ impl Engine {
                         }
                         _ => {}
                     }
+                }
+                if code == 96 && !pressed {
+                    if let Some(when) = self.a_down_at.take() {
+                        self.fresh_launch = when.elapsed().as_millis() >= 400;
+                    }
+                    return;
                 }
                 let ms = self.born.elapsed().as_millis() as u64;
                 let shelf = &mut self.shelves[self.active];
@@ -400,7 +416,7 @@ impl Engine {
     fn start_prepared_game(&mut self, local: &str) {
         let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some((storage, library)) = paths {
-            match GameSession::open(Path::new(local), &library.join("libmgba_libretro.so"), &storage) {
+            match GameSession::open(Path::new(local), &library.join("libmgba_libretro.so"), &storage, !self.fresh_launch) {
                 Ok(session) => {
                     self.buttons = 0;
                     SAMPLE_RATE.store(session.sample_rate, Ordering::Release);
@@ -473,9 +489,19 @@ impl Engine {
             self.handle(event);
         }
 
+        // A long A press skips loading the auto-save state, but preserves SRAM.
+        // At least 400ms must pass before treating a held A as a fresh launch.
+        if let Some(when) = self.a_down_at {
+            if when.elapsed().as_millis() >= 400 {
+                self.fresh_launch = true;
+                self.a_down_at = None;
+            }
+        }
         // ROM cache may finish at any time, but core.load() and automatic state
         // restore only occur AFTER the full 730ms insertion has been displayed.
-        if self.inserted && self.progress >= 1.0 && self.seated_frame_seen {
+        if self.inserted && self.progress >= 1.0 && self.seated_frame_seen
+            && self.a_down_at.is_none()
+        {
             if let Some(local) = self.prepared_rom.take() {
                 self.start_prepared_game(&local);
             }
