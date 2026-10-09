@@ -10,5 +10,5 @@ fn konkr_960x640_fills_the_entire_panel() {
 
 #[test]
 fn other_aspect_ratios_keep_the_original_integer_placement() {
-    assert_eq!(blit_rect((1500, 1000), 0.0), (30, 20, 1440, 960));
+    assert_eq!(blit_rect((1500, 980), 0.0), (30, 10, 1440, 960));
 }
