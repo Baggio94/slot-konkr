@@ -19,6 +19,9 @@ jobs:
   debug-apk:
     runs-on: ubuntu-latest
     timeout-minutes: 50
+    env:
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_HOME: /usr/local/lib/android/sdk
     permissions:
       contents: read
     steps:
@@ -31,7 +34,9 @@ jobs:
         run: |
           # GitHub hosted ubuntu includes Android SDK command-line tools.
           # setup-android@v3 currently tries to install removed "tools" package.
-          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+          MANAGER="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -maxdepth 3 -type f -name sdkmanager | sort -V | tail -1)"
+          if [ -z "$MANAGER" ]; then echo "Android sdkmanager not installed" >&2; exit 1; fi
+          "$MANAGER" --sdk_root="$ANDROID_SDK_ROOT" --install "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: '1.96.0'
