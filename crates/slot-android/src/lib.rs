@@ -6,3 +6,8 @@ mod library;
 mod game;
 #[cfg(target_os = "android")]
 mod runtime;
+
+// Reuse upstream Slot's unmodified mechanical core picker: 420ms open,
+// 180ms chip hop, 320ms close and refusal shake.
+#[path = "../../slot/src/core_picker.rs"]
+mod core_picker;
