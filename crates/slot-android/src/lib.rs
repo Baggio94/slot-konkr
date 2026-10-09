@@ -3,4 +3,6 @@
 //! Stage M1: display-only preview carts, not executable games.
 mod library;
 #[cfg(target_os = "android")]
+mod game;
+#[cfg(target_os = "android")]
 mod runtime;

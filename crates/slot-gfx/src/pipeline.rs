@@ -32,7 +32,12 @@ pub struct GamePass {
 impl GamePass {
     pub fn new() -> Result<Self, GfxError> {
         let prog = crate::shaders::program(RECT_VERT, GAME_FRAG)?;
-        let game = crate::gl::texture(SRC_W, SRC_H, gl::NEAREST, gl::CLAMP_TO_EDGE, gl::BGRA, None);
+        // OpenGL ES 2 only guarantees RGBA, not BGRA texture uploads.
+        #[cfg(target_os = "android")]
+        let format = gl::RGBA;
+        #[cfg(not(target_os = "android"))]
+        let format = gl::BGRA;
+        let game = crate::gl::texture(SRC_W, SRC_H, gl::NEAREST, gl::CLAMP_TO_EDGE, format, None);
         let paper = crate::gl::texture(1, 1, gl::NEAREST, gl::REPEAT, gl::RGBA, Some(&[255; 4]));
         let (u_rect, u_bright, u_uv, u_mode, u_paper_size, u_pic, u_fbo);
         unsafe {
@@ -108,6 +113,16 @@ impl GamePass {
         if xrgb8888.len() < (SRC_W * SRC_H * 4) as usize {
             return;
         }
+        #[cfg(target_os = "android")]
+        let rgba: Vec<u8> = xrgb8888.chunks_exact(4).flat_map(|px| [px[2], px[1], px[0], 255]).collect();
+        #[cfg(target_os = "android")]
+        let pixels = rgba.as_ptr();
+        #[cfg(not(target_os = "android"))]
+        let pixels = xrgb8888.as_ptr();
+        #[cfg(target_os = "android")]
+        let format = gl::RGBA;
+        #[cfg(not(target_os = "android"))]
+        let format = gl::BGRA;
         unsafe {
             gl::BindTexture(gl::TEXTURE_2D, self.game);
             gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
@@ -118,9 +133,9 @@ impl GamePass {
                 0,
                 SRC_W as i32,
                 SRC_H as i32,
-                gl::BGRA,
+                format,
                 gl::UNSIGNED_BYTE,
-                xrgb8888.as_ptr() as *const std::ffi::c_void,
+                pixels as *const std::ffi::c_void,
             );
         }
     }
