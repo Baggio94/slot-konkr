@@ -1,12 +1,20 @@
 //! Native libretro mGBA / gpSP game session. All core calls occur on GLSurfaceView's GL thread.
 //! Android's SAF bridge materializes a **bounded private cache** copy of each selected ROM.
 use slot_retro::{ButtonMask, LibretroCore, RetroCore};
-use slot_store::{atomic_write, Core};
+use slot_store::{atomic_write, Core, Platform, StateEntry, StateRing, stamp_now, parse_stamp, format_stamp, RING_MAX};
+use crate::thumb;
 use crate::retroarch_state;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const SRAM_PERIOD: Duration = Duration::from_secs(30);
+const UNDO_WINDOW: Duration = Duration::from_secs(30);
+
+enum PendingUndo {
+    Saved { stamp: String, evicted: Option<(String, Vec<u8>, Vec<u8>)> },
+    Loaded { prior: Vec<u8> },
+}
+
 
 pub struct GameSession {
     core: LibretroCore,
@@ -14,6 +22,8 @@ pub struct GameSession {
     state: PathBuf,
     retroarch_export: PathBuf,
     retroarch_import: PathBuf,
+    ring: StateRing,
+    pending_undo: Option<(Instant, PendingUndo)>,
     last_sram: Instant,
     pub sample_rate: i32,
     pub fps: f64,
@@ -21,7 +31,7 @@ pub struct GameSession {
 
 impl GameSession {
     pub fn open(rom: &Path, core_file: &Path, storage: &Path,
-                which: Core, resume_state: bool) -> Result<Self, String> {
+                which: Core, platform: Platform, resume_state: bool) -> Result<Self, String> {
         if !rom.exists() || !core_file.exists() {
             return Err(format!("ROM cache or {} core missing", which.text()));
         }
@@ -37,6 +47,7 @@ impl GameSession {
         let state = root.join(format!("{id}.{}.state", which.as_str()));
         let retroarch_export = root.join(format!("{id}.{}.retroarch-export.state.auto", which.as_str()));
         let retroarch_import = root.join(format!("{id}.{}.retroarch-import.state.auto", which.as_str()));
+        let ring = StateRing::new(storage, platform, which, id);
         // mGBA's libretro core looks for gba_bios.bin / gb_bios.bin /
         // gbc_bios.bin in RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY.
         // Keep the user-selected SAF folder external and read-only: Android
@@ -97,8 +108,8 @@ impl GameSession {
         let sample_rate = core.av_info().sample_rate.round() as i32;
         let fps = core.av_info().fps.clamp(30.0, 120.0);
         Ok(Self {
-            core, save, state, retroarch_export, retroarch_import,
-            last_sram: Instant::now(),
+            core, save, state, retroarch_export, retroarch_import, ring,
+            pending_undo: None, last_sram: Instant::now(),
             sample_rate: sample_rate.clamp(8_000, 96_000),
             fps,
         })
@@ -151,4 +162,72 @@ impl GameSession {
         }
         saved_sram
     }
+    /// Original Slot ring: 10 timestamped states per ROM/core, each with
+    /// a 240×160 PNG thumbnail. Independent from RetroArch's manual slots.
+    pub fn save_manual(&mut self) -> Result<(), String> {
+        let state = self.core.serialize().map_err(|e|e.to_string())?;
+        let preview = thumb::png(self.core.video_xrgb8888()).unwrap_or_default();
+        let entries = self.ring.list().map_err(|e|e.to_string())?;
+        let mut seconds = slot_store::parse_stamp(&stamp_now()).ok_or("Invalid system clock")?;
+        let mut stamp = format_stamp(seconds);
+        while entries.iter().any(|e|e.stamp==stamp) {
+            seconds+=1;
+            stamp=format_stamp(seconds);
+        }
+        let evicted = if entries.len()>=RING_MAX {
+            entries.last().and_then(|item|
+                self.ring.read(&item.stamp).ok()
+                    .map(|(state, thumb)|(item.stamp.clone(),state,thumb)))
+        } else {None};
+        self.ring.push(&state, &preview, &stamp).map_err(|e|e.to_string())?;
+        self.pending_undo = Some((Instant::now(), PendingUndo::Saved {stamp, evicted}));
+        Ok(())
+    }
+
+    pub fn history(&self) -> Vec<StateEntry> {
+        self.ring.list().unwrap_or_default()
+    }
+
+    pub fn load_manual(&mut self, stamp:&str) -> Result<(), String> {
+        let (bytes, _) = self.ring.read(stamp).map_err(|e|e.to_string())?;
+        let prior = self.core.serialize().map_err(|e|e.to_string())?;
+        self.core.unserialize(&bytes).map_err(|e|e.to_string())?;
+        self.pending_undo=Some((Instant::now(), PendingUndo::Loaded {prior}));
+        Ok(())
+    }
+
+    pub fn load_latest(&mut self)->Result<(),String> {
+        let newest=self.history().into_iter().next()
+            .ok_or_else(||"No saved states yet".to_owned())?;
+        self.load_manual(&newest.stamp)
+    }
+
+    pub fn delete_manual(&mut self, stamp:&str)->Result<(),String> {
+        self.ring.remove(stamp).map_err(|e|e.to_string())
+    }
+
+    pub fn undo_manual(&mut self)->Result<(),String> {
+        let Some((since,_))=&self.pending_undo else { return Err("Nothing to undo".into())};
+        if since.elapsed()>UNDO_WINDOW {
+            self.pending_undo=None;
+            return Err("Undo expired (30 seconds)".into());
+        }
+        let (_, pending)=self.pending_undo.take().unwrap();
+        match pending {
+            PendingUndo::Loaded {prior} =>
+                self.core.unserialize(&prior).map_err(|e|e.to_string()),
+            PendingUndo::Saved {stamp,evicted} => {
+                self.ring.remove(&stamp).map_err(|e|e.to_string())?;
+                if let Some((name,state,thumb))=evicted {
+                    self.ring.push(&state,&thumb,&name).map_err(|e|e.to_string())?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    pub fn undo_available(&self)->bool {
+        self.pending_undo.as_ref().is_some_and(|(at,_)|at.elapsed()<=UNDO_WINDOW)
+    }
+
 }
