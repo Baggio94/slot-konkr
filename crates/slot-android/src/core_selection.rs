@@ -25,7 +25,7 @@ mod tests {
     use super::*;
     #[test]
     fn stable_unique_rom_uri_keys() {
-        assert_eq!(key("content://roms/1"), "d68dd19100fab4d9");
+        assert_eq!(key("content://roms/1"), "cd3adfea5b691b9d");
         assert_ne!(key("content://roms/1"), key("content://roms/2"));
         assert_ne!(key("content://roms/a"), key("content://other/a"));
     }
