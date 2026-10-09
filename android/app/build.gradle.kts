@@ -16,6 +16,9 @@ android {
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
+    // Reuse the exact upstream Slot insert/eject PCM assets.
+    sourceSets.getByName("main").assets.srcDir("../../crates/slot/assets")
+
     packaging {
         jniLibs { useLegacyPackaging = true }
     }
