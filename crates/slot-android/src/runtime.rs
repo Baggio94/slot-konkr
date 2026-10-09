@@ -93,32 +93,39 @@ thread_local! {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum ShelfOverlay {
     None,
+    Menu { row: usize },
     Library { row: usize },
+    Scraping,
+    Achievements,
     Core,
-    Settings,
     GameMenu { row: usize },
 }
 
-const MENU_ITEMS: usize = 2; // scrape action is visible but disabled until implemented
-const MENU_TEXT: [&str; 18] = [
-    "LIBRARY",
-    "Choose ROM folder",
-    "Refresh library",
-    "Scrape labels (coming later)",
-    "A: select   B: back",
-    "SELECT CORE",
-    "mGBA",
-    "gpSP (not installed)",
-    "A: confirm   B: back",
-    "SETTINGS",
-    "Library settings",
-    "Other options coming later",
-    "A: select   B: back",
-    "GAME MENU",
-    "Resume",
-    "Save and eject",
-    "States (coming soon)",
-    "A: select   B: back",
+const MENU_TEXT: [&str; 24] = [
+    "MENU",                             // 0
+    "Library",                          // 1
+    "Scraping",                         // 2
+    "RetroAchievements",               // 3
+    "A Select     B Back",              // 4
+    "LIBRARY",                          // 5
+    "Choose ROM Folder",               // 6
+    "Choose Save Folder",              // 7
+    "Choose Save State Folder",        // 8
+    "Refresh Library",                 // 9
+    "Save locations coming soon",      // 10
+    "SCRAPING",                         // 11
+    "Artwork scraping coming soon",    // 12
+    "RETROACHIEVEMENTS",               // 13
+    "RA integration coming soon",      // 14
+    "SELECT CORE",                      // 15
+    "mGBA",                             // 16
+    "gpSP (not installed)",            // 17
+    "A Confirm     B Back",             // 18
+    "GAME MENU",                        // 19
+    "Resume",                           // 20
+    "Save and Eject",                   // 21
+    "States (coming soon)",            // 22
+    "A Select     B Back",              // 23
 ];
 
 struct Engine {
@@ -317,12 +324,9 @@ impl Engine {
                                 ShelfOverlay::GameMenu { .. } => ShelfOverlay::None,
                                 _ => ShelfOverlay::GameMenu { row: 0 },
                             };
-                        } else if !self.inserted {
-                            self.overlay = match self.overlay {
-                                ShelfOverlay::Settings => ShelfOverlay::None,
-                                _ => ShelfOverlay::Settings,
-                            };
                         }
+                        // On the carousel, START is the sole menu shortcut;
+                        // the physical MENU key is reserved for in-game actions.
                     }
                     return;
                 }
@@ -358,26 +362,50 @@ impl Engine {
                 if self.overlay != ShelfOverlay::None {
                     if pressed {
                         match self.overlay {
-                            ShelfOverlay::Library { row } => match code {
+                            ShelfOverlay::Menu { row } => match code {
                                 19 | 20 => {
-                                    let next = if code == 19 { row + MENU_ITEMS - 1 } else { row + 1 };
-                                    self.overlay = ShelfOverlay::Library { row: next % MENU_ITEMS };
+                                    let next = if code == 19 { (row + 2) % 3 } else { (row + 1) % 3 };
+                                    self.overlay = ShelfOverlay::Menu { row: next };
                                 }
                                 96 => {
-                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
-                                        .push_back(if row == 0 { 1 } else { 2 });
-                                    self.overlay = ShelfOverlay::None;
+                                    self.overlay = match row {
+                                        0 => ShelfOverlay::Library { row: 0 },
+                                        1 => ShelfOverlay::Scraping,
+                                        _ => ShelfOverlay::Achievements,
+                                    };
                                 }
                                 97 | 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
-                            ShelfOverlay::Core => match code {
-                                96 | 97 | 109 => self.overlay = ShelfOverlay::None,
+                            ShelfOverlay::Library { row } => match code {
+                                19 | 20 => {
+                                    let next = if code == 19 { (row + 3) % 4 } else { (row + 1) % 4 };
+                                    self.overlay = ShelfOverlay::Library { row: next };
+                                }
+                                96 => match row {
+                                    0 | 3 => {
+                                        UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
+                                            .push_back(if row == 0 { 1 } else { 2 });
+                                        self.overlay = ShelfOverlay::None;
+                                    }
+                                    // Save and save-state folder pickers will be
+                                    // enabled together with real SAF save routing.
+                                    1 | 2 => {}
+                                    _ => {}
+                                },
+                                97 => self.overlay = ShelfOverlay::Menu { row: 0 },
+                                108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
-                            ShelfOverlay::Settings => match code {
-                                96 => self.overlay = ShelfOverlay::Library { row: 0 },
-                                97 => self.overlay = ShelfOverlay::None,
+                            ShelfOverlay::Scraping | ShelfOverlay::Achievements => match code {
+                                97 => self.overlay = ShelfOverlay::Menu {
+                                    row: if matches!(self.overlay, ShelfOverlay::Scraping) { 1 } else { 2 },
+                                },
+                                108 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
+                            ShelfOverlay::Core => match code {
+                                96 | 97 | 109 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
                             ShelfOverlay::GameMenu { .. } | ShelfOverlay::None => {}
@@ -389,7 +417,7 @@ impl Engine {
                     match code {
                         108 if !self.inserted => {
                             self.shelves[self.active].release_hold();
-                            self.overlay = ShelfOverlay::Library { row: 0 };
+                            self.overlay = ShelfOverlay::Menu { row: 0 };
                             return;
                         }
                         109 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
@@ -531,59 +559,113 @@ impl Engine {
         out.push(Draw::Tex { x, y, w: w as f32, h: h as f32, tex, alpha });
     }
 
+    fn text_fit(&self, index: usize, x: f32, y: f32, max_w: f32,
+                alpha: f32, out: &mut Vec<Draw>) {
+        let (tex, raw_w, raw_h) = self.menu_textures[index];
+        // Keep original Slot typography, but fit long settings labels without
+        // horizontally stretching them or overflowing a 3:2 display.
+        if raw_w == 0 || raw_h == 0 { return; }
+        let scale = 0.79f32.min(max_w / raw_w as f32);
+        out.push(Draw::Tex {
+            x, y, w: raw_w as f32 * scale, h: raw_h as f32 * scale,
+            tex, alpha,
+        });
+    }
+
+    fn modal(&self, x: f32, y: f32, w: f32, h: f32,
+             out: &mut Vec<Draw>, dim: f32) {
+        out.push(Draw::Rect {
+            x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
+            colour: [0.0, 0.0, 0.0, dim],
+        });
+        out.push(Draw::Rect {
+            x, y, w, h, colour: [0.085, 0.085, 0.093, 1.0],
+        });
+        out.push(Draw::Rect {
+            x, y, w, h: 2.0, colour: [0.69, 0.69, 0.72, 1.0],
+        });
+    }
+
     fn draw_overlay(&self, out: &mut Vec<Draw>) {
         match self.overlay {
             ShelfOverlay::None => {}
-            ShelfOverlay::Library { row } => {
-                out.push(Draw::Rect { x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32, colour: [0.0, 0.0, 0.0, 0.82] });
-                out.push(Draw::Rect { x: 95.0, y: 99.0, w: 530.0, h: 287.0, colour: [0.085, 0.085, 0.093, 1.0] });
-                out.push(Draw::Rect { x: 95.0, y: 99.0, w: 530.0, h: 3.0, colour: [0.69, 0.69, 0.72, 1.0] });
-                self.add_text(0, 124.0, 116.0, out);
+            ShelfOverlay::Menu { row } => {
+                self.modal(117.0, 75.0, 486.0, 330.0, out, 0.78);
+                self.text_fit(0, 148.0, 98.0, 400.0, 1.0, out);
                 for index in 0..3 {
-                    let y = 178.0 + index as f32 * 51.0;
+                    let y = 156.0 + index as f32 * 59.0;
                     if index == row {
-                        out.push(Draw::Rect { x: 111.0, y: y - 2.0, w: 498.0, h: 43.0, colour: [0.28, 0.28, 0.32, 1.0] });
+                        out.push(Draw::Rect {
+                            x: 135.0, y: y - 6.0, w: 450.0, h: 44.0,
+                            colour: [0.28, 0.28, 0.32, 1.0],
+                        });
                     }
-                    self.add_text_alpha(index + 1, 136.0, y,
-                        if index == 2 { 0.42 } else { 1.0 }, out);
+                    self.text_fit(index + 1, 152.0, y, 406.0, 1.0, out);
                 }
-                self.add_text(4, 136.0, 347.0, out);
+                self.text_fit(4, 152.0, 360.0, 405.0, 0.85, out);
             }
-            ShelfOverlay::Settings => {
-                out.push(Draw::Rect { x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32, colour: [0.0, 0.0, 0.0, 0.82] });
-                out.push(Draw::Rect { x: 95.0, y: 115.0, w: 530.0, h: 255.0, colour: [0.085, 0.085, 0.093, 1.0] });
-                out.push(Draw::Rect { x: 95.0, y: 115.0, w: 530.0, h: 3.0, colour: [0.69, 0.69, 0.72, 1.0] });
-                self.add_text(9, 136.0, 136.0, out);
-                out.push(Draw::Rect { x: 111.0, y: 198.0, w: 498.0, h: 43.0, colour: [0.28, 0.28, 0.32, 1.0] });
-                self.add_text(10, 136.0, 204.0, out);
-                self.add_text_alpha(11, 136.0, 268.0, 0.42, out);
-                self.add_text(12, 136.0, 326.0, out);
+            ShelfOverlay::Library { row } => {
+                self.modal(105.0, 41.0, 510.0, 400.0, out, 0.78);
+                self.text_fit(5, 136.0, 63.0, 445.0, 1.0, out);
+                for index in 0..4 {
+                    let y = 131.0 + index as f32 * 56.0;
+                    if index == row {
+                        out.push(Draw::Rect {
+                            x: 125.0, y: y - 7.0, w: 470.0, h: 43.0,
+                            colour: [0.28, 0.28, 0.32, 1.0],
+                        });
+                    }
+                    self.text_fit(index + 6, 145.0, y, 430.0,
+                        if index == 1 || index == 2 { 0.4 } else { 1.0 }, out);
+                }
+                self.text_fit(10, 145.0, 359.0, 440.0, 0.5, out);
+                self.text_fit(4, 145.0, 409.0, 440.0, 0.85, out);
+            }
+            ShelfOverlay::Scraping | ShelfOverlay::Achievements => {
+                self.modal(110.0, 127.0, 500.0, 227.0, out, 0.78);
+                let (header, detail) = if matches!(self.overlay, ShelfOverlay::Scraping) {
+                    (11, 12)
+                } else {
+                    (13, 14)
+                };
+                self.text_fit(header, 141.0, 152.0, 438.0, 1.0, out);
+                self.text_fit(detail, 141.0, 230.0, 438.0, 0.65, out);
+                self.text_fit(4, 141.0, 311.0, 438.0, 0.85, out);
             }
             ShelfOverlay::GameMenu { row } => {
-                out.push(Draw::Rect { x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32, colour: [0.0, 0.0, 0.0, 0.76] });
-                out.push(Draw::Rect { x: 95.0, y: 115.0, w: 530.0, h: 255.0, colour: [0.085, 0.085, 0.093, 1.0] });
-                out.push(Draw::Rect { x: 95.0, y: 115.0, w: 530.0, h: 3.0, colour: [0.69, 0.69, 0.72, 1.0] });
-                self.add_text(13, 136.0, 136.0, out);
+                self.modal(117.0, 80.0, 486.0, 320.0, out, 0.75);
+                self.text_fit(19, 148.0, 103.0, 400.0, 1.0, out);
                 for index in 0..2 {
-                    let y = 204.0 + index as f32 * 49.0;
-                    if row == index {
-                        out.push(Draw::Rect { x: 111.0, y: y - 5.0, w: 498.0, h: 43.0, colour: [0.28, 0.28, 0.32, 1.0] });
+                    let y = 162.0 + index as f32 * 61.0;
+                    if index == row {
+                        out.push(Draw::Rect {
+                            x: 135.0, y: y - 7.0, w: 450.0, h: 45.0,
+                            colour: [0.28, 0.28, 0.32, 1.0],
+                        });
                     }
-                    self.add_text(index + 14, 136.0, y, out);
+                    self.text_fit(index + 20, 152.0, y, 406.0, 1.0, out);
                 }
-                self.add_text_alpha(16, 136.0, 305.0, 0.42, out);
-                self.add_text(17, 136.0, 346.0, out);
+                self.text_fit(22, 152.0, 291.0, 420.0, 0.42, out);
+                self.text_fit(23, 152.0, 355.0, 420.0, 0.85, out);
             }
             ShelfOverlay::Core => {
-                out.push(Draw::Rect { x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32, colour: [0.085, 0.085, 0.093, 1.0] });
-                self.add_text(5, 263.0, 74.0, out);
+                out.push(Draw::Rect {
+                    x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
+                    colour: [0.085, 0.085, 0.093, 1.0],
+                });
+                self.text_fit(15, 263.0, 74.0, 355.0, 1.0, out);
                 if let Some(tex) = self.board_texture {
-                    out.push(Draw::Tex { x: 174.0, y: 131.0, w: 372.0, h: 209.0, tex, alpha: 1.0 });
-                    out.push(Draw::Tex { x: 323.0, y: 213.0, w: 63.0, h: 45.0, tex: self.chip_texture, alpha: 1.0 });
+                    out.push(Draw::Tex {
+                        x: 174.0, y: 131.0, w: 372.0, h: 209.0, tex, alpha: 1.0,
+                    });
+                    out.push(Draw::Tex {
+                        x: 323.0, y: 213.0, w: 63.0, h: 45.0,
+                        tex: self.chip_texture, alpha: 1.0,
+                    });
                 }
-                self.add_text(6, 265.0, 346.0, out);
-                self.add_text(7, 225.0, 389.0, out);
-                self.add_text(8, 221.0, 443.0, out);
+                self.text_fit(16, 265.0, 346.0, 355.0, 1.0, out);
+                self.text_fit(17, 225.0, 389.0, 400.0, 0.46, out);
+                self.text_fit(18, 221.0, 443.0, 410.0, 0.85, out);
             }
         }
     }
