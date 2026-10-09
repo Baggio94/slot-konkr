@@ -58,6 +58,11 @@ enum Input {
 static INPUT: Mutex<VecDeque<Input>> = Mutex::new(VecDeque::new());
 static REQUEST: Mutex<Option<String>> = Mutex::new(None);
 static UI_ACTION: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
+static CART_SFX: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
+const CART_INSERT_SFX: i32 = 1;
+const CART_EJECT_SFX: i32 = 2;
+const INSERT_SOUND_PROGRESS: f32 = 0.353 / 0.730;
+const EJECT_SOUND_PROGRESS: f32 = 1.0 - (0.350 / 0.730);
 static MESSAGE: Mutex<Option<String>> = Mutex::new(None);
 static PATHS: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
 static AUDIO: Mutex<VecDeque<i16>> = Mutex::new(VecDeque::new());
@@ -141,6 +146,7 @@ struct Engine {
     a_down_at: Option<Instant>,
     fresh_launch: bool,
     mode_down_at: Option<Instant>,
+    eject_sound_armed: bool,
 }
 
 impl Engine {
@@ -223,6 +229,7 @@ impl Engine {
             a_down_at: None,
             fresh_launch: false,
             mode_down_at: None,
+            eject_sound_armed: false,
         })
     }
 
@@ -244,6 +251,8 @@ impl Engine {
                 AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
             }
             Input::Exit => {
+                // The reversed cart animation will emit the original eject sound.
+                if self.progress > 0.0 || self.inserted { self.eject_sound_armed = true; }
                 if let Some(mut session) = self.game.take() {
                     session.save(true);
                 }
@@ -426,6 +435,9 @@ impl Engine {
                             return;
                         }
                         97 => {
+                            if self.inserted && self.progress > 0.0 {
+                                self.eject_sound_armed = true;
+                            }
                             self.inserted = false;
                             self.a_down_at = None;
                             self.fresh_launch = false;
@@ -659,13 +671,26 @@ impl Engine {
         self.prepare_visible();
         let shelf = &mut self.shelves[self.active];
 
-        // Match the upstream ~730 ms cartridge insertion timing.
+        // Upstream Slot triggers the mechanical insertion sound 353 ms after
+        // insertion begins: SEATED_AT (450ms) minus the recording's 97ms lead.
+        // The ejection effect follows the upstream 350ms hold. Keep this
+        // independent of the game AudioTrack: no emulator needs to be running.
+        let previous_progress = self.progress;
         let change = dt / 0.73;
         self.progress = if self.inserted {
             (self.progress + change).min(1.0)
         } else {
             (self.progress - change).max(0.0)
         };
+        if self.inserted && previous_progress < INSERT_SOUND_PROGRESS
+            && self.progress >= INSERT_SOUND_PROGRESS
+        {
+            CART_SFX.lock().unwrap_or_else(|e| e.into_inner()).push_back(CART_INSERT_SFX);
+        }
+        if !self.inserted && self.eject_sound_armed && self.progress <= EJECT_SOUND_PROGRESS {
+            self.eject_sound_armed = false;
+            CART_SFX.lock().unwrap_or_else(|e| e.into_inner()).push_back(CART_EJECT_SFX);
+        }
 
         let mut commands = vec![Draw::Rect {
             x: 0.0,
@@ -841,6 +866,13 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollUiAction(
     _env: *mut c_void, _this: *mut c_void,
 ) -> jint {
     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).pop_front().unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollCartSfx(
+    _env: *mut c_void, _this: *mut c_void,
+) -> jint {
+    CART_SFX.lock().unwrap_or_else(|e| e.into_inner()).pop_front().unwrap_or(0)
 }
 
 fn push(input: Input) {
