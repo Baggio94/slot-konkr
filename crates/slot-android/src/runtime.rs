@@ -322,7 +322,7 @@ impl Engine {
                         match self.overlay {
                             ShelfOverlay::GameMenu { row } => match code {
                                 19 | 20 => {
-                                    let next = if code == 19 { (row + 1) % 2 } else { (row + 1) % 2 };
+                                    let next = (row + 1) % 2;
                                     self.overlay = ShelfOverlay::GameMenu { row: next };
                                 }
                                 96 => {
@@ -616,18 +616,19 @@ impl Engine {
             }
         }
 
+        if self.game.is_some() && matches!(self.overlay, ShelfOverlay::GameMenu { .. }) {
+            // Rendering the pause menu does not borrow an active libretro session
+            // or advance the core, so input and audio stay frozen.
+            self.game_accum = 0.0;
+            let mut commands = vec![Draw::Game];
+            self.draw_overlay(&mut commands);
+            self.gpu.fit(self.size);
+            self.gpu.begin_frame();
+            self.gpu.draw_list(&commands);
+            self.gpu.end_frame(self.size);
+            return;
+        }
         if let Some(session) = self.game.as_mut() {
-            if matches!(self.overlay, ShelfOverlay::GameMenu { .. }) {
-                // Do not advance emulation or consume input while the menu is open.
-                self.game_accum = 0.0;
-                let mut commands = vec![Draw::Game];
-                self.draw_overlay(&mut commands);
-                self.gpu.fit(self.size);
-                self.gpu.begin_frame();
-                self.gpu.draw_list(&commands);
-                self.gpu.end_frame(self.size);
-                return;
-            }
             // Independent from display refresh: a 120 Hz panel must not run mGBA at 2x speed.
             self.game_accum = (self.game_accum + f64::from(dt)).min(0.10);
             let period = 1.0 / session.fps;
