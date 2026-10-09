@@ -47,7 +47,17 @@ internal object BiosLibrary {
                     folder, cursor.getString(idCol)
                 )
                 val bytes = resolver.openInputStream(uri)?.use { stream ->
-                    stream.readNBytes(expected + 1)
+                    // Android 12 compatibility: bounded read, no Java 9
+                    // InputStream.readNBytes API dependency.
+                    val data = ByteArray(expected + 1)
+                    var count = 0
+                    while (count < data.size) {
+                        val n = stream.read(data, count, data.size - count)
+                        if (n < 0) break
+                        if (n == 0) continue
+                        count += n
+                    }
+                    data.copyOf(count)
                 } ?: continue
                 if (bytes.size != expected) continue
                 // Original Slot also recognizes the standard GBA BIOS prefix.
