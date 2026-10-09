@@ -78,3 +78,24 @@ Do not treat the independent RA branch and UI branch as merged. Consolidate into
 ## Next physical test
 
 Use the 0.0.4-dev1 APK from a green Actions artifact on UI branch. Preview GitHub debug signing may require uninstalling the previous app; the owner explicitly considers existing seconds of gameplay disposable for now. Then capture Logcat while pressing physical MENU to confirm Android-level delivery. Do NOT claim physical success until reported.
+
+## Original Slot interface sounds — integrated, physical test pending
+
+The original Slot repository ships exactly two UI PCM assets:
+- crates/slot/assets/insert.pcm (240 ms; mono 16-bit LE at 48 kHz)
+- crates/slot/assets/eject.pcm (315 ms; mono 16-bit LE at 48 kHz)
+
+Upstream audio/sfx.rs plays those cart sounds, but no independent carousel
+navigation click library is shipped. No extra UI beeps are being invented.
+The earlier Android port only started AudioTrack while mGBA was playing,
+which explains the absence of interface sound.
+
+The experimental UI branch now packages both original PCM files in the APK.
+CartSounds.kt adds WAV containers in cache and preloads both recordings with
+Android SoundPool, independently of game audio. Rust emits insert/eject cues
+at corresponding points in the cart animation; Kotlin polls on the GL render
+thread rather than through the slower UI action timer.
+
+Acceptance: CI build and APK asset presence; physical KONKR sound during
+insert, game eject, cancelled insert, long MENU, repeated A/B, Android
+pause/resume, proper volume and no duplicate cues. Not yet physically tested.
