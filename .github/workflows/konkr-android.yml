@@ -3,7 +3,7 @@ name: KONKR Android preview
 on:
   workflow_dispatch:
   push:
-    branches: [feat/android-bootstrap, feat/konkr-ui-feedback, feat/konkr-retroachievements, feat/konkr-integration]
+    branches: [feat/android-bootstrap, feat/konkr-ui-feedback, feat/konkr-retroachievements, feat/konkr-integration, feat/konkr-slot-parity]
     paths:
       - 'android/**'
       - 'crates/slot-android/**'
