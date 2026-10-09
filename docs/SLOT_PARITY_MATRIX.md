@@ -134,3 +134,37 @@ regression, initial empty shelf, transparence, controller-only input, exit
 combo removed, long MENU exit, RA SAF folder access and permissions, SRAM
 round trip RA→Slot→RA, state RASTATE round trip, v1 RZIP decode, v2 zstd
 preservation, Slot history/undo. Do NOT distribute as stable until tested.
+
+## Read-only actual KONKR RetroArch file audit — 2026-10-10
+
+- RetroArch package: com.retroarch.aarch64.
+- Audit enumerates /sdcard/RetroArch/saves and /sdcard/RetroArch/states,
+  plus lowercase /sdcard/retroarch counterparts with apparently identical
+  contents. Check whether both spellings identify the same Android SAF tree
+  rather than assuming two separate stores.
+- Save tree has mGBA and mgba spellings, with matching example files. Do
+  not create duplicate folders; use the observed conventional mGBA name.
+- mGBA .srm examples: 256 B (Mystic Quest GB), 32768 B (Metroid Fusion)
+  and 131072 B (Pokemon GBA). A 48-byte Pokemon Silver .rtc exists: this
+  RTC sidecar still needs explicit synchronization; save parity is incomplete
+  for titles with an independent RTC file.
+- mGBA automatic states end with .state.auto and start with hex
+  23 52 5A 49 50 76 01 23 => #RZIPv1#.
+- RZIP header indicates 131072-byte uncompressed chunk size, followed by
+  64-bit total raw size and per-chunk compressed lengths. The examples
+  show zlib data beginning 78 9c.
+- RetroArchCompression.kt supports bounded v1 zlib decoding and, from
+  commit f590e5f, encodes #RZIPv1# on state export. Existing .state.auto
+  stays backed up before verified writeback. Zstd v2 is still unsupported.
+- A listing and 32-byte headers are NOT enough to confirm actual game-state
+  unserialization. Obtain one intact .state.auto sample for read-only
+  decoding tests before asking the user to share real RetroArch folders
+  with a development APK that can overwrite files.
+- No gpSP saves/states are shown in this audit: nothing gpSP-specific can
+  be claimed validated.
+- ROMs/states created by different core versions can be incompatible even
+  when filesystem and container formats match; recover and show errors.
+- The intended no-folder fallback layout Saves/<core>/name.srm and
+  States/<core>/name.state.auto is not yet fully implemented: current app
+  private fallback still uses URI-digest filenames. Keep this as an open
+  requirement; do not claim completed default-path parity.
