@@ -2,6 +2,7 @@
 //! Android's SAF bridge materializes a **bounded private cache** copy of each selected ROM.
 use slot_retro::{ButtonMask, LibretroCore, RetroCore};
 use slot_store::{atomic_write, Core};
+use crate::retroarch_state;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -11,6 +12,8 @@ pub struct GameSession {
     core: LibretroCore,
     save: PathBuf,
     state: PathBuf,
+    retroarch_export: PathBuf,
+    retroarch_import: PathBuf,
     last_sram: Instant,
     pub sample_rate: i32,
     pub fps: f64,
@@ -27,11 +30,13 @@ impl GameSession {
         let id = rom.file_stem().and_then(|v| v.to_str())
             .filter(|v| !v.is_empty() && v.bytes().all(|c| c.is_ascii_hexdigit()))
             .ok_or_else(|| "Unsafe ROM cache file name".to_owned())?;
-        let save = root.join(format!("{id}.srm"));
+        let save = root.join(format!("{id}.{}.srm", which.as_str()));
         // Save states belong to their specific emulator core. Incompatible
         // mGBA/gpSP states must never be deserialized in the other core.
         // Legacy single-core .state files are still readable by mGBA only.
         let state = root.join(format!("{id}.{}.state", which.as_str()));
+        let retroarch_export = root.join(format!("{id}.{}.retroarch-export.state.auto", which.as_str()));
+        let retroarch_import = root.join(format!("{id}.{}.retroarch-import.state.auto", which.as_str()));
         // mGBA's libretro core looks for gba_bios.bin / gb_bios.bin /
         // gbc_bios.bin in RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY.
         // Keep the user-selected SAF folder external and read-only: Android
@@ -51,20 +56,39 @@ impl GameSession {
             }
         }
         core.load(rom).map_err(|e| e.to_string())?;
-        if let Ok(ram) = std::fs::read(&save) {
+        let ram = std::fs::read(&save).or_else(|err| {
+            if which == Core::Mgba && err.kind() == std::io::ErrorKind::NotFound {
+                // Upgrade existing 0.0.6 single-core test data without loss.
+                std::fs::read(root.join(format!("{id}.srm")))
+            } else {
+                Err(err)
+            }
+        });
+        if let Ok(ram) = ram {
             if let Err(error) = core.load_save_ram(&ram) {
                 eprintln!("slot-konkr: SRAM restore skipped: {error}");
             }
         }
         if resume_state {
-            let bytes = std::fs::read(&state).or_else(|err| {
+            // Prefer a successfully decoded RetroArch auto state, then the
+            // Slot private state. A compressed/unrecognized external file is
+            // kept intact and is NEVER interpreted as raw emulator memory.
+            let external = std::fs::read(&retroarch_import)
+                .ok().and_then(|bytes| match retroarch_state::decode(&bytes) {
+                    Ok(raw) => Some(raw),
+                    Err(error) => {
+                        eprintln!("slot-konkr: external {} savestate skipped: {error}", which.text());
+                        None
+                    }
+                });
+            let local = || std::fs::read(&state).or_else(|err| {
                 if which == Core::Mgba && err.kind() == std::io::ErrorKind::NotFound {
                     std::fs::read(root.join(format!("{id}.state")))
                 } else {
                     Err(err)
                 }
-            });
-            if let Ok(bytes) = bytes {
+            }).ok();
+            if let Some(bytes) = external.or_else(local) {
                 if let Err(error) = core.unserialize(&bytes) {
                     eprintln!("slot-konkr: {} state resume skipped: {error}", which.text());
                 }
@@ -73,7 +97,8 @@ impl GameSession {
         let sample_rate = core.av_info().sample_rate.round() as i32;
         let fps = core.av_info().fps.clamp(30.0, 120.0);
         Ok(Self {
-            core, save, state, last_sram: Instant::now(),
+            core, save, state, retroarch_export, retroarch_import,
+            last_sram: Instant::now(),
             sample_rate: sample_rate.clamp(8_000, 96_000),
             fps,
         })
@@ -109,6 +134,12 @@ impl GameSession {
             if let Ok(data) = self.core.serialize() {
                 if let Err(err) = atomic_write(&self.state, &data) {
                     eprintln!("slot-konkr: state save failed: {err}");
+                }
+                match retroarch_state::encode(&data) {
+                    Ok(container) => if let Err(error) = atomic_write(&self.retroarch_export, &container) {
+                        eprintln!("slot-konkr: RetroArch state export failed: {error}");
+                    },
+                    Err(error) => eprintln!("slot-konkr: RetroArch container error: {error}"),
                 }
             }
         }
