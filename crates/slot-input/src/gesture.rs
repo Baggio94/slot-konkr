@@ -38,6 +38,7 @@ pub enum Action {
     GameMenu,
     MuteToggle,
     ColourCorrectionToggle,
+    PaletteNext,
     ShaderNext,
     ShaderPrev,
     PowerPress,
@@ -415,6 +416,7 @@ fn chord(b: Btn) -> Option<(u16, Action)> {
         Btn::Y => (64, Action::ColourCorrectionToggle),
         Btn::L2 => (128, Action::ShaderPrev),
         Btn::R2 => (256, Action::ShaderNext),
+        Btn::X => (512, Action::PaletteNext),
         _ => return None,
     })
 }

@@ -486,3 +486,19 @@ fn l2_and_r2_on_their_own_still_rewind_and_fast_forward() {
     assert!(!g.feed(Down(R2), 60).contains(&ShaderNext));
     assert!(!g.feed(Up(R2), 90).contains(&ShaderNext));
 }
+
+#[test]
+fn select_and_x_steps_the_palette_and_costs_the_game_nothing() {
+    let mut g = Gestures::new();
+    assert!(g.feed(Down(Select), 0).is_empty());
+    assert_eq!(g.feed(Down(X), 10), vec![PaletteNext]);
+    assert!(g.feed(Up(X), 40).is_empty());
+    assert!(g.feed(Up(Select), 200).is_empty());
+}
+
+#[test]
+fn x_on_its_own_is_untouched_by_the_palette_chord() {
+    let mut g = Gestures::new();
+    assert_eq!(g.feed(Down(X), 0), vec![GbaDown(X)]);
+    assert_eq!(g.feed(Up(X), 40), vec![GbaUp(X)]);
+}
