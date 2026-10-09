@@ -67,6 +67,7 @@ class MainActivity : Activity() {
     external fun nativeAudioSampleRate(): Int
     external fun nativeReadAudio(): ShortArray
     external fun nativePollMessage(): String?
+    external fun nativePollUiAction(): Int
 
     private val scanner = Executors.newSingleThreadExecutor()
     private val gameLoader = Executors.newSingleThreadExecutor()
@@ -83,6 +84,10 @@ class MainActivity : Activity() {
             }
             val request = nativePollLaunchUri()
             if (request != null) loadGameFromSaf(request)
+            when (nativePollUiAction()) {
+                1 -> openRomFolderPicker()
+                2 -> refreshLibrary()
+            }
             nativePollMessage()?.let { message ->
                 Log.e(TAG, message)
                 status.visibility = View.VISIBLE
@@ -183,10 +188,10 @@ class MainActivity : Activity() {
                 }) {
                 scanFolder(uri)
             } else {
-                status.text = "ROM folder permission expired — press START to choose it again"
+                status.text = "ROM folder permission expired — START to choose again"
             }
         } else {
-            status.text = "Press START to select your ROMs folder  •  Demo carts only"
+            status.text = "Press START for Library — select your ROM folder"
         }
     }
 
@@ -195,26 +200,23 @@ class MainActivity : Activity() {
             onBackPressed()
             return true
         }
-        if (!nativeIsPlaying()) {
-            if (keyCode == KeyEvent.KEYCODE_BUTTON_START && event.repeatCount == 0) {
-                openRomFolderPicker()
-                return true
+        // START / SELECT on the shelf are now rendered by Slot itself.
+        // Log any otherwise unrecognized physical key so the KONKR's top-round
+        // key can be mapped from real device evidence, not a guessed keycode.
+        if (keyCode !in BUTTONS) {
+            if (event.repeatCount == 0) {
+                Log.i(TAG, "Unmapped hardware key down: code=" + keyCode +
+                    " name=" + KeyEvent.keyCodeToString(keyCode) +
+                    " device=" + event.deviceId + " scan=" + event.scanCode)
             }
-            if (keyCode == KeyEvent.KEYCODE_BUTTON_SELECT && event.repeatCount == 0) {
-                val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)
-                if (saved != null) scanFolder(Uri.parse(saved)) else openRomFolderPicker()
-                return true
-            }
-            if (keyCode == KeyEvent.KEYCODE_BUTTON_START || keyCode == KeyEvent.KEYCODE_BUTTON_SELECT) return true
+            return super.onKeyDown(keyCode, event)
         }
-        if (keyCode !in BUTTONS) return super.onKeyDown(keyCode, event)
         if (event.repeatCount == 0) nativeKey(keyCode, true)
         return true
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK) return true
-        if (!nativeIsPlaying() && keyCode in setOf(KeyEvent.KEYCODE_BUTTON_START, KeyEvent.KEYCODE_BUTTON_SELECT)) return true
         if (keyCode !in BUTTONS) return super.onKeyUp(keyCode, event)
         nativeKey(keyCode, false)
         return true
@@ -336,6 +338,22 @@ class MainActivity : Activity() {
         audioThread = null
     }
 
+    private fun refreshLibrary() {
+        val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)
+        if (saved == null) {
+            Toast.makeText(this, "Choose a ROM folder first", Toast.LENGTH_SHORT).show()
+            openRomFolderPicker()
+            return
+        }
+        val uri = Uri.parse(saved)
+        if (contentResolver.persistedUriPermissions.none { it.uri == uri && it.isReadPermission }) {
+            Toast.makeText(this, "ROM folder permission expired", Toast.LENGTH_SHORT).show()
+            openRomFolderPicker()
+            return
+        }
+        scanFolder(uri)
+    }
+
     private fun openRomFolderPicker() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             addFlags(
@@ -381,7 +399,7 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
                     if (count < 0) {
-                        status.text = "Library import failed — press SELECT to retry"
+                        status.text = "Library import failed — START to retry"
                     } else if (count == 0) {
                         status.text = "No .gb/.gbc/.gba games found — START choose another folder"
                     } else {
@@ -395,7 +413,7 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     if (!isDestroyed && scanSerial.get() == serial) {
                         status.visibility = View.VISIBLE
-                        status.text = "Cannot read ROM folder — press START to choose again"
+                        status.text = "Cannot read ROM folder — START to choose again"
                     }
                 }
             }
