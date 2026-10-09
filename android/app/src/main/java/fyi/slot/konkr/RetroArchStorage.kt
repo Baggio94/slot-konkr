@@ -69,11 +69,11 @@ internal object RetroArchStorage {
                 // The Rust decoder validates the full RASTATE structure.
                 // Reject RZIP here and leave the previously working private
                 // resume state untouched. Don't overwrite the external file.
-                if (isCompressed(bytes)) {
-                    Log.w(TAG, "RetroArch compressed auto-state preserved; import deferred")
+                try {
+                    stage(target.stateImportLocal, RetroArchCompression.decode(bytes))
+                } catch (error: Exception) {
+                    Log.w(TAG, "RetroArch state not importable; existing private save preserved", error)
                     target.stateImportLocal.delete()
-                } else {
-                    stage(target.stateImportLocal, bytes)
                 }
             } else {
                 target.stateImportLocal.delete()
@@ -123,9 +123,7 @@ internal object RetroArchStorage {
         error("Cannot read ROM filename from Android document provider")
     }
 
-    private fun isCompressed(b: ByteArray): Boolean =
-        b.size >= 4 && b[0] == 'R'.code.toByte() &&
-        b[1] == 'Z'.code.toByte() && b[2] == 'I'.code.toByte() && b[3] == 'P'.code.toByte()
+    private fun isCompressed(b: ByteArray): Boolean = RetroArchCompression.isRzip(b)
 
     private fun ByteArray.startsWithRASTATE(): Boolean =
         size >= 8 && copyOfRange(0, 7).contentEquals("RASTATE".toByteArray()) && this[7] == 1.toByte()
@@ -199,9 +197,12 @@ internal object RetroArchStorage {
             val old = read(context, existing, if (isState) MAX_STATE else MAX_SAVE)
             if (old.contentEquals(bytes)) return
             if (isState && isCompressed(old)) {
-                // Do not replace a compressed RetroArch state until we can
-                // decode and round-trip it, even if Slot made a new raw state.
-                error("Existing compressed RetroArch state preserved")
+                // Only replace a compressed file if the v1 content can be
+                // decoded and verified. v2/zstd remains untouched.
+                val decoded=RetroArchCompression.decode(old)
+                require(decoded.startsWithRASTATE()) {
+                    "Existing RetroArch compressed state preserved"
+                }
             }
             // Never destroy the pre-Slot save on first sync. A backup is
             // retained in a dedicated subdirectory of the same core folder.
