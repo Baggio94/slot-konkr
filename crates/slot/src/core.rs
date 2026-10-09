@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use slot_retro::{LibretroCore, MockCore, RetroCore};
-use slot_store::{Core, GbPalette};
+use slot_store::{Core, GbPalette, Platform};
 
 use crate::root;
 
@@ -117,6 +117,15 @@ fn open_named(
         }
     }
     None
+}
+
+pub fn palette_for(
+    chosen: Option<GbPalette>,
+    platform: Platform,
+    rom: &Path,
+    link: Option<u8>,
+) -> Option<GbPalette> {
+    chosen.filter(|_| link.is_none() && platform != Platform::Gba && dmg_only(rom))
 }
 
 pub fn dmg_only(rom: &Path) -> bool {

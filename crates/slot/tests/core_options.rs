@@ -211,3 +211,27 @@ fn only_a_cart_without_the_colour_flag_is_game_boy_only() {
     assert!(!slot::core::dmg_only(&rom("cgb.gbc", 0xC0)));
     assert!(!slot::core::dmg_only(&d.path().join("missing.gb")));
 }
+
+#[test]
+fn a_linked_game_never_takes_a_named_palette() {
+    let d = tempfile::tempdir().unwrap();
+    let mut bytes = vec![0u8; 0x8000];
+    bytes[0x146] = 0x03;
+    let rom = d.path().join("sgb.gb");
+    std::fs::write(&rom, bytes).unwrap();
+    let p = slot_store::GbPalette::DEFAULT;
+    let gb = slot_store::Platform::Gb;
+    assert_eq!(slot::core::palette_for(Some(p), gb, &rom, None), Some(p));
+    for player in [0, 1] {
+        assert_eq!(
+            slot::core::palette_for(Some(p), gb, &rom, Some(player)),
+            None,
+            "player {player}: a linked pair would run two models of one cart"
+        );
+    }
+    assert_eq!(slot::core::palette_for(None, gb, &rom, None), None);
+    assert_eq!(
+        slot::core::palette_for(Some(p), slot_store::Platform::Gba, &rom, None),
+        None
+    );
+}

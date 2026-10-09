@@ -419,12 +419,9 @@ impl Session {
         let resume = (!self.app.starting_clean())
             .then(|| persist::read_resume(&self.root, platform, core, stem))
             .flatten();
-        let palette = self
-            .app
-            .gb_palette()
-            .filter(|_| platform != Platform::Gba && crate::core::dmg_only(&rom));
-        self.app.set_palette_live(palette.is_some());
         let player = self.app.link_player();
+        let palette = crate::core::palette_for(self.app.gb_palette(), platform, &rom, player);
+        self.app.set_palette_live(palette.is_some());
         let opened = open_core(
             &self.root,
             core,
