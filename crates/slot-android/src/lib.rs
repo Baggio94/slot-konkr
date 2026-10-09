@@ -2,6 +2,7 @@
 //!
 //! Stage M1: display-only preview carts, not executable games.
 mod library;
+mod core_selection;
 mod core_legend;
 #[cfg(target_os = "android")]
 mod game;
