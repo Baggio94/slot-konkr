@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased](https://github.com/BrandonKowalski/slot/compare/v1.4.0...main)
+## [1.5.0](https://github.com/BrandonKowalski/slot/releases/tag/v1.5.0)
 
 - Rumble regression fixed.
 - The boot logo is built to the size of the one BaseOS installed, so it fits every panel instead of only 720x480.
