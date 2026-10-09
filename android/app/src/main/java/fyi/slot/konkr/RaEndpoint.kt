@@ -27,7 +27,8 @@ internal object RaEndpoint {
       ?: Route.ProxyUnavailable
   }
   /** Call only from a worker thread. The status API requires no control permission. */
-  fun discover(context: Context): Status? = try {
+  fun discover(context: Context): Status? {
+    return try {
     val r = context.contentResolver
     val listener = r.query(uri, null, null, null, null)?.use { c ->
       if (!c.moveToFirst()) return@use null
@@ -42,5 +43,6 @@ internal object RaEndpoint {
     Status(listener.running, listener.host, listener.port,
       if (json != null && json.has("online")) json.optBoolean("online") else null,
       json?.optJSONObject("pendingAwards")?.optInt("count"))
-  } catch (_: Exception) { null }
+    } catch (_: Exception) { null }
+  }
 }

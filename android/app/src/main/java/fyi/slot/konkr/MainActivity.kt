@@ -196,6 +196,22 @@ class MainActivity : Activity() {
             return true
         }
         if (!nativeIsPlaying()) {
+            if (keyCode == KeyEvent.KEYCODE_BUTTON_X && event.repeatCount == 0) {
+                scanner.execute {
+                    val proxy = RaEndpoint.discover(this)
+                    val message = when {
+                        proxy == null -> "RAOfflineProxy unavailable"
+                        !proxy.running -> "RAOfflineProxy stopped"
+                        proxy.base() == null -> "RAOfflineProxy address invalid"
+                        else -> "RAOfflineProxy :" + proxy.port +
+                            " online=" + proxy.online + " pending=" + (proxy.pendingAwards ?: "?")
+                    }
+                    runOnUiThread {
+                        if (!isDestroyed) Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+                    }
+                }
+                return true
+            }
             if (keyCode == KeyEvent.KEYCODE_BUTTON_START && event.repeatCount == 0) {
                 openRomFolderPicker()
                 return true
@@ -214,6 +230,7 @@ class MainActivity : Activity() {
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK) return true
+        if (!nativeIsPlaying() && keyCode == KeyEvent.KEYCODE_BUTTON_X) return true
         if (!nativeIsPlaying() && keyCode in setOf(KeyEvent.KEYCODE_BUTTON_START, KeyEvent.KEYCODE_BUTTON_SELECT)) return true
         if (keyCode !in BUTTONS) return super.onKeyUp(keyCode, event)
         nativeKey(keyCode, false)

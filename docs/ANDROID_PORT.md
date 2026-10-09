@@ -115,3 +115,22 @@ Controller-only exit: press **START + SELECT** together during gameplay to save
 and return to the original Slot cart shelf. Android BACK also exits. Touchscreen
 taps hold game input across multiple emulated frames instead of getting lost in a
 single JNI queue flush.
+
+
+## RetroAchievements development — separate branch
+
+Branch: feat/konkr-retroachievements (0.0.3-dev1 base, not a RA release).
+Press X while on the shelf for a read-only RAOfflineProxy diagnostic: installed,
+listening port, online status, pending awards. No credentials are transmitted,
+no achievements are claimed, and RAOfflineProxy is never started/stopped.
+Android network security permits cleartext only for 127.0.0.1; direct mode
+will use official RetroAchievements HTTPS once actual achievements are integrated.
+Proxy mode must never automatically fall back to direct (avoid losing offline caching).
+A game must use precisely one achievement queue. GBA support in the pvaibhav
+fork does NOT establish GB/GBC support.
+
+CAUTION: CI debug APKs are signed with temporary keys. Save SRAM and states
+before uninstall: `bash scripts/backup-konkr-saves.sh` exports files/Saves
+from the debuggable installed package as a verified local TAR. The script does
+not modify app data or ROMs. Set up a durable release signing key before shipping
+upgradable production APKs; never check it into a public GitHub repository.
