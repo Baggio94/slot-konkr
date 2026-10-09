@@ -6,8 +6,9 @@ use slot_input::{Action, Btn, MUTE_CHORD_MS};
 use slot_power::{Battery, Charge, LedState, LidPolicy, Power};
 use slot_retro::LinkChannel;
 use slot_store::{
-    format_stamp, read_slot_state, scan, write_slot_state, Cart, Core, Platform, Shader, SlotState,
-    StateEntry, StateRing, Theme, BLUE_LIGHT_MAX, BRIGHTNESS_MAX, FF_SPEEDS, RING_MAX, VOLUME_MAX,
+    format_stamp, read_slot_state, scan, write_slot_state, Cart, Core, GbPalette, Platform, Shader,
+    SlotState, StateEntry, StateRing, Theme, BLUE_LIGHT_MAX, BRIGHTNESS_MAX, FF_SPEEDS, RING_MAX,
+    VOLUME_MAX,
 };
 use slot_ui::{
     board_from, board_zoom, draw_backdrop, draw_empty_slot, draw_footer, draw_slot_name,
@@ -298,6 +299,8 @@ pub struct App {
     snapshot: Option<Box<dyn Snapshot>>,
     core: Core,
     colour_pending: Option<bool>,
+    palette_live: bool,
+    palette_pending: Option<GbPalette>,
     link_player: Option<u8>,
     platform: Platform,
     named_core: bool,
@@ -414,6 +417,8 @@ impl App {
             snapshot: None,
             core: Core::default(),
             colour_pending: None,
+            palette_live: false,
+            palette_pending: None,
             link_player: None,
             platform: Platform::default(),
             named_core: false,
@@ -1091,6 +1096,22 @@ impl App {
         self.colour_pending.take()
     }
 
+    pub fn gb_palette(&self) -> Option<GbPalette> {
+        self.state.gb_palettes.then_some(self.state.gb_palette)
+    }
+
+    pub fn set_palette_live(&mut self, live: bool) {
+        self.palette_live = live;
+    }
+
+    pub fn palette_live(&self) -> bool {
+        self.palette_live
+    }
+
+    pub fn take_gb_palette(&mut self) -> Option<GbPalette> {
+        self.palette_pending.take()
+    }
+
     pub fn core(&self) -> Core {
         self.core
     }
@@ -1391,6 +1412,16 @@ impl App {
         }
         if let Action::ShaderNext | Action::ShaderPrev = action {
             self.step_shader(action == Action::ShaderNext);
+            return true;
+        }
+        if action == Action::PaletteNext {
+            if self.palette_live && matches!(self.phase, Phase::Playing { .. }) {
+                let to = self.state.gb_palette.next();
+                self.state.gb_palette = to;
+                self.palette_pending = Some(to);
+                self.persist();
+                self.hud.toast(Toast::Palette(to), self.now());
+            }
             return true;
         }
         if action == Action::ColourCorrectionToggle {

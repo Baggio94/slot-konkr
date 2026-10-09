@@ -222,6 +222,11 @@ impl Session {
                 None => eprintln!("slot: link: a transport arrived with no core to run it"),
             }
         }
+        if let Some(p) = self.app.take_gb_palette() {
+            if let Some(emu) = &self.emu {
+                emu.set_option("mgba_gb_colors", p.core_name());
+            }
+        }
         if let Some(on) = self.app.take_colour_correction() {
             if let Some((key, value)) = crate::core::colour_option(self.app.core(), on) {
                 if let Some(emu) = &self.emu {
@@ -381,7 +386,14 @@ impl Session {
         }
         match self.emu.as_ref().map(EmuHandle::state) {
             Some(CoreState::Loading) => {}
-            Some(CoreState::Ready) => self.app.on_core_ready(),
+            Some(CoreState::Ready) => {
+                if let (true, Some(p), Some(emu)) =
+                    (self.app.palette_live(), self.app.gb_palette(), &self.emu)
+                {
+                    emu.set_option("mgba_gb_colors", p.core_name());
+                }
+                self.app.on_core_ready()
+            }
             Some(CoreState::Failed) | None => {
                 self.emu = None;
                 self.app.on_core_failed();
@@ -407,13 +419,18 @@ impl Session {
         let resume = (!self.app.starting_clean())
             .then(|| persist::read_resume(&self.root, platform, core, stem))
             .flatten();
+        let palette = self
+            .app
+            .gb_palette()
+            .filter(|_| platform != Platform::Gba && crate::core::dmg_only(&rom));
+        self.app.set_palette_live(palette.is_some());
         let player = self.app.link_player();
         let opened = open_core(
             &self.root,
             core,
             serial,
             self.app.colour_correction(),
-            None,
+            palette,
             player,
         );
         self.app.set_named_core(opened.named);
