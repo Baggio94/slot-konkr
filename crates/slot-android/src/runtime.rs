@@ -50,7 +50,7 @@ enum Input {
     Key(i32, bool),
     Reset,
     GameReady { uri: String, path: String },
-    GameError(String),
+    GameError { uri: String, message: String },
     Exit,
     Suspend,
 }
@@ -200,9 +200,13 @@ impl Engine {
                 self.seated_frame_seen = false;
                 *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = None;
             }
-            Input::GameError(error) => {
-                if !self.inserted { return; }
-                set_message(format!("Cannot open game: {error}"));
+            Input::GameError { uri, message } => {
+                if !self.inserted || !self.awaiting_game
+                    || self.requested_uri.as_deref() != Some(uri.as_str())
+                {
+                    return;
+                }
+                set_message(format!("Cannot open game: {message}"));
                 self.awaiting_game = false;
                 self.inserted = false;
                 self.requested_uri = None;
@@ -431,15 +435,8 @@ impl Engine {
 /// Return the current shelf if it is the only populated one, and never
 /// select an empty GB/GBC/GBA shelf. Safe even if all libraries are empty.
 fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
-    let n = shelves.len();
-    if n == 0 || current >= n { return current; }
-    for step in 1..=n {
-        let candidate = (current as i32 + delta * step as i32).rem_euclid(n as i32) as usize;
-        if !shelves[candidate].carts.is_empty() {
-            return candidate;
-        }
-    }
-    current
+    let counts: Vec<usize> = shelves.iter().map(|s| s.carts.len()).collect();
+    crate::library::next_populated(current, delta, &counts)
 }
 
 #[cfg(test)]
@@ -608,10 +605,13 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeGameReady(
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeGameError(
-    mut env: JNIEnv<'_>, _this: JObject<'_>, message: JString<'_>,
+    mut env: JNIEnv<'_>, _this: JObject<'_>, uri: JString<'_>, message: JString<'_>,
 ) {
-    if let Ok(message) = env.get_string(&message) {
-        push(Input::GameError(message.to_string_lossy().into_owned()));
+    if let (Ok(uri), Ok(message)) = (env.get_string(&uri), env.get_string(&message)) {
+        push(Input::GameError {
+            uri: uri.to_string_lossy().into_owned(),
+            message: message.to_string_lossy().into_owned(),
+        });
     }
 }
 

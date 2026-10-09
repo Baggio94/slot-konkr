@@ -30,6 +30,18 @@ pub static LIBRARY: Mutex<LibraryState> = Mutex::new(LibraryState {
     entries: None,
 });
 
+/// Select the next shelf with games in the given direction, skipping empty
+/// GB/GBC/GBA systems. Returns the current shelf if no alternative exists.
+pub fn next_populated(current: usize, direction: i32, count: &[usize]) -> usize {
+    let n = count.len();
+    if n == 0 || current >= n { return current; }
+    for step in 1..=n {
+        let i = (current as i32 + direction * step as i32).rem_euclid(n as i32) as usize;
+        if count[i] != 0 { return i; }
+    }
+    current
+}
+
 pub fn carts_by_platform(entries: &[RomEntry]) -> [Vec<Cart>; 3] {
     let mut groups: [Vec<Cart>; 3] = std::array::from_fn(|_| Vec::new());
     for entry in entries.iter().take(MAX_ROMS) {
@@ -95,6 +107,17 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetLibrary(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shelf_navigation_skips_empty_platforms() {
+        assert_eq!(next_populated(0, 1, &[]), 0);
+        assert_eq!(next_populated(0, 1, &[2, 0, 0]), 0);
+        assert_eq!(next_populated(0, -1, &[2, 0, 0]), 0);
+        assert_eq!(next_populated(0, 1, &[2, 0, 3]), 2);
+        assert_eq!(next_populated(0, -1, &[2, 0, 3]), 2);
+        assert_eq!(next_populated(2, 1, &[2, 0, 3]), 0);
+        assert_eq!(next_populated(0, 1, &[0, 0, 0]), 0);
+    }
+
     #[test]
     fn sorts_and_rejects_non_saf_entries() {
         let example = |platform: &str, title: &str, uri: &str| RomEntry {

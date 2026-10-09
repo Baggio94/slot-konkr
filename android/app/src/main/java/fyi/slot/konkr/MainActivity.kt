@@ -60,7 +60,7 @@ class MainActivity : Activity() {
     external fun nativeConfigure(dataDir: String, libraryDir: String)
     external fun nativePollLaunchUri(): String?
     external fun nativeGameReady(uri: String, path: String)
-    external fun nativeGameError(message: String)
+    external fun nativeGameError(uri: String, message: String)
     external fun nativeExitGame()
     external fun nativeSuspend()
     external fun nativeIsPlaying(): Boolean
@@ -232,7 +232,7 @@ class MainActivity : Activity() {
 
     private fun loadGameFromSaf(rawUri: String) {
         val uri = try { Uri.parse(rawUri) } catch (_: Exception) {
-            nativeGameError("Invalid ROM URI")
+            nativeGameError(rawUri, "Invalid ROM URI")
             return
         }
         gameLoader.execute {
@@ -273,7 +273,7 @@ class MainActivity : Activity() {
                 nativeGameReady(rawUri, target.absolutePath)
             } catch (error: Exception) {
                 Log.e(TAG, "Could not prepare ROM", error)
-                nativeGameError(error.message ?: "Cannot open ROM")
+                nativeGameError(rawUri, error.message ?: "Cannot open ROM")
             }
         }
     }

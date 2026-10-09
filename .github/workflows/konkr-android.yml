@@ -48,6 +48,8 @@ jobs:
           gradle-version: '8.7'
       - name: Test KONKR 3:2 scaling
         run: cargo test -p slot-gfx --no-default-features --test konkr
+      - name: Test Android library and shelf selection
+        run: cargo test -p slot-android --lib
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
       - name: Build mGBA arm64 libretro core
