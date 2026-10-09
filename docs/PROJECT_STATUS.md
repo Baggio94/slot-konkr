@@ -1,5 +1,12 @@
 # Slot KONKR — project status and integration roadmap
 
+> **CURRENT PRIORITY (2026-10-10): Original Slot parity, NOT RetroAchievements.**
+> The user has explicitly paused RA and automatic scraping until we reproduce
+> the original Slot features. Work from branch feat/konkr-slot-parity.
+> See [the parity matrix](SLOT_PARITY_MATRIX.md). Existing RA discovery
+> remains read-only and unchanged.
+
+
 Last checked: 2026-10-09. Source of truth: GitHub branches and physical KONKR results, **not** declarations that a feature will work. Update this file as each test gate is completed.
 
 ## Product scope / immutable constraints
@@ -168,3 +175,14 @@ missing in the queried provider JSON. Changed to `Pending awards: not reported`.
 This is not the same as zero pending awards; the proxy is otherwise reachable
 and online. RetroAchievements evaluation/unlocking remains unimplemented.
 Physical 0.0.5-dev2 display acceptance remains pending.
+
+
+## 0.0.6-dev1 BIOS parity checkpoint
+
+The LIBRARY menu now includes Choose BIOS Folder between ROM and Save folders.
+Android SAF imports only recognized, size-checked user-owned GB/GBC/GBA boot
+ROMs to the app-private libretro system directory, not into /ROMs. The mGBA
+BIOS loading options are enabled for a real boot intro. Other original Slot
+features are tracked in [SLOT_PARITY_MATRIX.md](SLOT_PARITY_MATRIX.md).
+RA/rcheevos work is paused at user request. This build is **not physically
+validated** until tested on KONKR.

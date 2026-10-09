@@ -139,3 +139,18 @@ The `feat/konkr-integration` branch contains all the validated 0.0.4-dev2 UI wor
 Navigate START > Menu > RetroAchievements > A to check proxy status. It does NOT authenticate to RA, award achievements, change proxy configuration, or select a transport yet. The app will later support OFF, DIRECT and PROXY modes. In PROXY mode, RAOfflineProxy will be the sole owner of queued offline Softcore awards. No direct fallback if local proxy is unavailable.
 
 The `X` diagnostic from the original RA exploratory branch is intentionally moved into the RetroAchievements submenu to avoid conflicting with controller conventions. Upstream `core_picker.rs` animation and frame-based rcheevos evaluation are separate follow-on milestones.
+
+
+## Slot original parity — BIOS selection (0.0.6-dev1)
+
+START > Menu > Library > Choose BIOS Folder opens an Android SAF directory
+picker. We persist the read permission, validate files, and stage up to three
+user-owned boot ROMs under private filesDir/BIOS: gba_bios.bin (16384 bytes,
+first byte 0x18), gbc_bios.bin (2304 bytes), gb_bios.bin (256 bytes).
+Only the selected read-only SAF folder is accessed, never mutated; no BIOS
+binary is bundled in the APK. mGBA now sees that private directory as the
+libretro system folder and uses mgba_use_bios=ON, mgba_skip_bios=OFF.
+Import runs on the same worker as ROM copy, so a restart must stage BIOS
+before first core load. Valid BIOS apply on the next game boot.
+Save and Save State folder choosers remain disabled until their underlying
+Android file writes are fully implemented. RetroAchievements is on hold.
