@@ -24,7 +24,7 @@ use slot_ui::{
     CHIP_U, CHIP_V, CHIP_W, CHIP_H, HOP_LIFT, TURN_PAD, SHADOW_W, SHADOW_H,
     CART_W, hint_face, arrows_hint_face, title_face, photo_face, Polaroids, Printed, HINT_H, HINT_EDGE,
     draw_footer, draw_slot_name, word_face, icon_face, Icon, BOLT_PX, HUD_INK,
-    Hud, Toast, toast_face, QUICK_PITCH, opening, edge, centred_hints, LEGEND_GAP,
+    Hud, HudKind, FfState, Toast, toast_face, QUICK_PITCH, opening, edge, centred_hints, LEGEND_GAP,
 };
 
 // Android GLSurfaceView owns EGL context creation, current context and buffer swaps.
@@ -83,6 +83,9 @@ const EJECT_SOUND_PROGRESS: f32 = 1.0 - (0.350 / 0.450);
 const SCREEN_POWER_ON_S: f32 = 0.22;
 const SCREEN_POWER_OFF_S: f32 = 0.16;
 const EJECT_S: f32 = 0.45;
+const REWIND_STEP_S: f32 = 0.10;  // Original Slot's time-travel HUD + ~10 Hz restoration.
+const FF_FACTOR: f64 = 2.0;
+const FF_DOUBLE_TAP_MS: u128 = 320;
 static MESSAGE: Mutex<Option<String>> = Mutex::new(None);
 static PATHS: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
 static AUDIO: Mutex<VecDeque<i16>> = Mutex::new(VecDeque::new());
@@ -176,6 +179,11 @@ struct Engine {
     game: Option<GameSession>,
     pending_game: Option<GameSession>,
     buttons: u16,
+    ff_held: bool,
+    ff_latched: bool,
+    ff_last_release: Option<Instant>,
+    rewind_held: bool,
+    rewind_accum: f32,
     awaiting_game: bool,
     requested_uri: Option<String>,
     prepared_rom: Option<String>,
@@ -294,6 +302,13 @@ impl Engine {
             gpu.create_texture(face.w, face.h, &face.rgba)
         }).collect();
         hud.set_toasts(toasts);
+        // The upstream glyph subset is already packaged. Enable its exact
+        // fast-forward badge and rewind progress icon in the Android HUD.
+        let icons = Icon::ALL.into_iter().map(|icon| {
+            let face = icon_face(icon, slot_ui::HUD_ICON_PX, HUD_INK);
+            gpu.create_texture(face.w, face.h, &face.rgba)
+        }).collect();
+        hud.set_icons(icons);
         let bolt = icon_face(Icon::Charging, BOLT_PX, HUD_INK);
         let bolt_texture = gpu.create_texture(bolt.w, bolt.h, &bolt.rgba);
 
@@ -317,6 +332,11 @@ impl Engine {
             game: None,
             pending_game: None,
             buttons: 0,
+            ff_held: false,
+            ff_latched: false,
+            ff_last_release: None,
+            rewind_held: false,
+            rewind_accum: 0.0,
             awaiting_game: false,
             requested_uri: None,
             prepared_rom: None,
@@ -389,9 +409,21 @@ impl Engine {
         }
     }
 
+    fn reset_time_controls(&mut self) {
+        self.ff_held = false;
+        self.ff_latched = false;
+        self.ff_last_release = None;
+        self.rewind_held = false;
+        self.rewind_accum = 0.0;
+        self.game_accum = 0.0;
+        self.hud.set_ff(FfState::Off);
+        self.hud.release_rewind();
+    }
+
     fn handle(&mut self, input: Input) {
         match input {
             Input::Reset => {
+                self.reset_time_controls();
                 self.buttons = 0;
                 self.mode_down_at = None;
                 self.mode_last_tap = None;
@@ -419,6 +451,7 @@ impl Engine {
                 AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
             }
             Input::Exit => {
+                self.reset_time_controls();
                 self.pending_game = None;
                 // Preserve the final video texture for the original 160ms CRT
                 // power-off before the mechanical 450ms cartridge ejection.
@@ -496,6 +529,7 @@ impl Engine {
                             self.buttons=0;
                             self.game_accum=0.0;
                             AUDIO.lock().unwrap_or_else(|e|e.into_inner()).clear();
+                            self.reset_time_controls();
                             if is_double {
                                 self.open_polaroids();
                             } else {
@@ -585,6 +619,53 @@ impl Engine {
                     return;
                 }
                 if self.game.is_some() {
+                    // Upstream Slot gamepad mapping: R2 fast forward (hold or
+                    // double tap to latch), L2 rewind. Handle these BEFORE
+                    // libretro, so trigger presses never reach a game.
+                    if code == 104 {
+                        if pressed {
+                            self.rewind_held = true;
+                            self.rewind_accum = 0.0;
+                            self.ff_held = false;
+                            self.ff_latched = false;
+                            self.ff_last_release = None;
+                            self.hud.set_ff(FfState::Off);
+                            AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+                        } else {
+                            self.rewind_held = false;
+                            self.rewind_accum = 0.0;
+                            self.game_accum = 0.0;
+                            self.hud.release_rewind();
+                            AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+                        }
+                        return;
+                    }
+                    if code == 105 {
+                        if pressed {
+                            if self.ff_latched {
+                                self.ff_latched = false;
+                                self.ff_held = false;
+                                self.ff_last_release = None;
+                            } else {
+                                let double = self.ff_last_release.take().is_some_and(
+                                    |at| at.elapsed().as_millis() <= FF_DOUBLE_TAP_MS);
+                                self.ff_latched = double;
+                                self.ff_held = true;
+                            }
+                            self.rewind_held = false;
+                            self.hud.release_rewind();
+                            AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+                        } else if self.ff_held {
+                            self.ff_held = false;
+                            self.ff_last_release = Some(Instant::now());
+                        }
+                        self.hud.set_ff(match (self.ff_latched, self.ff_held) {
+                            (true, _) => FfState::Latched,
+                            (false, true) => FfState::Held,
+                            (false, false) => FfState::Off,
+                        });
+                        return;
+                    }
                     // Restore upstream SELECT+R1/L1 save/load shortcuts.
                     if pressed && self.buttons & ButtonMask::SELECT != 0 {
                         if code == 103 {
