@@ -308,7 +308,20 @@ fn sticker_face_custom(f: &StickerFields, credits: &[&str; 10],
 
     let mut ry = panel_y as f32 + panel_h as f32 + 10.0;
     let right_edge = (panel_x + panel_w) as f32;
-    if let Some(mark) = wordmark(WORDMARK_W) {
+    if model == "MODEL NO. KONKR ADV" {
+        // Dedicated KONKR device signature. Keep the original Slot sticker's
+        // white-on-charcoal label, Code39 barcode and small edition credits.
+        // Draw the wordmark from the existing embedded Open Sans font so it
+        // is resolution-independent and never depends on a third-party logo.
+        let word = "KONKR";
+        let word_px = 27.0;
+        let word_w = c.print_measure(word, word_px);
+        ry = c.print(right_edge - word_w - 10.0, ry, word, word_px, WHITE);
+        let edition = "POCKET ADVANCE";
+        let edition_w = c.print_measure(edition, 10.0);
+        ry = c.print(right_edge - edition_w - 10.0, ry - 5.0, edition, 10.0, WHITE);
+    } else if let Some(mark) = wordmark(WORDMARK_W) {
+        // Preserve the actual ANBERNIC original artwork for upstream Slot.
         let (mw, mh) = mark.1;
         c.blit(
             (right_edge - mw as f32 - 10.0) as u32,
