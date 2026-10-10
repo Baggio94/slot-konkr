@@ -1,0 +1,80 @@
+name: KONKR Cart Studio upstream WASM
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/konkr-dev26-cart-studio-foundation]
+    paths:
+      - 'third_party/slot-cart-studio/**'
+      - '.github/workflows/konkr-studio-wasm.yml'
+
+jobs:
+  official-studio-wasm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout KONKR (contains the pinned, unmodified Studio)
+        uses: actions/checkout@v4
+        with:
+          path: source
+
+      - name: Check out the exact upstream Slot commit pinned by Studio
+        uses: actions/checkout@v4
+        with:
+          repository: BrandonKowalski/slot
+          ref: 3b907510201c70e579aff7d9205056d18dd0618d
+          path: slot
+
+      - name: Set up official Studio beside its matching Slot sources
+        run: |
+          set -euo pipefail
+          cp -a source/third_party/slot-cart-studio slot-cart-studio
+          expected="$(tr -d '\r\n' < slot-cart-studio/slot.ref)"
+          actual="$(git -C slot rev-parse HEAD)"
+          test "$expected" = "$actual" || {
+            echo "Wrong upstream Slot revision: expected $expected, got $actual"
+            exit 1
+          }
+          test -f slot-cart-studio/LICENSE
+
+      - name: Test unmodified official Studio JavaScript components
+        working-directory: slot-cart-studio/web
+        run: node --test *.test.mjs
+
+      - name: Install original Rust 1.96 WASM toolchain
+        run: rustup toolchain install 1.96 --profile minimal --target wasm32-unknown-unknown
+
+      - name: Install upstream wasm-pack 0.15.0
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-x86_64-unknown-linux-musl.tar.gz \
+            | tar -xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/wasm-pack-v0.15.0-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
+
+      - name: Compile the pinned original Cart Studio renderer
+        working-directory: slot-cart-studio
+        run: wasm-pack build --release --target web --no-typescript --out-dir web/pkg
+
+      - name: Verify offline UI and built WASM entrypoints
+        run: |
+          set -euo pipefail
+          test -s slot-cart-studio/web/pkg/slot_cart_studio_bg.wasm
+          test -s slot-cart-studio/web/pkg/slot_cart_studio.js
+          test -s slot-cart-studio/web/studio.js
+          test -s slot-cart-studio/web/index.html
+          test -s slot-cart-studio/web/studio.css
+          test -s slot-cart-studio/LICENSE
+          echo "Built the original Studio WASM and preserved the original editor."
+
+      - name: Archive pinned original UI and WASM for KONKR integration
+        uses: actions/upload-artifact@v4
+        with:
+          name: slot-konkr-original-cart-studio-wasm
+          path: |
+            slot-cart-studio/web/**
+            slot-cart-studio/LICENSE
+            slot-cart-studio/slot.ref
+          retention-days: 14
+          if-no-files-found: error
