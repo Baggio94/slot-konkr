@@ -643,6 +643,28 @@ impl RetroCore for LibretroCore {
         Ok(())
     }
 
+    fn save_rtc(&self) -> Option<Vec<u8>> {
+        let data = unsafe { (self.api.get_memory_data)(MEMORY_RTC) };
+        let len = unsafe { (self.api.get_memory_size)(MEMORY_RTC) };
+        if data.is_null() || len == 0 || len > 4096 { return None; }
+        Some(unsafe { std::slice::from_raw_parts(data as *const u8, len) }.to_vec())
+    }
+
+    fn load_rtc(&mut self, data: &[u8]) -> Result<(), CoreError> {
+        let dst = unsafe { (self.api.get_memory_data)(MEMORY_RTC) };
+        let len = unsafe { (self.api.get_memory_size)(MEMORY_RTC) };
+        if dst.is_null() || len == 0 {
+            return Err(CoreError::Unsupported("core exposes no RTC".into()));
+        }
+        if len != data.len() || len > 4096 {
+            return Err(CoreError::State(format!(
+                "RTC length mismatch: core expects {len}, file has {}", data.len()
+            )));
+        }
+        unsafe { ptr::copy_nonoverlapping(data.as_ptr(), dst as *mut u8, len) };
+        Ok(())
+    }
+
     fn av_info(&self) -> AvInfo {
         self.av
     }
