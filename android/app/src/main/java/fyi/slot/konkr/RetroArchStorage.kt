@@ -125,8 +125,6 @@ internal object RetroArchStorage {
         error("Cannot read ROM filename from Android document provider")
     }
 
-    private fun isCompressed(b: ByteArray): Boolean = RetroArchCompression.isRzip(b)
-
     private fun ByteArray.startsWithRASTATE(): Boolean =
         size >= 8 && copyOfRange(0, 7).contentEquals("RASTATE".toByteArray()) && this[7] == 1.toByte()
 
@@ -198,13 +196,10 @@ internal object RetroArchStorage {
         if (existing != null) {
             val old = read(context, existing, if (isState) MAX_STATE else MAX_SAVE)
             if (old.contentEquals(bytes)) return
-            if (isState && isCompressed(old)) {
-                // Only replace a compressed file if the v1 content can be
-                // decoded and verified. v2/zstd remains untouched.
-                val decoded=RetroArchCompression.decode(old)
-                require(decoded.startsWithRASTATE()) {
-                    "Existing RetroArch compressed state preserved"
-                }
+            if (isState) {
+                // Never overwrite unsupported or damaged RetroArch states,
+                // including zstd v2 and legacy raw files we cannot validate.
+                RetroArchCompression.requireSupportedContainer(old)
             }
             // Never destroy the pre-Slot save on first sync. A backup is
             // retained in a dedicated subdirectory of the same core folder.
@@ -216,6 +211,16 @@ internal object RetroArchStorage {
                     ?: error("Cannot back up existing RetroArch file")
                 resolver.openOutputStream(backup, "wt")?.use { it.write(old) }
                     ?: error("Cannot write RetroArch backup")
+                check(read(context, backup, if (isState) MAX_STATE else MAX_SAVE)
+                    .contentEquals(old)) {
+                    "RetroArch backup verification failed; external state preserved"
+                }
+            }
+            // Best-effort conflict guard: abort if a sync service or RetroArch
+            // modified the source while we were preparing the replacement.
+            check(read(context, existing, if (isState) MAX_STATE else MAX_SAVE)
+                .contentEquals(old)) {
+                "RetroArch file changed during sync; refusing to overwrite"
             }
         }
         val target = existing ?: DocumentsContract.createDocument(resolver, folder,
