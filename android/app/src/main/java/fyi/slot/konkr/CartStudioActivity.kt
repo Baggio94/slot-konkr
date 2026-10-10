@@ -117,14 +117,21 @@ class CartStudioActivity : Activity() {
         }
         w.isFocusableInTouchMode = true
         w.addJavascriptInterface(bridge, "AndroidStudio")
+        val officialArt = CartStudioArtProxy(this)
         w.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(
                 view: WebView?, request: WebResourceRequest?
             ): WebResourceResponse? {
                 val url = request?.url ?: return null
-                if (url.scheme != "https" || url.host != "appassets.androidplatform.net" ||
+                if (request.method != "GET" || url.scheme != "https" ||
+                    url.host != "appassets.androidplatform.net" ||
                     !url.path.orEmpty().startsWith("/studio/")) return null
                 val path = url.path.orEmpty().removePrefix("/studio/")
+                // Native same-origin fetch avoids CORS restrictions from the
+                // official art CDN when the Studio runs under appassets.
+                if (path.startsWith("art/")) {
+                    return officialArt.intercept(path.removePrefix("art/"))
+                }
                 val safe = Regex("[a-zA-Z0-9_.\\-/]+").matches(path) &&
                     !path.split('/').contains("..") && !path.startsWith("/")
                 if (!safe) return missing()
