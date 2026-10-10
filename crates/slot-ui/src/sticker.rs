@@ -8,6 +8,10 @@ use crate::text;
 const STICKER_SVG: &str = include_str!("../assets/sticker.svg");
 
 const WORDMARK_SVG: &str = include_str!("../assets/wordmark.svg");
+// Scalable artwork traced from the KONKR and Pocket Advance branding
+// supplied specifically for this Android device, not substitute type.
+const KONKR_SVG: &str = include_str!("../assets/konkr-logo.svg");
+const POCKET_ADVANCE_SVG: &str = include_str!("../assets/pocket-advance-logo.svg");
 
 const WORDMARK_W: u32 = 250;
 
@@ -309,17 +313,19 @@ fn sticker_face_custom(f: &StickerFields, credits: &[&str; 10],
     let mut ry = panel_y as f32 + panel_h as f32 + 10.0;
     let right_edge = (panel_x + panel_w) as f32;
     if model == "MODEL NO. KONKR ADV" {
-        // Dedicated KONKR device signature. Keep the original Slot sticker's
-        // white-on-charcoal label, Code39 barcode and small edition credits.
-        // Draw the wordmark from the existing embedded Open Sans font so it
-        // is resolution-independent and never depends on a third-party logo.
-        let word = "KONKR";
-        let word_px = 27.0;
-        let word_w = c.print_measure(word, word_px);
-        ry = c.print(right_edge - word_w - 10.0, ry, word, word_px, WHITE);
-        let edition = "POCKET ADVANCE";
-        let edition_w = c.print_measure(edition, 10.0);
-        ry = c.print(right_edge - edition_w - 10.0, ry - 5.0, edition, 10.0, WHITE);
+        // Keep Slot's barcode, proportions and label typography unchanged.
+        // Render the actual user-supplied graphics as crisp native vectors:
+        // KONKR emblem above its matching POCKET ADVANCE wordmark.
+        if let Some((logo, (w, h))) = vector_mark(KONKR_SVG, 217) {
+            c.blit((right_edge - w as f32 - 10.0) as u32,
+                   ry as u32, &logo, w, h);
+            ry += h as f32 + 4.0;
+        }
+        if let Some((edition, (w, h))) = vector_mark(POCKET_ADVANCE_SVG, 217) {
+            c.blit((right_edge - w as f32 - 10.0) as u32,
+                   ry as u32, &edition, w, h);
+            ry += h as f32 + 3.0;
+        }
     } else if let Some(mark) = wordmark(WORDMARK_W) {
         // Preserve the actual ANBERNIC original artwork for upstream Slot.
         let (mw, mh) = mark.1;
@@ -345,10 +351,14 @@ fn sticker_face_custom(f: &StickerFields, credits: &[&str; 10],
 }
 
 fn wordmark(w: u32) -> Option<(Vec<u8>, (u32, u32))> {
-    let tree = usvg::Tree::from_str(WORDMARK_SVG, &usvg::Options::default()).ok()?;
+    vector_mark(WORDMARK_SVG, w)
+}
+
+fn vector_mark(source: &str, w: u32) -> Option<(Vec<u8>, (u32, u32))> {
+    let tree = usvg::Tree::from_str(source, &usvg::Options::default()).ok()?;
     let size = tree.size();
     let h = (w as f32 * size.height() / size.width()).round() as u32;
-    Some((render_svg(WORDMARK_SVG, w, h)?, (w, h)))
+    Some((render_svg(source, w, h)?, (w, h)))
 }
 
 pub fn draw_sticker(face: Option<TexId>, out: &mut Vec<Draw>) {
