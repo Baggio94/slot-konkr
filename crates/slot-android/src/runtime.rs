@@ -175,7 +175,7 @@ const MENU_TEXT: [&str; 48] = [
     "Refresh Library",                 // 9
     "RetroArch core folders",           // 10
     "SCRAPING",                         // 11
-    "Artwork scraping coming soon",    // 12
+    "A: Identify selected cart (dev26)", // 12
     "RETROACHIEVEMENTS",               // 13
     "A: Check RAOfflineProxy status",    // 14
     "SELECT CORE",                      // 15
@@ -1099,6 +1099,18 @@ impl Engine {
                                 _ => {}
                             },
                             ShelfOverlay::Scraping | ShelfOverlay::Achievements => match code {
+                                96 if matches!(self.overlay, ShelfOverlay::Scraping) => {
+                                    if let Some(cart) = self.shelves[self.active].carts
+                                        .get(self.shelves[self.active].index) {
+                                        *LABEL_PICK_REQUEST.lock()
+                                            .unwrap_or_else(|e| e.into_inner()) =
+                                            Some(cart.rom.to_string_lossy().into_owned());
+                                        UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
+                                            .push_back(13);
+                                    } else {
+                                        set_message("Choose a cartridge first".into());
+                                    }
+                                }
                                 96 if matches!(self.overlay, ShelfOverlay::Achievements) => {
                                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(3);
                                 }

@@ -175,6 +175,7 @@ class MainActivity : Activity() {
                 10 -> resetVisualFile(WALLPAPER_REQUEST)
                 11 -> openCartLabelPicker()
                 12 -> removeSelectedCartLabel()
+                13 -> identifySelectedCartForStudio()
             }
             nativePollMessage()?.let { message ->
                 Log.w(TAG, message)
@@ -804,6 +805,41 @@ class MainActivity : Activity() {
         }
         val name = java.lang.Long.toUnsignedString(hash, 16).padStart(16, '0')
         return File(File(filesDir, "Labels"), "$name.png")
+    }
+
+    /**
+     * First Cart Studio integration test: identify the selected ROM using the
+     * original CRC32 rule without opening the entire ROM into memory.
+     * Later dev26 steps reuse this catalogue for the official WebView editor.
+     */
+    private fun identifySelectedCartForStudio() {
+        val selected = nativePollCartLabelUri()
+        if (selected.isNullOrBlank()) {
+            Toast.makeText(this, "Select a cartridge first", Toast.LENGTH_SHORT).show()
+            return
+        }
+        gameLoader.execute {
+            try {
+                val rom = CartStudioCatalog.games(this@MainActivity)
+                    .firstOrNull { it.uri == selected }
+                    ?: throw IllegalArgumentException("ROM not in current indexed library")
+                val fp = CartStudioCatalog.identify(this@MainActivity, rom)
+                Log.i(TAG, "Cart Studio match input: " + rom.platform +
+                    " CRC32=" + fp.hex + " header=" + fp.head.size)
+                runOnUiThread {
+                    if (!isDestroyed) Toast.makeText(this@MainActivity,
+                        "Cart Studio: " + rom.platform + " CRC32 " + fp.hex,
+                        Toast.LENGTH_LONG).show()
+                }
+            } catch (error: Exception) {
+                Log.w(TAG, "Cart Studio read-only ROM fingerprint failed", error)
+                runOnUiThread {
+                    if (!isDestroyed) Toast.makeText(this@MainActivity,
+                        "Cart Studio: " + (error.message ?: "ROM read failed"),
+                        Toast.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 
     private fun openCartLabelPicker() {
