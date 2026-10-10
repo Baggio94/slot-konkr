@@ -52,3 +52,10 @@ body.editing { padding-right: var(--panel); }
   .wrap { padding: 10px; }
   .grid { grid-template-columns: repeat(auto-fill, minmax(min(100%,250px),1fr)); }
 }
+
+/* On a large ROM collection, render the shelf while the official scraper is
+   matching CRCs. Each card already exposes its own loading/error state. */
+body.loading #grid { display: grid; }
+body.loading .shelf-bar { display: flex; }
+body.loading #progress { display: flex; }
+.loader { margin: 16px auto; }
