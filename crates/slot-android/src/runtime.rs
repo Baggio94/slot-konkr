@@ -24,7 +24,7 @@ use slot_ui::{
     CHIP_U, CHIP_V, CHIP_W, CHIP_H, HOP_LIFT, TURN_PAD, SHADOW_W, SHADOW_H,
     CART_W, hint_face, arrows_hint_face, title_face, photo_face, Polaroids, Printed, HINT_H, HINT_EDGE,
     draw_footer, draw_slot_name, word_face, icon_face, Icon, BOLT_PX, HUD_INK,
-    Hud, Toast, toast_face,
+    Hud, Toast, toast_face, QUICK_PITCH, opening, edge, centred_hints, LEGEND_GAP,
 };
 
 // Android GLSurfaceView owns EGL context creation, current context and buffer swaps.
@@ -181,6 +181,9 @@ struct Engine {
     prepared_rom: Option<String>,
     game_accum: f64,
     overlay: ShelfOverlay,
+    menu_seen: u8,
+    menu_opened: Instant,
+    menu_cursor_y: f32,
     menu_textures: Vec<(slot_gfx::TexId, u32, u32)>,
     menu_hints: [(slot_gfx::TexId, u32); 2],
     board_texture: Option<slot_gfx::TexId>,
@@ -309,6 +312,9 @@ impl Engine {
             prepared_rom: None,
             game_accum: 0.0,
             overlay: ShelfOverlay::None,
+            menu_seen: 0,
+            menu_opened: now,
+            menu_cursor_y: 0.0,
             menu_textures,
             menu_hints,
             board_texture: None,
@@ -927,42 +933,48 @@ impl Engine {
         }
     }
 
+    fn draw_original_style_menu(&self, heading: usize, items: &[usize],
+                                selected: usize, out: &mut Vec<Draw>) {
+        // The original Slot full-screen quick menu uses the housing palette,
+        // full-width selected bar, 52px pitch, and centred physical keycaps.
+        // Reuse those exact primitives for Android's library settings.
+        out.push(Draw::Rect {
+            x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
+            colour: opening(),
+        });
+        let top = ((OUT_H as f32 - QUICK_PITCH * items.len() as f32) / 2.0).round();
+        let cursor = if self.menu_cursor_y.is_finite() { self.menu_cursor_y }
+            else { top + selected as f32 * QUICK_PITCH };
+        let intro = (self.menu_opened.elapsed().as_secs_f32() / 0.16).clamp(0.0, 1.0);
+        let fade = slot_ui::ease(intro);
+        out.push(Draw::Rect {
+            x: 0.0, y: cursor + 4.0, w: OUT_W as f32,
+            h: QUICK_PITCH - 8.0,
+            colour: { let mut c = edge(); c[3] *= fade; c },
+        });
+        self.text_fit(heading, 32.0, 33.0, 650.0, 0.68 * fade, out);
+        for (i, index) in items.iter().copied().enumerate() {
+            let x = 37.0;
+            let y = top + i as f32 * QUICK_PITCH + 8.0
+                + (1.0 - fade) * 8.0;
+            self.text_fit(index, x, y, 650.0, fade, out);
+        }
+        for (tex, w, x) in centred_hints(&self.menu_hints, LEGEND_GAP) {
+            out.push(Draw::Tex {
+                x, y: 427.0, w: w as f32, h: HINT_H as f32,
+                tex, alpha: fade,
+            });
+        }
+    }
+
     fn draw_overlay(&self, out: &mut Vec<Draw>) {
         match self.overlay {
             ShelfOverlay::None => {}
             ShelfOverlay::Menu { row } => {
-                self.modal(117.0, 75.0, 486.0, 330.0, out, 0.78);
-                self.text_fit(0, 148.0, 98.0, 400.0, 1.0, out);
-                for index in 0..3 {
-                    let y = 156.0 + index as f32 * 59.0;
-                    if index == row {
-                        out.push(Draw::Rect {
-                            x: 135.0, y: y - 6.0, w: 450.0, h: 44.0,
-                            colour: [0.28, 0.28, 0.32, 1.0],
-                        });
-                    }
-                    self.text_fit(index + 1, 152.0, y, 406.0, 1.0, out);
-                }
-                self.draw_menu_hints(152.0, 360.0, out);
+                self.draw_original_style_menu(0, &[1, 2, 3], row, out);
             }
             ShelfOverlay::Library { row } => {
-                self.modal(105.0, 41.0, 510.0, 400.0, out, 0.78);
-                self.text_fit(5, 136.0, 63.0, 445.0, 1.0, out);
-                // Five settings in a 720x480 3:2 modal, no overlap with footer.
-                // Leave disabled Save/State folders visibly distinct.
-                let labels = [6, 24, 7, 8, 9];
-                for index in 0..5 {
-                    let y = 112.0 + index as f32 * 47.0;
-                    if index == row {
-                        out.push(Draw::Rect {
-                            x: 125.0, y: y - 6.0, w: 470.0, h: 39.0,
-                            colour: [0.28, 0.28, 0.32, 1.0],
-                        });
-                    }
-                    self.text_fit(labels[index], 145.0, y, 430.0, 1.0, out);
-                }
-                self.text_fit(10, 145.0, 363.0, 440.0, 0.5, out);
-                self.draw_menu_hints(145.0, 412.0, out);
+                self.draw_original_style_menu(5, &[6, 24, 7, 8, 9], row, out);
             }
             ShelfOverlay::Scraping | ShelfOverlay::Achievements => {
                 self.modal(110.0, 127.0, 500.0, 227.0, out, 0.78);
@@ -1158,6 +1170,28 @@ impl Engine {
             self.picker = None;
             self.overlay = ShelfOverlay::None;
         }
+        // Update full-screen menus and spring-smooth the selection bar.
+        // Keep animation entirely in rendering: never delay controller input.
+        let (kind, selected, count) = match self.overlay {
+            ShelfOverlay::Menu { row } => (1u8, row, 3usize),
+            ShelfOverlay::Library { row } => (2u8, row, 5usize),
+            _ => (0, 0, 0),
+        };
+        if kind != self.menu_seen {
+            self.menu_seen = kind;
+            self.menu_opened = now;
+            if count > 0 {
+                self.menu_cursor_y = ((OUT_H as f32 -
+                    QUICK_PITCH * count as f32) / 2.0).round()
+                    + selected as f32 * QUICK_PITCH;
+            }
+        } else if count > 0 {
+            let goal = ((OUT_H as f32 - QUICK_PITCH * count as f32) / 2.0).round()
+                + selected as f32 * QUICK_PITCH;
+            let response = 1.0 - (-dt * 24.0).exp();
+            self.menu_cursor_y += (goal - self.menu_cursor_y) * response;
+        }
+
         // The CRT powers off WHILE the cartridge ejects, not before.
         // Upstream Slot combines those transitions via SlotChrome::screen.
         // Rendering the stored game frame also avoids advancing a stopped core.
@@ -1366,7 +1400,7 @@ impl Engine {
             .draw(&mut commands);
         }
         self.draw_overlay(&mut commands);
-        if self.progress == 0.0 {
+        if self.progress == 0.0 && matches!(self.overlay, ShelfOverlay::None) {
             draw_footer(self.battery, self.battery_face,
                 Some(self.bolt_texture), self.clock_face, &mut commands);
         }
