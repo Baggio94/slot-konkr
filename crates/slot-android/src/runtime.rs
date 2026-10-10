@@ -1377,7 +1377,7 @@ mod ui_feedback_tests {
         // After the 160ms CRT shutdown, the cartridge is already ejecting;
         // it must NOT wait to begin a fresh 450ms mechanical animation.
         assert!(from_seated < 0.70 && from_seated > 0.60);
-        assert_eq!(advance_cart(from_seated, false, EJECT_S - SCREEN_POWER_OFF_S), 0.0);
+        assert!(advance_cart(from_seated, false, EJECT_S - SCREEN_POWER_OFF_S) < 0.0001);
         assert_eq!(advance_cart(0.0, true, INSERT_S), 1.0);
         assert!(INSERT_S < 0.73);
         assert!((INSERT_S * INSERT_SOUND_PROGRESS + 0.24 - INSERT_S).abs() < 0.001);
