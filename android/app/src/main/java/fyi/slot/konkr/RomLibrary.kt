@@ -22,7 +22,28 @@ internal object RomLibrary {
     internal data class ScanResult(val json: String, val count: Int, val truncated: Boolean)
     private data class Directory(val id: String, val depth: Int, val folder: String)
 
-    fun scan(context: Context, treeUri: Uri): ScanResult {
+    /**
+     * Re-scan the selected tree, but avoid re-opening every ROM header when
+     * its exact SAF URI, display name, size and last-modified time match our
+     * previously persisted library index. Unknown provider metadata still
+     * forces a real header read (never trust size=0 or modified=0).
+     */
+    fun scan(context: Context, treeUri: Uri, oldGamesJson: String? = null): ScanResult {
+        val previous = HashMap<String, JSONObject>()
+        if (oldGamesJson != null) {
+            try {
+                val cached = JSONArray(oldGamesJson)
+                for (index in 0 until cached.length().coerceAtMost(MAX_ROMS)) {
+                    val entry = cached.optJSONObject(index) ?: continue
+                    val uri = entry.optString("uri")
+                    if (uri.startsWith("content://")) previous[uri] = entry
+                }
+            } catch (_: Exception) {
+                // Bad cache affects speed only; discovery still reads headers.
+            }
+        }
+        var headersRead = 0
+        var headersReused = 0
         val resolver = context.contentResolver
         val rootId = DocumentsContract.getTreeDocumentId(treeUri)
         val pending = ArrayDeque<Directory>()
@@ -34,7 +55,9 @@ internal object RomLibrary {
         val columns = arrayOf(
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,
             DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-            DocumentsContract.Document.COLUMN_MIME_TYPE
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_SIZE,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED
         )
 
         while (pending.isNotEmpty()) {
@@ -50,6 +73,9 @@ internal object RomLibrary {
                 val idIndex = cursor.getColumnIndexOrThrow(columns[0])
                 val nameIndex = cursor.getColumnIndexOrThrow(columns[1])
                 val mimeIndex = cursor.getColumnIndexOrThrow(columns[2])
+                // Cloud/document providers may omit these optional columns.
+                val sizeIndex = cursor.getColumnIndex(columns[3])
+                val modifiedIndex = cursor.getColumnIndex(columns[4])
                 while (cursor.moveToNext()) {
                     val id = cursor.getString(idIndex) ?: continue
                     val name = cursor.getString(nameIndex) ?: continue
@@ -69,38 +95,68 @@ internal object RomLibrary {
                         break
                     }
                     val fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
-                    val header = cartridgeHeader(context, fileUri)
-                    val gba = extension == "gba"
-                    val colorOnly = !gba && header.size > 0x143 && (header[0x143].toInt() and 0xff) == 0xc0
-                    val container = dir.folder.lowercase(Locale.ROOT)
-                    val gbColor = !gba && (extension == "gbc" || colorOnly ||
-                        container == "gbc" || container == "game boy color")
-                    val platform = when {
-                        gba -> "GBA"
-                        gbColor -> "GBC"
-                        else -> "GB"
-                    }
-                    val code = if (gba && header.size >= 0xb0) {
-                        String(header, 0xac, 4, Charsets.US_ASCII)
-                            .takeIf { it.all { c -> c in 'A'..'Z' || c in '0'..'9' } }
-                            ?: ""
-                    } else ""
                     // Keep the shelf title identical to the RetroArch save basename.
                     val title = name.substringBeforeLast('.').trim().take(200)
                     if (title.isEmpty()) continue
-                    games.put(
-                        JSONObject()
-                            .put("title", title)
-                            .put("platform", platform)
-                            .put("uri", fileUri.toString())
-                            .put("code", code)
-                            .put("color_only", colorOnly || extension == "gbc")
-                    )
+                    val uriText = fileUri.toString()
+                    val size = if (sizeIndex >= 0 && !cursor.isNull(sizeIndex))
+                        cursor.getLong(sizeIndex) else -1L
+                    val modified = if (modifiedIndex >= 0 && !cursor.isNull(modifiedIndex))
+                        cursor.getLong(modifiedIndex) else -1L
+                    val old = previous[uriText]
+                    val reuse = old != null && canReuseHeader(
+                        old.optString("title"), old.optLong("size", -1),
+                        old.optLong("modified", -1), title, size, modified)
+                    val gba = extension == "gba"
+                    var code: String
+                    var colorOnly: Boolean
+                    var platform: String
+                    if (reuse && old != null) {
+                        headersReused++
+                        code = old.optString("code")
+                        colorOnly = old.optBoolean("color_only")
+                        platform = old.optString("platform")
+                    } else {
+                        headersRead++
+                        val header = cartridgeHeader(context, fileUri)
+                        code = if (gba && header.size >= 0xb0) {
+                            String(header, 0xac, 4, Charsets.US_ASCII)
+                                .takeIf { it.all { c -> c in 'A'..'Z' || c in '0'..'9' } }
+                                ?: ""
+                        } else ""
+                        colorOnly = !gba && (extension == "gbc" ||
+                            (header.size > 0x143 && (header[0x143].toInt() and 0xff) == 0xc0))
+                        val container = dir.folder.lowercase(Locale.ROOT)
+                        val gbColor = !gba && (extension == "gbc" || colorOnly ||
+                            container == "gbc" || container == "game boy color")
+                        platform = when {
+                            gba -> "GBA"
+                            gbColor -> "GBC"
+                            else -> "GB"
+                        }
+                    }
+                    games.put(JSONObject()
+                        .put("title", title)
+                        .put("filename", name)
+                        .put("platform", platform)
+                        .put("uri", uriText)
+                        .put("code", code)
+                        .put("color_only", colorOnly)
+                        .put("size", size)
+                        .put("modified", modified))
                 }
             }
         }
+        android.util.Log.i("SlotKonkr", "ROM scan: $directories folders, ${games.length()} carts, " +
+            "headers read=$headersRead, reused=$headersReused")
         return ScanResult(games.toString(), games.length(), truncated)
     }
+
+    /** Only stable nonzero provider metadata permits skipping a header read. */
+    internal fun canReuseHeader(oldTitle: String?, oldSize: Long, oldModified: Long,
+                                title: String, size: Long, modified: Long): Boolean =
+        oldTitle == title && size > 0 && modified > 0 &&
+            oldSize == size && oldModified == modified
 
     private fun ignoredDirectory(name: String): Boolean {
         return name.lowercase(Locale.ROOT) in setOf(
