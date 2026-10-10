@@ -14,6 +14,7 @@ use std::time::Instant;
 
 use slot_gfx::{Compositor, GfxError, Surface, OUT_H, OUT_W};
 use slot_store::{Cart, Platform, Core, stamp_now};
+use slot_power::{Battery, Charge};
 use crate::library::{carts_by_platform, RomEntry, LIBRARY};
 use slot_ui::{
     board_face, chip_face, chip_shadow_face, socket_face, quick_value_face, cart_face_with,
@@ -22,6 +23,8 @@ use slot_ui::{
     BOARD_X, BOARD_W, SOCKET_U, SOCKET_V, SOCKET_W, SOCKET_H,
     CHIP_U, CHIP_V, CHIP_W, CHIP_H, HOP_LIFT, TURN_PAD, SHADOW_W, SHADOW_H,
     CART_W, hint_face, arrows_hint_face, title_face, photo_face, Polaroids, Printed, HINT_H, HINT_EDGE,
+    draw_footer, draw_slot_name, word_face, icon_face, Icon, BOLT_PX, HUD_INK,
+    Hud, Toast, toast_face,
 };
 
 // Android GLSurfaceView owns EGL context creation, current context and buffer swaps.
@@ -78,6 +81,15 @@ static PATHS: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
 static AUDIO: Mutex<VecDeque<i16>> = Mutex::new(VecDeque::new());
 static PLAYING: AtomicBool = AtomicBool::new(false);
 static SAMPLE_RATE: AtomicI32 = AtomicI32::new(0);
+
+#[derive(Clone)]
+struct SystemStatus {
+    clock: String,
+    battery: Option<Battery>,
+}
+static SYSTEM_STATUS: Mutex<SystemStatus> = Mutex::new(SystemStatus {
+    clock: String::new(), battery: None,
+});
 
 fn controls(code: i32) -> u16 {
     match code {
@@ -176,6 +188,18 @@ struct Engine {
     polaroids: Option<Polaroids>,
     photo_textures: Vec<slot_gfx::TexId>,
     polaroid_title_texture: Option<slot_gfx::TexId>,
+    hud: Hud,
+    clock_text: String,
+    clock_texture: Option<slot_gfx::TexId>,
+    clock_face: Printed,
+    battery_percent: Option<u8>,
+    battery_texture: Option<slot_gfx::TexId>,
+    battery_face: Printed,
+    battery: Option<Battery>,
+    bolt_texture: slot_gfx::TexId,
+    letter_texture: Option<slot_gfx::TexId>,
+    letter_face: Printed,
+    letter_shown_at: Option<Instant>,
 }
 
 impl Engine {
@@ -234,6 +258,16 @@ impl Engine {
             (texture, face.w)
         });
 
+        // Use the original Slot toast faces and HUD, not Android text banners.
+        let mut hud = Hud::new();
+        let toasts = Toast::all().into_iter().map(|toast| {
+            let face = toast_face(toast);
+            gpu.create_texture(face.w, face.h, &face.rgba)
+        }).collect();
+        hud.set_toasts(toasts);
+        let bolt = icon_face(Icon::Charging, BOLT_PX, HUD_INK);
+        let bolt_texture = gpu.create_texture(bolt.w, bolt.h, &bolt.rgba);
+
         // On a GBA-only library do not begin on an empty GB or GBC shelf.
         let active = shelves.iter().position(|s| !s.carts.is_empty()).unwrap_or(0);
         let now = Instant::now();
@@ -273,7 +307,49 @@ impl Engine {
             polaroids: None,
             photo_textures: Vec::new(),
             polaroid_title_texture: None,
+            hud,
+            clock_text: String::new(),
+            clock_texture: None,
+            clock_face: Printed::default(),
+            battery_percent: None,
+            battery_texture: None,
+            battery_face: Printed::default(),
+            battery: None,
+            bolt_texture,
+            letter_texture: None,
+            letter_face: Printed::default(),
+            letter_shown_at: None,
         })
+    }
+
+    fn refresh_system_status(&mut self) {
+        let status = SYSTEM_STATUS.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if status.clock != self.clock_text {
+            self.clock_text = status.clock;
+            if !self.clock_text.is_empty() {
+                let face = word_face(&self.clock_text);
+                let tex = match self.clock_texture {
+                    Some(tex) => { self.gpu.update_texture(tex, face.w, face.h, &face.rgba); tex }
+                    None => { let tex = self.gpu.create_texture(face.w, face.h, &face.rgba);
+                        self.clock_texture = Some(tex); tex }
+                };
+                self.clock_face = Printed::new(tex, face.w);
+            }
+        }
+        self.battery = status.battery;
+        let percent = self.battery.map(|b| b.percent);
+        if percent != self.battery_percent {
+            self.battery_percent = percent;
+            if let Some(percent) = percent {
+                let face = word_face(&format!("{percent}%"));
+                let tex = match self.battery_texture {
+                    Some(tex) => { self.gpu.update_texture(tex, face.w, face.h, &face.rgba); tex }
+                    None => { let tex = self.gpu.create_texture(face.w, face.h, &face.rgba);
+                        self.battery_texture = Some(tex); tex }
+                };
+                self.battery_face = Printed::new(tex, face.w);
+            } else { self.battery_face = Printed::default(); }
+        }
     }
 
     fn handle(&mut self, input: Input) {
@@ -475,6 +551,8 @@ impl Engine {
                             if let Some(game)=self.game.as_mut() {
                                 match game.save_manual() {
                                     Ok(stamp) => {
+                                        self.hud.toast(Toast::StateSaved,
+                                            self.born.elapsed().as_millis() as u64);
                                         if let Some(uri) = self.requested_uri.as_deref() {
                                             let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
                                             let core = paths.as_ref().map(|(storage, _)| {
@@ -494,8 +572,10 @@ impl Engine {
                         }
                         if code == 102 {
                             if let Some(game)=self.game.as_mut() {
-                                if let Err(err)=game.load_latest() {
-                                    set_message(format!("Cannot load state: {err}"));
+                                match game.load_latest() {
+                                    Ok(()) => self.hud.toast(Toast::StateLoaded,
+                                        self.born.elapsed().as_millis() as u64),
+                                    Err(err) => set_message(format!("Cannot load state: {err}")),
                                 }
                             }
                             return;
@@ -684,6 +764,7 @@ impl Engine {
                 }
                 let ms = self.born.elapsed().as_millis() as u64;
                 let shelf = &mut self.shelves[self.active];
+                let before = shelf.index;
                 match (code, pressed) {
                     (21, true) if !self.inserted => shelf.hold_left(ms),
                     (22, true) if !self.inserted => shelf.hold_right(ms),
@@ -692,6 +773,18 @@ impl Engine {
                     (19, true) if !self.inserted => shelf.jump_prev_letter(),
                     (20, true) if !self.inserted => shelf.jump_next_letter(),
                     _ => {}
+                }
+                if !self.inserted && pressed && (code == 19 || code == 20)
+                    && shelf.index != before {
+                    let letter = slot_store::initial(&shelf.carts[shelf.index].stem);
+                    let face = word_face(&letter.to_string());
+                    let tex = match self.letter_texture {
+                        Some(tex) => { self.gpu.update_texture(tex, face.w, face.h, &face.rgba); tex }
+                        None => { let tex = self.gpu.create_texture(face.w, face.h, &face.rgba);
+                            self.letter_texture = Some(tex); tex }
+                    };
+                    self.letter_face = Printed::new(tex, face.w);
+                    self.letter_shown_at = Some(Instant::now());
                 }
             }
         }
@@ -1014,6 +1107,7 @@ impl Engine {
     }
 
     fn draw(&mut self) {
+        self.refresh_system_status();
         let now = Instant::now();
         let dt = (now - self.last).as_secs_f32().min(0.05);
         self.last = now;
@@ -1107,7 +1201,9 @@ impl Engine {
             if stepped > 0 { self.gpu.upload_game(session.frame()); }
             self.gpu.fit(self.size);
             self.gpu.begin_frame();
-            self.gpu.draw_list(&[Draw::Game]);
+            let mut commands = vec![Draw::Game];
+            self.hud.draw(self.born.elapsed().as_millis() as u64, &mut commands);
+            self.gpu.draw_list(&commands);
             self.gpu.end_frame(self.size);
             return;
         }
@@ -1155,6 +1251,13 @@ impl Engine {
                 draw_empty_slot(&mut commands);
             } else {
                 shelf.draw(0.0, &mut commands);
+                if let Some(since) = self.letter_shown_at {
+                    let ms = since.elapsed().as_millis();
+                    if ms < 1500 {
+                        let alpha = ((1500 - ms) as f32 / 250.0).min(1.0);
+                        draw_slot_name(self.letter_face, alpha, &mut commands);
+                    }
+                }
             }
         } else {
             let cart = &shelf.carts[shelf.index];
@@ -1174,6 +1277,8 @@ impl Engine {
             .draw(&mut commands);
         }
         self.draw_overlay(&mut commands);
+        draw_footer(self.battery, self.battery_face,
+            Some(self.bolt_texture), self.clock_face, &mut commands);
         self.gpu.fit(self.size);
         self.gpu.begin_frame();
         self.gpu.draw_list(&commands);
@@ -1356,6 +1461,22 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollCartSfx(
 
 fn push(input: Input) {
     INPUT.lock().unwrap_or_else(|e| e.into_inner()).push_back(input);
+}
+
+/// Android provides the local clock and device battery to the original Slot footer.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSystemStatus(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, clock: JString<'_>,
+    percent: jint, charging: jboolean,
+) {
+    let Ok(clock) = env.get_string(&clock) else { return; };
+    let clock = clock.to_string_lossy().into_owned();
+    if clock.len() > 16 || !clock.chars().all(|c| c.is_ascii_digit() || c == ':') { return; }
+    let battery = if (0..=100).contains(&percent) {
+        Some(Battery { percent: percent as u8,
+            charge: if charging != 0 { Charge::Charging } else { Charge::Discharging } })
+    } else { None };
+    *SYSTEM_STATUS.lock().unwrap_or_else(|p| p.into_inner()) = SystemStatus { clock, battery };
 }
 
 /// App-private files directory and nativeLibraryDir (where mGBA is packaged).
