@@ -202,7 +202,7 @@ impl Canvas {
 }
 
 pub fn sticker_face(f: &StickerFields) -> UndoFace {
-    sticker_face_custom(f, &CREDITS, &ORIGIN, COPYRIGHT, HOME)
+    sticker_face_custom(f, &CREDITS, &ORIGIN, COPYRIGHT, HOME, "MODEL NO. AGS-102")
 }
 
 /// The KONKR port uses the *same* SVG backing, Code39 barcode, typography,
@@ -222,13 +222,13 @@ pub fn sticker_face_konkr(f: &StickerFields) -> UndoFace {
     ];
     sticker_face_custom(
         f, &PORT_CREDITS, &["S/LOT-KONKR", "ANDROID EDITION"],
-        "2026 SLOT. COMMUNITY", "0.0.7-DEV13",
+        "2026 SLOT. COMMUNITY", "0.0.7-DEV13", "MODEL NO. KONKR ADV",
     )
 }
 
 fn sticker_face_custom(f: &StickerFields, credits: &[&str; 10],
                        origin: &[&str; 2], copyright: &str,
-                       home: &str) -> UndoFace {
+                       home: &str, model: &str) -> UndoFace {
     let mut c = Canvas::shape(STICKER_W, STICKER_H);
     let panel_x = (PANEL_FX * STICKER_W as f32).round() as u32;
     let panel_y = (PANEL_FY * STICKER_H as f32).round() as u32;
@@ -237,7 +237,9 @@ fn sticker_face_custom(f: &StickerFields, credits: &[&str; 10],
 
     let left = MARGIN;
     let mut y = MARGIN;
-    for (n, line) in head_rows(f).iter().enumerate() {
+    let mut headers = head_rows(f);
+    headers[0] = model.into();
+    for (n, line) in headers.iter().enumerate() {
         if n == 1 {
             if let Some((before, after)) = line.split_once(DC) {
                 let bw = c.print_measure(before, HEAD_PX);
