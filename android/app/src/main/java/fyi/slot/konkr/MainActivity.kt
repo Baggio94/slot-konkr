@@ -109,7 +109,12 @@ class MainActivity : Activity() {
                     val target = activeTargets[uri]
                     if (target != null && target.core == core) {
                         gameLoader.execute {
-                            val failures = RetroArchStorage.exportAfterSave(this@MainActivity, target)
+                            val stamp = payload.optString("manual_stamp", "")
+                            val failures = if (stamp.isNotEmpty()) {
+                                RetroArchStorage.exportManualState(this@MainActivity, target, stamp)
+                            } else {
+                                RetroArchStorage.exportAfterSave(this@MainActivity, target)
+                            }
                             if (failures.isNotEmpty()) {
                                 runOnUiThread {
                                     if (!isDestroyed) Toast.makeText(this@MainActivity,
