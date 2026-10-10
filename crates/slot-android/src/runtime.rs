@@ -1937,6 +1937,13 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollUiAction(
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollRumbleStrength(
+    _env: *mut c_void, _this: *mut c_void,
+) -> jint {
+    RUMBLE_STRENGTH.load(Ordering::Acquire)
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollCartSfx(
     _env: *mut c_void, _this: *mut c_void,
 ) -> jint {
