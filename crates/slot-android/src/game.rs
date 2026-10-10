@@ -196,6 +196,10 @@ impl GameSession {
         true
     }
 
+    pub fn rumble_strength(&self) -> u16 {
+        self.core.rumble().strength()
+    }
+
     pub fn rewind_fill(&self) -> u8 {
         self.rewind.fill()
     }
