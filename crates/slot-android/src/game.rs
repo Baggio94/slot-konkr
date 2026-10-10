@@ -14,7 +14,7 @@ unsafe extern "C" {
         text: *const std::ffi::c_char) -> i32;
 }
 
-fn log_launch_timing(message: &str) {
+pub(crate) fn log_launch_timing(message: &str) {
     #[cfg(target_os = "android")]
     if let Ok(text) = std::ffi::CString::new(message) {
         unsafe {
