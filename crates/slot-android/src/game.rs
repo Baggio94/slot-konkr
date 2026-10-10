@@ -70,7 +70,7 @@ impl GameSession {
         // has already staged only allowed BIOS files into this private folder.
         let bios = storage.join("BIOS");
         std::fs::create_dir_all(&bios).map_err(|e| e.to_string())?;
-        let mut core = LibretroCore::open_with(core_file, &bios, &root)
+        let mut core = LibretroCore::open_with(core_file, &bios, &core_root)
             .map_err(|e| e.to_string())?;
         match which {
             Core::Mgba => {
