@@ -123,6 +123,12 @@ class CartStudioActivity : Activity() {
         }
         w.isFocusableInTouchMode = true
         w.addJavascriptInterface(bridge, "AndroidStudio")
+        w.addJavascriptInterface(object {
+            @JavascriptInterface
+            fun back() {
+                runOnUiThread { if (!isFinishing && !isDestroyed) finish() }
+            }
+        }, "AndroidNav")
         val officialArt = CartStudioArtProxy(this)
         val noIntro = CartStudioDatProxy(this)
         w.webViewClient = object : WebViewClient() {
@@ -318,24 +324,32 @@ class CartStudioActivity : Activity() {
         }
     }
 
+    private fun controllerKey(keyCode: Int): String? = when (keyCode) {
+        KeyEvent.KEYCODE_BUTTON_L1 -> "L1"
+        KeyEvent.KEYCODE_BUTTON_R1 -> "R1"
+        KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER -> "A"
+        KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK -> "B"
+        KeyEvent.KEYCODE_BUTTON_Y -> "Y"
+        KeyEvent.KEYCODE_DPAD_UP -> "UP"
+        KeyEvent.KEYCODE_DPAD_DOWN -> "DOWN"
+        KeyEvent.KEYCODE_DPAD_LEFT -> "LEFT"
+        KeyEvent.KEYCODE_DPAD_RIGHT -> "RIGHT"
+        else -> null
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        when (keyCode) {
-            KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK -> { finish(); return true }
-            KeyEvent.KEYCODE_BUTTON_A -> {
-                return web?.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN,
-                    KeyEvent.KEYCODE_DPAD_CENTER)) ?: super.onKeyDown(keyCode, event)
-            }
+        val command = controllerKey(keyCode) ?: return super.onKeyDown(keyCode, event)
+        if (event.repeatCount == 0 || command in setOf("UP", "DOWN", "LEFT", "RIGHT")) {
+            // The browser controller adapter owns selection, platform tabs and
+            // editor popup back behavior, so B does not accidentally exit.
+            web?.evaluateJavascript("window.SlotController?.key('$command')", null)
+                ?: if (command == "B") finish() else Unit
         }
-        return super.onKeyDown(keyCode, event)
+        return true
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_BUTTON_B || keyCode == KeyEvent.KEYCODE_BACK)
-            return true
-        if (keyCode == KeyEvent.KEYCODE_BUTTON_A) {
-            return web?.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP,
-                KeyEvent.KEYCODE_DPAD_CENTER)) ?: true
-        }
+        if (controllerKey(keyCode) != null) return true
         return super.onKeyUp(keyCode, event)
     }
 
@@ -351,6 +365,7 @@ class CartStudioActivity : Activity() {
             stopLoading()
             removeJavascriptInterface("AndroidStudio")
             removeJavascriptInterface("AndroidToolbar")
+            removeJavascriptInterface("AndroidNav")
             destroy()
         }
         web = null
