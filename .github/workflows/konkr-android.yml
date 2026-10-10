@@ -80,6 +80,11 @@ jobs:
             echo "::warning::No persistent signing key configured. Android updates between CI builds require reinstall."
           fi
           bash scripts/build-konkr-android.sh
+      - name: Verify APK signature and print certificate fingerprint
+        run: |
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs \
+            android/app/build/outputs/apk/debug/app-debug.apk
+          shasum -a 256 android/app/build/outputs/apk/debug/app-debug.apk
       - uses: actions/upload-artifact@v4
         with:
           name: slot-konkr-preview-debug-apk
