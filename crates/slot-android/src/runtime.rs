@@ -91,6 +91,10 @@ static PATHS: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
 static AUDIO: Mutex<VecDeque<i16>> = Mutex::new(VecDeque::new());
 static PLAYING: AtomicBool = AtomicBool::new(false);
 static SAMPLE_RATE: AtomicI32 = AtomicI32::new(0);
+// Android AudioTrack time-stretches 2x game audio while preserving pitch.
+// Expose the current transport speed separately from libretro's sample rate.
+static AUDIO_SPEED_PERMILLE: AtomicI32 = AtomicI32::new(1000);
+static FF_AUDIO_SUPPORTED: AtomicBool = AtomicBool::new(true);
 
 #[derive(Clone)]
 struct SystemStatus {
@@ -418,6 +422,7 @@ impl Engine {
         self.game_accum = 0.0;
         self.hud.set_ff(FfState::Off);
         self.hud.release_rewind();
+        AUDIO_SPEED_PERMILLE.store(1000, Ordering::Release);
     }
 
     fn handle(&mut self, input: Input) {
@@ -630,6 +635,7 @@ impl Engine {
                             self.ff_latched = false;
                             self.ff_last_release = None;
                             self.hud.set_ff(FfState::Off);
+                            AUDIO_SPEED_PERMILLE.store(1000, Ordering::Release);
                             AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
                         } else {
                             self.rewind_held = false;
@@ -659,6 +665,11 @@ impl Engine {
                             self.ff_held = false;
                             self.ff_last_release = Some(Instant::now());
                         }
+                        // Flush old transport-speed PCM at every FF edge.
+                        AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+                        AUDIO_SPEED_PERMILLE.store(
+                            if self.ff_latched || self.ff_held { 2000 } else { 1000 },
+                            Ordering::Release);
                         self.hud.set_ff(match (self.ff_latched, self.ff_held) {
                             (true, _) => FfState::Latched,
                             (false, true) => FfState::Held,
@@ -1435,7 +1446,8 @@ impl Engine {
                     self.game_accum -= period;
                     stepped += 1;
                     let samples = session.take_audio();
-                    if !fast && !samples.is_empty() {
+                    if (!fast || FF_AUDIO_SUPPORTED.load(Ordering::Acquire))
+                        && !samples.is_empty() {
                         let mut audio = AUDIO.lock().unwrap_or_else(|e| e.into_inner());
                         let overflow = audio.len().saturating_add(samples.len()).saturating_sub(96_000);
                         for _ in 0..overflow.min(audio.len()) { audio.pop_front(); }
@@ -1856,6 +1868,19 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSuspend(
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeIsPlaying(
     _env: *mut c_void, _this: *mut c_void,
 ) -> jboolean { PLAYING.load(Ordering::Acquire) as jboolean }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeAudioSpeedPermille(
+    _env: *mut c_void, _this: *mut c_void,
+) -> jint { AUDIO_SPEED_PERMILLE.load(Ordering::Acquire) }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeFastAudioSupported(
+    _env: *mut c_void, _this: *mut c_void, supported: jboolean,
+) {
+    FF_AUDIO_SUPPORTED.store(supported != 0, Ordering::Release);
+    if supported == 0 { AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear(); }
+}
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeAudioSampleRate(
