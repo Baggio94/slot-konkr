@@ -222,7 +222,9 @@ pub fn sticker_face_konkr(f: &StickerFields) -> UndoFace {
     ];
     sticker_face_custom(
         f, &PORT_CREDITS, &["S/LOT-KONKR", "ANDROID EDITION"],
-        "2026 SLOT. COMMUNITY", "0.0.7-DEV13", "MODEL NO. KONKR ADV",
+        "2026 SLOT. COMMUNITY",
+        option_env!("SLOT_KONKR_VERSION").unwrap_or("DEV BUILD"),
+        "MODEL NO. KONKR ADV",
     )
 }
 
