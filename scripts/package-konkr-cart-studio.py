@@ -72,7 +72,7 @@ def package(root: Path, built: Path):
  object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none';
 ">""")
     html = checked_replace(html, '<link rel="stylesheet" href="studio.css">',
-        '<link rel="stylesheet" href="studio.css">\\n<link rel="stylesheet" href="embedded.css">')
+        '<link rel="stylesheet" href="studio.css">\n<link rel="stylesheet" href="embedded.css">')
     htmlfile.write_text(html, encoding="utf-8")
     assert 'editor.open(session.carts[0])' in js
     assert 'embedded.css' in html
