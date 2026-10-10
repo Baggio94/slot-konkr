@@ -57,6 +57,7 @@ uniform vec2 u_src;
 uniform vec4 u_uv;
 uniform float u_bright;
 uniform float u_mode;
+uniform float u_colour_correct;
 uniform float u_paper_size;
 uniform vec4 u_rect;
 uniform vec2 u_fbo;
@@ -105,6 +106,15 @@ void main() {
         float yfactor = (16.0 + sin(angle.y)) / 17.0;
         vec3 xfactors = (4.0 + sin(angle.x + offsets)) / 5.0;
         c *= yfactor * xfactors;
+    }
+    if (u_colour_correct > 0.5 && inside) {
+        // GBA-era display simulation: subtly warmer, lower-saturation
+        // colours and a restrained luminance response. GPU only; libretro
+        // framebuffer, SRAM and save states remain untouched.
+        float luminance = dot(c, vec3(0.299, 0.587, 0.114));
+        c = mix(vec3(luminance), c, 0.80);
+        c *= vec3(1.02, 1.00, 0.95);
+        c = pow(clamp(c, 0.0, 1.0), vec3(1.05));
     }
     FRAG_COLOR = vec4(c * u_bright, 1.0);
 }
