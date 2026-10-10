@@ -78,15 +78,28 @@ internal class CartStudioBridge(
     @JavascriptInterface
     fun session(): String {
         val entries = JSONArray()
+        var allReady = true
         for (rom in roms) {
-            entries.put(JSONObject()
+            val labelExists = label(context, rom.uri).isFile
+            val cached = if (labelExists) null else CartStudioCatalog.cached(context, rom)
+            if (!labelExists && cached == null) allReady = false
+            val entry = JSONObject()
                 .put("id", key(rom.uri))
                 .put("platform", rom.platform)
                 .put("stem", rom.title)
-                .put("hasLabel", label(context, rom.uri).isFile))
+                .put("hasLabel", labelExists)
+            // A valid size/mtime CRC avoids one Java bridge round-trip per
+            // unchanged ROM, and avoids reading its entire contents again.
+            if (cached != null) {
+                entry.put("fingerprint", JSONObject()
+                    .put("crc", cached.crc)
+                    .put("head", Base64.encodeToString(cached.head, Base64.NO_WRAP)))
+            }
+            entries.put(entry)
         }
         return JSONObject()
             .put("carts", entries)
+            .put("allCached", allReady)
             .put("selectedKey", selectedUri?.let(::key) ?: "")
             .toString()
     }
@@ -104,10 +117,20 @@ internal class CartStudioBridge(
 
     @JavascriptInterface
     fun readLabel(id: String): String {
-        val target = label(context, known(id).uri)
-        if (!target.isFile) return ""
-        require(target.length() in 24..(2L * 1024 * 1024)) { "Label is too large" }
-        return Base64.encodeToString(target.readBytes(), Base64.NO_WRAP)
+        // Match saveLabel's maximum; older builds accepted a 9 MiB PNG for
+        // Crystal but rejected it on next launch with an opaque Java exception.
+        return try {
+            val target = label(context, known(id).uri)
+            if (!target.isFile) return ""
+            require(target.length() in 24..(9L * 1024 * 1024)) {
+                "Saved label size unsupported: ${target.length()} bytes"
+            }
+            Base64.encodeToString(target.readBytes(), Base64.NO_WRAP)
+        } catch (error: Exception) {
+            android.util.Log.e("SlotStudioRead", "Cannot load saved label: $id", error)
+            "error: " + (error.message?.replace("\n", " ")?.take(200)
+                ?: error.javaClass.simpleName)
+        }
     }
 
     @Synchronized
