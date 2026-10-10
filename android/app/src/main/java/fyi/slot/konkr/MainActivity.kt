@@ -179,6 +179,7 @@ class MainActivity : Activity() {
                 12 -> removeSelectedCartLabel()
                 13 -> openSelectedCartStudio()
                 14 -> openAllCartStudio()
+                15 -> startActivity(Intent(this@MainActivity, AppsActivity::class.java))
             }
             nativePollMessage()?.let { message ->
                 Log.w(TAG, message)
