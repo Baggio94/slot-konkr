@@ -59,3 +59,16 @@ body.loading #grid { display: grid; }
 body.loading .shelf-bar { display: flex; }
 body.loading #progress { display: flex; }
 .loader { margin: 16px auto; }
+
+/* Header controls are rendered natively alongside Cart Studio's title on
+   KONKR. Keep official DOM buttons for their click handlers/state, but never
+   let their CSS consume another entire shelf row. */
+body #fill-open, body #write-bar { display: none !important; }
+.shelf-bar { flex-wrap: nowrap; min-height: var(--shelf-row); }
+.shelf-tabs { flex-wrap: nowrap; }
+.grid .cart {
+  /* Large indexed libraries: let WebView cull offscreen card layout/paint.
+     Preserve each card's intrinsic size for stable scroll positions. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 300px;
+}
