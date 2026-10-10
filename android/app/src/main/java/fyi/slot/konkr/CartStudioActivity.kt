@@ -281,6 +281,9 @@ class CartStudioActivity : Activity() {
         }
         web = null
         worker.shutdownNow()
+        // Persist the final (<12 carts) CRC batch for fast subsequent launches.
+        try { CartStudioCatalog.flush(this) }
+        catch (error: Exception) { Log.w(TAG, "Could not flush Studio CRC cache", error) }
         super.onDestroy()
     }
 }
