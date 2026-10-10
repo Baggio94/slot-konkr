@@ -266,6 +266,20 @@ class CartStudioActivity : Activity() {
         }
         w.addJavascriptInterface(object {
             @JavascriptInterface
+            fun saved(written: Int, shells: Int, skipped: Int) {
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        val message = when {
+                            written + shells > 0 -> "Saved to slot.: $written labels, $shells shell changes"
+                            skipped > 0 -> "Labels already saved ($skipped skipped)"
+                            else -> "Nothing to save"
+                        }
+                        Toast.makeText(this@CartStudioActivity, message, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+
+            @JavascriptInterface
             fun actions(canSave: Boolean, canFill: Boolean) {
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) {
