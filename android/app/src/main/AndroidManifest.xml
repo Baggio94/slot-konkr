@@ -8,6 +8,8 @@
         android:allowBackup="false"
         android:networkSecurityConfig="@xml/ra_network_security_config"
         android:label="slot. for KONKR"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity
             android:name=".MainActivity"

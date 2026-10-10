@@ -286,6 +286,9 @@ struct Engine {
     letter_texture: Option<slot_gfx::TexId>,
     letter_face: Printed,
     letter_shown_at: Option<Instant>,
+    // Unmodified upstream system names: 200ms in, 1200ms hold, 800ms out.
+    platform_faces: [Printed; 3],
+    platform_shown_at: Option<Instant>,
 }
 
 impl Engine {
@@ -323,6 +326,14 @@ impl Engine {
             }
             shelves.push(Shelf::new(carts));
         }
+
+        // Exactly match upstream Slot Platform::name() and word_face() glyphs.
+        // Cache these three textures once, not on every shelf switch.
+        let platform_faces = Platform::ALL.map(|platform| {
+            let face = word_face(platform.name());
+            let tex = gpu.create_texture(face.w, face.h, &face.rgba);
+            Printed::new(tex, face.w)
+        });
 
         let shadow = cart_shadow();
         let gba = gpu.create_texture(shadow.w, shadow.h, &shadow.rgba);
@@ -422,6 +433,7 @@ impl Engine {
         // On a GBA-only library do not begin on an empty GB or GBC shelf.
         let active = shelves.iter().position(|s| !s.carts.is_empty()).unwrap_or(0);
         let now = Instant::now();
+        let has_multiple_systems = shelves.iter().filter(|s| !s.carts.is_empty()).count() > 1;
         Ok(Self {
             gpu,
             size,
@@ -496,6 +508,8 @@ impl Engine {
             letter_texture: None,
             letter_face: Printed::default(),
             letter_shown_at: None,
+            platform_faces,
+            platform_shown_at: has_multiple_systems.then_some(now),
         })
     }
 
@@ -1172,6 +1186,8 @@ impl Engine {
                                 self.shelves[self.active].release_hold();
                                 self.active = next;
                                 self.progress = 0.0;
+                                self.letter_shown_at = None;
+                                self.platform_shown_at = Some(Instant::now());
                             }
                             return;
                         }
@@ -2018,11 +2034,24 @@ impl Engine {
                 draw_empty_slot(&mut commands);
             } else {
                 shelf.draw(0.0, &mut commands);
-                if let Some(since) = self.letter_shown_at {
-                    let ms = since.elapsed().as_millis();
-                    if ms < 1500 {
-                        let alpha = ((1500 - ms) as f32 / 250.0).min(1.0);
-                        draw_slot_name(self.letter_face, alpha, &mut commands);
+                // Original Slot draws platform name at the bottom slot mouth.
+                // 200ms ease-in + 1200ms hold + 800ms ease-out, 0.4 peak alpha.
+                if let Some(since) = self.platform_shown_at {
+                    let elapsed_ms = since.elapsed().as_millis() as u64;
+                    let alpha = slot_name_alpha(elapsed_ms);
+                    if alpha > 0.0 {
+                        draw_slot_name(self.platform_faces[self.active], alpha, &mut commands);
+                    } else {
+                        self.platform_shown_at = None;
+                    }
+                }
+                if self.platform_shown_at.is_none() {
+                    if let Some(since) = self.letter_shown_at {
+                        let ms = since.elapsed().as_millis();
+                        if ms < 1500 {
+                            let alpha = ((1500 - ms) as f32 / 250.0).min(1.0);
+                            draw_slot_name(self.letter_face, alpha, &mut commands);
+                        }
                     }
                 }
             }
@@ -2053,6 +2082,18 @@ impl Engine {
         self.gpu.draw_list(&commands);
         self.gpu.end_frame(self.size);
     }
+}
+
+/// Follow Slot 1.5.0's platform name alpha curve and durations exactly.
+fn slot_name_alpha(elapsed_ms: u64) -> f32 {
+    let level = if elapsed_ms < 200 {
+        elapsed_ms as f32 / 200.0
+    } else if elapsed_ms < 1400 {
+        1.0
+    } else {
+        (1.0 - (elapsed_ms - 1400) as f32 / 800.0).max(0.0)
+    };
+    0.4 * slot_ui::ease(level)
 }
 
 /// Physical D-pad UP and DOWN must move the selection in opposite
@@ -2150,6 +2191,20 @@ mod ui_feedback_tests {
             combined |= bit;
         }
         assert_eq!(select_chord_bit(109), 0);
+    }
+
+    #[test]
+    fn platform_name_timing_matches_upstream_slot() {
+        assert_eq!(slot_name_alpha(0), 0.0);
+        assert!(slot_name_alpha(100) > 0.0);
+        assert!((slot_name_alpha(200) - 0.4).abs() < 0.001);
+        assert!((slot_name_alpha(1400) - 0.4).abs() < 0.001);
+        assert!(slot_name_alpha(2000) > 0.0);
+        assert_eq!(slot_name_alpha(2200), 0.0);
+        assert_eq!(slot_name_alpha(3500), 0.0);
+        assert_eq!(Platform::Gba.name(), "Game Boy Advance");
+        assert_eq!(Platform::Gb.name(), "Game Boy");
+        assert_eq!(Platform::Gbc.name(), "Game Boy Color");
     }
 
     #[test]

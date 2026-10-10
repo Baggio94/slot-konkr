@@ -22,6 +22,10 @@ import android.content.Intent
 import android.content.ActivityNotFoundException
 import android.graphics.Color
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.RectF
 import android.widget.ImageView
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -322,20 +326,35 @@ class MainActivity : Activity() {
 
     private fun showSlotStartupSplash(frame: FrameLayout) {
         val logo = readOriginalSlotBootLogo() ?: return
+        // Target the KONKR Pocket Advance panel at native 960x640 pixels.
+        // Reconstruct a true full-resolution splash canvas from the upstream
+        // BMP rather than allowing ImageView to enlarge a 196x75 bitmap.
+        val targetW = 960
+        val targetH = 640
+        val highRes = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+        val screen = Canvas(highRes)
+        screen.drawColor(logo.getPixel(0, 0))
+        val wantedW = (targetW * 0.66f).toInt()
+        val wantedH = (wantedW.toFloat() * logo.height / logo.width).toInt()
+        val left = (targetW - wantedW) / 2f
+        val top = (targetH - wantedH) / 2f
+        screen.drawBitmap(
+            logo, Rect(0, 0, logo.width, logo.height),
+            RectF(left, top, left + wantedW, top + wantedH),
+            Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        )
+        logo.recycle()
         val overlay = FrameLayout(this).apply {
             setBackgroundColor(Color.rgb(17, 14, 11))
             isFocusable = false
             isClickable = false
         }
         val image = ImageView(this).apply {
-            setImageBitmap(logo)
+            setImageBitmap(highRes)
             scaleType = ImageView.ScaleType.FIT_CENTER
             contentDescription = "slot. boot logo"
         }
-        val width = (resources.displayMetrics.widthPixels * 0.55f).toInt()
-            .coerceAtLeast(logo.width)
-        val height = (width.toFloat() * logo.height / logo.width).toInt()
-        overlay.addView(image, FrameLayout.LayoutParams(width, height, Gravity.CENTER))
+        overlay.addView(image, FrameLayout.LayoutParams(-1, -1))
         frame.addView(overlay, FrameLayout.LayoutParams(-1, -1))
         startupSplash = overlay
     }
@@ -661,11 +680,15 @@ class MainActivity : Activity() {
         gameLoader.execute {
             try {
                 val imported = BiosLibrary.importFrom(this, uri)
+                // Restoring the already selected BIOS at startup is silent.
+                // Only the first explicit selection ever shows 'BIOS ready'.
+                val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+                val firstExplicitImport = persistSelection &&
+                    !prefs.contains(BIOS_ROOT)
                 if (persistSelection) {
-                    getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                        .putString(BIOS_ROOT, uri.toString()).apply()
+                    prefs.edit().putString(BIOS_ROOT, uri.toString()).apply()
                 }
-                runOnUiThread {
+                if (firstExplicitImport) runOnUiThread {
                     if (!isDestroyed) {
                         Toast.makeText(
                             this,
