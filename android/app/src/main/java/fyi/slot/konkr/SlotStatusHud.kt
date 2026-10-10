@@ -156,10 +156,12 @@ internal class SlotStatusHud(private val context: Context, private val frame: Fr
         if (key == lastRight) return
         lastRight = key
         right.removeAllViews()
-        if (wifiOn && connected) {
+        if (wifiOn) {
             val bars = LinearLayout(context).apply {
                 gravity = Gravity.BOTTOM
                 orientation = LinearLayout.HORIZONTAL
+                contentDescription = if (connected) "Wi-Fi signal ${level + 1} of 4"
+                    else "Wi-Fi enabled, not connected"
             }
             for (i in 0..3) {
                 val bar = View(context)
