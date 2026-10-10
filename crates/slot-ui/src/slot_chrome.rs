@@ -208,6 +208,15 @@ fn draw_slot_back(alpha: f32, out: &mut Vec<Draw>) {
 
 fn draw_slot_front(alpha: f32, out: &mut Vec<Draw>) {
     front_bands(|x, y, w, h, c| out.push(band(x, y, w, h, c, alpha)));
+    // Original receiver geometry, with an Android-only molded-plastic sheen.
+    // Tiny highlights add material depth without changing the slot silhouette.
+    #[cfg(target_os = "android")]
+    if alpha > 0.0 {
+        let sheen = [1.0, 1.0, 1.0, 0.035 * alpha];
+        for (x, w) in [(0.0, BAY_X), (BAY_X + BAY_W, OUT_W as f32 - BAY_X - BAY_W)] {
+            out.push(Draw::Rect { x, y: BAND_Y + 3.0, w, h: 1.0, colour: sheen });
+        }
+    }
 }
 
 fn front_bands(mut band: impl FnMut(f32, f32, f32, f32, [f32; 4])) {
