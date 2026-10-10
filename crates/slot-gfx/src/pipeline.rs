@@ -17,6 +17,8 @@ pub struct GamePass {
     u_bright: gl::types::GLint,
     u_uv: gl::types::GLint,
     u_mode: gl::types::GLint,
+    u_colour_correct: gl::types::GLint,
+    colour_correct: bool,
     u_paper_size: gl::types::GLint,
     u_fbo: gl::types::GLint,
     fbo_scale: [f32; 2],
@@ -39,7 +41,7 @@ impl GamePass {
         let format = gl::BGRA;
         let game = crate::gl::texture(SRC_W, SRC_H, gl::NEAREST, gl::CLAMP_TO_EDGE, format, None);
         let paper = crate::gl::texture(1, 1, gl::NEAREST, gl::REPEAT, gl::RGBA, Some(&[255; 4]));
-        let (u_rect, u_bright, u_uv, u_mode, u_paper_size, u_pic, u_fbo);
+        let (u_rect, u_bright, u_uv, u_mode, u_paper_size, u_pic, u_fbo, u_colour_correct);
         unsafe {
             gl::UseProgram(prog);
             gl::Uniform1i(crate::gl::uniform_location(prog, "u_game"), 0);
@@ -58,6 +60,7 @@ impl GamePass {
             u_uv = crate::gl::uniform_location(prog, "u_uv");
             gl::Uniform1i(crate::gl::uniform_location(prog, "u_paper"), 1);
             u_mode = crate::gl::uniform_location(prog, "u_mode");
+            u_colour_correct = crate::gl::uniform_location(prog, "u_colour_correct");
             u_paper_size = crate::gl::uniform_location(prog, "u_paper_size");
             u_fbo = crate::gl::uniform_location(prog, "u_fbo");
             u_pic = crate::gl::uniform_location(prog, "u_pic");
@@ -69,6 +72,8 @@ impl GamePass {
             u_bright,
             u_uv,
             u_mode,
+            u_colour_correct,
+            colour_correct: false,
             u_paper_size,
             u_fbo,
             fbo_scale: [1.0, 1.0],
@@ -96,6 +101,10 @@ impl GamePass {
 
     pub fn set_effect(&mut self, effect: ScreenEffect) {
         self.effect = effect;
+    }
+
+    pub fn set_colour_correction(&mut self, enabled: bool) {
+        self.colour_correct = enabled;
     }
 
     pub fn set_paper(&mut self, size: u32, rgba: &[u8]) {
@@ -160,6 +169,7 @@ impl GamePass {
             gl::Uniform4f(self.u_uv, src[0], src[1], src[2], src[3]);
             gl::Uniform1f(self.u_bright, screen_brightness(self.power));
             gl::Uniform1f(self.u_mode, self.effect.mode());
+            gl::Uniform1f(self.u_colour_correct, if self.colour_correct { 1.0 } else { 0.0 });
             gl::Uniform1f(self.u_paper_size, self.paper_size);
             gl::Uniform2f(self.u_fbo, self.fbo_scale[0], self.fbo_scale[1]);
             gl::Uniform4f(
