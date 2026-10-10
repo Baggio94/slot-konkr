@@ -105,6 +105,22 @@ def package(root: Path, built: Path):
       await loadIndex();
     }
   }""")
+    # X focuses one game: never ask the bulk Real Label / Logo Only wizard.
+    js = checked_replace(js,
+        "if (s === session && !fatal && s.fill == null) await fillOrAsk(s);",
+        "if (s === session && !fatal && s.fill == null && !s.source.focused) await fillOrAsk(s);")
+    js = checked_replace(js, "let session = null;",
+        """let session = null;
+let lastNativeActionState = '';
+function syncNativeToolbar() {
+  if (!window.AndroidToolbar || !session) return;
+  const save = !$('write-bar').hidden && !$('write').disabled;
+  const fill = !$('fill-open').hidden;
+  const state = String(save) + ':' + String(fill);
+  if (state === lastNativeActionState) return;
+  lastNativeActionState = state;
+  window.AndroidToolbar.actions(save, fill);
+}""")
     # WebView render budget: never compose 125 offscreen cart PNG canvases.
     # The official renderer/label functions stay untouched. Every visible card
     # is painted as it enters the viewport; hidden tabs do no canvas work.
@@ -146,22 +162,6 @@ function observeAndroidCarts(s) {
     updateFillButton();
     return;
   }""")
-    # X focuses one game: never ask the bulk Real Label / Logo Only wizard.
-    js = checked_replace(js,
-        "if (s === session && !fatal && s.fill == null) await fillOrAsk(s);",
-        "if (s === session && !fatal && s.fill == null && !s.source.focused) await fillOrAsk(s);")
-    js = checked_replace(js, "let session = null;",
-        """let session = null;
-let lastNativeActionState = '';
-function syncNativeToolbar() {
-  if (!window.AndroidToolbar || !session) return;
-  const save = !$('write-bar').hidden && !$('write').disabled;
-  const fill = !$('fill-open').hidden;
-  const state = String(save) + ':' + String(fill);
-  if (state === lastNativeActionState) return;
-  lastNativeActionState = state;
-  window.AndroidToolbar.actions(save, fill);
-}""")
     js = checked_replace(js,
         "  $('write').textContent = session.source.direct ? 'Write to card' : 'Download ZIP';",
         "  $('write').textContent = session.source.direct ? 'Save to slot.' : 'Download ZIP';\n  syncNativeToolbar();")
@@ -184,7 +184,7 @@ function syncNativeToolbar() {
     editorFile = target / "editor.js"
     ed = editorFile.read_text("utf-8")
     ed = checked_replace(ed, "    $('ed-query').value = api.name(cart);",
-        """    $('ed-query').value = window.AndroidStudio
+        r"""    $('ed-query').value = window.AndroidStudio
       ? api.name(cart).replace(/\s*\([^)]*\)/g, '').trim()
       : api.name(cart);""")
     ed = checked_replace(ed,
