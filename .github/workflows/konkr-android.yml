@@ -48,6 +48,8 @@ jobs:
           gradle-version: '8.7'
       - name: Test KONKR 3:2 scaling
         run: cargo test -p slot-gfx --no-default-features --test konkr
+      - name: Test original Slot cartridge fidelity
+        run: cargo test -p slot-ui --test cart_material
       - name: Test Android library and shelf selection
         run: cargo test -p slot-android --lib
       - name: Install cargo-ndk
