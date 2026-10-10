@@ -473,8 +473,21 @@ impl Engine {
                     if pressed && self.buttons & ButtonMask::SELECT != 0 {
                         if code == 103 {
                             if let Some(game)=self.game.as_mut() {
-                                if let Err(err)=game.save_manual() {
-                                    set_message(format!("Cannot save state: {err}"));
+                                match game.save_manual() {
+                                    Ok(stamp) => {
+                                        if let Some(uri) = self.requested_uri.as_deref() {
+                                            let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                                            let core = paths.as_ref().map(|(storage, _)| {
+                                                core_selection::selected(storage, uri).as_str()
+                                            }).unwrap_or("mgba");
+                                            let event = serde_json::json!({
+                                                "uri": uri, "core": core, "manual_stamp": stamp
+                                            }).to_string();
+                                            SAVE_SYNC.lock().unwrap_or_else(|e| e.into_inner())
+                                                .push_back(event);
+                                        }
+                                    }
+                                    Err(err) => set_message(format!("Cannot export state: {err}")),
                                 }
                             }
                             return;
