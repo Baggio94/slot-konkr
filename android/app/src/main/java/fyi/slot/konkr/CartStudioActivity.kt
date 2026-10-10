@@ -1,9 +1,12 @@
 package fyi.slot.konkr
 
 import android.app.Activity
+import android.content.Intent
+import android.net.Uri
 import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
+import android.webkit.ValueCallback
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -32,11 +35,13 @@ class CartStudioActivity : Activity() {
         private const val ORIGIN = "https://appassets.androidplatform.net"
         private const val PAGE = "$ORIGIN/studio/index.html"
         private const val TAG = "SlotCartStudio"
+        private const val PICK_CUSTOM_PNG = 4709
     }
 
     private val worker = Executors.newSingleThreadExecutor()
     private val changed = AtomicBoolean(false)
     private var web: WebView? = null
+    private var pendingPngPicker: ValueCallback<Array<Uri>>? = null
 
     private fun immersive() {
         // FLAG_FULLSCREEN removes the status-bar window (the grey strip seen
@@ -149,6 +154,33 @@ class CartStudioActivity : Activity() {
             }
         }
         w.webChromeClient = object : WebChromeClient() {
+            override fun onShowFileChooser(
+                webView: WebView?,
+                filePathCallback: ValueCallback<Array<Uri>>?,
+                fileChooserParams: FileChooserParams?,
+            ): Boolean {
+                if (filePathCallback == null) return false
+                // Original Studio's custom logo/label input needs Android's
+                // document picker; no broad storage permission is requested.
+                pendingPngPicker?.onReceiveValue(null)
+                pendingPngPicker = filePathCallback
+                val pick = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "image/png"
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                return try {
+                    @Suppress("DEPRECATION")
+                    startActivityForResult(pick, PICK_CUSTOM_PNG)
+                    true
+                } catch (error: Exception) {
+                    Log.w(TAG, "Unable to open PNG picker", error)
+                    pendingPngPicker?.onReceiveValue(null)
+                    pendingPngPicker = null
+                    false
+                }
+            }
+
             override fun onConsoleMessage(message: ConsoleMessage?): Boolean {
                 if (message != null) Log.d(TAG, "Studio: " + message.message())
                 return true
@@ -195,6 +227,20 @@ class CartStudioActivity : Activity() {
         WebResourceResponse("text/plain", "UTF-8",
             ByteArrayInputStream("Not found".toByteArray(Charsets.UTF_8)))
 
+    @Deprecated("Android 12 document picker result")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == PICK_CUSTOM_PNG) {
+            val callback = pendingPngPicker
+            pendingPngPicker = null
+            val uri = if (resultCode == RESULT_OK) data?.data else null
+            callback?.onReceiveValue(
+                if (uri?.scheme == "content") arrayOf(uri) else null
+            )
+            immersive()
+        }
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         when (keyCode) {
             KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK -> { finish(); return true }
@@ -222,6 +268,8 @@ class CartStudioActivity : Activity() {
     }
 
     override fun onDestroy() {
+        pendingPngPicker?.onReceiveValue(null)
+        pendingPngPicker = null
         web?.apply {
             stopLoading()
             removeJavascriptInterface("AndroidStudio")
