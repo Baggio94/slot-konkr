@@ -293,6 +293,7 @@ class MainActivity : Activity() {
             return
         }
         gameLoader.execute {
+            val launchStart = SystemClock.elapsedRealtime()
             try {
                 val name = uri.lastPathSegment.orEmpty().lowercase()
                 val ext = when {
@@ -327,6 +328,7 @@ class MainActivity : Activity() {
                         check(temp.renameTo(target)) { "Cannot cache ROM" }
                     } finally { temp.delete() }
                 }
+                val romReadyAt = SystemClock.elapsedRealtime()
                 val savedCore = nativeCoreForUri(rawUri)
                 val core = if (savedCore == "gpsp" && ext == "gba") "gpSP" else "mGBA"
                 val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
@@ -344,6 +346,9 @@ class MainActivity : Activity() {
                     }
                 }
                 activeTargets[rawUri] = shared
+                val readyAt = SystemClock.elapsedRealtime()
+                Log.i(TAG, "Slot launch preparation: ROM cache=${romReadyAt - launchStart}ms, " +
+                    "RetroArch import=${readyAt - romReadyAt}ms, total=${readyAt - launchStart}ms")
                 nativeGameReady(rawUri, target.absolutePath)
             } catch (error: Exception) {
                 Log.e(TAG, "Could not prepare ROM", error)
