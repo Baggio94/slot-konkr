@@ -74,7 +74,10 @@ static SAVE_SYNC: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static CART_SFX: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
 const CART_INSERT_SFX: i32 = 1;
 const CART_EJECT_SFX: i32 = 2;
-const INSERT_SOUND_PROGRESS: f32 = 0.480 / 0.730;
+// Keep the 450ms physical insertion, but shorten the idle seated hold.
+// The original 240ms click ends as the game takes over the display.
+const INSERT_S: f32 = 0.56;
+const INSERT_SOUND_PROGRESS: f32 = (INSERT_S - 0.24) / INSERT_S;
 const EJECT_SOUND_PROGRESS: f32 = 1.0 - (0.350 / 0.450);
 // Upstream Slot screen power transition times (app.rs).
 const SCREEN_POWER_ON_S: f32 = 0.22;
@@ -1153,15 +1156,33 @@ impl Engine {
             self.picker = None;
             self.overlay = ShelfOverlay::None;
         }
-        // Grow/shrink the game viewport with the exact upstream power timing.
-        // During shutdown keep drawing the last uploaded frame; only then
-        // allow the spring-loaded cartridge to eject.
+        // The CRT powers off WHILE the cartridge ejects, not before.
+        // Upstream Slot combines those transitions via SlotChrome::screen.
+        // Rendering the stored game frame also avoids advancing a stopped core.
         if self.exiting_screen {
             self.screen_power = (self.screen_power - dt / SCREEN_POWER_OFF_S).max(0.0);
+            self.progress = advance_cart(self.progress, false, dt);
             self.gpu.set_screen_power(self.screen_power);
+            let mut commands = vec![Draw::Rect {
+                x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
+                colour: [0.085, 0.085, 0.093, 1.0],
+            }];
+            if let Some(shelf) = self.shelves.get(self.active) {
+                if let Some(cart) = shelf.carts.get(shelf.index) {
+                    let (rest, scale) = shelf.selected_at();
+                    shelf.draw_row(Some(cart.stem.as_str()), 0.0, 0.0, 1.0, &mut commands);
+                    SlotChrome {
+                        cart, face: shelf.face(shelf.index), rest, scale,
+                        seat: self.progress, alert: None, dim: 0.0,
+                        screen: self.screen_power, game: true,
+                    }.draw(&mut commands);
+                } else {
+                    commands.push(Draw::Game);
+                }
+            }
             self.gpu.fit(self.size);
             self.gpu.begin_frame();
-            self.gpu.draw_list(&[Draw::Game]);
+            self.gpu.draw_list(&commands);
             self.gpu.end_frame(self.size);
             if self.screen_power <= 0.0 { self.exiting_screen = false; }
             return;
@@ -1188,7 +1209,7 @@ impl Engine {
             }
         }
         // ROM cache may finish at any time, but core.load() and automatic state
-        // restore only occur AFTER the full 730ms insertion has been displayed.
+        // restore only occur after the physical insertion frame has completed.
         if self.inserted && self.progress >= 1.0 && self.seated_frame_seen
             && self.a_down_at.is_none()
         {
@@ -1260,16 +1281,11 @@ impl Engine {
         self.prepare_visible();
         let shelf = &mut self.shelves[self.active];
 
-        // Original Slot's mechanical PCM is kept intact; move its onset to
-        // 480ms so the 240ms clip finishes as the 730ms cart seats on KONKR.
-        // The ejection effect follows the upstream 350ms hold. Keep this
-        // independent of the game AudioTrack: no emulator needs to be running.
+        // Original mechanical PCM is intact: play the 240ms insertion clip
+        // during the final portion of the 560ms animation. Exit overlaps
+        // the screen-off effect with the physical eject motion.
         let previous_progress = self.progress;
-        self.progress = if self.inserted {
-            (self.progress + dt / 0.73).min(1.0)
-        } else {
-            (self.progress - dt / EJECT_S).max(0.0)
-        };
+        self.progress = advance_cart(self.progress, self.inserted, dt);
         if self.inserted && previous_progress < INSERT_SOUND_PROGRESS
             && self.progress >= INSERT_SOUND_PROGRESS
         {
@@ -1331,6 +1347,16 @@ impl Engine {
         self.gpu.draw_list(&commands);
         self.gpu.end_frame(self.size);
         self.seated_frame_seen = self.inserted && self.progress >= 1.0;
+    }
+}
+
+/// Same easing timeline for the shelf and CRT-composited exit frames.
+/// Separating progress from rendering makes the animation durations testable.
+fn advance_cart(progress: f32, inserted: bool, dt: f32) -> f32 {
+    if inserted {
+        (progress + dt / INSERT_S).min(1.0)
+    } else {
+        (progress - dt / EJECT_S).max(0.0)
     }
 }
 
