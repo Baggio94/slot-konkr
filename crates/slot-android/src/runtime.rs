@@ -24,7 +24,8 @@ use slot_ui::{
     BOARD_X, BOARD_W, SOCKET_U, SOCKET_V, SOCKET_W, SOCKET_H,
     CHIP_U, CHIP_V, CHIP_W, CHIP_H, HOP_LIFT, TURN_PAD, SHADOW_W, SHADOW_H,
     CART_W, hint_face, arrows_hint_face, title_face, photo_face, Polaroids, Printed, HINT_H, HINT_EDGE,
-    draw_footer, draw_slot_name, word_face, icon_face, Icon, BOLT_PX, HUD_INK,
+    draw_footer, draw_slot_name, draw_platform_name, word_face, platform_name_face,
+    icon_face, Icon, BOLT_PX, HUD_INK,
     Hud, HudKind, FfState, Toast, toast_face, QUICK_PITCH, opening, edge, centred_hints, LEGEND_GAP,
     sticker_face_konkr, StickerFields, STICKER_W, STICKER_H, quick_caret_face,
 };
@@ -327,10 +328,11 @@ impl Engine {
             shelves.push(Shelf::new(carts));
         }
 
-        // Exactly match upstream Slot Platform::name() and word_face() glyphs.
-        // Cache these three textures once, not on every shelf switch.
+        // Same compact size for all three platforms, rasterised at 3x
+        // resolution before downsampling to Slot's 720x480 design canvas.
+        // Cache textures once rather than rebuilding on every L1/R1.
         let platform_faces = Platform::ALL.map(|platform| {
-            let face = word_face(platform.name());
+            let face = platform_name_face(platform_abbrev(platform));
             let tex = gpu.create_texture(face.w, face.h, &face.rgba);
             Printed::new(tex, face.w)
         });
@@ -2044,7 +2046,7 @@ impl Engine {
                     if platform_name_running(elapsed_ms) {
                         let alpha = slot_name_alpha(elapsed_ms);
                         if alpha > 0.0 {
-                            draw_slot_name(self.platform_faces[self.active], alpha, &mut commands);
+                            draw_platform_name(self.platform_faces[self.active], alpha, &mut commands);
                         }
                     } else {
                         self.platform_shown_at = None;
@@ -2092,6 +2094,14 @@ impl Engine {
 /// Slot. keeps the label timer alive even when fade-in alpha is initially zero.
 /// Time-based expiry (not alpha-based) is essential for reliable GBA startup
 /// and every L1/R1 GB/GBC/GBA switch on a high-refresh-rate Android panel.
+fn platform_abbrev(platform: Platform) -> &'static str {
+    match platform {
+        Platform::Gba => "GBA",
+        Platform::Gb => "GB",
+        Platform::Gbc => "GBC",
+    }
+}
+
 fn platform_name_running(elapsed_ms: u64) -> bool {
     elapsed_ms < 200 + 1200 + 800
 }
@@ -2221,9 +2231,15 @@ mod ui_feedback_tests {
         assert!(slot_name_alpha(2000) > 0.0);
         assert_eq!(slot_name_alpha(2200), 0.0);
         assert_eq!(slot_name_alpha(3500), 0.0);
-        assert_eq!(Platform::Gba.name(), "Game Boy Advance");
-        assert_eq!(Platform::Gb.name(), "Game Boy");
-        assert_eq!(Platform::Gbc.name(), "Game Boy Color");
+        assert_eq!(platform_abbrev(Platform::Gba), "GBA");
+        assert_eq!(platform_abbrev(Platform::Gb), "GB");
+        assert_eq!(platform_abbrev(Platform::Gbc), "GBC");
+        for platform in Platform::ALL {
+            let face = platform_name_face(platform_abbrev(platform));
+            assert_eq!(face.h, HINT_H * slot_ui::PLATFORM_NAME_SCALE);
+            assert!(face.w > 0);
+            assert_eq!(face.rgba.len(), (face.w * face.h * 4) as usize);
+        }
     }
 
     #[test]

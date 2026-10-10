@@ -212,10 +212,9 @@ fn draw_slot_back(alpha: f32, out: &mut Vec<Draw>) {
 
 fn draw_slot_front(alpha: f32, out: &mut Vec<Draw>) {
     front_bands(|x, y, w, h, c| out.push(band(x, y, w, h, c, alpha)));
-    // Android material treatment: three soft satin highlights and the shadow
-    // under the lip. Preserve the original Slot receiver geometry and theme.
-    // This is deliberately just a handful of rectangles, not noisy geometry
-    // or a full-screen texture updated on every animation frame.
+    // Keep Android's original satin finish on the external shoulders, without
+    // drawing extra bevel strips inside the cart receiving mouth. Those two
+    // Android-only strips were the visible horizontal artefact on KONKR.
     #[cfg(target_os = "android")]
     if alpha > 0.0 {
         let shoulders = [(0.0, BAY_X), (BAY_X + BAY_W, OUT_W as f32 - BAY_X - BAY_W)];
@@ -227,12 +226,6 @@ fn draw_slot_front(alpha: f32, out: &mut Vec<Draw>) {
             out.push(band(x, BAND_Y + 8.0, w, 2.0,
                 [0.0, 0.0, 0.0, 0.12], alpha));
         }
-        // The curved receiving notch has a subtle polished bevel. The groove
-        // itself remains dark so the cartridge still looks seated in a recess.
-        out.push(band(MOUTH_X + 7.0, SLIT_Y + SLIT_H + 1.0,
-            MOUTH_W - 14.0, 2.0, [1.0, 1.0, 1.0, 0.13], alpha));
-        out.push(band(MOUTH_X + 7.0, SLIT_Y + SLIT_H + 3.0,
-            MOUTH_W - 14.0, 2.0, [0.0, 0.0, 0.0, 0.22], alpha));
     }
 }
 
@@ -272,11 +265,11 @@ fn for_each_scoop_span(mut span: impl FnMut(f32, f32, f32)) {
     }
 }
 
-pub fn draw_slot_name(name: Printed, alpha: f32, out: &mut Vec<Draw>) {
+fn draw_slot_name_at_scale(name: Printed, alpha: f32, scale: f32, out: &mut Vec<Draw>) {
     let (Some(tex), true) = (name.face, alpha > 0.0) else {
         return;
     };
-    let (w, h) = (name.w as f32, HINT_H as f32);
+    let (w, h) = (name.w as f32 / scale, HINT_H as f32);
     let hole = SCOOP_Y + SCOOP_D - SLIT_Y;
     out.push(Draw::Tex {
         x: CX - w / 2.0,
@@ -286,6 +279,15 @@ pub fn draw_slot_name(name: Printed, alpha: f32, out: &mut Vec<Draw>) {
         tex,
         alpha,
     });
+}
+
+pub fn draw_slot_name(name: Printed, alpha: f32, out: &mut Vec<Draw>) {
+    draw_slot_name_at_scale(name, alpha, 1.0, out);
+}
+
+/// Draw a 3× supersampled short platform name at the same native text size.
+pub fn draw_platform_name(name: Printed, alpha: f32, out: &mut Vec<Draw>) {
+    draw_slot_name_at_scale(name, alpha, crate::plate::PLATFORM_NAME_SCALE as f32, out);
 }
 
 pub fn draw_empty_slot(out: &mut Vec<Draw>) {

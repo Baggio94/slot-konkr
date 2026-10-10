@@ -102,6 +102,26 @@ pub fn word_face(text: &str) -> UndoFace {
     UndoFace { rgba, w, h: HINT_H }
 }
 
+/// High-resolution GBA / GB / GBC legend for the KONKR's 960×640 panel.
+/// Render at 3× the exact same 16px Slot label size, then draw at 1/3.
+///
+/// Extra transparent left/right padding protects against glyph clipping at
+/// larger text rasterisation while preserving all three labels' font size.
+pub const PLATFORM_NAME_SCALE: u32 = 3;
+
+pub fn platform_name_face(text: &str) -> UndoFace {
+    let scale = PLATFORM_NAME_SCALE;
+    let w = (word_width(text) + 6) * scale;
+    let h = HINT_H * scale;
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    if let Some(font) = text::label_font() {
+        let px = LABEL_PX * scale as f32;
+        let layout = text::fit(font, text, w as f32, 1, px, px);
+        text::draw_centred(&mut rgba, w, h, &layout, INK);
+    }
+    UndoFace { rgba, w, h }
+}
+
 pub fn hint_quad(x: f32, y: f32, w: f32, face: Option<TexId>) -> Draw {
     let h = HINT_H as f32;
     match face {
