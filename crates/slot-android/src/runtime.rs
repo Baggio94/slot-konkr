@@ -473,6 +473,7 @@ impl Engine {
         self.hud.set_ff(FfState::Off);
         self.hud.release_rewind();
         AUDIO_SPEED_PERMILLE.store(1000, Ordering::Release);
+        RUMBLE_STRENGTH.store(0, Ordering::Release);
     }
 
     fn handle(&mut self, input: Input) {
@@ -585,6 +586,7 @@ impl Engine {
                             self.game_accum=0.0;
                             AUDIO.lock().unwrap_or_else(|e|e.into_inner()).clear();
                             self.reset_time_controls();
+                            RUMBLE_STRENGTH.store(0, Ordering::Release);
                             if is_double {
                                 self.open_polaroids();
                             } else {
@@ -718,7 +720,9 @@ impl Engine {
                         // Flush old transport-speed PCM at every FF edge.
                         AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
                         AUDIO_SPEED_PERMILLE.store(
-                            if self.ff_latched || self.ff_held { 2000 } else { 1000 },
+                            if self.ff_latched || self.ff_held {
+                                i32::from(self.settings.ff_speed) * 1000
+                            } else { 1000 },
                             Ordering::Release);
                         self.hud.set_ff(match (self.ff_latched, self.ff_held) {
                             (true, _) => FfState::Latched,
@@ -1575,21 +1579,21 @@ impl Engine {
                 self.hud.show(HudKind::Rewind, session.rewind_fill(), false,
                     self.born.elapsed().as_millis() as u64);
             } else {
-                // Keep game speed based on libretro FPS, never screen refresh.
-                // At 2x, consume up to 8 core frames per render tick. Silent FF
-                // avoids unsupported resampling/pitch changes in AudioTrack.
+                // Original Slot offers 2/3/4/6x, independent of display Hz.
                 let fast = self.ff_held || self.ff_latched;
-                self.game_accum = (self.game_accum + f64::from(dt) *
-                    if fast { FF_FACTOR } else { 1.0 })
-                    .min(if fast { 0.20 } else { 0.10 });
+                let multiplier = if fast { f64::from(self.settings.ff_speed) } else { 1.0 };
+                self.game_accum = (self.game_accum + f64::from(dt) * multiplier)
+                    .min(if fast { 0.40 } else { 0.10 });
                 let period = 1.0 / session.fps;
-                let frame_limit = if fast { 8 } else { 4 };
+                let frame_limit = if fast { usize::from(self.settings.ff_speed) * 4 }
+                    else { 4 };
                 while self.game_accum >= period && stepped < frame_limit {
                     session.advance(self.buttons);
                     self.game_accum -= period;
                     stepped += 1;
                     let samples = session.take_audio();
-                    if (!fast || FF_AUDIO_SUPPORTED.load(Ordering::Acquire))
+                    if (!fast || (self.settings.ff_sound &&
+                        FF_AUDIO_SUPPORTED.load(Ordering::Acquire)))
                         && !samples.is_empty() {
                         let mut audio = AUDIO.lock().unwrap_or_else(|e| e.into_inner());
                         let overflow = audio.len().saturating_add(samples.len()).saturating_sub(96_000);
@@ -1598,7 +1602,15 @@ impl Engine {
                     }
                 }
             }
-            if stepped > 0 { self.gpu.upload_game(session.frame()); }
+            if stepped > 0 {
+                self.gpu.upload_game(session.frame());
+                RUMBLE_STRENGTH.store(
+                    if self.settings.rumble && !self.rewind_held {
+                        i32::from(session.rumble_strength())
+                    } else { 0 },
+                    Ordering::Release,
+                );
+            }
             self.gpu.fit(self.size);
             self.gpu.begin_frame();
             let mut commands = vec![Draw::Game];
