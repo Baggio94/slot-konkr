@@ -221,9 +221,8 @@ impl GameSession {
         // Keep Slot's Polaroid history private. The Android storage worker
         // publishes a distinct, verified RetroArch .stateN after this returns.
         let encoded = retroarch_state::encode(&state)?;
-        let export = self.manual_export_prefix.with_extension("");
         let export = std::path::PathBuf::from(format!(
-            "{}.{}.rastate", export.display(), stamp
+            "{}.{}.rastate", self.manual_export_prefix.display(), stamp
         ));
         atomic_write(&export, &encoded).map_err(|error|
             format!("Polaroid saved, manual RetroArch export failed: {error}"))?;
