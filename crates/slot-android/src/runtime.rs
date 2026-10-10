@@ -75,7 +75,11 @@ static CART_SFX: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
 const CART_INSERT_SFX: i32 = 1;
 const CART_EJECT_SFX: i32 = 2;
 const INSERT_SOUND_PROGRESS: f32 = 0.480 / 0.730;
-const EJECT_SOUND_PROGRESS: f32 = 1.0 - (0.350 / 0.730);
+const EJECT_SOUND_PROGRESS: f32 = 1.0 - (0.350 / 0.450);
+// Upstream Slot screen power transition times (app.rs).
+const SCREEN_POWER_ON_S: f32 = 0.22;
+const SCREEN_POWER_OFF_S: f32 = 0.16;
+const EJECT_S: f32 = 0.45;
 static MESSAGE: Mutex<Option<String>> = Mutex::new(None);
 static PATHS: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
 static AUDIO: Mutex<VecDeque<i16>> = Mutex::new(VecDeque::new());
@@ -159,6 +163,8 @@ struct Engine {
     active: usize,
     inserted: bool,
     progress: f32,
+    screen_power: f32,
+    exiting_screen: bool,
     born: Instant,
     last: Instant,
     library_version: u64,
@@ -278,6 +284,8 @@ impl Engine {
             active,
             inserted: false,
             progress: 0.0,
+            screen_power: 0.0,
+            exiting_screen: false,
             born: now,
             last: now,
             library_version,
@@ -382,6 +390,9 @@ impl Engine {
                 AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
             }
             Input::Exit => {
+                // Preserve the final video texture for the original 160ms CRT
+                // power-off before the mechanical 450ms cartridge ejection.
+                if self.game.is_some() { self.exiting_screen = true; }
                 // The reversed cart animation will emit the original eject sound.
                 if self.progress > 0.0 || self.inserted { self.eject_sound_armed = true; }
                 if let Some(mut session) = self.game.take() {
@@ -841,7 +852,9 @@ impl Engine {
                     self.game = Some(session);
                     self.game_accum = 0.0;
                     self.gpu.set_screen_effect(ScreenEffect::None);
-                    self.gpu.set_screen_power(1.0);
+                    self.screen_power = 0.0;
+                    self.exiting_screen = false;
+                    self.gpu.set_screen_power(0.0);
                     PLAYING.store(true, Ordering::Release);
                 }
                 Err(error) => {
@@ -1124,6 +1137,23 @@ impl Engine {
             self.picker = None;
             self.overlay = ShelfOverlay::None;
         }
+        // Grow/shrink the game viewport with the exact upstream power timing.
+        // During shutdown keep drawing the last uploaded frame; only then
+        // allow the spring-loaded cartridge to eject.
+        if self.exiting_screen {
+            self.screen_power = (self.screen_power - dt / SCREEN_POWER_OFF_S).max(0.0);
+            self.gpu.set_screen_power(self.screen_power);
+            self.gpu.fit(self.size);
+            self.gpu.begin_frame();
+            self.gpu.draw_list(&[Draw::Game]);
+            self.gpu.end_frame(self.size);
+            if self.screen_power <= 0.0 { self.exiting_screen = false; }
+            return;
+        }
+        if self.game.is_some() {
+            self.screen_power = (self.screen_power + dt / SCREEN_POWER_ON_S).min(1.0);
+            self.gpu.set_screen_power(self.screen_power);
+        }
         // Holding physical MENU saves, ejects, and returns to shelf without
         // requiring a second keypress or sending MENU to libretro.
         if self.game.is_some()
@@ -1219,11 +1249,10 @@ impl Engine {
         // The ejection effect follows the upstream 350ms hold. Keep this
         // independent of the game AudioTrack: no emulator needs to be running.
         let previous_progress = self.progress;
-        let change = dt / 0.73;
         self.progress = if self.inserted {
-            (self.progress + change).min(1.0)
+            (self.progress + dt / 0.73).min(1.0)
         } else {
-            (self.progress - change).max(0.0)
+            (self.progress - dt / EJECT_S).max(0.0)
         };
         if self.inserted && previous_progress < INSERT_SOUND_PROGRESS
             && self.progress >= INSERT_SOUND_PROGRESS
