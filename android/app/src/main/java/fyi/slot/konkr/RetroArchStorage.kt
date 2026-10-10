@@ -146,6 +146,45 @@ internal object RetroArchStorage {
         return failures
     }
 
+    /** Export each new Slot Polaroid to the first EMPTY RetroArch manual slot.
+     * Never replace the user's existing .state/.state1..state9 files.
+     * The private 10-entry Polaroid ring remains independent.
+     */
+    fun exportManualState(context: Context, target: Target, stamp: String): List<String> {
+        val failures = mutableListOf<String>()
+        try {
+            require(stamp.matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}"))) {
+                "Invalid Slot state timestamp"
+            }
+            val staged = File(target.manualExportPrefix.absolutePath + "." + stamp + ".rastate")
+            val bytes = staged.readBytes()
+            RetroArchCompression.requireSupportedContainer(bytes)
+            val compressed = RetroArchCompression.encode(bytes)
+            for (slot in 0..9) {
+                val name = target.stem + if (slot == 0) ".state" else ".state$slot"
+                if (target.statesTree != null) {
+                    if (find(context, target.statesTree, target.core, name) != null) continue
+                    writeSaf(context, target.statesTree, target.core,
+                        name, compressed, isState = true, createOnly = true)
+                } else {
+                    val local = File(target.stateDefaultLocal.parentFile, name)
+                    if (local.exists()) continue
+                    stage(local, compressed)
+                    check(local.readBytes().contentEquals(compressed)) {
+                        "Private numbered state verification failed"
+                    }
+                }
+                if (!staged.delete()) Log.w(TAG, "Manual staging cleanup deferred: $staged")
+                return failures
+            }
+            error("Manual slots 0-9 are occupied; Polaroid remains saved inside Slot")
+        } catch (e: Exception) {
+            Log.e(TAG, "RetroArch manual state export skipped", e)
+            failures.add("Manual state sync skipped: " + (e.message ?: "unsupported format"))
+        }
+        return failures
+    }
+
     private fun queryRomName(context: Context, uri: Uri): String {
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME),
             null, null, null)?.use { cursor ->
@@ -219,12 +258,16 @@ internal object RetroArchStorage {
     }
 
     private fun writeSaf(context: Context, root: Uri, core: String,
-                         name: String, bytes: ByteArray, isState: Boolean) {
+                         name: String, bytes: ByteArray, isState: Boolean,
+                         createOnly: Boolean = false) {
         val resolver = context.contentResolver
         val folder = coreFolder(context, root, core, create = true)
             ?: error("Cannot access RetroArch core folder")
         val dirId = DocumentsContract.getDocumentId(folder)
         val existing = children(context, root, dirId).firstOrNull { it.first == name }?.second
+        require(!createOnly || existing == null) {
+            "Manual RetroArch slot was occupied during sync; preserved"
+        }
         if (existing != null) {
             val old = read(context, existing, if (isState) MAX_STATE else MAX_SAVE)
             if (old.contentEquals(bytes)) return
