@@ -4,6 +4,7 @@ import android.app.Activity
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.media.PlaybackParams
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -81,6 +82,8 @@ class MainActivity : Activity() {
     external fun nativeSuspend()
     external fun nativeIsPlaying(): Boolean
     external fun nativeAudioSampleRate(): Int
+    external fun nativeAudioSpeedPermille(): Int
+    external fun nativeFastAudioSupported(supported: Boolean)
     external fun nativeReadAudio(): ShortArray
     external fun nativePollMessage(): String?
     external fun nativeSystemStatus(clock: String, batteryPercent: Int, charging: Boolean)
@@ -368,6 +371,7 @@ class MainActivity : Activity() {
         audioThread = Thread({
             var player: AudioTrack? = null
             var rate = 0
+            var requestedSpeed = 0
             try {
                 while (audioRunning.get()) {
                     val wanted = nativeAudioSampleRate()
@@ -397,7 +401,32 @@ class MainActivity : Activity() {
                             .setTransferMode(AudioTrack.MODE_STREAM)
                             .build()
                         rate = wanted
+                        requestedSpeed = 0
                         player.play()
+                    }
+                    val speed = if (nativeAudioSpeedPermille() >= 1500) 2000 else 1000
+                    if (speed != requestedSpeed) {
+                        requestedSpeed = speed
+                        try {
+                            // Android time-stretches to 2x while preserving
+                            // the ORIGINAL sample pitch (not 2x chipmunk audio).
+                            // If the Audio HAL cannot stretch, mute rather
+                            // than silently playing an incorrect-pitch stream.
+                            val params = PlaybackParams()
+                                .setSpeed(speed / 1000f)
+                                .setPitch(1.0f)
+                                .setAudioFallbackMode(PlaybackParams.AUDIO_FALLBACK_MODE_MUTE)
+                            player.playbackParams = params
+                            nativeFastAudioSupported(true)
+                            Log.i(TAG, "FF audio: speed=${speed / 1000f}x, pitch=1.0x")
+                        } catch (error: Exception) {
+                            Log.w(TAG, "Pitch-preserving FF unsupported; silent fallback", error)
+                            nativeFastAudioSupported(false)
+                            try {
+                                player.playbackParams = PlaybackParams()
+                                    .setSpeed(1.0f).setPitch(1.0f)
+                            } catch (_: Exception) { }
+                        }
                     }
                     val samples = nativeReadAudio()
                     if (samples.isEmpty()) {
