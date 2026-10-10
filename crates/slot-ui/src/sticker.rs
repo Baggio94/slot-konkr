@@ -202,6 +202,33 @@ impl Canvas {
 }
 
 pub fn sticker_face(f: &StickerFields) -> UndoFace {
+    sticker_face_custom(f, &CREDITS, &ORIGIN, COPYRIGHT, HOME)
+}
+
+/// The KONKR port uses the *same* SVG backing, Code39 barcode, typography,
+/// dimensions and logo as original Slot, with truthful port credits.
+pub fn sticker_face_konkr(f: &StickerFields) -> UndoFace {
+    const PORT_CREDITS: [&str; 10] = [
+        "SLOT. FOR KONKR POCKET",
+        "ADVANCE. ORIGINAL SLOT.",
+        "BY BRANDON T. KOWALSKI.",
+        "ANDROID PORT BY BAGGIO94.",
+        "EMULATION POWERED BY MGBA",
+        "AND GPSP LIBRETRO CORES.",
+        "ORIGINAL UI & CART ART BY",
+        "BRANDON T. KOWALSKI.",
+        "TYPE: OPEN SANS / NERD",
+        "FONTS. OPEN SOURCE SOFTWARE.",
+    ];
+    sticker_face_custom(
+        f, &PORT_CREDITS, &["S/LOT-KONKR", "ANDROID EDITION"],
+        "2026 SLOT. COMMUNITY", "0.0.7-DEV13",
+    )
+}
+
+fn sticker_face_custom(f: &StickerFields, credits: &[&str; 10],
+                       origin: &[&str; 2], copyright: &str,
+                       home: &str) -> UndoFace {
     let mut c = Canvas::shape(STICKER_W, STICKER_H);
     let panel_x = (PANEL_FX * STICKER_W as f32).round() as u32;
     let panel_y = (PANEL_FY * STICKER_H as f32).round() as u32;
@@ -223,14 +250,14 @@ pub fn sticker_face(f: &StickerFields) -> UndoFace {
         y = c.print(left, y, line, HEAD_PX, WHITE);
     }
     y += 3.0;
-    for line in CREDITS {
+    for line in credits {
         y = c.print(left, y, line, BODY_PX, WHITE);
     }
     y += 3.0;
     let col_right = panel_x as f32 - MARGIN;
-    c.print(left, y, ORIGIN[0], BODY_PX, WHITE);
-    let maker_w = c.print_measure(ORIGIN[1], BODY_PX);
-    c.print(col_right - maker_w, y, ORIGIN[1], BODY_PX, WHITE);
+    c.print(left, y, origin[0], BODY_PX, WHITE);
+    let maker_w = c.print_measure(origin[1], BODY_PX);
+    c.print(col_right - maker_w, y, origin[1], BODY_PX, WHITE);
 
     let bars_y = panel_y + 14;
     let bars_h = 62;
@@ -288,7 +315,7 @@ pub fn sticker_face(f: &StickerFields) -> UndoFace {
         );
         ry += mh as f32 + 4.0;
     }
-    for line in [COPYRIGHT, HOME] {
+    for line in [copyright, home] {
         let lw = c.print_measure(line, SMALL_PX);
         ry = c.print(right_edge - lw - 10.0, ry, line, SMALL_PX, WHITE);
     }
