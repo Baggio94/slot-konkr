@@ -67,10 +67,10 @@ def package(root: Path, built: Path):
     # Load the official art index concurrently with local library setup:
     # the three tabs and edited cartridge remain usable with slow/offline Wi-Fi.
     js = checked_replace(js, "let artIndex = null;",
-        "let artIndex = null;\\nlet androidIndexReady = Promise.resolve();")
+        "let artIndex = null;\nlet androidIndexReady = Promise.resolve();")
     js = checked_replace(js,
-        "async function match(s) {\\n  // One database per platform",
-        "async function match(s) {\\n  await androidIndexReady;\\n  // One database per platform")
+        "async function match(s) {\n  // One database per platform",
+        "async function match(s) {\n  await androidIndexReady;\n  // One database per platform")
     js = checked_replace(js,
         """  if (ART_BASE) {
     try {
