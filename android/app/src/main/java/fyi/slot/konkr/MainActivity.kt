@@ -54,6 +54,7 @@ class MainActivity : Activity() {
         private const val STATE_REQUEST = 4704
         private const val THEME_REQUEST = 4705
         private const val WALLPAPER_REQUEST = 4706
+        private const val LABEL_REQUEST = 4707
         private const val PREFS = "slot_konkr_library"
         private const val ROM_ROOT = "rom_root_uri"
         private const val BIOS_ROOT = "bios_root_uri"
@@ -95,11 +96,14 @@ class MainActivity : Activity() {
     external fun nativeSystemStatus(clock: String, batteryPercent: Int, charging: Boolean)
     external fun nativePollUiAction(): Int
     external fun nativeReloadVisualAssets()
+    external fun nativePollCartLabelUri(): String?
+    external fun nativeReloadCartLabel(uri: String)
     external fun nativePollCartSfx(): Int
     external fun nativePollRumbleStrength(): Int
     external fun nativeCoreForUri(uri: String): String
     external fun nativePollSaveFlush(): String?
 
+    private var pendingCartLabelUri: String? = null
     private lateinit var cartSounds: CartSounds
     private val scanner = Executors.newSingleThreadExecutor()
     private val gameLoader = Executors.newSingleThreadExecutor()
@@ -165,6 +169,8 @@ class MainActivity : Activity() {
                 8 -> openVisualPicker(WALLPAPER_REQUEST)
                 9 -> resetVisualFile(THEME_REQUEST)
                 10 -> resetVisualFile(WALLPAPER_REQUEST)
+                11 -> openCartLabelPicker()
+                12 -> removeSelectedCartLabel()
             }
             nativePollMessage()?.let { message ->
                 Log.w(TAG, message)
@@ -690,9 +696,94 @@ class MainActivity : Activity() {
         }
     }
 
+    // Match the Rust core_selection::key FNV-1a exactly. Cartridge
+    // labels belong to opaque SAF URIs, not their non-unique filenames.
+    private fun cartLabelFile(romUri: String): File {
+        var hash = -3750763034362895579L // unsigned 0xcbf29ce484222325
+        for (byte in romUri.toByteArray(Charsets.UTF_8)) {
+            hash = (hash xor (byte.toInt() and 0xff).toLong()) * 0x100000001b3L
+        }
+        val name = java.lang.Long.toUnsignedString(hash, 16).padStart(16, '0')
+        return File(File(filesDir, "Labels"), "$name.png")
+    }
+
+    private fun openCartLabelPicker() {
+        val selected = nativePollCartLabelUri()
+        if (selected.isNullOrBlank()) {
+            Toast.makeText(this, "Select a cartridge first", Toast.LENGTH_SHORT).show()
+            return
+        }
+        pendingCartLabelUri = selected
+        openVisualPicker(LABEL_REQUEST)
+    }
+
+    private fun removeSelectedCartLabel() {
+        val selected = nativePollCartLabelUri() ?: return
+        val file = cartLabelFile(selected)
+        if (file.exists() && !file.delete()) {
+            Toast.makeText(this, "Could not remove label", Toast.LENGTH_LONG).show()
+            return
+        }
+        nativeReloadCartLabel(selected)
+        Toast.makeText(this, "Original Slot. label restored", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun importCartLabel(source: Uri, romUri: String) {
+        try {
+            // Only standalone PNG artwork: not a ROM/BIOS folder or a
+            // serialized game state. Decode bounds before storing it.
+            val bytes = contentResolver.openInputStream(source)?.use { stream ->
+                val output = ByteArrayOutputStream()
+                val chunk = ByteArray(8192)
+                while (true) {
+                    val count = stream.read(chunk)
+                    if (count < 0) break
+                    if (output.size() + count > 2 * 1024 * 1024) {
+                        throw IllegalArgumentException("Cartridge label exceeds 2 MiB")
+                    }
+                    output.write(chunk, 0, count)
+                }
+                output.toByteArray()
+            } ?: throw IllegalArgumentException("Cannot open label image")
+            val signature = byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)
+            require(bytes.size >= 8 && bytes.copyOfRange(0, 8).contentEquals(signature)) {
+                "Cartridge artwork must be a PNG"
+            }
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            require(bounds.outWidth in 1..2048 && bounds.outHeight in 1..2048) {
+                "Unsupported cartridge-label dimensions"
+            }
+            val target = cartLabelFile(romUri)
+            target.parentFile?.mkdirs()
+            val atomic = AtomicFile(target)
+            val output = atomic.startWrite()
+            try {
+                output.write(bytes)
+                atomic.finishWrite(output)
+            } catch (error: Exception) {
+                atomic.failWrite(output)
+                throw error
+            }
+            nativeReloadCartLabel(romUri)
+            Toast.makeText(this, "Cartridge label applied", Toast.LENGTH_SHORT).show()
+        } catch (error: Exception) {
+            Log.e(TAG, "Could not import cartridge label", error)
+            Toast.makeText(this, "Label import failed: " + error.message, Toast.LENGTH_LONG).show()
+        }
+    }
+
     @Deprecated("Android 12 SAF activity result")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == LABEL_REQUEST) {
+            val selected = pendingCartLabelUri
+            pendingCartLabelUri = null
+            if (resultCode == RESULT_OK && selected != null) {
+                data?.data?.let { importCartLabel(it, selected) }
+            }
+            return
+        }
         if (requestCode == THEME_REQUEST || requestCode == WALLPAPER_REQUEST) {
             if (resultCode == RESULT_OK) data?.data?.let { importVisualFile(requestCode, it) }
             return

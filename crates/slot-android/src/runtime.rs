@@ -68,10 +68,12 @@ enum Input {
     Exit,
     Suspend,
     ReloadVisuals,
+    ReloadCartLabel { uri: String },
 }
 
 static INPUT: Mutex<VecDeque<Input>> = Mutex::new(VecDeque::new());
 static REQUEST: Mutex<Option<String>> = Mutex::new(None);
+static LABEL_PICK_REQUEST: Mutex<Option<String>> = Mutex::new(None);
 static UI_ACTION: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
 static SAVE_SYNC: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static CART_SFX: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
@@ -148,7 +150,7 @@ enum ShelfOverlay {
     States,
 }
 
-const MENU_TEXT: [&str; 46] = [
+const MENU_TEXT: [&str; 48] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Scraping",                         // 2
@@ -195,6 +197,8 @@ const MENU_TEXT: [&str; 46] = [
     "Import Wallpaper",                 // 43
     "Reset Theme",                      // 44
     "Remove Wallpaper",                 // 45
+    "Import Selected Cart Label",       // 46
+    "Remove Selected Cart Label",       // 47
 ];
 
 struct Engine {
@@ -289,7 +293,15 @@ impl Engine {
         // First-run empty shelf: never synthesize fake demo cartridges.
         let grouped = library.map(carts_by_platform)
             .unwrap_or_else(|| std::array::from_fn(|_| Vec::new()));
-        for carts in grouped {
+        for mut carts in grouped {
+            if let Some(root) = visuals_root.as_deref() {
+                for cart in &mut carts {
+                    let uri = cart.rom.to_string_lossy();
+                    let filename = format!("{}.png", core_selection::key(&uri));
+                    // Only app-private labels are used; never rewrite ROMs.
+                    cart.label = Some(root.join("Labels").join(filename));
+                }
+            }
             shelves.push(Shelf::new(carts));
         }
 
@@ -531,6 +543,18 @@ impl Engine {
                             self.gpu.create_texture(OUT_W, OUT_H, &rgba)
                         }
                     });
+                }
+            }
+            Input::ReloadCartLabel { uri } => {
+                for shelf in &self.shelves {
+                    for (index, cart) in shelf.carts.iter().enumerate() {
+                        if cart.rom.to_string_lossy() == uri {
+                            if let Some(tex) = shelf.face(index) {
+                                let face = cart_face_with_material(cart, None);
+                                self.gpu.update_texture(tex, face.w, face.h, &face.rgba);
+                            }
+                        }
+                    }
                 }
             }
             Input::Reset => {
@@ -906,11 +930,24 @@ impl Engine {
                             },
                             ShelfOverlay::Personalization { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::Personalization {
-                                    row: move_menu_row(row, code, 4),
+                                    row: move_menu_row(row, code, 6),
                                 },
                                 96 => {
+                                    let action = if row < 4 { 7 + row as i32 }
+                                                 else { 11 + (row - 4) as i32 };
+                                    if action >= 11 {
+                                        if let Some(cart) = self.shelves[self.active].carts
+                                            .get(self.shelves[self.active].index) {
+                                            *LABEL_PICK_REQUEST.lock()
+                                                .unwrap_or_else(|e| e.into_inner()) =
+                                                Some(cart.rom.to_string_lossy().into_owned());
+                                        } else {
+                                            set_message("Choose a cartridge first".into());
+                                            return;
+                                        }
+                                    }
                                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
-                                        .push_back(7 + row as i32);
+                                        .push_back(action);
                                 }
                                 97 => self.overlay = ShelfOverlay::Menu { row: 4 },
                                 108 => self.overlay = ShelfOverlay::None,
@@ -1413,7 +1450,7 @@ impl Engine {
                 self.draw_original_style_menu(26, &[32, 33, 31], row, out);
             }
             ShelfOverlay::Personalization { row } => {
-                self.draw_original_style_menu(41, &[42, 43, 44, 45], row, out);
+                self.draw_original_style_menu(41, &[42, 43, 44, 45, 46, 47], row, out);
             }
             ShelfOverlay::ScreenSettings { row } => {
                 self.draw_original_style_menu(32, &[34, 35, 29, 36], row, out);
@@ -1628,7 +1665,7 @@ impl Engine {
             ShelfOverlay::Settings { row } => (4u8, row, 3usize),
             ShelfOverlay::ScreenSettings { row } => (5u8, row, 4usize),
             ShelfOverlay::GameplaySettings { row } => (6u8, row, 6usize),
-            ShelfOverlay::Personalization { row } => (7u8, row, 4usize),
+            ShelfOverlay::Personalization { row } => (7u8, row, 6usize),
             _ => (0, 0, 0),
         };
         if kind != self.menu_seen {
@@ -2057,6 +2094,27 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceChanged(
             engine.size = (width.max(1) as u32, height.max(1) as u32);
         }
     });
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollCartLabelUri(
+    env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jstring {
+    let uri = LABEL_PICK_REQUEST.lock().unwrap_or_else(|e| e.into_inner()).take();
+    uri.and_then(|s| env.new_string(s).ok())
+        .map_or(std::ptr::null_mut(), |s| s.into_raw())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeReloadCartLabel(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, uri: JString<'_>,
+) {
+    if let Ok(uri) = env.get_string(&uri) {
+        INPUT.lock().unwrap_or_else(|e| e.into_inner())
+            .push_back(Input::ReloadCartLabel {
+                uri: uri.to_string_lossy().into_owned()
+            });
+    }
 }
 
 #[unsafe(no_mangle)]

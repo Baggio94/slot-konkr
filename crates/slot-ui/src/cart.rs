@@ -201,7 +201,13 @@ pub fn cart_face_with(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
 /// label, colours, embossing and moulding untouched. Only the pre-label body
 /// gets a subtle deterministic micrograin; never randomise it frame-to-frame.
 pub fn cart_face_with_material(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
-    render_cart(cart, art, true)
+    // Use the original Slot crop/antialias renderer for optional user labels.
+    // Missing label files fall back to the normal generated cartridge label.
+    let artwork = art.or_else(|| {
+        let (w, h) = label_size(cart);
+        cart.label.as_deref().and_then(|path| crate::art::cover(path, w, h))
+    });
+    render_cart(cart, artwork, true)
 }
 
 fn render_cart(cart: &Cart, art: Option<Vec<u8>>, satin_plastic: bool) -> CartFace {
