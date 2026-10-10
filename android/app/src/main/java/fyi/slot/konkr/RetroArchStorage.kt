@@ -2,10 +2,12 @@ package fyi.slot.konkr
 
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.util.Log
 import java.io.File
+import java.io.FileNotFoundException
 import java.security.MessageDigest
 import java.util.Locale
 
@@ -64,23 +66,31 @@ internal object RetroArchStorage {
     }
 
     fun importBeforeLaunch(context: Context, target: Target) {
+        val started = SystemClock.elapsedRealtime()
+        // The original implementation enumerated the entire save/state
+        // directory SIX times per game launch. Large ROM collections with
+        // Syncthing conflict files make SAF queries very expensive.
+        // For Android's own ExternalStorageProvider, document IDs are
+        // hierarchical. Use the user-granted tree to open the exact document
+        // directly, without listing its siblings. Other providers retain the
+        // existing safe directory-enumeration fallback.
         target.savesTree?.let { root ->
-            find(context, root, target.core, target.stem + ".srm")?.let { doc ->
-                val bytes = read(context, doc, MAX_SAVE)
-                stage(target.saveLocal, bytes)
-            }
-            find(context, root, target.core, target.stem + ".rtc")?.let { doc ->
-                val bytes = read(context, doc, 4096)
-                require(bytes.isNotEmpty()) { "Empty RetroArch RTC" }
-                stage(target.rtcLocal, bytes)
-            }
+            readNamed(context, root, target.core, target.stem + ".srm", MAX_SAVE)
+                ?.let { stage(target.saveLocal, it) }
+            readNamed(context, root, target.core, target.stem + ".rtc", 4096)
+                ?.let { bytes ->
+                    require(bytes.isNotEmpty()) { "Empty RetroArch RTC" }
+                    stage(target.rtcLocal, bytes)
+                }
         }
+        val savesAt = SystemClock.elapsedRealtime()
         val incoming = if (target.statesTree != null) {
-            find(context, target.statesTree, target.core, target.stem + ".state.auto")
-                ?.let { read(context, it, MAX_STATE) }
+            readNamed(context, target.statesTree, target.core,
+                target.stem + ".state.auto", MAX_STATE)
         } else if (target.stateDefaultLocal.isFile) {
             target.stateDefaultLocal.readBytes()
         } else null
+        val readAt = SystemClock.elapsedRealtime()
         if (incoming != null) {
             try {
                 // Rust validates RASTATE before passing the memory to libretro.
@@ -92,6 +102,10 @@ internal object RetroArchStorage {
         } else {
             target.stateImportLocal.delete()
         }
+        val doneAt = SystemClock.elapsedRealtime()
+        Log.i(TAG, "RetroArch SAF import breakdown: saves=${savesAt - started}ms, " +
+            "state read=${readAt - savesAt}ms, state decode/stage=${doneAt - readAt}ms, " +
+            "total=${doneAt - started}ms")
     }
 
     /** Returns human-readable export errors; no silent data loss. */
@@ -226,6 +240,46 @@ internal object RetroArchStorage {
         return DocumentsContract.createDocument(context.contentResolver, root,
             DocumentsContract.Document.MIME_TYPE_DIR, core)
             ?: error("Cannot create RetroArch core folder: $core")
+    }
+
+    /**
+     * The AOSP external-storage document provider uses stable hierarchical IDs
+     * such as "primary:RetroArch/states/mGBA/Game.state.auto". A tree grant
+     * covers its descendants; we do not infer a file-system path or bypass SAF.
+     * Never use this optimisation for downloads/cloud/third-party providers,
+     * whose document identifiers need not be hierarchical.
+     */
+    private fun directDocument(context: Context, root: Uri, core: String, name: String): Uri? {
+        if (root.authority != "com.android.externalstorage.documents") return null
+        if (core != "mGBA" && core != "gpSP") return null
+        if (name.isEmpty() || name == "." || name == ".." ||
+            name.any { it == '/' || it == '\\' || it.code < 32 }) return null
+        val treeId = try {
+            DocumentsContract.getTreeDocumentId(root)
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        val volume = treeId.substringBefore(':', "")
+        if (volume != "primary" && !volume.matches(Regex("[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"))) {
+            return null
+        }
+        // Use only the selected tree's own root and a validated core/filename.
+        return DocumentsContract.buildDocumentUriUsingTree(root, "$treeId/$core/$name")
+    }
+
+    private fun readNamed(context: Context, root: Uri, core: String,
+                          name: String, limit: Int): ByteArray? {
+        val direct = directDocument(context, root, core, name)
+        if (direct != null) {
+            return try {
+                read(context, direct, limit)
+            } catch (_: FileNotFoundException) {
+                // A missing RTC/auto-state is normal. AOSP document IDs map
+                // names to paths; do not enumerate thousands of siblings.
+                null
+            }
+        }
+        return find(context, root, core, name)?.let { read(context, it, limit) }
     }
 
     private fun find(context: Context, root: Uri, core: String, name: String): Uri? {
