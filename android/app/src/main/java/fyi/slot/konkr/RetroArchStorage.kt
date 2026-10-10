@@ -32,6 +32,7 @@ internal object RetroArchStorage {
         val saveLocal: File,
         val rtcLocal: File,
         val stateDefaultLocal: File,
+        val manualExportPrefix: File,
         val stateImportLocal: File,
         val stateExportLocal: File,
         val savesTree: Uri?,
@@ -56,6 +57,7 @@ internal object RetroArchStorage {
             File(coreFolder, "$stem.srm"),
             File(coreFolder, "$stem.rtc"),
             File(defaultStates, "$stem.state.auto"),
+            File(File(prefix, "ManualExports").apply { mkdirs() }, "$digest.$coreLower"),
             File(prefix, "$digest.$coreLower.retroarch-import.state.auto"),
             File(prefix, "$digest.$coreLower.retroarch-export.state.auto"),
             savesTree, statesTree)
