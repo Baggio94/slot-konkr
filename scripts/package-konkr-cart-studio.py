@@ -144,6 +144,14 @@ function syncNativeToolbar() {
       ? api.name(cart).replace(/\s*\([^)]*\)/g, '').trim()
       : api.name(cart);""")
     editorFile.write_text(ed, encoding="utf-8")
+    # Original libretro DAT URLs via native cache on Android only.
+    datFile = target / "libretro.js"
+    dat = datFile.read_text("utf-8")
+    dat = checked_replace(dat,
+        "  const r = await fetch(`${DAT}${encodeURIComponent(NAMES[platform])}.dat`);",
+        "  const r = await fetch(window.AndroidStudio ? '/studio/dat/' + platform + '.dat' : `${DAT}${encodeURIComponent(NAMES[platform])}.dat`);")
+    datFile.write_text(dat, encoding="utf-8")
+
 
     js = js.replace("'Write to card'", "'Save to slot.'")
     jsfile.write_text(js, encoding="utf-8")
