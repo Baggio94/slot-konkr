@@ -49,6 +49,9 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<u8>, String> {
             pos+=8;
             if name==b"END " {
                 if size!=0 { return Err("Invalid END block".into()); }
+                if pos != bytes.len() {
+                    return Err("Trailing data after RetroArch END block".into());
+                }
                 return memory.ok_or_else(||"No libretro memory block".into());
             }
             let end=pos.checked_add(size).ok_or("State block overflow")?;
@@ -86,6 +89,23 @@ mod tests {
         assert!(decode(b"RASTATE\x02MEM ").is_err());
         assert!(decode(b"#RZIPv\x01#NOT_SUPPORTED").is_err());
         assert!(decode(b"RASTATE\x01MEM \xff\xff\xff\x7f").is_err());
+    }
+    #[test]
+    fn genuine_konkr_mgba_state_shape_with_achievements_block_is_readable() {
+        // Derived from the observed 202,928-byte RetroArch RASTATE v1
+        // layout: 202,816-byte MEM, optional 76-byte ACHV, empty END.
+        // Synthesized payload: do not commit a player's actual savestate.
+        let memory = vec![0x5a; 202_816];
+        let mut state = MAGIC.to_vec();
+        block(&mut state, b"MEM ", &memory);
+        block(&mut state, b"ACHV", &[0x42; 76]);
+        block(&mut state, b"END ", &[]);
+        assert_eq!(state.len(), 202_928);
+        assert_eq!(decode(&state).unwrap(), memory);
+        assert!(decode(&state[..state.len() - 8]).is_err());
+        let mut trailing = state;
+        trailing.extend_from_slice(b"trailing");
+        assert!(decode(&trailing).is_err());
     }
     #[test]
     fn raw_legacy_states_are_accepted() {
