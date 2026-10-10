@@ -35,19 +35,15 @@ def package(root: Path, built: Path):
     js = "import { fromAndroid } from './android-card.js';\n" + js
     js = checked_replace(js, "  const crc = new Crc32();",
                          "  if (file.slotCrc != null) return file.slotCrc >>> 0;\n  const crc = new Crc32();")
-    # Bypass the single-cart catalogue step on KONKR: open its real editor
-    # immediately. The original matching/painting work continues async and
-    # refreshes the editor when ROM identity and artwork become available.
+    # Selected cart (X) enters its editor immediately, while the normal menu
+    # displays the official three-tab catalog with Real Label/Logo Only prompt.
+    # Selected-first order also makes ROM matching responsive in a large library.
     js = checked_replace(js,
-                         "  if (s !== session) return;\n  progress(total, total, '');",
-                         """  if (s !== session) return;
-  // ROM header, existing label, and shell have all been read by now.
-  // Open the selected editor BEFORE remote artwork/database requests,
-  // so offline or slow Wi-Fi never blocks native Cart Studio controls.
-  if (window.AndroidStudio && s.carts.length === 1) {
-    editor.open(s.carts[0]);
-  }
-  progress(total, total, '');""")
+                         "  showPlatform(platformsOf(session)[0] ?? PLATFORMS[0]);",
+                         """  const selected = source.selectedKey &&
+      session.carts.find((c) => c.slotId === source.selectedKey);
+  showPlatform(selected?.platform ?? platformsOf(session)[0] ?? PLATFORMS[0]);
+  if (window.AndroidStudio && selected) editor.open(selected);""")
     js = checked_replace(js, "  document.body.dataset.ready = 'true';" ,
         """  document.body.dataset.ready = 'true';
   if (window.AndroidStudio) {
@@ -79,7 +75,7 @@ def package(root: Path, built: Path):
     html = checked_replace(html, '<link rel="stylesheet" href="studio.css">',
         '<link rel="stylesheet" href="studio.css">\n<link rel="stylesheet" href="embedded.css">')
     htmlfile.write_text(html, encoding="utf-8")
-    assert 'editor.open(s.carts[0])' in js
+    assert 'editor.open(selected)' in js
     assert 'embedded.css' in html
     assert (target / 'embedded.css').is_file()
     print("Original Cart Studio packaged:", target,
