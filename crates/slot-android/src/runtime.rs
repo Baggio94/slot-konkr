@@ -83,12 +83,19 @@ const CART_EJECT_SFX: i32 = 2;
 // Exact upstream Slot timeline: 450ms mechanical seating + 280ms hold.
 const INSERT_S: f32 = 0.73;
 const SEATED_AT: f32 = 0.45;
-const INSERT_SOUND_PROGRESS: f32 = (SEATED_AT - 0.24) / SEATED_AT;
+// Original Slot starts the 48-kHz insert clip 97ms before the cart seats,
+// so the recorded contact lands at 450ms, not 143ms early.
+const INSERT_SOUND_LEAD_S: f32 = 0.097;
+const INSERT_SOUND_PROGRESS: f32 = (SEATED_AT - INSERT_SOUND_LEAD_S) / SEATED_AT;
 // Upstream Slot screen power transition times (app.rs).
 const SCREEN_POWER_ON_S: f32 = 0.22;
 const SCREEN_POWER_OFF_S: f32 = 0.16;
 const EJECT_S: f32 = 0.45;
 const EJECT_HOLD_S: f32 = 0.35; // Original Slot hold after CRT-off.
+// Slightly later than upstream's first-motion eject click, by request:
+// retain the original 160ms CRT + 350ms hold + 450ms travel unchanged.
+const EJECT_SOUND_DELAY_S: f32 = 0.040;
+const EJECT_SOUND_PROGRESS: f32 = 1.0 - EJECT_SOUND_DELAY_S / EJECT_S;
 const SELECT_CHORD_MS: u128 = 600;
 const SELECT_TAP_FRAMES: u8 = 3;
 const REWIND_STEP_S: f32 = 0.10;  // Original Slot's time-travel HUD + ~10 Hz restoration.
@@ -2014,9 +2021,9 @@ impl Engine {
         self.prepare_visible();
         let shelf = &mut self.shelves[self.active];
 
-        // Original Slot 450ms mechanical insertion + 280ms hold. The click
-        // arrives during the last 240ms of the seating motion. Ejection
-        // continues to overlap CRT shutdown.
+        // Original Slot: 450ms seating + 280ms hold. Start the original
+        // insert clip 97ms before full contact; its embedded lead completes
+        // exactly at the seating point. Ejection follows CRT-off + black hold.
         let previous_progress = self.progress;
         self.progress = advance_cart(self.progress, self.inserted, dt);
         if self.inserted && previous_progress < INSERT_SOUND_PROGRESS
@@ -2025,7 +2032,8 @@ impl Engine {
             CART_SFX.lock().unwrap_or_else(|e| e.into_inner()).push_back(CART_INSERT_SFX);
         }
         if !self.inserted && self.eject_sound_armed
-            && self.progress < previous_progress {
+            && self.progress < previous_progress
+            && self.progress <= EJECT_SOUND_PROGRESS {
             self.eject_sound_armed = false;
             CART_SFX.lock().unwrap_or_else(|e| e.into_inner()).push_back(CART_EJECT_SFX);
         }
@@ -2212,7 +2220,31 @@ mod ui_feedback_tests {
         assert!(advance_cart(1.0, false, EJECT_S) < 0.0001);
         assert_eq!(advance_cart(0.0, true, SEATED_AT), 1.0);
         assert!((INSERT_S - SEATED_AT - 0.28).abs() < 0.001);
-        assert!((SEATED_AT * INSERT_SOUND_PROGRESS + 0.24 - SEATED_AT).abs() < 0.001);
+        // The original Slot lead is 97ms: sample impact should coincide
+        // with the end of 450ms mechanical seating.
+        assert!((SEATED_AT * INSERT_SOUND_PROGRESS + INSERT_SOUND_LEAD_S - SEATED_AT).abs() < 0.001);
+        // The requested slightly later eject click must not alter mechanics.
+        assert!((EJECT_S * (1.0 - EJECT_SOUND_PROGRESS) - 0.040).abs() < 0.001);
+    }
+
+    #[test]
+    fn cartridge_sound_thresholds_follow_motion_without_starting_early() {
+        // Insertion click is silent at 210ms, unlike the old Android port.
+        let mut seat = advance_cart(0.0, true, 0.210);
+        assert!(seat < INSERT_SOUND_PROGRESS);
+        let previous = seat;
+        seat = advance_cart(seat, true, 0.145);
+        assert!(previous < INSERT_SOUND_PROGRESS && seat >= INSERT_SOUND_PROGRESS);
+
+        // Ejection keeps the original black hold and waits a few frames
+        // of actual motion before handing off the original PCM clip.
+        let mut eject = 1.0;
+        for _ in 0..2 {
+            eject = advance_cart(eject, false, 1.0 / 60.0);
+            assert!(eject > EJECT_SOUND_PROGRESS);
+        }
+        eject = advance_cart(eject, false, 1.0 / 60.0);
+        assert!(eject <= EJECT_SOUND_PROGRESS);
     }
 
     #[test]
