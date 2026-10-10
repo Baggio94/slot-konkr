@@ -45,7 +45,7 @@ impl GameSession {
             .ok_or_else(|| "Unsafe ROM cache file name".to_owned())?;
         // Canonical private layout matches RetroArch's per-core filenames.
         // The opaque ROM URI hash is retained for internal cache / state-ring IDs.
-        if rom_stem.is_empty() || rom_stem.len() > 200 ||
+        if rom_stem.is_empty() || rom_stem.chars().count() > 200 ||
             rom_stem == "." || rom_stem == ".." ||
             rom_stem.chars().any(|c| c == '/' || c == '\\' || c.is_control()) {
             return Err("Unsafe ROM save filename".into());
