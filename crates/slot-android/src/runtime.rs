@@ -1277,8 +1277,10 @@ impl Engine {
             .draw(&mut commands);
         }
         self.draw_overlay(&mut commands);
-        draw_footer(self.battery, self.battery_face,
-            Some(self.bolt_texture), self.clock_face, &mut commands);
+        if self.progress == 0.0 {
+            draw_footer(self.battery, self.battery_face,
+                Some(self.bolt_texture), self.clock_face, &mut commands);
+        }
         self.gpu.fit(self.size);
         self.gpu.begin_frame();
         self.gpu.draw_list(&commands);
