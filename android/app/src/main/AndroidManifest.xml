@@ -12,6 +12,9 @@
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
         <package android:name="com.med.sleepmanager" />
+        <package android:name="com.chiller3.basicsync" />
+        <package android:name="com.github.catfriend1.syncthingfork" />
+        <package android:name="com.github.catfriend1.syncthingfork.debug" />
         <package android:name="com.github.catfriend1.syncthingandroid" />
         <package android:name="com.nutomic.syncthingandroid" />
         <package android:name="com.raofflineproxy" />
