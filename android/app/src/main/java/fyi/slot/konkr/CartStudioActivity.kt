@@ -7,6 +7,7 @@ import android.util.Log
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.WindowManager
 import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -37,13 +38,32 @@ class CartStudioActivity : Activity() {
     private val changed = AtomicBoolean(false)
     private var web: WebView? = null
 
+    private fun immersive() {
+        // FLAG_FULLSCREEN removes the status-bar window (the grey strip seen
+        // on KONKR), while immersive keeps the navigation area out of the UI.
+        window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        window.statusBarColor = Color.rgb(27, 27, 33)
+        window.navigationBarColor = Color.BLACK
+        window.decorView.systemUiVisibility = (
+            View.SYSTEM_UI_FLAG_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        )
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) immersive()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.decorView.systemUiVisibility = (
-            View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
+        immersive()
         val frame = FrameLayout(this)
-        frame.setBackgroundColor(Color.rgb(17, 20, 24))
+        frame.setBackgroundColor(Color.rgb(27, 27, 33))
         setContentView(frame)
         val notice = TextView(this).apply {
             text = "Cart Studio\nReading selected cartridge…"
@@ -83,7 +103,7 @@ class CartStudioActivity : Activity() {
     private fun openStudio(frame: FrameLayout, notice: View, bridge: CartStudioBridge) {
         val w = WebView(this)
         web = w
-        w.setBackgroundColor(Color.rgb(17, 20, 24))
+        w.setBackgroundColor(Color.rgb(27, 27, 33))
         w.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -135,19 +155,39 @@ class CartStudioActivity : Activity() {
             }
         }
         frame.removeView(notice)
-        frame.addView(w, FrameLayout.LayoutParams(-1, -1))
+        // Keep native navigation OUTSIDE the WebView: it cannot cover the
+        // original logo, label preview, or Cart Studio controls.
+        val barHeight = (48 * resources.displayMetrics.density + 0.5f).toInt()
+        val webLayout = FrameLayout.LayoutParams(-1, -1).apply {
+            topMargin = barHeight
+        }
+        frame.addView(w, webLayout)
+        val toolbar = FrameLayout(this).apply {
+            setBackgroundColor(Color.rgb(27, 27, 33))
+        }
+        frame.addView(toolbar, FrameLayout.LayoutParams(-1, barHeight, Gravity.TOP))
+        val title = TextView(this).apply {
+            text = "Cart Studio"
+            textSize = 17f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+        }
+        toolbar.addView(title, FrameLayout.LayoutParams(-1, -1))
         val close = TextView(this).apply {
             text = "‹  SLOT."
-            textSize = 14f
+            textSize = 15f
             setTextColor(Color.WHITE)
-            setBackgroundColor(Color.rgb(22, 25, 30))
             gravity = Gravity.CENTER
-            setPadding(18, 0, 18, 0)
             setOnClickListener { finish() }
             isFocusable = true
             contentDescription = "Close Cart Studio and return to Slot"
         }
-        frame.addView(close, FrameLayout.LayoutParams(120, 38, Gravity.TOP or Gravity.START))
+        val backWidth = (116 * resources.displayMetrics.density + 0.5f).toInt()
+        toolbar.addView(close, FrameLayout.LayoutParams(backWidth, -1, Gravity.START))
+        val rule = View(this).apply { setBackgroundColor(Color.rgb(58, 58, 70)) }
+        toolbar.addView(rule, FrameLayout.LayoutParams(-1,
+            (resources.displayMetrics.density + 0.5f).toInt().coerceAtLeast(1),
+            Gravity.BOTTOM))
         w.loadUrl(PAGE)
     }
 
