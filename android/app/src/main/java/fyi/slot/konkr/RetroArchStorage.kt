@@ -119,8 +119,8 @@ internal object RetroArchStorage {
                         target.stem + ".srm", data, isState = false)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "RetroArch SRAM export failed", e)
-                failures.add("Save sync failed: " + (e.message ?: "access denied"))
+                Log.e(TAG, "RetroArch SRAM export failed for ${target.core}/${target.stem}", e)
+                failures.add("Save sync failed (${target.core}): " + (e.message ?: "access denied"))
             }
         }
         if (target.savesTree != null && target.rtcLocal.isFile) {
@@ -130,8 +130,8 @@ internal object RetroArchStorage {
                 writeSaf(context, target.savesTree, target.core,
                     target.stem + ".rtc", data, isState = false)
             } catch (e: Exception) {
-                Log.e(TAG, "RetroArch RTC export failed", e)
-                failures.add("RTC sync failed: " + (e.message ?: "access denied"))
+                Log.e(TAG, "RetroArch RTC export failed for ${target.core}/${target.stem}", e)
+                failures.add("RTC sync failed (${target.core}): " + (e.message ?: "access denied"))
             }
         }
         if (target.stateExportLocal.isFile) {
@@ -153,8 +153,8 @@ internal object RetroArchStorage {
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "RetroArch state export failed", e)
-                failures.add("State sync skipped: " + (e.message ?: "unsupported format"))
+                Log.e(TAG, "RetroArch state export failed for ${target.core}/${target.stem}", e)
+                failures.add("State sync skipped (${target.core}): " + (e.message ?: "unsupported format"))
             }
         }
         return failures
