@@ -166,7 +166,7 @@ struct Engine {
     active: usize,
     inserted: bool,
     progress: f32,
-    insert_elapsed: f32,
+    insert_started: Option<Instant>,
     screen_power: f32,
     exiting_screen: bool,
     born: Instant,
@@ -294,7 +294,7 @@ impl Engine {
             active,
             inserted: false,
             progress: 0.0,
-            insert_elapsed: 0.0,
+            insert_started: None,
             screen_power: 0.0,
             exiting_screen: false,
             born: now,
@@ -751,8 +751,8 @@ impl Engine {
                             let uri = selected.rom.to_string_lossy();
                                         self.prepared_rom = None;
                             self.pending_game = None;
-                            self.insert_elapsed = 0.0;
-                            self.a_down_at = Some(Instant::now());
+                            self.insert_started = Some(Instant::now());
+                            self.a_down_at = self.insert_started;
                             self.fresh_launch = false;
                             if uri.starts_with("content://") {
                                 let uri = uri.into_owned();
@@ -1211,16 +1211,20 @@ impl Engine {
         // seated until 730ms (or until the core is ready, if later).
         // Use the hold to initialize mGBA/gpSP and restore SRAM/auto-state
         // instead of running this work only AFTER the insertion has ended.
-        if self.inserted {
-            self.insert_elapsed += dt;
-            if self.insert_elapsed >= SEATED_AT && self.a_down_at.is_none()
+        if self.inserted && self.game.is_none() {
+            // Read wall time, not accumulated clipped frame dt: a slow core
+            // load must be hidden INSIDE the hold, not added after it.
+            let inserted_for = self.insert_started.map_or(0.0, |t| t.elapsed().as_secs_f32());
+            if inserted_for >= SEATED_AT && self.a_down_at.is_none()
                 && self.pending_game.is_none()
             {
                 if let Some(local) = self.prepared_rom.take() {
                     self.prepare_game_core(&local);
                 }
             }
-            if self.insert_elapsed >= INSERT_S {
+            // Re-read wall time after core.load() and save-state import.
+            let inserted_for = self.insert_started.map_or(0.0, |t| t.elapsed().as_secs_f32());
+            if inserted_for >= INSERT_S {
                 if let Some(session) = self.pending_game.take() {
                     self.buttons = 0;
                     SAMPLE_RATE.store(session.sample_rate, Ordering::Release);
