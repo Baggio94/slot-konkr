@@ -140,6 +140,27 @@ internal object CartStudioCatalog {
     }
 
     /**
+     * Look up verified fingerprints without touching ROM bytes. Every cached
+     * record is tied to size AND modification time; unknown SAF metadata
+     * forces the original streaming CRC path. Used during the first session
+     * bridge call to eliminate repeated WebView/Java boundary traffic.
+     */
+    @Synchronized
+    fun cached(context: Context, rom: Rom): Fingerprint? {
+        if (rom.size <= 0 || rom.modified <= 0) return null
+        val old = records(context).optJSONObject(rom.uri) ?: return null
+        if (old.optLong("size") != rom.size ||
+            old.optLong("modified") != rom.modified) return null
+        return try {
+            val crc = old.getLong("crc")
+            val header = Base64.decode(old.getString("head"), Base64.DEFAULT)
+            if (crc in 0..0xFFFFFFFFL && header.size == HEAD_BYTES)
+                Fingerprint(crc, header)
+            else null
+        } catch (_: Exception) { null }
+    }
+
+    /**
      * Called off the UI thread. Missing or unreliable SAF metadata triggers
      * recalculation, while unchanged ROMs reuse the exact previous CRC/header.
      * The partial batch is flushed on CartStudioActivity.onDestroy().
@@ -147,18 +168,8 @@ internal object CartStudioCatalog {
     @Synchronized
     fun identify(context: Context, rom: Rom): Fingerprint {
         require(rom.uri.startsWith("content://")) { "A SAF ROM URI is required" }
+        cached(context, rom)?.let { return it }
         val entries = records(context)
-        val old = entries.optJSONObject(rom.uri)
-        if (rom.size > 0 && rom.modified > 0 && old != null &&
-            old.optLong("size") == rom.size && old.optLong("modified") == rom.modified) {
-            try {
-                val crc = old.getLong("crc")
-                val header = Base64.decode(old.getString("head"), Base64.DEFAULT)
-                if (crc in 0..0xFFFFFFFFL && header.size == HEAD_BYTES) {
-                    return Fingerprint(crc, header)
-                }
-            } catch (_: Exception) { /* invalid cache: re-read ROM */ }
-        }
         val content = context.contentResolver.openInputStream(Uri.parse(rom.uri))
             ?: throw IllegalArgumentException("Unable to read the ROM")
         val fingerprint = fingerprintStream(content)
