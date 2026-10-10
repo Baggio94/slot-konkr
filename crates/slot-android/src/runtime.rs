@@ -862,8 +862,11 @@ impl Engine {
                 Ok(session) => {
                     // Create libretro on the same GL thread, but defer audio
                     // and CRT presentation until Slot's seated hold completes.
-                    eprintln!("slot-konkr: core prepared in {}ms during insert",
-                        started.elapsed().as_millis());
+                    crate::game::log_launch_timing(&format!(
+                        "Core prepared: {}ms loading, {}ms since A",
+                        started.elapsed().as_millis(),
+                        self.insert_started.map_or(0, |at| at.elapsed().as_millis())
+                    ));
                     self.pending_game = Some(session);
                 }
                 Err(error) => {
@@ -1226,6 +1229,10 @@ impl Engine {
             let inserted_for = self.insert_started.map_or(0.0, |t| t.elapsed().as_secs_f32());
             if inserted_for >= INSERT_S {
                 if let Some(session) = self.pending_game.take() {
+                    crate::game::log_launch_timing(&format!(
+                        "Start CRT: {}ms since A (upstream target 730ms)",
+                        self.insert_started.map_or(0, |at| at.elapsed().as_millis())
+                    ));
                     self.buttons = 0;
                     SAMPLE_RATE.store(session.sample_rate, Ordering::Release);
                     self.game = Some(session);
