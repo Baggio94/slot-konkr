@@ -63,8 +63,20 @@ jobs:
       - name: Test RetroArch RZIP v1 codec on JVM
         run: gradle --no-daemon -p android :app:testDebugUnitTest
       - name: Build debug APK
+        env:
+          SLOT_KEYSTORE_BASE64: ${{ secrets.SLOT_KEYSTORE_BASE64 }}
+          SLOT_SIGNING_STORE_PASSWORD: ${{ secrets.SLOT_SIGNING_STORE_PASSWORD }}
+          SLOT_SIGNING_KEY_ALIAS: ${{ secrets.SLOT_SIGNING_KEY_ALIAS }}
+          SLOT_SIGNING_KEY_PASSWORD: ${{ secrets.SLOT_SIGNING_KEY_PASSWORD }}
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          if [ -n "$SLOT_KEYSTORE_BASE64" ]; then
+            export SLOT_SIGNING_STORE_FILE="$RUNNER_TEMP/slot-konkr-signing.jks"
+            (umask 077; printf '%s' "$SLOT_KEYSTORE_BASE64" | base64 -d > "$SLOT_SIGNING_STORE_FILE")
+            echo "Using persistent Android signing certificate"
+          else
+            echo "::warning::No persistent signing key configured. Android updates between CI builds require reinstall."
+          fi
           bash scripts/build-konkr-android.sh
       - uses: actions/upload-artifact@v4
         with:
