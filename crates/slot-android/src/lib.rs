@@ -5,6 +5,9 @@ mod library;
 #[path = "../../slot/src/thumb.rs"]
 mod thumb;
 mod retroarch_state;
+// Reuse the upstream 20 MiB XOR/LZ4 rewind ring without forking its algorithm.
+#[path = "../../slot/src/rewind.rs"]
+mod rewind;
 mod core_selection;
 mod core_legend;
 #[cfg(target_os = "android")]
