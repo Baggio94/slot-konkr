@@ -82,7 +82,9 @@ pub fn carts_by_platform(entries: &[RomEntry]) -> [Vec<Cart>; 3] {
         });
     }
     for shelf in &mut groups {
-        shelf.sort_by(|a, b| sort_key(&a.stem).cmp(&sort_key(&b.stem)));
+        // Unicode casefold keys are allocated once per cart instead of on
+        // every comparator call (thousands of extra allocations at startup).
+        shelf.sort_by_cached_key(|cart| sort_key(&cart.stem));
     }
     groups
 }
