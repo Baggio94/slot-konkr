@@ -81,7 +81,7 @@ internal class CartStudioBridge(
         var allReady = true
         for (rom in roms) {
             val labelExists = label(context, rom.uri).isFile
-            val cached = if (labelExists) null else CartStudioCatalog.cached(context, rom)
+            val cached = CartStudioCatalog.cached(context, rom)
             if (!labelExists && cached == null) allReady = false
             val entry = JSONObject()
                 .put("id", key(rom.uri))
