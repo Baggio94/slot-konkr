@@ -208,14 +208,27 @@ fn draw_slot_back(alpha: f32, out: &mut Vec<Draw>) {
 
 fn draw_slot_front(alpha: f32, out: &mut Vec<Draw>) {
     front_bands(|x, y, w, h, c| out.push(band(x, y, w, h, c, alpha)));
-    // Original receiver geometry, with an Android-only molded-plastic sheen.
-    // Tiny highlights add material depth without changing the slot silhouette.
+    // Android material treatment: three soft satin highlights and the shadow
+    // under the lip. Preserve the original Slot receiver geometry and theme.
+    // This is deliberately just a handful of rectangles, not noisy geometry
+    // or a full-screen texture updated on every animation frame.
     #[cfg(target_os = "android")]
     if alpha > 0.0 {
-        let sheen = [1.0, 1.0, 1.0, 0.035 * alpha];
-        for (x, w) in [(0.0, BAY_X), (BAY_X + BAY_W, OUT_W as f32 - BAY_X - BAY_W)] {
-            out.push(Draw::Rect { x, y: BAND_Y + 3.0, w, h: 1.0, colour: sheen });
+        let shoulders = [(0.0, BAY_X), (BAY_X + BAY_W, OUT_W as f32 - BAY_X - BAY_W)];
+        for (x, w) in shoulders {
+            for (offset, opacity) in [(2.0, 0.21), (3.0, 0.13), (4.0, 0.07)] {
+                out.push(band(x, BAND_Y + offset, w, 1.0,
+                    [1.0, 1.0, 1.0, opacity], alpha));
+            }
+            out.push(band(x, BAND_Y + 8.0, w, 2.0,
+                [0.0, 0.0, 0.0, 0.12], alpha));
         }
+        // The curved receiving notch has a subtle polished bevel. The groove
+        // itself remains dark so the cartridge still looks seated in a recess.
+        out.push(band(MOUTH_X + 7.0, SLIT_Y + SLIT_H + 1.0,
+            MOUTH_W - 14.0, 2.0, [1.0, 1.0, 1.0, 0.13], alpha));
+        out.push(band(MOUTH_X + 7.0, SLIT_Y + SLIT_H + 3.0,
+            MOUTH_W - 14.0, 2.0, [0.0, 0.0, 0.0, 0.22], alpha));
     }
 }
 
