@@ -37,6 +37,7 @@ internal class SlotStatusHud(private val context: Context, private val frame: Fr
         isClickable = false
     }
     private var raState: Boolean? = null
+    private var syncthingState: Boolean? = null
     private var syncState: Boolean? = null
     private var syncObservedAt: Long = 0L
     private var lastLeft: String = ""
@@ -54,6 +55,7 @@ internal class SlotStatusHud(private val context: Context, private val frame: Fr
         right.visibility = visibility
     }
     fun raRunning(value: Boolean?) { raState = value; updateApps() }
+    fun syncthingRunning(value: Boolean?) { syncthingState = value; updateApps() }
     fun basicSyncState(value: Boolean?) {
         syncState = value
         syncObservedAt = android.os.SystemClock.elapsedRealtime()
@@ -91,7 +93,8 @@ internal class SlotStatusHud(private val context: Context, private val frame: Fr
             }),
         App("Syncthing", listOf("com.github.catfriend1.syncthingfork",
             "com.github.catfriend1.syncthingfork.debug",
-            "com.github.catfriend1.syncthingandroid"), State.UNKNOWN),
+            "com.github.catfriend1.syncthingandroid"),
+            if (syncthingState == true) State.RUNNING else State.UNKNOWN),
         App("RAOfflineProxy", listOf("com.raofflineproxy"),
             when (raState) { true -> State.RUNNING; false -> State.STOPPED; null -> State.UNKNOWN })
     )
