@@ -279,6 +279,32 @@ internal object RetroArchStorage {
         return DocumentsContract.buildDocumentUriUsingTree(root, childId)
     }
 
+    /**
+     * ExternalStorageProvider can wrap a *missing* child file in an
+     * IllegalArgumentException during its tree ancestry check, rather than
+     * throwing FileNotFoundException from openInputStream().
+     *
+     * Only tolerate the precise "Missing file for <requested document ID>"
+     * condition. Permission errors, malformed URIs, provider failures, and
+     * missing *other* paths must still surface to the caller.
+     */
+    internal fun isMissingDirectDocument(error: IllegalArgumentException, requestedId: String): Boolean {
+        var current: Throwable? = error
+        repeat(8) {
+            val issue = current ?: return false
+            if (issue is FileNotFoundException) {
+                return issue.message?.contains("Missing file for $requestedId") == true
+            }
+            val message = issue.message.orEmpty()
+            if (message.startsWith("Failed to determine if ") &&
+                message.contains("java.io.FileNotFoundException: Missing file for $requestedId")) {
+                return true
+            }
+            current = issue.cause
+        }
+        return false
+    }
+
     private fun readNamed(context: Context, root: Uri, core: String,
                           name: String, limit: Int): ByteArray? {
         val direct = directDocument(root, core, name)
@@ -286,8 +312,15 @@ internal object RetroArchStorage {
             return try {
                 read(context, direct, limit)
             } catch (_: FileNotFoundException) {
-                // A missing RTC/auto-state is normal. AOSP document IDs map
-                // names to paths; do not enumerate thousands of siblings.
+                // An absent SRAM, RTC or auto-state is optional.
+                null
+            } catch (error: IllegalArgumentException) {
+                val requestedId = DocumentsContract.getDocumentId(direct)
+                if (!isMissingDirectDocument(error, requestedId)) throw error
+                // Android's ExternalStorageProvider rejected the missing child
+                // during its isChildDocument() check. Continue importing the
+                // *other* files, without an expensive fallback directory scan.
+                Log.d(TAG, "Optional RetroArch file absent: $core/$name")
                 null
             }
         }
