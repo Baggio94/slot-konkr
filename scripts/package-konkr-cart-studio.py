@@ -105,6 +105,39 @@ def package(root: Path, built: Path):
       await loadIndex();
     }
   }""")
+    # Do not show the same "Reading 1 of 125..." blocking screen after
+    # the prior scan produced validated cached fingerprints. A new/modified
+    # ROM still runs the original progress pipeline.
+    js = checked_replace(js,
+        "  loading('Reading the card…');",
+        "  if (!window.AndroidStudio || !source.allCached) loading('Reading the card…');")
+    js = checked_replace(js,
+        "function progress(done, total, stem, verb = 'Reading') {",
+        """function progress(done, total, stem, verb = 'Reading') {
+  if (window.AndroidStudio && session?.source?.allCached && verb === 'Reading') {
+    $('progress').hidden = true;
+    return;
+  }""")
+    js = checked_replace(js,
+        "  loading('Looking up the games…');",
+        "  if (!window.AndroidStudio || !s.source.allCached) loading('Looking up the games…');")
+    # Original Cart Studio does not compute a CRC for carts with an existing
+    # label, but we can reuse their previously stored CRC without reading ROMs.
+    # This lets the X editor recognize a previously decorated game again.
+    js = checked_replace(js,
+        "        c.existingPng = bytes;\n        c.choice = 'card';",
+        """        c.existingPng = bytes;
+        if (window.AndroidStudio && file.slotCrc != null) c.crc = file.slotCrc;
+        c.choice = 'card';""")
+    js = checked_replace(js,
+        "  const pending = s.carts.filter((c) => c.crc !== null && !c.game && !c.existing && !c.error);",
+        """  if (window.AndroidStudio) for (const c of s.carts) {
+    if (c.existing && c.crc !== null && !c.game) {
+      c.game = dats.get(c.platform)?.game_for(c.crc) ?? null;
+      if (c.game) paint(c);
+    }
+  }
+  const pending = s.carts.filter((c) => c.crc !== null && !c.game && !c.existing && !c.error);""")
     # X focuses one game: never ask the bulk Real Label / Logo Only wizard.
     js = checked_replace(js,
         "if (s === session && !fatal && s.fill == null) await fillOrAsk(s);",
