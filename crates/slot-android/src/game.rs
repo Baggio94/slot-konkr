@@ -4,6 +4,7 @@ use slot_retro::{ButtonMask, LibretroCore, RetroCore};
 use slot_store::{atomic_write, Core, Platform, StateEntry, StateRing, stamp_now, parse_stamp, format_stamp, RING_MAX};
 use crate::thumb;
 use crate::retroarch_state;
+use crate::rewind::{Rewind, REWIND_BYTES};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -26,6 +27,7 @@ pub(crate) fn log_launch_timing(message: &str) {
 }
 
 const SRAM_PERIOD: Duration = Duration::from_secs(30);
+const REWIND_CAPTURE_FRAMES: u8 = 6; // 10 states/second at the original GBA FPS
 const UNDO_WINDOW: Duration = Duration::from_secs(30);
 
 enum PendingUndo {
@@ -43,6 +45,8 @@ pub struct GameSession {
     retroarch_export: PathBuf,
     retroarch_import: PathBuf,
     ring: StateRing,
+    rewind: Rewind,
+    rewind_frames: u8,
     pending_undo: Option<(Instant, PendingUndo)>,
     last_sram: Instant,
     pub sample_rate: i32,
@@ -158,6 +162,7 @@ impl GameSession {
         let fps = core.av_info().fps.clamp(30.0, 120.0);
         Ok(Self {
             core, save, rtc, manual_export_prefix, state, retroarch_export, retroarch_import, ring,
+            rewind: Rewind::new(REWIND_BYTES), rewind_frames: 0,
             pending_undo: None, last_sram: Instant::now(),
             sample_rate: sample_rate.clamp(8_000, 96_000),
             fps,
@@ -166,9 +171,33 @@ impl GameSession {
 
     pub fn advance(&mut self, buttons: u16) {
         self.core.run_frame(ButtonMask(buttons));
+        self.rewind_frames += 1;
+        if self.rewind_frames >= REWIND_CAPTURE_FRAMES {
+            self.rewind_frames = 0;
+            // Original Slot LZ4/XOR ring with 20 MiB bounded history.
+            // Snapshots are private in memory and NEVER exported to RetroArch.
+            if let Ok(snapshot) = self.core.serialize() {
+                self.rewind.push(&snapshot);
+            }
+        }
         if self.last_sram.elapsed() >= SRAM_PERIOD {
             self.save_sram();
         }
+    }
+
+    pub fn rewind_step(&mut self) -> bool {
+        let Some(previous) = self.rewind.pop() else { return false; };
+        if self.core.unserialize(&previous).is_err() { return false; }
+        // Most libretro cores only refresh video after retro_run. Run a single
+        // input-free frame so the renderer shows the restored moment.
+        self.core.run_frame(ButtonMask(0));
+        let _ = self.core.take_audio();
+        self.rewind_frames = 0;
+        true
+    }
+
+    pub fn rewind_fill(&self) -> u8 {
+        self.rewind.fill()
     }
 
     pub fn frame(&self) -> &[u8] {
