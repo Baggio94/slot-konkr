@@ -292,8 +292,13 @@ class MainActivity : Activity() {
             nativeGameError(rawUri, "Invalid ROM URI")
             return
         }
+        val queuedAt = SystemClock.elapsedRealtime()
         gameLoader.execute {
             val launchStart = SystemClock.elapsedRealtime()
+            val queueWait = launchStart - queuedAt
+            if (queueWait > 20) {
+                Log.i(TAG, "Slot launch queue delay: ${queueWait}ms (waiting for preceding save exports)")
+            }
             try {
                 val name = uri.lastPathSegment.orEmpty().lowercase()
                 val ext = when {
