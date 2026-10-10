@@ -249,27 +249,34 @@ internal object RetroArchStorage {
      * Never use this optimisation for downloads/cloud/third-party providers,
      * whose document identifiers need not be hierarchical.
      */
-    private fun directDocument(context: Context, root: Uri, core: String, name: String): Uri? {
-        if (root.authority != "com.android.externalstorage.documents") return null
+    internal fun directDocumentId(treeId: String, core: String, name: String): String? {
         if (core != "mGBA" && core != "gpSP") return null
         if (name.isEmpty() || name == "." || name == ".." ||
             name.any { it == '/' || it == '\\' || it.code < 32 }) return null
+        val volume = treeId.substringBefore(':', "")
+        if (volume != "primary" && !volume.matches(Regex("[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"))) {
+            return null
+        }
+        if (treeId.any { it == '\\' || it.code < 32 } ||
+            treeId.split('/').any { it == "." || it == ".." }) return null
+        return "$treeId/$core/$name"
+    }
+
+    private fun directDocument(root: Uri, core: String, name: String): Uri? {
+        if (root.authority != "com.android.externalstorage.documents") return null
         val treeId = try {
             DocumentsContract.getTreeDocumentId(root)
         } catch (_: IllegalArgumentException) {
             return null
         }
-        val volume = treeId.substringBefore(':', "")
-        if (volume != "primary" && !volume.matches(Regex("[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"))) {
-            return null
-        }
-        // Use only the selected tree's own root and a validated core/filename.
-        return DocumentsContract.buildDocumentUriUsingTree(root, "$treeId/$core/$name")
+        val childId = directDocumentId(treeId, core, name) ?: return null
+        // Only the selected SAF tree, not a raw filesystem path, is accessed.
+        return DocumentsContract.buildDocumentUriUsingTree(root, childId)
     }
 
     private fun readNamed(context: Context, root: Uri, core: String,
                           name: String, limit: Int): ByteArray? {
-        val direct = directDocument(context, root, core, name)
+        val direct = directDocument(root, core, name)
         if (direct != null) {
             return try {
                 read(context, direct, limit)
