@@ -6,19 +6,34 @@ import android.util.AtomicFile
 import android.util.Base64
 import android.webkit.JavascriptInterface
 import org.json.JSONObject
+import org.json.JSONArray
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Only the one ROM selected in Slot is exposed to the trusted, packaged Studio page.
- * No JavaScript method accepts arbitrary Android paths, document URIs or ROM writes.
+ * Read-only SAF source for every GB/GBC/GBA ROM already indexed by Slot.
+ * The WebView receives opaque keys only; arbitrary URI / filesystem access is
+ * never exposed to JavaScript. Label and shell writes remain app-private.
  */
 internal class CartStudioBridge(
     private val context: Context,
-    private val rom: CartStudioCatalog.Rom,
-    private val identity: CartStudioCatalog.Fingerprint,
+    private val roms: List<CartStudioCatalog.Rom>,
+    private val selectedUri: String?,
     private val dirty: AtomicBoolean,
 ) {
+    private val keyed = roms.associateBy { key(it.uri) }
+
+    // Original Cart Studio writes a label by (platform, stem), not URI.
+    // Do not pick the wrong cartridge when two filenames are identical.
+    private fun named(platform: String, stem: String): CartStudioCatalog.Rom {
+        val matches = roms.filter { it.platform == platform && it.title == stem }
+        require(matches.size == 1) { "Ambiguous cartridge name: $platform/$stem" }
+        return matches.single()
+    }
+
+    private fun known(id: String): CartStudioCatalog.Rom =
+        keyed[id] ?: throw IllegalArgumentException("Cartridge is not in Slot library")
+
     companion object {
         fun key(uri: String): String {
             var hash = -3750763034362895579L
@@ -59,26 +74,46 @@ internal class CartStudioBridge(
         }
     }
 
+    /** Fast initial catalog: no CRC scanning or embedded PNG base64 on load. */
     @JavascriptInterface
     fun session(): String {
-        val existing = label(context, rom.uri)
-        val png = if (existing.isFile && existing.length() in 1..(2L * 1024 * 1024))
-            Base64.encodeToString(existing.readBytes(), Base64.NO_WRAP) else ""
-        val shell = savedShell(context, rom.uri)
+        val entries = JSONArray()
+        for (rom in roms) {
+            entries.put(JSONObject()
+                .put("id", key(rom.uri))
+                .put("platform", rom.platform)
+                .put("stem", rom.title)
+                .put("hasLabel", label(context, rom.uri).isFile))
+        }
         return JSONObject()
-            .put("platform", rom.platform)
-            .put("stem", rom.title)
-            .put("crc", identity.crc)
-            .put("head", Base64.encodeToString(identity.head, Base64.NO_WRAP))
-            .put("label", png)
-            .put("shellText", if (shell != null) rom.title + " = " + shell + "\n" else "")
+            .put("carts", entries)
+            .put("selectedKey", selectedUri?.let(::key) ?: "")
             .toString()
+    }
+
+    /** Invoked lazily for each cart by the original Studio identify() loop. */
+    @JavascriptInterface
+    fun fingerprint(id: String): String {
+        val fingerprint = CartStudioCatalog.identify(context, known(id))
+        require(fingerprint.head.size == 0x150) { "ROM header incomplete" }
+        return JSONObject()
+            .put("crc", fingerprint.crc)
+            .put("head", Base64.encodeToString(fingerprint.head, Base64.NO_WRAP))
+            .toString()
+    }
+
+    @JavascriptInterface
+    fun readLabel(id: String): String {
+        val target = label(context, known(id).uri)
+        if (!target.isFile) return ""
+        require(target.length() in 24..(2L * 1024 * 1024)) { "Label is too large" }
+        return Base64.encodeToString(target.readBytes(), Base64.NO_WRAP)
     }
 
     @Synchronized
     @JavascriptInterface
     fun saveLabel(platform: String, stem: String, encoded: String, replace: Boolean): String {
-        require(platform == rom.platform && stem == rom.title) { "Unknown cartridge" }
+        val rom = named(platform, stem)
         require(encoded.length <= 3_000_000) { "Label too large" }
         val target = label(context, rom.uri)
         if (!replace && target.isFile) return "skipped"
@@ -96,27 +131,50 @@ internal class CartStudioBridge(
         return "written"
     }
 
+    @JavascriptInterface
+    fun labelShells(): String {
+        val lines = roms.mapNotNull { rom ->
+            savedShell(context, rom.uri)?.let { rom.title + " = " + it }
+        }
+        return if (lines.isEmpty()) "" else lines.joinToString("\n", postfix = "\n")
+    }
+
+    /**
+     * Preserve the upstream merged Labels/cart_shell.txt protocol, mapping
+     * each line back to a known SAF ROM. Never change ROMs or system config.
+     * A duplicated stem across platforms with different overrides is
+     * ambiguous in the original format and is rejected instead of guessing.
+     */
     @Synchronized
     @JavascriptInterface
     fun saveShells(text: String): Boolean {
-        require(text.length < 1024) { "Shell data too large" }
-        val lines = text.lineSequence().map(String::trim).filter(String::isNotEmpty)
-            .filterNot { it.startsWith("#") || it.startsWith(";") }.toList()
-        require(lines.size <= 1) { "One selected cartridge only" }
-        val value = if (lines.isEmpty()) null else {
-            val pair = lines.single().split('=', limit = 2)
-            require(pair.size == 2 && pair[0].trim() == rom.title) { "Wrong cartridge key" }
-            pair[1].trim().takeIf { it != "auto" }?.also {
-                require(validShell(it)) { "Invalid shell selection" }
+        require(text.length <= 2_000_000) { "Shell data too large" }
+        val requested = LinkedHashMap<String, String>()
+        for (line in text.lineSequence().map(String::trim).filter(String::isNotEmpty)
+            .filterNot { it.startsWith("#") || it.startsWith(";") }) {
+            val pair = line.split('=', limit = 2)
+            require(pair.size == 2) { "Invalid shell entry" }
+            val stem = pair[0].trim()
+            require(stem.isNotEmpty() && roms.any { it.title == stem }) { "Unknown cartridge" }
+            require(stem !in requested) { "Duplicate cartridge shell entry" }
+            val value = pair[1].trim()
+            require(value == "auto" || validShell(value)) { "Invalid shell selection" }
+            requested[stem] = value
+        }
+        // Original Studio's key is stem only; matching it across more than
+        // one platform is safe only when every occurrence shares the setting.
+        for (rom in roms) {
+            val desired = requested[rom.title]?.takeUnless { it == "auto" }
+            val current = savedShell(context, rom.uri)
+            if (desired == current) continue
+            val target = profile(context, rom.uri)
+            if (desired == null) {
+                if (target.exists() && !target.delete()) error("Cannot reset shell")
+            } else {
+                atomicWrite(target, desired.toByteArray(Charsets.UTF_8))
             }
+            dirty.set(true)
         }
-        val target = profile(context, rom.uri)
-        if (value == null) {
-            if (target.exists() && !target.delete()) error("Cannot reset shell")
-        } else {
-            atomicWrite(target, value.toByteArray(Charsets.UTF_8))
-        }
-        dirty.set(true)
         return true
     }
 }
