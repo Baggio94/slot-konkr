@@ -3,6 +3,9 @@
 //! Stage M1: display-only preview carts, not executable games.
 mod library;
 mod settings;
+// Use Slot's original per-game Actual/Stretch geometry and video_mode.ini.
+#[path = "../../slot/src/video_mode.rs"]
+mod video_mode;
 #[path = "../../slot/src/thumb.rs"]
 mod thumb;
 mod retroarch_state;

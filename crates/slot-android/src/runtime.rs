@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use crate::game::GameSession;
 use crate::settings::Settings;
+use crate::video_mode::{self, VideoMode};
 use crate::core_selection;
 use crate::core_picker::{CorePicker, Press};
 use slot_retro::ButtonMask;
@@ -216,6 +217,7 @@ struct Engine {
     game_accum: f64,
     overlay: ShelfOverlay,
     settings: Settings,
+    video_mode: VideoMode,
     setting_values: Vec<(slot_gfx::TexId, u32, u32)>,
     setting_carets: [(slot_gfx::TexId, u32, u32); 2],
     settings_hints: [(slot_gfx::TexId, u32); 2],
@@ -399,6 +401,7 @@ impl Engine {
             game_accum: 0.0,
             overlay: ShelfOverlay::None,
             settings,
+            video_mode: VideoMode::Actual,
             setting_values,
             setting_carets,
             settings_hints,
@@ -764,6 +767,18 @@ impl Engine {
                         self.hud.toast(Toast::Palette(palette),
                             self.born.elapsed().as_millis() as u64);
                         self.persist_settings();
+                        return;
+                    }
+                    // Slot original: GB/GBC L1 = Stretch, R1 = Actual.
+                    // On GBA the shoulder buttons remain owned by the core.
+                    // SELECT+shoulder save/load is handled below and takes priority.
+                    if self.active != 0 && self.buttons & ButtonMask::SELECT == 0
+                        && (code == 102 || code == 103) {
+                        if pressed {
+                            self.set_video_mode(if code == 102 {
+                                VideoMode::Stretch
+                            } else { VideoMode::Actual });
+                        }
                         return;
                     }
                     // Restore upstream SELECT+R1/L1 save/load shortcuts.
@@ -1174,6 +1189,39 @@ impl Engine {
             self.about_texture = Some(self.gpu.create_texture(
                 sticker.w, sticker.h, &sticker.rgba,
             ));
+        }
+    }
+
+    fn current_cart_platform(&self) -> Platform {
+        self.shelves[self.active].carts
+            .get(self.shelves[self.active].index)
+            .map_or(Platform::Gba, |cart| cart.platform)
+    }
+
+    fn apply_video_geometry(&mut self) {
+        let platform = self.current_cart_platform();
+        let (w, h) = platform.picture();
+        let x = (slot_gfx::SRC_W - w) as f32 / (2 * slot_gfx::SRC_W) as f32;
+        let y = (slot_gfx::SRC_H - h) as f32 / (2 * slot_gfx::SRC_H) as f32;
+        let x2 = 1.0 - x;
+        let y2 = 1.0 - y;
+        self.gpu.set_picture([x, y, x2, y2]);
+        self.gpu.set_game_source_rect(video_mode::source_rect(platform, self.video_mode));
+    }
+
+    fn set_video_mode(&mut self, mode: VideoMode) {
+        if self.video_mode == mode || self.current_cart_platform() == Platform::Gba {
+            return;
+        }
+        self.video_mode = mode;
+        self.apply_video_geometry();
+        let name = self.shelves[self.active].carts
+            .get(self.shelves[self.active].index)
+            .map_or("", |cart| cart.stem.as_str());
+        if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            if let Err(err) = video_mode::write_video_mode(root, name, mode) {
+                set_message(format!("Cannot save display mode: {err}"));
+            }
         }
     }
 
@@ -1625,6 +1673,15 @@ impl Engine {
                         self.settings.shader_gba
                     } else { self.settings.shader_gb };
                     self.gpu.set_screen_effect(shader.effect());
+                    // The exact Slot upstream geometry: GB/GBC 160x144
+                    // is centred within the 240x160 libretro canvas.
+                    let name = self.shelves[self.active].carts
+                        .get(self.shelves[self.active].index)
+                        .map_or("", |cart| cart.stem.as_str());
+                    self.video_mode = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+                        .as_ref().map_or(VideoMode::Actual,
+                            |(root, _)| video_mode::video_mode_for(root, name));
+                    self.apply_video_geometry();
                     self.screen_power = 0.0;
                     self.exiting_screen = false;
                     self.gpu.set_screen_power(0.0);
