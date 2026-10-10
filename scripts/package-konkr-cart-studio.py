@@ -27,13 +27,23 @@ def package(root: Path, built: Path):
     for name in ("slot_cart_studio.js", "slot_cart_studio_bg.wasm"):
         shutil.copy2(built / "pkg" / name, target / "pkg" / name)
     shutil.copy2(root / "android/studio/android-card.js", target / "android-card.js")
+    # Only the Android-packaged web app gets compact embedded CSS.
+    shutil.copy2(root / "android/studio/embedded.css", target / "embedded.css")
 
     jsfile = target / "studio.js"
     js = jsfile.read_text("utf-8")
     js = "import { fromAndroid } from './android-card.js';\n" + js
     js = checked_replace(js, "  const crc = new Crc32();",
                          "  if (file.slotCrc != null) return file.slotCrc >>> 0;\n  const crc = new Crc32();")
-    js = checked_replace(js, "  document.body.dataset.ready = 'true';",
+    # Bypass the single-cart catalogue step on KONKR: open its real editor
+    # immediately. The original matching/painting work continues async and
+    # refreshes the editor when ROM identity and artwork become available.
+    js = checked_replace(js, "  track(identify(session));",
+                         """  track(identify(session));
+  if (window.AndroidStudio && session.carts.length === 1) {
+    editor.open(session.carts[0]);
+  }""")
+    js = checked_replace(js, "  document.body.dataset.ready = 'true';" ,
         """  document.body.dataset.ready = 'true';
   if (window.AndroidStudio) {
     $('pick').hidden = true;
@@ -61,7 +71,12 @@ def package(root: Path, built: Path):
  img-src 'self' data: blob: https://raw.githubusercontent.com https://art.slot-cfw.fyi;
  object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none';
 ">""")
+    html = checked_replace(html, '<link rel="stylesheet" href="studio.css">',
+        '<link rel="stylesheet" href="studio.css">\\n<link rel="stylesheet" href="embedded.css">')
     htmlfile.write_text(html, encoding="utf-8")
+    assert 'editor.open(session.carts[0])' in js
+    assert 'embedded.css' in html
+    assert (target / 'embedded.css').is_file()
     print("Original Cart Studio packaged:", target,
           (target / "pkg/slot_cart_studio_bg.wasm").stat().st_size, "WASM bytes")
 
