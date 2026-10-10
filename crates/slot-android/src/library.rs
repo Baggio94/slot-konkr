@@ -94,6 +94,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetLibrary(
     _this: jni::objects::JObject<'_>,
     json: jni::objects::JString<'_>,
 ) -> jni::sys::jint {
+    let started = std::time::Instant::now();
     let Ok(input) = env.get_string(&json) else { return -1 };
     let Ok(entries) = serde_json::from_str::<Vec<RomEntry>>(&input.to_string_lossy()) else { return -1 };
     if entries.len() > MAX_ROMS { return -1; }
@@ -101,6 +102,8 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetLibrary(
     let mut state = LIBRARY.lock().unwrap_or_else(|err| err.into_inner());
     state.entries = Some(entries);
     state.version = state.version.wrapping_add(1);
+    crate::game::log_launch_timing(&format!(
+        "ROM shelf JSON import: {count} carts in {}ms", started.elapsed().as_millis()));
     count
 }
 
