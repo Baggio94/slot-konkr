@@ -143,6 +143,10 @@ impl Compositor {
         self.game.set_effect(effect);
     }
 
+    pub fn set_colour_correction(&mut self, enabled: bool) {
+        self.game.set_colour_correction(enabled);
+    }
+
     pub fn set_picture(&mut self, rect: [f32; 4]) {
         self.game.set_picture(rect);
     }
