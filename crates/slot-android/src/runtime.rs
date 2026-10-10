@@ -17,7 +17,7 @@ use slot_store::{Cart, Platform, Core, stamp_now};
 use slot_power::{Battery, Charge};
 use crate::library::{carts_by_platform, RomEntry, LIBRARY};
 use slot_ui::{
-    board_face, chip_face, chip_shadow_face, socket_face, quick_value_face, cart_face_with,
+    board_face, chip_face, chip_shadow_face, socket_face, quick_value_face, cart_face_with_material,
     cart_shadow, gb_cart_shadow, board_from, board_zoom, lift_of, shelf_cart_at,
     on_board, lid_from, grown, draw_empty_slot, Draw, GbShell, Shelf, SlotChrome,
     BOARD_X, BOARD_W, SOCKET_U, SOCKET_V, SOCKET_W, SOCKET_H,
