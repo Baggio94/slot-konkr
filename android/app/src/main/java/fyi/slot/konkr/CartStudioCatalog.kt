@@ -99,22 +99,56 @@ internal object CartStudioCatalog {
         return Fingerprint(crc.value, head.copyOf(got))
     }
 
+    // A full Studio catalog can contain hundreds of carts. The old adapter
+    // decoded and rewrote the complete JSON file once PER cartridge (quadratic
+    // disk overhead). Keep one in-memory index and commit misses in batches.
+    private var memoryPath: String? = null
+    private var memoryRecords: JSONObject? = null
+    private var unsavedFingerprints = 0
+    private const val CACHE_BATCH = 12
+
+    private fun records(context: Context): JSONObject {
+        val path = File(context.filesDir, CACHE).absolutePath
+        if (memoryPath == path && memoryRecords != null) return memoryRecords!!
+        val doc = try { JSONObject(File(path).readText(Charsets.UTF_8)) }
+                  catch (_: Exception) { JSONObject() }
+        val entries = if (doc.optInt("schema") == 1)
+            doc.optJSONObject("records") ?: JSONObject()
+        else JSONObject()
+        memoryPath = path
+        memoryRecords = entries
+        unsavedFingerprints = 0
+        return entries
+    }
+
+    @Synchronized
+    fun flush(context: Context) {
+        if (unsavedFingerprints == 0) return
+        val entries = records(context)
+        val cacheFile = File(context.filesDir, CACHE)
+        val atomic = AtomicFile(cacheFile)
+        val output = atomic.startWrite()
+        try {
+            output.write(JSONObject().put("schema", 1)
+                .put("records", entries).toString().toByteArray(Charsets.UTF_8))
+            atomic.finishWrite(output)
+            unsavedFingerprints = 0
+        } catch (failure: Exception) {
+            atomic.failWrite(output)
+            throw failure
+        }
+    }
+
     /**
-     * Called only from a background worker. Positive size and modification
-     * timestamps are required before reusing a fingerprint: SAF providers can
-     * omit metadata, in which case recomputing is safer than stale matching.
+     * Called off the UI thread. Missing or unreliable SAF metadata triggers
+     * recalculation, while unchanged ROMs reuse the exact previous CRC/header.
+     * The partial batch is flushed on CartStudioActivity.onDestroy().
      */
     @Synchronized
     fun identify(context: Context, rom: Rom): Fingerprint {
         require(rom.uri.startsWith("content://")) { "A SAF ROM URI is required" }
-        val cacheFile = File(context.filesDir, CACHE)
-        val store = try {
-            JSONObject(cacheFile.readText(Charsets.UTF_8))
-        } catch (_: Exception) { JSONObject() }
-        val records = if (store.optInt("schema") == 1) {
-            store.optJSONObject("records") ?: JSONObject()
-        } else JSONObject()
-        val old = records.optJSONObject(rom.uri)
+        val entries = records(context)
+        val old = entries.optJSONObject(rom.uri)
         if (rom.size > 0 && rom.modified > 0 && old != null &&
             old.optLong("size") == rom.size && old.optLong("modified") == rom.modified) {
             try {
@@ -129,21 +163,13 @@ internal object CartStudioCatalog {
             ?: throw IllegalArgumentException("Unable to read the ROM")
         val fingerprint = fingerprintStream(content)
         if (rom.size > 0 && rom.modified > 0 && fingerprint.head.size == HEAD_BYTES) {
-            records.put(rom.uri, JSONObject()
+            entries.put(rom.uri, JSONObject()
                 .put("size", rom.size)
                 .put("modified", rom.modified)
                 .put("crc", fingerprint.crc)
                 .put("head", Base64.encodeToString(fingerprint.head, Base64.NO_WRAP)))
-            val atomic = AtomicFile(cacheFile)
-            val output = atomic.startWrite()
-            try {
-                output.write(JSONObject().put("schema", 1)
-                    .put("records", records).toString().toByteArray(Charsets.UTF_8))
-                atomic.finishWrite(output)
-            } catch (failure: Exception) {
-                atomic.failWrite(output)
-                throw failure
-            }
+            unsavedFingerprints++
+            if (unsavedFingerprints >= CACHE_BATCH) flush(context)
         }
         return fingerprint
     }
