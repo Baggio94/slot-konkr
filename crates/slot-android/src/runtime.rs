@@ -2038,9 +2038,14 @@ impl Engine {
                 // 200ms ease-in + 1200ms hold + 800ms ease-out, 0.4 peak alpha.
                 if let Some(since) = self.platform_shown_at {
                     let elapsed_ms = since.elapsed().as_millis() as u64;
-                    let alpha = slot_name_alpha(elapsed_ms);
-                    if alpha > 0.0 {
-                        draw_slot_name(self.platform_faces[self.active], alpha, &mut commands);
+                    // At t=0 the original fade starts at alpha=0. Do NOT
+                    // clear the timer on that first render frame: only expire
+                    // after the full 200ms + 1200ms + 800ms timeline.
+                    if platform_name_running(elapsed_ms) {
+                        let alpha = slot_name_alpha(elapsed_ms);
+                        if alpha > 0.0 {
+                            draw_slot_name(self.platform_faces[self.active], alpha, &mut commands);
+                        }
                     } else {
                         self.platform_shown_at = None;
                     }
@@ -2082,6 +2087,13 @@ impl Engine {
         self.gpu.draw_list(&commands);
         self.gpu.end_frame(self.size);
     }
+}
+
+/// Slot. keeps the label timer alive even when fade-in alpha is initially zero.
+/// Time-based expiry (not alpha-based) is essential for reliable GBA startup
+/// and every L1/R1 GB/GBC/GBA switch on a high-refresh-rate Android panel.
+fn platform_name_running(elapsed_ms: u64) -> bool {
+    elapsed_ms < 200 + 1200 + 800
 }
 
 /// Follow Slot 1.5.0's platform name alpha curve and durations exactly.
@@ -2195,6 +2207,13 @@ mod ui_feedback_tests {
 
     #[test]
     fn platform_name_timing_matches_upstream_slot() {
+        // Regression: a zero-alpha first frame must not cancel the animation.
+        assert!(platform_name_running(0));
+        assert!(platform_name_running(1));
+        assert!(platform_name_running(199));
+        assert!(platform_name_running(2199));
+        assert!(!platform_name_running(2200));
+        assert!(!platform_name_running(3500));
         assert_eq!(slot_name_alpha(0), 0.0);
         assert!(slot_name_alpha(100) > 0.0);
         assert!((slot_name_alpha(200) - 0.4).abs() < 0.001);

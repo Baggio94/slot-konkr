@@ -3,7 +3,7 @@ name: KONKR Android preview
 on:
   workflow_dispatch:
   push:
-    branches: [feat/android-bootstrap, feat/konkr-ui-feedback, feat/konkr-retroachievements, feat/konkr-integration, feat/konkr-slot-parity, feat/konkr-save-parity, feat/konkr-dev4-performance-material, feat/konkr-dev5-launch-parity, feat/konkr-dev6-saf-launch, fix/konkr-dev7-saf-root-uri, fix/konkr-dev8-missing-optional-retroarch-files, feat/konkr-dev9-original-menus, feat/konkr-dev10-in-game-ui, feat/konkr-dev11-fastforward-rewind, feat/konkr-dev12-audio-startup-performance, feat/konkr-dev13-settings-about, feat/konkr-dev14-screen-gameplay, feat/konkr-dev15-gb-display, feat/konkr-dev16-personalization, feat/konkr-dev17-cart-labels, feat/konkr-dev18-original-color, feat/konkr-dev19-original-gestures-crt-boot, feat/konkr-dev20-official-icons-platform-labels]
+    branches: [feat/android-bootstrap, feat/konkr-ui-feedback, feat/konkr-retroachievements, feat/konkr-integration, feat/konkr-slot-parity, feat/konkr-save-parity, feat/konkr-dev4-performance-material, feat/konkr-dev5-launch-parity, feat/konkr-dev6-saf-launch, fix/konkr-dev7-saf-root-uri, fix/konkr-dev8-missing-optional-retroarch-files, feat/konkr-dev9-original-menus, feat/konkr-dev10-in-game-ui, feat/konkr-dev11-fastforward-rewind, feat/konkr-dev12-audio-startup-performance, feat/konkr-dev13-settings-about, feat/konkr-dev14-screen-gameplay, feat/konkr-dev15-gb-display, feat/konkr-dev16-personalization, feat/konkr-dev17-cart-labels, feat/konkr-dev18-original-color, feat/konkr-dev19-original-gestures-crt-boot, feat/konkr-dev20-official-icons-platform-labels, fix/konkr-dev21-platform-name-retrigger]
     paths:
       - 'android/**'
       - 'crates/slot-android/**'
