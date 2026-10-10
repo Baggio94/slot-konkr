@@ -774,14 +774,14 @@ impl Engine {
                         match self.overlay {
                             ShelfOverlay::Menu { row } => match code {
                                 19 | 20 => {
-                                    let next = if code == 19 { (row + 2) % 3 } else { (row + 1) % 3 };
-                                    self.overlay = ShelfOverlay::Menu { row: next };
+                                    self.overlay = ShelfOverlay::Menu { row: move_menu_row(row, code, 4) };
                                 }
                                 96 => {
                                     self.overlay = match row {
                                         0 => ShelfOverlay::Library { row: 0 },
                                         1 => ShelfOverlay::Scraping,
-                                        _ => ShelfOverlay::Achievements,
+                                        2 => ShelfOverlay::Achievements,
+                                        _ => ShelfOverlay::Settings { row: 0 },
                                     };
                                 }
                                 97 | 108 => self.overlay = ShelfOverlay::None,
@@ -809,6 +809,21 @@ impl Engine {
                                     _ => {}
                                 },
                                 97 => self.overlay = ShelfOverlay::Menu { row: 0 },
+                                108 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
+                            ShelfOverlay::Settings { row } => match code {
+                                19 | 20 => self.overlay = ShelfOverlay::Settings {
+                                    row: move_menu_row(row, code, 5),
+                                },
+                                21 | 22 => self.change_setting(row, code == 22),
+                                96 if row == 4 => self.overlay = ShelfOverlay::About,
+                                97 => self.overlay = ShelfOverlay::Menu { row: 3 },
+                                108 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
+                            ShelfOverlay::About => match code {
+                                97 | 96 => self.overlay = ShelfOverlay::Settings { row: 4 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -1087,6 +1102,23 @@ impl Engine {
         }
     }
 
+    fn change_setting(&mut self, row: usize, right: bool) {
+        if !self.settings.change(row, right) { return; }
+        if row == 1 {
+            FF_AUDIO_ENABLED.store(self.settings.ff_sound, Ordering::Release);
+            AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        }
+        if row == 2 {
+            self.gpu.set_colour_correction(self.settings.colour_correction);
+        }
+        // All configuration writes are on the GL/UI thread and atomic.
+        if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            if let Err(error) = self.settings.save(root) {
+                set_message(format!("Cannot save Settings: {error}"));
+            }
+        }
+    }
+
     fn draw_original_style_menu(&self, heading: usize, items: &[usize],
                                 selected: usize, out: &mut Vec<Draw>) {
         // The original Slot full-screen quick menu uses the housing palette,
@@ -1136,10 +1168,70 @@ impl Engine {
         match self.overlay {
             ShelfOverlay::None => {}
             ShelfOverlay::Menu { row } => {
-                self.draw_original_style_menu(0, &[1, 2, 3], row, out);
+                self.draw_original_style_menu(0, &[1, 2, 3, 25], row, out);
             }
             ShelfOverlay::Library { row } => {
                 self.draw_original_style_menu(5, &[6, 24, 7, 8, 9], row, out);
+            }
+            ShelfOverlay::Settings { row } => {
+                self.draw_original_style_menu(26, &[27, 28, 29, 30, 31], row, out);
+                let top = settings_row_top(5);
+                for index in 0..4 {
+                    let choice = match index {
+                        0 => match self.settings.ff_speed {
+                            2 => 0, 3 => 1, 4 => 2, _ => 3,
+                        },
+                        1 => if self.settings.ff_sound { 4 } else { 5 },
+                        2 => if self.settings.colour_correction { 4 } else { 5 },
+                        _ => if self.settings.rumble { 4 } else { 5 },
+                    };
+                    let (tex, width, height) = self.setting_values[choice];
+                    let y = top + index as f32 * QUICK_PITCH + 8.0;
+                    let scale = 0.79;
+                    let w = width as f32 * scale;
+                    let right = OUT_W as f32 - 34.0;
+                    let chosen = row == index;
+                    let x = right - w - if chosen { 22.0 } else { 0.0 };
+                    out.push(Draw::Tex {
+                        x, y, w, h: height as f32 * scale,
+                        tex, alpha: if chosen { 1.0 } else { 0.62 },
+                    });
+                    if chosen {
+                        let (left, lw, lh) = self.setting_carets[0];
+                        let (right_tex, rw, rh) = self.setting_carets[1];
+                        out.push(Draw::Tex {
+                            x: x - lw as f32 - 8.0, y, w: lw as f32,
+                            h: lh as f32, tex: left, alpha: 1.0,
+                        });
+                        out.push(Draw::Tex {
+                            x: right - rw as f32, y, w: rw as f32,
+                            h: rh as f32, tex: right_tex, alpha: 1.0,
+                        });
+                    }
+                }
+                // Original Back / Change keycap legend, not generic Select.
+                out.push(Draw::Rect {
+                    x: 0.0, y: 420.0, w: OUT_W as f32, h: 60.0,
+                    colour: opening(),
+                });
+                for (tex, w, x) in centred_hints(&self.settings_hints, LEGEND_GAP) {
+                    out.push(Draw::Tex {
+                        x, y: 427.0, w: w as f32, h: HINT_H as f32,
+                        tex, alpha: 1.0,
+                    });
+                }
+            }
+            ShelfOverlay::About => {
+                out.push(Draw::Rect {
+                    x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
+                    colour: [0.055, 0.055, 0.065, 1.0],
+                });
+                out.push(Draw::Tex {
+                    x: (OUT_W - STICKER_W) as f32 / 2.0,
+                    y: (OUT_H - STICKER_H) as f32 / 2.0,
+                    w: STICKER_W as f32, h: STICKER_H as f32,
+                    tex: self.about_texture, alpha: 1.0,
+                });
             }
             ShelfOverlay::Scraping | ShelfOverlay::Achievements => {
                 self.modal(110.0, 127.0, 500.0, 227.0, out, 0.78);
@@ -1326,9 +1418,10 @@ impl Engine {
         // Update full-screen menus and spring-smooth the selection bar.
         // Keep animation entirely in rendering: never delay controller input.
         let (kind, selected, count) = match self.overlay {
-            ShelfOverlay::Menu { row } => (1u8, row, 3usize),
+            ShelfOverlay::Menu { row } => (1u8, row, 4usize),
             ShelfOverlay::Library { row } => (2u8, row, 5usize),
             ShelfOverlay::GameMenu { row } => (3u8, row, 3usize),
+            ShelfOverlay::Settings { row } => (4u8, row, 5usize),
             _ => (0, 0, 0),
         };
         if kind != self.menu_seen {
