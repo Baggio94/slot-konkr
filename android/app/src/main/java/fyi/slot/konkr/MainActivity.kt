@@ -59,6 +59,7 @@ class MainActivity : Activity() {
         private const val THEME_REQUEST = 4705
         private const val WALLPAPER_REQUEST = 4706
         private const val LABEL_REQUEST = 4707
+        private const val CART_STUDIO_REQUEST = 4708
         private const val PREFS = "slot_konkr_library"
         private const val ROM_ROOT = "rom_root_uri"
         private const val BIOS_ROOT = "bios_root_uri"
@@ -108,6 +109,7 @@ class MainActivity : Activity() {
     external fun nativePollSaveFlush(): String?
 
     private var pendingCartLabelUri: String? = null
+    private var pendingCartStudioUri: String? = null
     private lateinit var cartSounds: CartSounds
     private val scanner = Executors.newSingleThreadExecutor()
     private val gameLoader = Executors.newSingleThreadExecutor()
@@ -175,7 +177,7 @@ class MainActivity : Activity() {
                 10 -> resetVisualFile(WALLPAPER_REQUEST)
                 11 -> openCartLabelPicker()
                 12 -> removeSelectedCartLabel()
-                13 -> identifySelectedCartForStudio()
+                13 -> openSelectedCartStudio()
             }
             nativePollMessage()?.let { message ->
                 Log.w(TAG, message)
@@ -807,40 +809,21 @@ class MainActivity : Activity() {
         return File(File(filesDir, "Labels"), "$name.png")
     }
 
-    /**
-     * First Cart Studio integration test: identify the selected ROM using the
-     * original CRC32 rule without opening the entire ROM into memory.
-     * Later dev26 steps reuse this catalogue for the official WebView editor.
-     */
-    private fun identifySelectedCartForStudio() {
+    private fun openSelectedCartStudio() {
         val selected = nativePollCartLabelUri()
         if (selected.isNullOrBlank()) {
             Toast.makeText(this, "Select a cartridge first", Toast.LENGTH_SHORT).show()
             return
         }
-        gameLoader.execute {
-            try {
-                val rom = CartStudioCatalog.games(this@MainActivity)
-                    .firstOrNull { it.uri == selected }
-                    ?: throw IllegalArgumentException("ROM not in current indexed library")
-                val fp = CartStudioCatalog.identify(this@MainActivity, rom)
-                Log.i(TAG, "Cart Studio match input: " + rom.platform +
-                    " CRC32=" + fp.hex + " header=" + fp.head.size)
-                runOnUiThread {
-                    if (!isDestroyed) Toast.makeText(this@MainActivity,
-                        "Cart Studio: " + rom.platform + " CRC32 " + fp.hex,
-                        Toast.LENGTH_LONG).show()
-                }
-            } catch (error: Exception) {
-                Log.w(TAG, "Cart Studio read-only ROM fingerprint failed", error)
-                runOnUiThread {
-                    if (!isDestroyed) Toast.makeText(this@MainActivity,
-                        "Cart Studio: " + (error.message ?: "ROM read failed"),
-                        Toast.LENGTH_LONG).show()
-                }
-            }
-        }
+        pendingCartStudioUri = selected
+        val intent = Intent(this, CartStudioActivity::class.java)
+            .putExtra(CartStudioActivity.EXTRA_ROM, selected)
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, CART_STUDIO_REQUEST)
     }
+
+    private fun setStudioOverrides(json: String): Int =
+        nativeSetLibrary(CartStudioCatalog.withOverrides(this, json))
 
     private fun openCartLabelPicker() {
         val selected = nativePollCartLabelUri()
@@ -911,6 +894,26 @@ class MainActivity : Activity() {
     @Deprecated("Android 12 SAF activity result")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == CART_STUDIO_REQUEST) {
+            val selected = pendingCartStudioUri
+            pendingCartStudioUri = null
+            if (resultCode == RESULT_OK && selected != null) {
+                // Rebuild the private shell/label textures from the existing ROM
+                // index; never request a new filesystem scan or touch save files.
+                try {
+                    val cache = File(filesDir, ROM_CACHE_NAME)
+                    val json = JSONObject(cache.readText(Charsets.UTF_8))
+                        .getJSONArray("games").toString()
+                    if (setStudioOverrides(json) < 0) error("Studio library reload failed")
+                    nativeReloadCartLabel(selected)
+                } catch (error: Exception) {
+                    Log.e(TAG, "Studio change could not refresh shelf", error)
+                    Toast.makeText(this, "Reopen Slot to show studio changes",
+                        Toast.LENGTH_LONG).show()
+                }
+            }
+            return
+        }
         if (requestCode == LABEL_REQUEST) {
             val selected = pendingCartLabelUri
             pendingCartLabelUri = null
@@ -973,7 +976,7 @@ class MainActivity : Activity() {
             if (metadata.optInt("schema") != ROM_CACHE_SCHEMA ||
                 metadata.optString("root") != root.toString()) return false
             val games = metadata.optJSONArray("games") ?: return false
-            val count = nativeSetLibrary(games.toString())
+            val count = setStudioOverrides(games.toString())
             if (count < 0) return false
             if (count == 0) {
                 status.visibility = View.VISIBLE
@@ -1021,7 +1024,7 @@ class MainActivity : Activity() {
             try {
                 val result = RomLibrary.scan(this, uri)
                 if (scanSerial.get() != serial) return@execute
-                val count = nativeSetLibrary(result.json)
+                val count = setStudioOverrides(result.json)
                 if (count >= 0) {
                     try {
                         storeCachedLibrary(uri, result.json)

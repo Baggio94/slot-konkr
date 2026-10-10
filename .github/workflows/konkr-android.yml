@@ -16,6 +16,7 @@ on:
       - 'rust-toolchain.toml'
       - 'scripts/build-konkr-android.sh'
       - 'scripts/build-mgba-android.sh'
+      - 'scripts/package-konkr-cart-studio.py'
       - '.github/workflows/konkr-android.yml'
 
 jobs:
@@ -63,6 +64,37 @@ jobs:
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           bash scripts/build-gpsp-android.sh
+      - name: Checkout official Slot revision required by Cart Studio
+        uses: actions/checkout@v4
+        with:
+          repository: BrandonKowalski/slot
+          ref: 3b907510201c70e579aff7d9205056d18dd0618d
+          path: studio-upstream/slot
+
+      - name: Stage original Studio with its pinned upstream Slot sources
+        run: |
+          set -euo pipefail
+          cp -a third_party/slot-cart-studio studio-upstream/slot-cart-studio
+          test "$(tr -d '\r\n' < studio-upstream/slot-cart-studio/slot.ref)" = \
+               "$(git -C studio-upstream/slot rev-parse HEAD)"
+          node --test studio-upstream/slot-cart-studio/web/*.test.mjs
+
+      - name: Install wasm-pack and target for original Studio
+        run: |
+          rustup target add wasm32-unknown-unknown --toolchain 1.96.0
+          curl -fsSL https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-x86_64-unknown-linux-musl.tar.gz \
+            | tar -xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/wasm-pack-v0.15.0-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
+
+      - name: Build and package genuine Cart Studio HTML/JS/WASM in APK assets
+        run: |
+          set -euo pipefail
+          (cd studio-upstream/slot-cart-studio && \
+            wasm-pack build --release --target web --no-typescript --out-dir web/pkg)
+          python3 scripts/package-konkr-cart-studio.py \
+            --source . --built studio-upstream/slot-cart-studio/web
+          test -s android/app/src/main/assets/studio/pkg/slot_cart_studio_bg.wasm
+
       - name: Test RetroArch RZIP v1 codec on JVM
         run: gradle --no-daemon -p android :app:testDebugUnitTest
       - name: Build debug APK

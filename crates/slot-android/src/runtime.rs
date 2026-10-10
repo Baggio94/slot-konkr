@@ -175,7 +175,7 @@ const MENU_TEXT: [&str; 48] = [
     "Refresh Library",                 // 9
     "RetroArch core folders",           // 10
     "SCRAPING",                         // 11
-    "A: Identify selected cart (dev26)", // 12
+    "A: Open Cart Studio",             // 12
     "RETROACHIEVEMENTS",               // 13
     "A: Check RAOfflineProxy status",    // 14
     "SELECT CORE",                      // 15

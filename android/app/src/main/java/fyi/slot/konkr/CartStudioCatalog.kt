@@ -59,6 +59,20 @@ internal object CartStudioCatalog {
         return result
     }
 
+    /** Layer local per-ROM Studio shell choices over the existing Android ROM index. */
+    fun withOverrides(context: Context, source: String): String {
+        val entries = JSONArray(source)
+        for (i in 0 until entries.length()) {
+            val game = entries.optJSONObject(i) ?: continue
+            val uri = game.optString("uri")
+            if (!uri.startsWith("content://")) continue
+            CartStudioBridge.savedShell(context, uri)?.let {
+                game.put("shell_override", it)
+            }
+        }
+        return entries.toString()
+    }
+
     /**
      * Official Cart Studio matching starts with CRC32 of uncompressed ROM bytes,
      * and reads 0x150 bytes for the original cart shell detection. Both are

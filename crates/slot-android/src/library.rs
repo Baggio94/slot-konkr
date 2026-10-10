@@ -127,7 +127,7 @@ mod tests {
     fn sorts_and_rejects_non_saf_entries() {
         let example = |platform: &str, title: &str, uri: &str| RomEntry {
             platform: platform.into(), title: title.into(), uri: uri.into(),
-            code: String::new(), color_only: false
+            code: String::new(), color_only: false, shell_override: None
         };
         let grouped = carts_by_platform(&[
             example("GBA", "Zelda", "content://roms/z"),
