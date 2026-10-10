@@ -19,7 +19,7 @@ class RetroArchStorageDirectUriTest {
     }
 
     @Test fun removableStorageAndAlternativeCoreWork() {
-        assertEquals("ABCD-1234/".replace("/", ":") + "My Saves/gpSP/Game.rtc",
+        assertEquals("ABCD-1234:My Saves/gpSP/Game.rtc",
             RetroArchStorage.directDocumentId("ABCD-1234:My Saves", "gpSP", "Game.rtc"))
     }
 
