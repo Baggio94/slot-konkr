@@ -810,7 +810,7 @@ impl Engine {
             if self.shelves[shelf_id].face(index).is_some() {
                 continue;
             }
-            let face = cart_face_with(&self.shelves[shelf_id].carts[index], None);
+            let face = cart_face_with_material(&self.shelves[shelf_id].carts[index], None);
             let texture = if self.texture_cache.len() >= 42 {
                 let (old_shelf, old_index, tex) = self.texture_cache
                     .pop_front().expect("nonempty texture pool");
