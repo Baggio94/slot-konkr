@@ -66,6 +66,49 @@ internal object RetroArchCompression {
         return result
     }
 
+    /** Refuse overwriting unknown, legacy raw, v2 or corrupt external states.
+     * A valid header alone is insufficient: require a complete MEM and END
+     * block before replacing a RetroArch state.
+     */
+    fun requireSupportedContainer(data: ByteArray) {
+        val decoded = decode(data)
+        require(decoded.size >= 24 && decoded.copyOfRange(0, 8)
+            .contentEquals(byteArrayOf(82,65,83,84,65,84,69,1))) {
+            "Existing RetroArch state format is unsupported; preserved"
+        }
+        fun size32(pos: Int): Long =
+            (0..3).fold(0L) { v, i ->
+                v or ((decoded[pos + i].toLong() and 255L) shl (8 * i))
+            }
+        var offset = 8
+        var memoryFound = false
+        while (offset + 8 <= decoded.size) {
+            val tag = decoded.copyOfRange(offset, offset + 4)
+                .toString(Charsets.US_ASCII)
+            val payloadSize = size32(offset + 4)
+            val end = offset.toLong() + 8L + payloadSize
+            require(end <= decoded.size.toLong()) {
+                "Truncated RetroArch container; preserved"
+            }
+            when (tag) {
+                "MEM " -> {
+                    require(!memoryFound && payloadSize in 1..(64L * 1024 * 1024)) {
+                        "Invalid RetroArch memory block; preserved"
+                    }
+                    memoryFound = true
+                }
+                "END " -> {
+                    require(memoryFound && payloadSize == 0L) {
+                        "Incomplete RetroArch container; preserved"
+                    }
+                    return
+                }
+            }
+            offset = ((end + 7) and -8L).toInt()
+        }
+        error("Missing RetroArch END block; preserved")
+    }
+
     fun decode(data: ByteArray): ByteArray {
         if (!isRzip(data)) return data
         val version=data[6].toInt() and 255
