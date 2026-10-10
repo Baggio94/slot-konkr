@@ -164,13 +164,15 @@ class AppsActivity : Activity() {
             finish()
             return true
         }
-        if (keyCode == KeyEvent.KEYCODE_BUTTON_A) {
-            val grid = findFocus()
-            if (grid is GridView && grid.selectedItemPosition >= 0) {
-                grid.performItemClick(grid.getChildAt(grid.selectedItemPosition - grid.firstVisiblePosition),
-                    grid.selectedItemPosition, grid.selectedItemPosition.toLong())
+        if (keyCode == KeyEvent.KEYCODE_BUTTON_A || keyCode == KeyEvent.KEYCODE_DPAD_CENTER) {
+            val focused = currentFocus
+            if (focused is GridView && focused.selectedItemPosition >= 0) {
+                val selected = focused.selectedItemPosition
+                focused.performItemClick(focused.getChildAt(selected - focused.firstVisiblePosition),
+                    selected, selected.toLong())
                 return true
             }
+            if (focused?.isClickable == true) return focused.performClick()
         }
         return super.onKeyDown(keyCode, event)
     }
