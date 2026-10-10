@@ -19,6 +19,7 @@ enum PendingUndo {
 pub struct GameSession {
     core: LibretroCore,
     save: PathBuf,
+    rtc: PathBuf,
     state: PathBuf,
     retroarch_export: PathBuf,
     retroarch_import: PathBuf,
@@ -31,7 +32,8 @@ pub struct GameSession {
 
 impl GameSession {
     pub fn open(rom: &Path, core_file: &Path, storage: &Path,
-                which: Core, platform: Platform, resume_state: bool) -> Result<Self, String> {
+                which: Core, platform: Platform, resume_state: bool,
+                rom_stem: &str) -> Result<Self, String> {
         if !rom.exists() || !core_file.exists() {
             return Err(format!("ROM cache or {} core missing", which.text()));
         }
@@ -40,7 +42,17 @@ impl GameSession {
         let id = rom.file_stem().and_then(|v| v.to_str())
             .filter(|v| !v.is_empty() && v.bytes().all(|c| c.is_ascii_hexdigit()))
             .ok_or_else(|| "Unsafe ROM cache file name".to_owned())?;
-        let save = root.join(format!("{id}.{}.srm", which.as_str()));
+        // Canonical private layout matches RetroArch's per-core filenames.
+        // The opaque ROM URI hash is retained for internal cache / state-ring IDs.
+        if rom_stem.is_empty() || rom_stem.len() > 200 ||
+            rom_stem == "." || rom_stem == ".." ||
+            rom_stem.chars().any(|c| c == '/' || c == '\\' || c.is_control()) {
+            return Err("Unsafe ROM save filename".into());
+        }
+        let core_root = root.join(which.text());
+        std::fs::create_dir_all(&core_root).map_err(|e| e.to_string())?;
+        let save = core_root.join(format!("{rom_stem}.srm"));
+        let rtc = core_root.join(format!("{rom_stem}.rtc"));
         // Save states belong to their specific emulator core. Incompatible
         // mGBA/gpSP states must never be deserialized in the other core.
         // Legacy single-core .state files are still readable by mGBA only.
@@ -68,16 +80,24 @@ impl GameSession {
         }
         core.load(rom).map_err(|e| e.to_string())?;
         let ram = std::fs::read(&save).or_else(|err| {
-            if which == Core::Mgba && err.kind() == std::io::ErrorKind::NotFound {
-                // Upgrade existing 0.0.6 single-core test data without loss.
-                std::fs::read(root.join(format!("{id}.srm")))
-            } else {
-                Err(err)
-            }
+            if err.kind() == std::io::ErrorKind::NotFound {
+                // Migrate the pre-0.0.7 hashed cache non-destructively.
+                std::fs::read(root.join(format!("{id}.{}.srm", which.as_str())))
+                    .or_else(|_| {
+                        if which == Core::Mgba {
+                            std::fs::read(root.join(format!("{id}.srm")))
+                        } else { Err(err) }
+                    })
+            } else { Err(err) }
         });
         if let Ok(ram) = ram {
             if let Err(error) = core.load_save_ram(&ram) {
                 eprintln!("slot-konkr: SRAM restore skipped: {error}");
+            }
+        }
+        if let Ok(bytes) = std::fs::read(&rtc) {
+            if let Err(error) = core.load_rtc(&bytes) {
+                eprintln!("slot-konkr: RTC restore skipped: {error}");
             }
         }
         if resume_state {
@@ -108,7 +128,7 @@ impl GameSession {
         let sample_rate = core.av_info().sample_rate.round() as i32;
         let fps = core.av_info().fps.clamp(30.0, 120.0);
         Ok(Self {
-            core, save, state, retroarch_export, retroarch_import, ring,
+            core, save, rtc, state, retroarch_export, retroarch_import, ring,
             pending_undo: None, last_sram: Instant::now(),
             sample_rate: sample_rate.clamp(8_000, 96_000),
             fps,
@@ -141,8 +161,17 @@ impl GameSession {
             },
             None => false,
         };
+        // RTC may exist independently of SRAM on GB/GBC cartridges.
+        let rtc_saved = self.core.save_rtc().is_some_and(|bytes|
+            match atomic_write(&self.rtc, &bytes) {
+                Ok(()) => true,
+                Err(err) => {
+                    eprintln!("slot-konkr: RTC save failed: {err}");
+                    false
+                }
+            });
         self.last_sram = Instant::now();
-        success
+        success || rtc_saved
     }
 
     pub fn save(&mut self, with_state: bool) -> bool {
