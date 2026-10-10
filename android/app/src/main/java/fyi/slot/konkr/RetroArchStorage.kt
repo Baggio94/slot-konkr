@@ -41,9 +41,16 @@ internal object RetroArchStorage {
         val statesTree: Uri?
     )
 
-    fun target(context: Context, rawUri: String, core: String, savesTree: Uri?, statesTree: Uri?): Target {
+    fun target(context: Context, rawUri: String, core: String, savesTree: Uri?, statesTree: Uri?,
+               scannedFileName: String? = null): Target {
         require(core == "mGBA" || core == "gpSP")
-        val name = queryRomName(context, Uri.parse(rawUri))
+        // ROM discovery (or restored shelf cache) already queried the SAF
+        // display name. Reuse only that exact URI's name; older caches and
+        // direct launches still query ContentResolver as a safe fallback.
+        val name = scannedFileName?.takeIf { candidate ->
+            candidate.endsWith(".gba", true) || candidate.endsWith(".gbc", true) ||
+                candidate.endsWith(".gb", true)
+        } ?: queryRomName(context, Uri.parse(rawUri))
         val stem = name.substringBeforeLast('.', name)
             .trim().take(200)
         require(stem.isNotEmpty() && stem !in setOf(".", "..") &&
