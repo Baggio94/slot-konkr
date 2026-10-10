@@ -89,6 +89,11 @@ pub trait RetroCore: Send {
     fn unserialize(&mut self, data: &[u8]) -> Result<(), CoreError>;
     fn save_ram(&self) -> Option<Vec<u8>>;
     fn load_save_ram(&mut self, data: &[u8]) -> Result<(), CoreError>;
+    /// Optional libretro RETRO_MEMORY_RTC (Game Boy / Color battery clock).
+    fn save_rtc(&self) -> Option<Vec<u8>> { None }
+    fn load_rtc(&mut self, _data: &[u8]) -> Result<(), CoreError> {
+        Err(CoreError::Unsupported("core exposes no RTC".into()))
+    }
     fn av_info(&self) -> AvInfo;
     fn rumble(&self) -> Rumble {
         Rumble::default()
