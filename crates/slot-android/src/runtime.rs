@@ -170,7 +170,7 @@ enum ShelfOverlay {
     States,
 }
 
-const MENU_TEXT: [&str; 48] = [
+const MENU_TEXT: [&str; 49] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -219,6 +219,7 @@ const MENU_TEXT: [&str; 48] = [
     "Remove Wallpaper",                 // 45
     "Import Selected Cart Label",       // 46
     "Remove Selected Cart Label",       // 47
+    "Apps",                             // 48
 ];
 
 struct Engine {
@@ -1008,7 +1009,7 @@ impl Engine {
                         match self.overlay {
                             ShelfOverlay::Menu { row } => match code {
                                 19 | 20 => {
-                                    self.overlay = ShelfOverlay::Menu { row: move_menu_row(row, code, 5) };
+                                    self.overlay = ShelfOverlay::Menu { row: move_menu_row(row, code, 6) };
                                 }
                                 96 => {
                                     self.overlay = match row {
@@ -1020,10 +1021,14 @@ impl Engine {
                                             ShelfOverlay::None
                                         },
                                         2 => ShelfOverlay::Achievements,
-                                        3 => ShelfOverlay::Settings { row: 0 },
+                                        3 => {
+                                            UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(15);
+                                            ShelfOverlay::None
+                                        },
+                                        4 => ShelfOverlay::Settings { row: 0 },
                                         _ => {
-                                            self.refresh_customize_items();
-                                            ShelfOverlay::Personalization { row: 0 }
+                                            self.prepare_about();
+                                            ShelfOverlay::About
                                         },
                                     };
                                 }
@@ -1081,7 +1086,7 @@ impl Engine {
                                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
                                         .push_back(action);
                                 }
-                                97 => self.overlay = ShelfOverlay::Menu { row: 4 },
+                                97 => self.overlay = ShelfOverlay::Settings { row: 2 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -1093,11 +1098,11 @@ impl Engine {
                                     0 => self.overlay = ShelfOverlay::ScreenSettings { row: 0 },
                                     1 => self.overlay = ShelfOverlay::GameplaySettings { row: 0 },
                                     _ => {
-                                        self.prepare_about();
-                                        self.overlay = ShelfOverlay::About;
+                                        self.refresh_customize_items();
+                                        self.overlay = ShelfOverlay::Personalization { row: 0 };
                                     }
                                 },
-                                97 => self.overlay = ShelfOverlay::Menu { row: 3 },
+                                97 => self.overlay = ShelfOverlay::Menu { row: 4 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -1120,7 +1125,7 @@ impl Engine {
                                 _ => {}
                             },
                             ShelfOverlay::About => match code {
-                                97 | 96 => self.overlay = ShelfOverlay::Settings { row: 2 },
+                                97 | 96 => self.overlay = ShelfOverlay::Menu { row: 5 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -1634,13 +1639,13 @@ impl Engine {
         match self.overlay {
             ShelfOverlay::None => {}
             ShelfOverlay::Menu { row } => {
-                self.draw_original_style_menu(0, &[1, 2, 3, 25, 40], row, out);
+                self.draw_original_style_menu(0, &[1, 2, 3, 48, 25, 31], row, out);
             }
             ShelfOverlay::Library { row } => {
                 self.draw_original_style_menu(5, &[6, 24, 7, 8, 9], row, out);
             }
             ShelfOverlay::Settings { row } => {
-                self.draw_original_style_menu(26, &[32, 33, 31], row, out);
+                self.draw_original_style_menu(26, &[32, 33, 40], row, out);
             }
             ShelfOverlay::Personalization { row } => {
                 self.draw_original_style_menu(41, &self.customize_items, row, out);
@@ -1852,7 +1857,7 @@ impl Engine {
         // Update full-screen menus and spring-smooth the selection bar.
         // Keep animation entirely in rendering: never delay controller input.
         let (kind, selected, count) = match self.overlay {
-            ShelfOverlay::Menu { row } => (1u8, row, 5usize),
+            ShelfOverlay::Menu { row } => (1u8, row, 6usize),
             ShelfOverlay::Library { row } => (2u8, row, 5usize),
             ShelfOverlay::GameMenu { row } => (3u8, row, 3usize),
             ShelfOverlay::Settings { row } => (4u8, row, 3usize),
