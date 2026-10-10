@@ -74,10 +74,10 @@ static SAVE_SYNC: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static CART_SFX: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
 const CART_INSERT_SFX: i32 = 1;
 const CART_EJECT_SFX: i32 = 2;
-// Keep the 450ms physical insertion, but shorten the idle seated hold.
-// The original 240ms click ends as the game takes over the display.
-const INSERT_S: f32 = 0.56;
-const INSERT_SOUND_PROGRESS: f32 = (INSERT_S - 0.24) / INSERT_S;
+// Exact upstream Slot timeline: 450ms mechanical seating + 280ms hold.
+const INSERT_S: f32 = 0.73;
+const SEATED_AT: f32 = 0.45;
+const INSERT_SOUND_PROGRESS: f32 = (SEATED_AT - 0.24) / SEATED_AT;
 const EJECT_SOUND_PROGRESS: f32 = 1.0 - (0.350 / 0.450);
 // Upstream Slot screen power transition times (app.rs).
 const SCREEN_POWER_ON_S: f32 = 0.22;
@@ -166,6 +166,7 @@ struct Engine {
     active: usize,
     inserted: bool,
     progress: f32,
+    insert_elapsed: f32,
     screen_power: f32,
     exiting_screen: bool,
     born: Instant,
@@ -173,11 +174,11 @@ struct Engine {
     library_version: u64,
     texture_cache: VecDeque<(usize, usize, slot_gfx::TexId)>,
     game: Option<GameSession>,
+    pending_game: Option<GameSession>,
     buttons: u16,
     awaiting_game: bool,
     requested_uri: Option<String>,
     prepared_rom: Option<String>,
-    seated_frame_seen: bool,
     game_accum: f64,
     overlay: ShelfOverlay,
     menu_textures: Vec<(slot_gfx::TexId, u32, u32)>,
@@ -293,6 +294,7 @@ impl Engine {
             active,
             inserted: false,
             progress: 0.0,
+            insert_elapsed: 0.0,
             screen_power: 0.0,
             exiting_screen: false,
             born: now,
@@ -300,11 +302,11 @@ impl Engine {
             library_version,
             texture_cache: VecDeque::new(),
             game: None,
+            pending_game: None,
             buttons: 0,
             awaiting_game: false,
             requested_uri: None,
             prepared_rom: None,
-            seated_frame_seen: false,
             game_accum: 0.0,
             overlay: ShelfOverlay::None,
             menu_textures,
@@ -400,6 +402,7 @@ impl Engine {
                 AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
             }
             Input::Exit => {
+                self.pending_game = None;
                 // Preserve the final video texture for the original 160ms CRT
                 // power-off before the mechanical 450ms cartridge ejection.
                 if self.game.is_some() { self.exiting_screen = true; }
@@ -433,7 +436,6 @@ impl Engine {
                 self.polaroids = None;
                 self.requested_uri = None;
                 self.prepared_rom = None;
-                self.seated_frame_seen = false;
                 *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = None;
             }
             Input::GameError { uri, message } => {
@@ -447,7 +449,6 @@ impl Engine {
                 self.inserted = false;
                 self.requested_uri = None;
                 self.prepared_rom = None;
-                self.seated_frame_seen = false;
             }
             Input::GameReady { uri, path } => {
                 // ROM preparation is asynchronous: a previously cancelled cart must
@@ -748,8 +749,9 @@ impl Engine {
                             self.inserted = true;
                             let selected = &self.shelves[self.active].carts[self.shelves[self.active].index];
                             let uri = selected.rom.to_string_lossy();
-                            self.seated_frame_seen = false;
-                            self.prepared_rom = None;
+                                        self.prepared_rom = None;
+                            self.pending_game = None;
+                            self.insert_elapsed = 0.0;
                             self.a_down_at = Some(Instant::now());
                             self.fresh_launch = false;
                             if uri.starts_with("content://") {
@@ -769,9 +771,9 @@ impl Engine {
                             self.fresh_launch = false;
                             self.awaiting_game = false;
                             self.prepared_rom = None;
+                            self.pending_game = None;
                             self.requested_uri = None;
-                            self.seated_frame_seen = false;
-                            *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                                        *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = None;
                             return;
                         }
                         _ => {}
@@ -835,7 +837,7 @@ impl Engine {
         }
     }
 
-    fn start_prepared_game(&mut self, local: &str) {
+    fn prepare_game_core(&mut self, local: &str) {
         let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some((storage, library)) = paths {
             let uri = self.requested_uri.as_deref().unwrap_or_default();
@@ -854,18 +856,15 @@ impl Engine {
             let rom_stem = self.shelves[self.active].carts
                 .get(self.shelves[self.active].index)
                 .map_or("", |cart| cart.stem.as_str());
+            let started = Instant::now();
             match GameSession::open(Path::new(local), &core_file, &storage,
                 core, platform, !self.fresh_launch, rom_stem) {
                 Ok(session) => {
-                    self.buttons = 0;
-                    SAMPLE_RATE.store(session.sample_rate, Ordering::Release);
-                    self.game = Some(session);
-                    self.game_accum = 0.0;
-                    self.gpu.set_screen_effect(ScreenEffect::None);
-                    self.screen_power = 0.0;
-                    self.exiting_screen = false;
-                    self.gpu.set_screen_power(0.0);
-                    PLAYING.store(true, Ordering::Release);
+                    // Create libretro on the same GL thread, but defer audio
+                    // and CRT presentation until Slot's seated hold completes.
+                    eprintln!("slot-konkr: core prepared in {}ms during insert",
+                        started.elapsed().as_millis());
+                    self.pending_game = Some(session);
                 }
                 Err(error) => {
                     set_message(format!("{}: {error}", core.text()));
@@ -1208,13 +1207,31 @@ impl Engine {
                 self.a_down_at = None;
             }
         }
-        // ROM cache may finish at any time, but core.load() and automatic state
-        // restore only occur after the physical insertion frame has completed.
-        if self.inserted && self.progress >= 1.0 && self.seated_frame_seen
-            && self.a_down_at.is_none()
-        {
-            if let Some(local) = self.prepared_rom.take() {
-                self.start_prepared_game(&local);
+        // Mirror original Slot: the cartridge seats at 450ms and remains
+        // seated until 730ms (or until the core is ready, if later).
+        // Use the hold to initialize mGBA/gpSP and restore SRAM/auto-state
+        // instead of running this work only AFTER the insertion has ended.
+        if self.inserted {
+            self.insert_elapsed += dt;
+            if self.insert_elapsed >= SEATED_AT && self.a_down_at.is_none()
+                && self.pending_game.is_none()
+            {
+                if let Some(local) = self.prepared_rom.take() {
+                    self.prepare_game_core(&local);
+                }
+            }
+            if self.insert_elapsed >= INSERT_S {
+                if let Some(session) = self.pending_game.take() {
+                    self.buttons = 0;
+                    SAMPLE_RATE.store(session.sample_rate, Ordering::Release);
+                    self.game = Some(session);
+                    self.game_accum = 0.0;
+                    self.gpu.set_screen_effect(ScreenEffect::None);
+                    self.screen_power = 0.0;
+                    self.exiting_screen = false;
+                    self.gpu.set_screen_power(0.0);
+                    PLAYING.store(true, Ordering::Release);
+                }
             }
         }
 
@@ -1281,9 +1298,9 @@ impl Engine {
         self.prepare_visible();
         let shelf = &mut self.shelves[self.active];
 
-        // Original mechanical PCM is intact: play the 240ms insertion clip
-        // during the final portion of the 560ms animation. Exit overlaps
-        // the screen-off effect with the physical eject motion.
+        // Original Slot 450ms mechanical insertion + 280ms hold. The click
+        // arrives during the last 240ms of the seating motion. Ejection
+        // continues to overlap CRT shutdown.
         let previous_progress = self.progress;
         self.progress = advance_cart(self.progress, self.inserted, dt);
         if self.inserted && previous_progress < INSERT_SOUND_PROGRESS
@@ -1346,7 +1363,6 @@ impl Engine {
         self.gpu.begin_frame();
         self.gpu.draw_list(&commands);
         self.gpu.end_frame(self.size);
-        self.seated_frame_seen = self.inserted && self.progress >= 1.0;
     }
 }
 
@@ -1354,7 +1370,7 @@ impl Engine {
 /// Separating progress from rendering makes the animation durations testable.
 fn advance_cart(progress: f32, inserted: bool, dt: f32) -> f32 {
     if inserted {
-        (progress + dt / INSERT_S).min(1.0)
+        (progress + dt / SEATED_AT).min(1.0)
     } else {
         (progress - dt / EJECT_S).max(0.0)
     }
@@ -1372,15 +1388,15 @@ mod ui_feedback_tests {
     use super::*;
 
     #[test]
-    fn cartridge_timelines_shorten_idle_hold_and_overlap_screen_shutdown() {
+    fn cartridge_timelines_match_upstream_seating_hold_and_ejection() {
         let from_seated = advance_cart(1.0, false, SCREEN_POWER_OFF_S);
         // After the 160ms CRT shutdown, the cartridge is already ejecting;
         // it must NOT wait to begin a fresh 450ms mechanical animation.
         assert!(from_seated < 0.70 && from_seated > 0.60);
         assert!(advance_cart(from_seated, false, EJECT_S - SCREEN_POWER_OFF_S) < 0.0001);
-        assert_eq!(advance_cart(0.0, true, INSERT_S), 1.0);
-        assert!(INSERT_S < 0.73);
-        assert!((INSERT_S * INSERT_SOUND_PROGRESS + 0.24 - INSERT_S).abs() < 0.001);
+        assert_eq!(advance_cart(0.0, true, SEATED_AT), 1.0);
+        assert!((INSERT_S - SEATED_AT - 0.28).abs() < 0.001);
+        assert!((SEATED_AT * INSERT_SOUND_PROGRESS + 0.24 - SEATED_AT).abs() < 0.001);
     }
 
     #[test]
