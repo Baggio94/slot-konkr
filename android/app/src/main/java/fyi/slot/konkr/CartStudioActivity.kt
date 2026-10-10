@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Original Cart Studio, offline HTML/JS/WASM served under a private HTTPS origin.
- * Uses a restricted one-cartridge bridge, not the browser's SD-card picker.
+ * Uses a restricted indexed-library SAF bridge, not a browser SD-card picker.
  */
 class CartStudioActivity : Activity() {
     companion object {
@@ -71,25 +71,22 @@ class CartStudioActivity : Activity() {
         frame.setBackgroundColor(Color.rgb(27, 27, 33))
         setContentView(frame)
         val notice = TextView(this).apply {
-            text = "Cart Studio\nReading selected cartridge…"
+            text = "Cart Studio\nLoading Slot library…"
             textSize = 18f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
         }
         frame.addView(notice, FrameLayout.LayoutParams(-1, -1))
 
-        val selected = intent.getStringExtra(EXTRA_ROM).orEmpty()
-        if (!selected.startsWith("content://")) {
-            Toast.makeText(this, "No cartridge selected", Toast.LENGTH_LONG).show()
-            finish()
-            return
-        }
+        val selected = intent.getStringExtra(EXTRA_ROM)?.takeIf { it.startsWith("content://") }
         worker.execute {
             try {
-                val rom = CartStudioCatalog.games(this).firstOrNull { it.uri == selected }
-                    ?: error("Selected cartridge is no longer in the library")
-                val identity = CartStudioCatalog.identify(this, rom)
-                val bridge = CartStudioBridge(this, rom, identity, changed)
+                val carts = CartStudioCatalog.games(this)
+                require(carts.isNotEmpty()) { "Choose GB, GBC or GBA ROM folders in Library" }
+                require(selected == null || carts.any { it.uri == selected }) {
+                    "Selected cartridge is no longer in the library"
+                }
+                val bridge = CartStudioBridge(this, carts, selected, changed)
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) openStudio(frame, notice, bridge)
                 }
@@ -97,7 +94,7 @@ class CartStudioActivity : Activity() {
                 Log.e(TAG, "Cannot prepare Cart Studio", error)
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) {
-                        notice.text = "Unable to read cartridge\n" +
+                        notice.text = "Unable to load library\n" +
                             (error.message ?: "Check your ROM folder permission")
                     }
                 }
@@ -206,7 +203,7 @@ class CartStudioActivity : Activity() {
         }
         toolbar.addView(title, FrameLayout.LayoutParams(-1, -1))
         val close = TextView(this).apply {
-            text = "‹  SLOT."
+            text = "‹  slot."
             textSize = 15f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
