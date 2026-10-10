@@ -41,8 +41,8 @@ def package(root: Path, built: Path):
         "function newCart({ platform, stem, file }) {",
         "function newCart({ platform, stem, file, slotId = '' }) {")
     js = checked_replace(js,
-        "    platform,\\n    stem,\\n    file,\\n    code: '',",
-        "    platform,\\n    stem,\\n    file,\\n    slotId,\\n    code: '',")
+        "    platform,\n    stem,\n    file,\n    code: '',",
+        "    platform,\n    stem,\n    file,\n    slotId,\n    code: '',")
     # Selected cart (X) enters its editor immediately, while the normal menu
     # displays the official three-tab catalog with Real Label/Logo Only prompt.
     # Selected-first order also makes ROM matching responsive in a large library.
