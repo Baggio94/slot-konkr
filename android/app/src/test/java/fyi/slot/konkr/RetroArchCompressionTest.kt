@@ -56,6 +56,20 @@ class RetroArchCompressionTest {
         }
     }
 
+    @Test fun optionalAchievementBlockIsCompatible() {
+        val state = raw.copyOfRange(0, raw.size - 8) +
+            byteArrayOf(65,67,72,86,76,0,0,0) +
+            ByteArray(76) + ByteArray(4) +
+            raw.copyOfRange(raw.size - 8, raw.size)
+        RetroArchCompression.requireSupportedContainer(state)
+        val zipped = RetroArchCompression.encode(state)
+        assertArrayEquals(state, RetroArchCompression.decode(zipped))
+        RetroArchCompression.requireSupportedContainer(zipped)
+        assertThrows(IllegalArgumentException::class.java) {
+            RetroArchCompression.requireSupportedContainer(state + byteArrayOf(1))
+        }
+    }
+
     @Test fun corruptTruncatedAndFutureVersionAreNeverAccepted() {
         assertThrows(IllegalArgumentException::class.java) {
             RetroArchCompression.decode(fixture.copyOfRange(0, 22))
