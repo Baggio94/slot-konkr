@@ -451,6 +451,12 @@ impl Engine {
         let percent = self.battery.map(|b| b.percent);
         if percent != self.battery_percent {
             self.battery_percent = percent;
+            // Just as with original Slot, the About label reflects the live
+            // battery without rebuilding it on every animation frame.
+            let sticker = sticker_face_konkr(&StickerFields {
+                battery: percent, serial: "0000130", dirty_digit: '0',
+            });
+            self.gpu.update_texture(self.about_texture, sticker.w, sticker.h, &sticker.rgba);
             if let Some(percent) = percent {
                 let face = word_face(&format!("{percent}%"));
                 let tex = match self.battery_texture {
