@@ -186,6 +186,7 @@ struct Engine {
     menu_cursor_y: f32,
     menu_textures: Vec<(slot_gfx::TexId, u32, u32)>,
     menu_hints: [(slot_gfx::TexId, u32); 2],
+    game_menu_hints: [(slot_gfx::TexId, u32); 3],
     board_texture: Option<slot_gfx::TexId>,
     chip_texture: slot_gfx::TexId,
     picker: Option<CorePicker>,
@@ -247,6 +248,15 @@ impl Engine {
             (tex, face.w, face.h)
         }).collect();
         let menu_hints = [("A", "Select"), ("B", "Back")].map(|(key, label)| {
+            let face = hint_face(key, label);
+            let tex = gpu.create_texture(face.w, face.h, &face.rgba);
+            (tex, face.w)
+        });
+        // Original Slot keycap typography also describes the actual in-game
+        // shortcuts, so users need not guess physical controller buttons.
+        let game_menu_hints = [
+            ("B", "Back"), ("SEL+R1", "Save"), ("SEL+L1", "Load"),
+        ].map(|(key, label)| {
             let face = hint_face(key, label);
             let tex = gpu.create_texture(face.w, face.h, &face.rgba);
             (tex, face.w)
@@ -317,6 +327,7 @@ impl Engine {
             menu_cursor_y: 0.0,
             menu_textures,
             menu_hints,
+            game_menu_hints,
             board_texture: None,
             chip_texture,
             picker: None,
@@ -959,11 +970,22 @@ impl Engine {
                 + (1.0 - fade) * 8.0;
             self.text_fit(index, x, y, 650.0, fade, out);
         }
-        for (tex, w, x) in centred_hints(&self.menu_hints, LEGEND_GAP) {
-            out.push(Draw::Tex {
-                x, y: 427.0, w: w as f32, h: HINT_H as f32,
-                tex, alpha: fade,
-            });
+        // All menus use the original Slot keycap generator. The paused game
+        // screen additionally advertises its active SAVE / LOAD shortcuts.
+        if heading == 19 {
+            for (tex, w, x) in centred_hints(&self.game_menu_hints, 15.0) {
+                out.push(Draw::Tex {
+                    x, y: 427.0, w: w as f32, h: HINT_H as f32,
+                    tex, alpha: fade,
+                });
+            }
+        } else {
+            for (tex, w, x) in centred_hints(&self.menu_hints, LEGEND_GAP) {
+                out.push(Draw::Tex {
+                    x, y: 427.0, w: w as f32, h: HINT_H as f32,
+                    tex, alpha: fade,
+                });
+            }
         }
     }
 
@@ -988,19 +1010,7 @@ impl Engine {
                 self.draw_menu_hints(141.0, 311.0, out);
             }
             ShelfOverlay::GameMenu { row } => {
-                self.modal(117.0, 80.0, 486.0, 320.0, out, 0.75);
-                self.text_fit(19, 148.0, 103.0, 400.0, 1.0, out);
-                for index in 0..3 {
-                    let y = 155.0 + index as f32 * 54.0;
-                    if index == row {
-                        out.push(Draw::Rect {
-                            x: 135.0, y: y - 7.0, w: 450.0, h: 45.0,
-                            colour: [0.28, 0.28, 0.32, 1.0],
-                        });
-                    }
-                    self.text_fit(index + 20, 152.0, y, 406.0, 1.0, out);
-                }
-                self.draw_menu_hints(152.0, 355.0, out);
+                self.draw_original_style_menu(19, &[20, 21, 22], row, out);
             }
             ShelfOverlay::Core => {
                 self.draw_original_core_picker(out);
@@ -1175,6 +1185,7 @@ impl Engine {
         let (kind, selected, count) = match self.overlay {
             ShelfOverlay::Menu { row } => (1u8, row, 3usize),
             ShelfOverlay::Library { row } => (2u8, row, 5usize),
+            ShelfOverlay::GameMenu { row } => (3u8, row, 3usize),
             _ => (0, 0, 0),
         };
         if kind != self.menu_seen {
