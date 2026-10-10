@@ -84,6 +84,7 @@ export function fromAndroid(bridge) {
     carts,
     labels,
     selectedKey,
+    focused: !!selectedKey,
     direct: true,
     systemShells: async () => '',
     labelShells: async () => bridge.labelShells(),
@@ -92,7 +93,9 @@ export function fromAndroid(bridge) {
         throw new Error('Cannot write to a cartridge outside Slot library');
       }
       const result = bridge.saveLabel(platform, stem, encode(bytes), replace);
-      if (!['written', 'skipped'].includes(result)) throw new Error('Label save failed');
+      if (!['written', 'skipped'].includes(result)) {
+        throw new Error((result || 'Label save failed') + ' (' + platform + '/' + stem + ')');
+      }
       return result;
     },
     async writeShells(text) {
