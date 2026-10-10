@@ -11,8 +11,8 @@ android {
         applicationId = "fyi.slot.konkr"
         minSdk = 31
         targetSdk = 32
-        versionCode = 15
-        versionName = "0.0.7-dev6"
+        versionCode = 16
+        versionName = "0.0.7-dev7"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
