@@ -83,11 +83,13 @@ const CART_EJECT_SFX: i32 = 2;
 const INSERT_S: f32 = 0.73;
 const SEATED_AT: f32 = 0.45;
 const INSERT_SOUND_PROGRESS: f32 = (SEATED_AT - 0.24) / SEATED_AT;
-const EJECT_SOUND_PROGRESS: f32 = 1.0 - (0.350 / 0.450);
 // Upstream Slot screen power transition times (app.rs).
 const SCREEN_POWER_ON_S: f32 = 0.22;
 const SCREEN_POWER_OFF_S: f32 = 0.16;
 const EJECT_S: f32 = 0.45;
+const EJECT_HOLD_S: f32 = 0.35; // Original Slot hold after CRT-off.
+const SELECT_CHORD_MS: u128 = 600;
+const SELECT_TAP_FRAMES: u8 = 3;
 const REWIND_STEP_S: f32 = 0.10;  // Original Slot's time-travel HUD + ~10 Hz restoration.
 
 const FF_DOUBLE_TAP_MS: u128 = 320;
@@ -119,6 +121,15 @@ fn controls(code: i32) -> u16 {
         21 => ButtonMask::LEFT, 22 => ButtonMask::RIGHT,
         96 => ButtonMask::A, 99 => ButtonMask::X,
         102 => ButtonMask::L, 103 => ButtonMask::R,
+        _ => 0,
+    }
+}
+
+// A consumed SELECT chord must also consume that key's release.
+fn select_chord_bit(code: i32) -> u16 {
+    match code {
+        96 => 1, 97 => 2, 100 => 4, 102 => 8,
+        103 => 16, 104 => 32, 105 => 64,
         _ => 0,
     }
 }
@@ -211,6 +222,12 @@ struct Engine {
     insert_started: Option<Instant>,
     screen_power: f32,
     exiting_screen: bool,
+    eject_hold_remaining: f32,
+    select_down_at: Option<Instant>,
+    select_chorded: bool,
+    select_forwarded: bool,
+    select_tap_frames: u8,
+    chord_releases: u16,
     born: Instant,
     last: Instant,
     library_version: u64,
@@ -415,6 +432,12 @@ impl Engine {
             insert_started: None,
             screen_power: 0.0,
             exiting_screen: false,
+            eject_hold_remaining: 0.0,
+            select_down_at: None,
+            select_chorded: false,
+            select_forwarded: false,
+            select_tap_frames: 0,
+            chord_releases: 0,
             born: now,
             last: now,
             library_version,
@@ -521,10 +544,105 @@ impl Engine {
         self.rewind_held = false;
         self.rewind_accum = 0.0;
         self.game_accum = 0.0;
+        self.select_down_at = None;
+        self.select_chorded = false;
+        self.select_forwarded = false;
+        self.select_tap_frames = 0;
+        self.chord_releases = 0;
         self.hud.set_ff(FfState::Off);
         self.hud.release_rewind();
         AUDIO_SPEED_PERMILLE.store(1000, Ordering::Release);
         RUMBLE_STRENGTH.store(0, Ordering::Release);
+    }
+
+
+    // Upstream slot-input gestures: SELECT chords have priority over game input.
+    // Distinct release bits avoid leaking A/B/shoulder releases into libretro.
+    fn handle_select_chord(&mut self, code: i32, pressed: bool) -> bool {
+        let bit = select_chord_bit(code);
+        if !pressed && bit != 0 && self.chord_releases & bit != 0 {
+            self.chord_releases &= !bit;
+            return true;
+        }
+        if !pressed || bit == 0 || self.select_down_at.is_none() { return false; }
+        self.chord_releases |= bit;
+        self.select_chorded = true;
+        self.select_tap_frames = 0;
+        self.select_forwarded = false;
+        self.buttons &= !ButtonMask::SELECT;
+        let time = self.born.elapsed().as_millis() as u64;
+        match code {
+            96 | 97 => {
+                let key = if self.active == 0 { 0 } else { 1 };
+                self.change_setting(key, code == 96);
+                let shader = if self.active == 0 {
+                    self.settings.shader_gba
+                } else { self.settings.shader_gb };
+                self.gpu.set_screen_effect(shader.effect());
+                self.hud.toast(match shader {
+                    crate::settings::Shader::Off => Toast::ShaderOff,
+                    crate::settings::Shader::Lcd3x => Toast::ShaderLcd3x,
+                    crate::settings::Shader::Grid => Toast::ShaderGrid,
+                    crate::settings::Shader::Dot => Toast::ShaderDot,
+                    crate::settings::Shader::Simpletex => Toast::ShaderSimpletex,
+                }, time);
+            }
+            100 => {
+                self.change_setting(2, true);
+                self.hud.toast(if self.settings.colour_correction {
+                    Toast::ColourOn
+                } else { Toast::ColourOff }, time);
+            }
+            102 => {
+                if let Some(game) = self.game.as_mut() {
+                    match game.load_latest() {
+                        Ok(()) => self.hud.toast(Toast::StateLoaded, time),
+                        Err(err) => set_message(format!("Cannot load state: {err}")),
+                    }
+                }
+            }
+            103 => {
+                if let Some(game) = self.game.as_mut() {
+                    match game.save_manual() {
+                        Ok(stamp) => {
+                            self.hud.toast(Toast::StateSaved, time);
+                            if let Some(uri) = self.requested_uri.as_deref() {
+                                let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                                let core = paths.as_ref().map(|(storage, _)| {
+                                    core_selection::selected(storage, uri).as_str()
+                                }).unwrap_or("mgba");
+                                let event = serde_json::json!({
+                                    "uri": uri, "core": core, "manual_stamp": stamp
+                                }).to_string();
+                                SAVE_SYNC.lock().unwrap_or_else(|e| e.into_inner())
+                                    .push_back(event);
+                            }
+                        }
+                        Err(err) => set_message(format!("Cannot export state: {err}")),
+                    }
+                }
+            }
+            104 | 105 => {
+                // Also valid for GB-compatible .gbc ROMs (CGB flag bit 7 unset).
+                if self.settings.gb_palettes
+                    && self.game.as_ref().is_some_and(|g| g.can_change_gb_palette())
+                {
+                    let index = if code == 105 {
+                        (self.settings.gb_palette + 1) % 48
+                    } else { (self.settings.gb_palette + 47) % 48 };
+                    self.settings.gb_palette = index;
+                    if let Some(game) = self.game.as_mut() {
+                        game.set_gb_palette(self.settings.palette_name());
+                    }
+                    let palette = slot_store::GbPalette::all().nth(index as usize)
+                        .unwrap_or(slot_store::GbPalette::DEFAULT);
+                    self.hud.toast(Toast::Palette(palette), time);
+                    self.persist_settings();
+                }
+            }
+            _ => {}
+        }
+        true
     }
 
     fn handle(&mut self, input: Input) {
@@ -592,7 +710,10 @@ impl Engine {
                 self.pending_game = None;
                 // Preserve the final video texture for the original 160ms CRT
                 // power-off before the mechanical 450ms cartridge ejection.
-                if self.game.is_some() { self.exiting_screen = true; }
+                if self.game.is_some() {
+                    self.exiting_screen = true;
+                    self.eject_hold_remaining = EJECT_HOLD_S;
+                }
                 // The reversed cart animation will emit the original eject sound.
                 if self.progress > 0.0 || self.inserted { self.eject_sound_armed = true; }
                 if let Some(mut session) = self.game.take() {
@@ -756,10 +877,35 @@ impl Engine {
                     }
                     return;
                 }
+
                 if self.game.is_some() {
-                    // Upstream Slot gamepad mapping: R2 fast forward (hold or
-                    // double tap to latch), L2 rewind. Handle these BEFORE
-                    // libretro, so trigger presses never reach a game.
+                    // Defer SELECT to reserve chord handling, as in upstream Gestures.
+                    if code == 109 {
+                        if pressed {
+                            self.select_down_at = Some(Instant::now());
+                            self.select_chorded = false;
+                            self.select_forwarded = false;
+                            self.select_tap_frames = 0;
+                            self.buttons &= !ButtonMask::SELECT;
+                        } else {
+                            if self.select_down_at.take().is_some() && !self.select_chorded {
+                                if self.select_forwarded {
+                                    self.buttons &= !ButtonMask::SELECT;
+                                } else {
+                                    self.buttons |= ButtonMask::SELECT;
+                                    self.select_tap_frames = SELECT_TAP_FRAMES;
+                                }
+                            } else { self.buttons &= !ButtonMask::SELECT; }
+                            self.select_chorded = false;
+                            self.select_forwarded = false;
+                        }
+                        return;
+                    }
+                    if self.handle_select_chord(code, pressed) { return; }
+                    if pressed && self.select_down_at.is_some() && !self.select_chorded {
+                        self.select_forwarded = true;
+                        self.buttons |= ButtonMask::SELECT;
+                    }
                     if code == 104 {
                         if !self.settings.rewind { return; }
                         if pressed {
@@ -799,7 +945,6 @@ impl Engine {
                             self.ff_held = false;
                             self.ff_last_release = Some(Instant::now());
                         }
-                        // Flush old transport-speed PCM at every FF edge.
                         AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
                         AUDIO_SPEED_PERMILLE.store(
                             if self.ff_latched || self.ff_held {
@@ -811,26 +956,6 @@ impl Engine {
                             (false, true) => FfState::Held,
                             (false, false) => FfState::Off,
                         });
-                        return;
-                    }
-                    // Use actual mGBA palette presets, and original Slot
-                    // HUD toasts. Restrict to monochrome GB games.
-                    if pressed && self.active == 1 && self.settings.gb_palettes
-                        && self.game.as_ref().is_some_and(|g| g.can_change_gb_palette())
-                        && self.buttons & ButtonMask::SELECT != 0
-                        && (code == 21 || code == 22) {
-                        let index = if code == 22 {
-                            (self.settings.gb_palette + 1) % 48
-                        } else { (self.settings.gb_palette + 47) % 48 };
-                        self.settings.gb_palette = index;
-                        if let Some(game) = self.game.as_mut() {
-                            game.set_gb_palette(self.settings.palette_name());
-                        }
-                        let palette = slot_store::GbPalette::all().nth(index as usize)
-                            .unwrap_or(slot_store::GbPalette::DEFAULT);
-                        self.hud.toast(Toast::Palette(palette),
-                            self.born.elapsed().as_millis() as u64);
-                        self.persist_settings();
                         return;
                     }
                     // Slot original: GB/GBC L1 = Stretch, R1 = Actual.
@@ -845,44 +970,6 @@ impl Engine {
                         }
                         return;
                     }
-                    // Restore upstream SELECT+R1/L1 save/load shortcuts.
-                    if pressed && self.buttons & ButtonMask::SELECT != 0 {
-                        if code == 103 {
-                            if let Some(game)=self.game.as_mut() {
-                                match game.save_manual() {
-                                    Ok(stamp) => {
-                                        self.hud.toast(Toast::StateSaved,
-                                            self.born.elapsed().as_millis() as u64);
-                                        if let Some(uri) = self.requested_uri.as_deref() {
-                                            let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                                            let core = paths.as_ref().map(|(storage, _)| {
-                                                core_selection::selected(storage, uri).as_str()
-                                            }).unwrap_or("mgba");
-                                            let event = serde_json::json!({
-                                                "uri": uri, "core": core, "manual_stamp": stamp
-                                            }).to_string();
-                                            SAVE_SYNC.lock().unwrap_or_else(|e| e.into_inner())
-                                                .push_back(event);
-                                        }
-                                    }
-                                    Err(err) => set_message(format!("Cannot export state: {err}")),
-                                }
-                            }
-                            return;
-                        }
-                        if code == 102 {
-                            if let Some(game)=self.game.as_mut() {
-                                match game.load_latest() {
-                                    Ok(()) => self.hud.toast(Toast::StateLoaded,
-                                        self.born.elapsed().as_millis() as u64),
-                                    Err(err) => set_message(format!("Cannot load state: {err}")),
-                                }
-                            }
-                            return;
-                        }
-                    }
-                    if !pressed && (code==102 || code==103)
-                        && self.buttons & ButtonMask::SELECT != 0 {return;}
                     let mask = controls(code);
                     if pressed { self.buttons |= mask; } else { self.buttons &= !mask; }
                     return;
@@ -1687,12 +1774,14 @@ impl Engine {
             self.menu_cursor_y += (goal - self.menu_cursor_y) * response;
         }
 
-        // The CRT powers off WHILE the cartridge ejects, not before.
-        // Upstream Slot combines those transitions via SlotChrome::screen.
-        // Rendering the stored game frame also avoids advancing a stopped core.
-        if self.exiting_screen {
-            self.screen_power = (self.screen_power - dt / SCREEN_POWER_OFF_S).max(0.0);
-            self.progress = advance_cart(self.progress, false, dt);
+        // Upstream CRT: 160ms extinction, 350ms black hold, 450ms ejection.
+        // Do not move the cart during screen power-off or the blank hold.
+        if self.exiting_screen || self.eject_hold_remaining > 0.0 {
+            if self.exiting_screen {
+                self.screen_power = (self.screen_power - dt / SCREEN_POWER_OFF_S).max(0.0);
+            } else {
+                self.eject_hold_remaining = (self.eject_hold_remaining - dt).max(0.0);
+            }
             self.gpu.set_screen_power(self.screen_power);
             let mut commands = vec![Draw::Rect {
                 x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
@@ -1817,6 +1906,13 @@ impl Engine {
             self.gpu.end_frame(self.size);
             return;
         }
+        if self.game.is_some() && self.select_down_at.is_some_and(
+            |at| at.elapsed().as_millis() >= SELECT_CHORD_MS)
+            && !self.select_chorded && !self.select_forwarded
+        {
+            self.select_forwarded = true;
+            self.buttons |= ButtonMask::SELECT;
+        }
         if let Some(session) = self.game.as_mut() {
             let mut stepped = 0;
             if self.rewind_held {
@@ -1861,6 +1957,10 @@ impl Engine {
                 }
             }
             if stepped > 0 {
+                if self.select_tap_frames > 0 {
+                    self.select_tap_frames = self.select_tap_frames.saturating_sub(stepped as u8);
+                    if self.select_tap_frames == 0 { self.buttons &= !ButtonMask::SELECT; }
+                }
                 self.gpu.upload_game(session.frame());
                 RUMBLE_STRENGTH.store(
                     if self.settings.rumble && !self.rewind_held {
@@ -1894,7 +1994,8 @@ impl Engine {
         {
             CART_SFX.lock().unwrap_or_else(|e| e.into_inner()).push_back(CART_INSERT_SFX);
         }
-        if !self.inserted && self.eject_sound_armed && self.progress <= EJECT_SOUND_PROGRESS {
+        if !self.inserted && self.eject_sound_armed
+            && self.progress < previous_progress {
             self.eject_sound_armed = false;
             CART_SFX.lock().unwrap_or_else(|e| e.into_inner()).push_back(CART_EJECT_SFX);
         }
@@ -2028,14 +2129,27 @@ mod ui_feedback_tests {
 
     #[test]
     fn cartridge_timelines_match_upstream_seating_hold_and_ejection() {
-        let from_seated = advance_cart(1.0, false, SCREEN_POWER_OFF_S);
-        // After the 160ms CRT shutdown, the cartridge is already ejecting;
-        // it must NOT wait to begin a fresh 450ms mechanical animation.
-        assert!(from_seated < 0.70 && from_seated > 0.60);
-        assert!(advance_cart(from_seated, false, EJECT_S - SCREEN_POWER_OFF_S) < 0.0001);
+        assert!((SCREEN_POWER_OFF_S - 0.16).abs() < 0.001);
+        assert!((EJECT_HOLD_S - 0.35).abs() < 0.001);
+        assert!((EJECT_S - 0.45).abs() < 0.001);
+        assert!((SCREEN_POWER_OFF_S + EJECT_HOLD_S + EJECT_S - 0.96).abs() < 0.001);
+        assert!(advance_cart(1.0, false, SCREEN_POWER_OFF_S) < 1.0);
+        assert!(advance_cart(1.0, false, EJECT_S) < 0.0001);
         assert_eq!(advance_cart(0.0, true, SEATED_AT), 1.0);
         assert!((INSERT_S - SEATED_AT - 0.28).abs() < 0.001);
         assert!((SEATED_AT * INSERT_SOUND_PROGRESS + 0.24 - SEATED_AT).abs() < 0.001);
+    }
+
+    #[test]
+    fn select_chords_have_distinct_consumed_release_bits() {
+        let mut combined = 0u16;
+        for code in [96, 97, 100, 102, 103, 104, 105] {
+            let bit = select_chord_bit(code);
+            assert_ne!(bit, 0);
+            assert_eq!(bit & combined, 0);
+            combined |= bit;
+        }
+        assert_eq!(select_chord_bit(109), 0);
     }
 
     #[test]

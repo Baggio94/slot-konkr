@@ -102,7 +102,7 @@ impl GameSession {
             .map_err(|e| e.to_string())?;
         // Exact upstream Slot libretro options for colour and Game Boy palettes.
         // Read only the 336-byte header: never read the entire cached ROM.
-        let dmg_only = platform == Platform::Gb && which == Core::Mgba
+        let dmg_only = platform != Platform::Gba && which == Core::Mgba
             && std::fs::File::open(rom).and_then(|mut file| {
                 let mut header = [0u8; 0x150];
                 file.read_exact(&mut header)?;
