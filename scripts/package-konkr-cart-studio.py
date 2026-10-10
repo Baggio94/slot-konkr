@@ -105,7 +105,47 @@ def package(root: Path, built: Path):
       await loadIndex();
     }
   }""")
-    js = js.replace("'Write to card'", "'Save to Slot'")
+    # X focuses one game: never ask the bulk Real Label / Logo Only wizard.
+    js = checked_replace(js,
+        "if (s === session && !fatal && s.fill == null) await fillOrAsk(s);",
+        "if (s === session && !fatal && s.fill == null && !s.source.focused) await fillOrAsk(s);")
+    js = checked_replace(js, "let session = null;",
+        """let session = null;
+let lastNativeActionState = '';
+function syncNativeToolbar() {
+  if (!window.AndroidToolbar || !session) return;
+  const save = !$('write-bar').hidden && !$('write').disabled;
+  const fill = !$('fill-open').hidden;
+  const state = String(save) + ':' + String(fill);
+  if (state === lastNativeActionState) return;
+  lastNativeActionState = state;
+  window.AndroidToolbar.actions(save, fill);
+}""")
+    js = checked_replace(js,
+        "  $('write').textContent = session.source.direct ? 'Write to card' : 'Download ZIP';",
+        "  $('write').textContent = session.source.direct ? 'Save to slot.' : 'Download ZIP';\n  syncNativeToolbar();")
+    js = checked_replace(js,
+        "  $('fill-open').hidden = counts.unlabelled === 0 || (session.fill != null && autoFill(counts) !== null);",
+        "  $('fill-open').hidden = counts.unlabelled === 0 || (session.fill != null && autoFill(counts) !== null);\n  syncNativeToolbar();")
+    js = checked_replace(js,
+        "          logError(c.stem, e);\n          c.result = 'failed';",
+        """          logError(c.stem, e);
+          if (window.AndroidStudio) banner(c.stem + ': ' + e.message);
+          c.result = 'failed';""")
+    js = checked_replace(js,
+        "        if (problems.length) banner(problems.join(' '));",
+        """        if (problems.length) banner(problems.join(' '));
+        else if (window.AndroidToolbar)
+          window.AndroidToolbar.saved(count.written, shells.length, count.skipped);""")
+    editorFile = target / "editor.js"
+    ed = editorFile.read_text("utf-8")
+    ed = checked_replace(ed, "    $('ed-query').value = api.name(cart);",
+        """    $('ed-query').value = window.AndroidStudio
+      ? api.name(cart).replace(/\s*\([^)]*\)/g, '').trim()
+      : api.name(cart);""")
+    editorFile.write_text(ed, encoding="utf-8")
+
+    js = js.replace("'Write to card'", "'Save to slot.'")
     jsfile.write_text(js, encoding="utf-8")
 
     htmlfile = target / "index.html"
