@@ -1,5 +1,6 @@
-// KONKR-only source adapter. The official Studio editor/renderer are unchanged.
-// Every method acts on ONE selected, read-only SAF ROM, never a filesystem path.
+// Android-only source adapter for the unchanged official Cart Studio.
+// All carts come from Slot's previously indexed, read-only SAF library.
+// The WebView only sees opaque IDs, never arbitrary SAF URI or filesystem paths.
 import { labelKey } from './card.js';
 
 function decode(encoded) {
@@ -17,35 +18,71 @@ function encode(bytes) {
   return btoa(chunks.join(''));
 }
 
+const PLATFORMS = new Set(['GB', 'GBC', 'GBA']);
+
+function loadFile(bridge, cart) {
+  // The original Studio asks for file.slice(header) and CRC32. Android
+  // computes the CRC once while streaming SAF and caches it with size/mtime.
+  // Resolve this only when identify() reaches the cart, not at page launch.
+  let file = null;
+  return async () => {
+    if (!file) {
+      const fingerprint = JSON.parse(bridge.fingerprint(cart.id));
+      if (!Number.isSafeInteger(fingerprint.crc) || fingerprint.crc < 0 ||
+          fingerprint.crc > 0xffffffff) throw new Error('Invalid cartridge CRC32');
+      const header = decode(fingerprint.head);
+      if (header.length !== 0x150) throw new Error('Incomplete cartridge header');
+      file = {
+        slotCrc: fingerprint.crc >>> 0,
+        slice(start = 0, end = header.length) {
+          const bytes = header.slice(start, end);
+          return { arrayBuffer: async () => bytes.buffer };
+        },
+      };
+    }
+    return file;
+  };
+}
+
 export function fromAndroid(bridge) {
   const data = JSON.parse(bridge.session());
-  if (!['GB', 'GBC', 'GBA'].includes(data.platform) || !data.stem ||
-      !Number.isSafeInteger(data.crc) || data.crc < 0 || data.crc > 0xffffffff) {
-    throw new Error('Invalid KONKR cartridge selection');
-  }
-  const head = decode(data.head);
-  if (head.length !== 0x150) throw new Error('ROM header incomplete');
-  const file = {
-    slotCrc: data.crc >>> 0,
-    slice(start = 0, end = head.length) {
-      const part = head.slice(start, end);
-      return { arrayBuffer: async () => part.buffer };
-    },
-  };
+  if (!Array.isArray(data.carts)) throw new Error('Slot ROM catalog not available');
+  const carts = [];
   const labels = new Map();
-  if (data.label) {
-    labels.set(labelKey(data.platform, data.stem),
-      async () => new Blob([decode(data.label)], { type: 'image/png' }));
+  const identities = new Set();
+  for (const cart of data.carts) {
+    if (!PLATFORMS.has(cart.platform) || typeof cart.stem !== 'string' ||
+        !cart.stem || typeof cart.id !== 'string' ||
+        !/^[0-9a-f]{16}$/.test(cart.id)) {
+      throw new Error('Invalid cartridge in Slot library');
+    }
+    const token = labelKey(cart.platform, cart.stem);
+    if (identities.has(token)) {
+      // The original Studio writes by platform/stem, so it cannot select
+      // one of two identically named carts safely. Stop instead of mixing labels.
+      throw new Error('Duplicate cartridge name: ' + cart.stem);
+    }
+    identities.add(token);
+    carts.push({ platform: cart.platform, stem: cart.stem,
+                 file: loadFile(bridge, cart), slotId: cart.id });
+    if (cart.hasLabel) {
+      labels.set(token, async () => {
+        const bytes = decode(bridge.readLabel(cart.id));
+        if (!bytes.length) throw new Error('Saved label missing for ' + cart.stem);
+        return new Blob([bytes], { type: 'image/png' });
+      });
+    }
   }
   return {
-    carts: [{ platform: data.platform, stem: data.stem, file: async () => file }],
+    carts,
     labels,
+    selectedKey: data.selectedKey || '',
     direct: true,
     systemShells: async () => '',
-    labelShells: async () => data.shellText || '',
+    labelShells: async () => bridge.labelShells(),
     async write(platform, stem, bytes, replace = false) {
-      if (platform !== data.platform || stem !== data.stem) {
-        throw new Error('Cannot write to a different cartridge');
+      if (!identities.has(labelKey(platform, stem))) {
+        throw new Error('Cannot write to a cartridge outside Slot library');
       }
       const result = bridge.saveLabel(platform, stem, encode(bytes), replace);
       if (!['written', 'skipped'].includes(result)) throw new Error('Label save failed');
