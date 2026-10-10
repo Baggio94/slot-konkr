@@ -16,6 +16,8 @@ pub struct RomEntry {
     pub code: String,
     #[serde(default)]
     pub color_only: bool,
+    #[serde(default)]
+    pub shell_override: Option<String>,
 }
 
 pub struct LibraryState {
@@ -69,6 +71,9 @@ pub fn carts_by_platform(entries: &[RomEntry]) -> [Vec<Cart>; 3] {
                 })
             }
         };
+        let shell = entry.shell_override.as_deref()
+            .and_then(ShellChoice::parse)
+            .or(shell);
         groups[group].push(Cart {
             platform,
             stem: entry.title.trim().to_owned(),
