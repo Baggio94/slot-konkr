@@ -1,0 +1,45 @@
+/* KONKR WebView only. Original Cart Studio files stay untouched.
+   Native Android supplies a slim Back / Cart Studio toolbar above this page.
+   Keep the official renderer, editor controls, shell options and label picker. */
+:root {
+  --mast-h: 0px;
+  --panel: 380px;
+}
+html, body { min-height: 100%; }
+body { background: var(--page); }
+.mast, .intro, .credits { display: none !important; }
+.wrap {
+  max-width: none;
+  margin: 0;
+  padding: 12px 16px 20px;
+}
+.shelf-bar {
+  top: 0;
+  margin-top: 0;
+  padding-top: 4px;
+}
+.grid {
+  grid-template-columns: minmax(0, 1fr);
+  margin-top: 12px;
+  gap: 12px;
+}
+.grid .cart {
+  width: 100%;
+  max-width: 390px;
+  margin: 0 auto;
+}
+.editor {
+  top: 0;
+  padding: 12px 16px;
+  gap: 12px;
+}
+.editor .props { gap: 9px; }
+body.editing .mast { margin-right: 0; }
+body.editing { padding-right: var(--panel); }
+@media (max-width: 760px) {
+  :root { --panel: 100vw; }
+  body.editing { padding-right: 0; }
+  .editor { left: 0; width: 100%; }
+  /* With no side-by-side shelf, keep the original editor's cart preview. */
+  .ed-face { display: block; }
+}
