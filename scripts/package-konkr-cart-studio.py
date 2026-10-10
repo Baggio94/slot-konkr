@@ -66,6 +66,12 @@ def package(root: Path, built: Path):
   }""")
     # Load the official art index concurrently with local library setup:
     # the three tabs and edited cartridge remain usable with slow/offline Wi-Fi.
+    # Browser-hosted Cart Studio already downloads from this art set,
+    # but it may CORS-block our embedded Android origin. Use the same files
+    # through a tightly allowlisted native proxy under our own HTTPS origin.
+    js = checked_replace(js,
+        "const ART_BASE = new URLSearchParams(location.search).get('art') ?? 'https://art.slot-cfw.fyi/';",
+        "const ART_BASE = window.AndroidStudio ? new URL('art/', location.href).href : (new URLSearchParams(location.search).get('art') ?? 'https://art.slot-cfw.fyi/');")
     js = checked_replace(js, "let artIndex = null;",
         "let artIndex = null;\nlet androidIndexReady = Promise.resolve();")
     js = checked_replace(js,
