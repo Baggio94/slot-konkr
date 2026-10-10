@@ -25,6 +25,8 @@ mod core_legend;
 #[cfg(target_os = "android")]
 mod game;
 #[cfg(target_os = "android")]
+mod cart_render;
+#[cfg(target_os = "android")]
 mod runtime;
 
 // Reuse upstream Slot's unmodified mechanical core picker: 420ms open,
