@@ -124,6 +124,7 @@ class CartStudioActivity : Activity() {
         w.isFocusableInTouchMode = true
         w.addJavascriptInterface(bridge, "AndroidStudio")
         val officialArt = CartStudioArtProxy(this)
+        val noIntro = CartStudioDatProxy(this)
         w.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(
                 view: WebView?, request: WebResourceRequest?
@@ -137,6 +138,9 @@ class CartStudioActivity : Activity() {
                 // official art CDN when the Studio runs under appassets.
                 if (path.startsWith("art/")) {
                     return officialArt.intercept(path.removePrefix("art/"))
+                }
+                if (path.startsWith("dat/") && path.endsWith(".dat")) {
+                    return noIntro.intercept(path.removePrefix("dat/").removeSuffix(".dat"))
                 }
                 val safe = Regex("[a-zA-Z0-9_.\\-/]+").matches(path) &&
                     !path.split('/').contains("..") && !path.startsWith("/")
