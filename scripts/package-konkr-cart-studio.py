@@ -35,6 +35,14 @@ def package(root: Path, built: Path):
     js = "import { fromAndroid } from './android-card.js';\n" + js
     js = checked_replace(js, "  const crc = new Crc32();",
                          "  if (file.slotCrc != null) return file.slotCrc >>> 0;\n  const crc = new Crc32();")
+    # Keep Android's opaque per-ROM identifier on the official cart objects;
+    # otherwise the selected X shortcut cannot find its cart after newCart().
+    js = checked_replace(js,
+        "function newCart({ platform, stem, file }) {",
+        "function newCart({ platform, stem, file, slotId = '' }) {")
+    js = checked_replace(js,
+        "    platform,\\n    stem,\\n    file,\\n    code: '',",
+        "    platform,\\n    stem,\\n    file,\\n    slotId,\\n    code: '',")
     # Selected cart (X) enters its editor immediately, while the normal menu
     # displays the official three-tab catalog with Real Label/Logo Only prompt.
     # Selected-first order also makes ROM matching responsive in a large library.
