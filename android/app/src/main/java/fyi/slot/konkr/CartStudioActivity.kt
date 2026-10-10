@@ -86,7 +86,10 @@ class CartStudioActivity : Activity() {
                 require(selected == null || carts.any { it.uri == selected }) {
                     "Selected cartridge is no longer in the library"
                 }
-                val bridge = CartStudioBridge(this, carts, selected, changed)
+                // X is an editor for ONE ROM, not a full catalog scan.
+                // Menu -> Cart Studio still sees all GB/GBC/GBA games.
+                val studioCarts = if (selected != null) carts.filter { it.uri == selected } else carts
+                val bridge = CartStudioBridge(this, studioCarts, selected, changed)
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) openStudio(frame, notice, bridge)
                 }
