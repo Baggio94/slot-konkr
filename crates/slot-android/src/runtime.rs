@@ -178,6 +178,7 @@ struct Engine {
     game_accum: f64,
     overlay: ShelfOverlay,
     menu_textures: Vec<(slot_gfx::TexId, u32, u32)>,
+    menu_hints: [(slot_gfx::TexId, u32); 2],
     board_texture: Option<slot_gfx::TexId>,
     chip_texture: slot_gfx::TexId,
     picker: Option<CorePicker>,
@@ -238,6 +239,11 @@ impl Engine {
             let tex = gpu.create_texture(face.w, face.h, &face.rgba);
             (tex, face.w, face.h)
         }).collect();
+        let menu_hints = [("A", "Select"), ("B", "Back")].map(|(key, label)| {
+            let face = hint_face(key, label);
+            let tex = gpu.create_texture(face.w, face.h, &face.rgba);
+            (tex, face.w)
+        });
         let chip = chip_face(Some(Core::Mgba));
         let chip_texture = gpu.create_texture(chip.w, chip.h, &chip.rgba);
         let socket_textures = Core::ALL.map(|core| {
@@ -299,6 +305,7 @@ impl Engine {
             game_accum: 0.0,
             overlay: ShelfOverlay::None,
             menu_textures,
+            menu_hints,
             board_texture: None,
             chip_texture,
             picker: None,
@@ -906,6 +913,15 @@ impl Engine {
         });
     }
 
+    fn draw_menu_hints(&self, x: f32, y: f32, out: &mut Vec<Draw>) {
+        let mut x = x;
+        for (tex, w) in self.menu_hints {
+            out.push(Draw::Tex { x, y, w: w as f32, h: HINT_H as f32,
+                tex, alpha: 1.0 });
+            x += w as f32 + 24.0;
+        }
+    }
+
     fn draw_overlay(&self, out: &mut Vec<Draw>) {
         match self.overlay {
             ShelfOverlay::None => {}
@@ -922,7 +938,7 @@ impl Engine {
                     }
                     self.text_fit(index + 1, 152.0, y, 406.0, 1.0, out);
                 }
-                self.text_fit(4, 152.0, 360.0, 405.0, 0.85, out);
+                self.draw_menu_hints(152.0, 360.0, out);
             }
             ShelfOverlay::Library { row } => {
                 self.modal(105.0, 41.0, 510.0, 400.0, out, 0.78);
@@ -941,7 +957,7 @@ impl Engine {
                     self.text_fit(labels[index], 145.0, y, 430.0, 1.0, out);
                 }
                 self.text_fit(10, 145.0, 363.0, 440.0, 0.5, out);
-                self.text_fit(4, 145.0, 412.0, 440.0, 0.85, out);
+                self.draw_menu_hints(145.0, 412.0, out);
             }
             ShelfOverlay::Scraping | ShelfOverlay::Achievements => {
                 self.modal(110.0, 127.0, 500.0, 227.0, out, 0.78);
@@ -952,7 +968,7 @@ impl Engine {
                 };
                 self.text_fit(header, 141.0, 152.0, 438.0, 1.0, out);
                 self.text_fit(detail, 141.0, 230.0, 438.0, 0.65, out);
-                self.text_fit(4, 141.0, 311.0, 438.0, 0.85, out);
+                self.draw_menu_hints(141.0, 311.0, out);
             }
             ShelfOverlay::GameMenu { row } => {
                 self.modal(117.0, 80.0, 486.0, 320.0, out, 0.75);
@@ -967,7 +983,7 @@ impl Engine {
                     }
                     self.text_fit(index + 20, 152.0, y, 406.0, 1.0, out);
                 }
-                self.text_fit(23, 152.0, 355.0, 420.0, 0.85, out);
+                self.draw_menu_hints(152.0, 355.0, out);
             }
             ShelfOverlay::Core => {
                 self.draw_original_core_picker(out);
