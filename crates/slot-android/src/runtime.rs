@@ -1650,6 +1650,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
     _activity: *mut c_void,
 ) -> u8 {
     ENGINE.with(|holder| {
+        let started = Instant::now();
         *holder.borrow_mut() = None;
         PLAYING.store(false, Ordering::Release);
         SAMPLE_RATE.store(0, Ordering::Release);
@@ -1660,6 +1661,8 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
         match Engine::new(version, snapshot.as_deref()) {
             Ok(engine) => {
                 *holder.borrow_mut() = Some(engine);
+                crate::game::log_launch_timing(&format!(
+                    "Cold renderer ready in {}ms", started.elapsed().as_millis()));
                 1
             }
             Err(error) => {
