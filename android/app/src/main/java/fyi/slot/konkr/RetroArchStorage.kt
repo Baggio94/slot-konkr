@@ -30,6 +30,8 @@ internal object RetroArchStorage {
         val stem: String,
         val core: String,
         val saveLocal: File,
+        val rtcLocal: File,
+        val stateDefaultLocal: File,
         val stateImportLocal: File,
         val stateExportLocal: File,
         val savesTree: Uri?,
@@ -47,9 +49,13 @@ internal object RetroArchStorage {
             .digest(rawUri.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(Locale.ROOT, it.toInt() and 255) }
         val prefix = File(context.filesDir, "Saves").apply { mkdirs() }
+        val coreFolder = File(prefix, core).apply { mkdirs() }
+        val defaultStates = File(File(context.filesDir, "States"), core).apply { mkdirs() }
         val coreLower = if (core == "mGBA") "mgba" else "gpsp"
         return Target(rawUri, stem, core,
-            File(prefix, "$digest.$coreLower.srm"),
+            File(coreFolder, "$stem.srm"),
+            File(coreFolder, "$stem.rtc"),
+            File(defaultStates, "$stem.state.auto"),
             File(prefix, "$digest.$coreLower.retroarch-import.state.auto"),
             File(prefix, "$digest.$coreLower.retroarch-export.state.auto"),
             savesTree, statesTree)
