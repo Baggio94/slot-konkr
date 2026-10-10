@@ -28,30 +28,36 @@ internal object SlotToast {
         fun dp(value: Int) = (value * density + 0.5f).toInt()
 
         return try {
+            // Mirror Slot's in-game SAVE STATE / STATE LOADED alerts:
+            // flat charcoal plate, quiet hairline, wide-tracked Open Sans.
             val background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                setColor(Color.rgb(249, 246, 250))
-                cornerRadius = dp(28).toFloat()
+                setColor(Color.rgb(23, 22, 25))
+                setStroke(dp(1), Color.rgb(91, 89, 96))
+                cornerRadius = dp(4).toFloat()
             }
             val row = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(16), dp(12), dp(18), dp(12))
+                setPadding(dp(17), dp(9), dp(19), dp(9))
                 this.background = background
-                elevation = dp(5).toFloat()
+                elevation = dp(3).toFloat()
             }
             val logo = ImageView(context).apply {
                 setImageResource(R.mipmap.ic_launcher)
                 contentDescription = "slot."
                 scaleType = ImageView.ScaleType.FIT_CENTER
             }
-            row.addView(logo, LinearLayout.LayoutParams(dp(34), dp(34)).apply {
+            row.addView(logo, LinearLayout.LayoutParams(dp(22), dp(22)).apply {
                 rightMargin = dp(12)
             })
             val text = TextView(context).apply {
-                this.text = friendly
-                textSize = 15f
-                setTextColor(Color.rgb(30, 29, 34))
+                this.text = friendly.uppercase(java.util.Locale.getDefault())
+                textSize = 12.5f
+                typeface = android.graphics.Typeface.create("sans-serif-condensed",
+                    android.graphics.Typeface.BOLD)
+                letterSpacing = .14f
+                setTextColor(Color.rgb(243, 241, 246))
                 maxLines = 3
                 contentDescription = friendly
             }
@@ -62,7 +68,7 @@ internal object SlotToast {
             @Suppress("DEPRECATION")
             Toast(context.applicationContext).apply {
                 this.duration = duration
-                setGravity(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, 0, dp(56))
+                setGravity(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, 0, dp(60))
                 view = row
             }
         } catch (_: Exception) {
