@@ -7,6 +7,24 @@ use crate::retroarch_state;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "android")]
+#[link(name = "log")]
+unsafe extern "C" {
+    fn __android_log_write(priority: i32, tag: *const std::ffi::c_char,
+        text: *const std::ffi::c_char) -> i32;
+}
+
+fn log_launch_timing(message: &str) {
+    #[cfg(target_os = "android")]
+    if let Ok(text) = std::ffi::CString::new(message) {
+        unsafe {
+            __android_log_write(4, c"SlotKONKR".as_ptr(), text.as_ptr());
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    eprintln!("SlotKONKR: {message}");
+}
+
 const SRAM_PERIOD: Duration = Duration::from_secs(30);
 const UNDO_WINDOW: Duration = Duration::from_secs(30);
 
@@ -35,6 +53,7 @@ impl GameSession {
     pub fn open(rom: &Path, core_file: &Path, storage: &Path,
                 which: Core, platform: Platform, resume_state: bool,
                 rom_stem: &str) -> Result<Self, String> {
+        let opening_at = Instant::now();
         if !rom.exists() || !core_file.exists() {
             return Err(format!("ROM cache or {} core missing", which.text()));
         }
@@ -83,6 +102,8 @@ impl GameSession {
             }
         }
         core.load(rom).map_err(|e| e.to_string())?;
+        let load_ms = opening_at.elapsed().as_millis();
+        let restore_started = Instant::now();
         let ram = std::fs::read(&save).or_else(|err| {
             if err.kind() == std::io::ErrorKind::NotFound {
                 // Migrate the pre-0.0.7 hashed cache non-destructively.
@@ -129,6 +150,10 @@ impl GameSession {
                 }
             }
         }
+        log_launch_timing(&format!(
+            "Core init + ROM: {load_ms}ms, SRAM/RTC/state restore: {}ms, resume={resume_state}, total: {}ms",
+            restore_started.elapsed().as_millis(), opening_at.elapsed().as_millis()
+        ));
         let sample_rate = core.av_info().sample_rate.round() as i32;
         let fps = core.av_info().fps.clamp(30.0, 120.0);
         Ok(Self {
