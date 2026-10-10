@@ -4,7 +4,7 @@ use slot_retro::{ButtonMask, LibretroCore, RetroCore};
 use slot_store::{atomic_write, Core, Platform, StateEntry, StateRing, stamp_now, parse_stamp, format_stamp, RING_MAX};
 use crate::thumb;
 use crate::retroarch_state;
-use crate::rewind::{Rewind, REWIND_BYTES};
+use crate::rewind::{RewindThread, REWIND_BYTES};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -45,7 +45,7 @@ pub struct GameSession {
     retroarch_export: PathBuf,
     retroarch_import: PathBuf,
     ring: StateRing,
-    rewind: Rewind,
+    rewind: RewindThread,
     rewind_frames: u8,
     pending_undo: Option<(Instant, PendingUndo)>,
     last_sram: Instant,
@@ -162,7 +162,7 @@ impl GameSession {
         let fps = core.av_info().fps.clamp(30.0, 120.0);
         Ok(Self {
             core, save, rtc, manual_export_prefix, state, retroarch_export, retroarch_import, ring,
-            rewind: Rewind::new(REWIND_BYTES), rewind_frames: 0,
+            rewind: RewindThread::spawn(REWIND_BYTES), rewind_frames: 0,
             pending_undo: None, last_sram: Instant::now(),
             sample_rate: sample_rate.clamp(8_000, 96_000),
             fps,
@@ -177,7 +177,7 @@ impl GameSession {
             // Original Slot LZ4/XOR ring with 20 MiB bounded history.
             // Snapshots are private in memory and NEVER exported to RetroArch.
             if let Ok(snapshot) = self.core.serialize() {
-                self.rewind.push(&snapshot);
+                self.rewind.push(snapshot);
             }
         }
         if self.last_sram.elapsed() >= SRAM_PERIOD {
