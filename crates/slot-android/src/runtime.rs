@@ -7,6 +7,7 @@ use crate::game::GameSession;
 use crate::settings::Settings;
 use crate::video_mode::{self, VideoMode};
 use crate::core_selection;
+use crate::cart_render::CartRender;
 use crate::core_picker::{CorePicker, Press};
 use slot_retro::ButtonMask;
 use jni::{JNIEnv, objects::{JObject, JString}, sys::{jint, jboolean, jshortArray, jstring}};
@@ -240,6 +241,7 @@ struct Engine {
     last: Instant,
     library_version: u64,
     texture_cache: VecDeque<(usize, usize, slot_gfx::TexId)>,
+    cart_render: CartRender,
     game: Option<GameSession>,
     pending_game: Option<GameSession>,
     buttons: u16,
@@ -463,6 +465,7 @@ impl Engine {
             last: now,
             library_version,
             texture_cache: VecDeque::new(),
+            cart_render: CartRender::start()?,
             game: None,
             pending_game: None,
             buttons: 0,
@@ -1294,33 +1297,14 @@ impl Engine {
         }
     }
 
-    // Reuse up to 42 GPU textures. Full-colour GBA label PNG decoding can
-    // take multiple milliseconds on the KONKR, and doing ALL newly visible
-    // carts in one 60fps frame stalls carousel input. Prioritize the selected
-    // cart, prefetch one other per frame, and use LRU eviction (not FIFO) so
-    // revisiting the nearby games never repeatedly decodes the same PNGs.
+    // Upstream Slot rasterizes its artwork on worker threads. Keep the same
+    // separation on Android: no slow PNG decode/embossing on the GLES thread.
+    // GPU texture uploads stay on their GL owner and are bounded per frame.
     fn prepare_visible(&mut self) {
-        let shelf_id = self.active;
-        let selected = self.shelves[shelf_id].index;
-        let mut needed: Vec<usize> = self.shelves[shelf_id].on_screen()
-            .into_iter().collect();
-        needed.sort_by_key(|&index| index.abs_diff(selected));
-        let mut rasterized = 0usize;
-        for index in needed {
-            if self.shelves[shelf_id].face(index).is_some() {
-                // Promote actually visible textures: a repeated scroll through
-                // a large GBA library no longer churns the oldest valid faces.
-                if let Some(pos) = self.texture_cache.iter()
-                    .position(|(s, i, _)| *s == shelf_id && *i == index)
-                {
-                    if let Some(entry) = self.texture_cache.remove(pos) {
-                        self.texture_cache.push_back(entry);
-                    }
-                }
-                continue;
-            }
-            if rasterized >= 1 { continue; }
-            let face = cart_face_with_material(&self.shelves[shelf_id].carts[index], None);
+        for _ in 0..2 {
+            let Some(((shelf_id, index), face)) = self.cart_render.ready() else { break };
+            let Some(shelf) = self.shelves.get(shelf_id) else { continue };
+            if index >= shelf.carts.len() || shelf.face(index).is_some() { continue }
             let texture = if self.texture_cache.len() >= 42 {
                 let (old_shelf, old_index, tex) = self.texture_cache
                     .pop_front().expect("nonempty texture pool");
@@ -1332,7 +1316,24 @@ impl Engine {
             };
             self.shelves[shelf_id].set_face(index, texture);
             self.texture_cache.push_back((shelf_id, index, texture));
-            rasterized += 1;
+        }
+        let shelf_id = self.active;
+        let selected = self.shelves[shelf_id].index;
+        let mut needed = self.shelves[shelf_id].on_screen();
+        needed.sort_by_key(|&index| index.abs_diff(selected));
+        for index in needed {
+            if self.shelves[shelf_id].face(index).is_some() {
+                if let Some(pos) = self.texture_cache.iter()
+                    .position(|(s, i, _)| *s == shelf_id && *i == index)
+                {
+                    if let Some(entry) = self.texture_cache.remove(pos) {
+                        self.texture_cache.push_back(entry);
+                    }
+                }
+                continue;
+            }
+            self.cart_render.request((shelf_id, index),
+                &self.shelves[shelf_id].carts[index]);
         }
     }
 
