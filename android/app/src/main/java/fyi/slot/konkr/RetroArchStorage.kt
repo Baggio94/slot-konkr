@@ -237,7 +237,12 @@ internal object RetroArchStorage {
         val existing = children(context, root, rootId).firstOrNull { it.first == core }?.second
         if (existing != null) return existing
         if (!create) return null
-        return DocumentsContract.createDocument(context.contentResolver, root,
+        // ACTION_OPEN_DOCUMENT_TREE returns a tree URI without a /document/
+        // segment. createDocument() requires a document URI, even when that
+        // document is the selected tree root. Supplying `root` directly causes
+        // ExternalStorageProvider to reject creation with "Invalid URI".
+        val rootDocument = DocumentsContract.buildDocumentUriUsingTree(root, rootId)
+        return DocumentsContract.createDocument(context.contentResolver, rootDocument,
             DocumentsContract.Document.MIME_TYPE_DIR, core)
             ?: error("Cannot create RetroArch core folder: $core")
     }
