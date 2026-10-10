@@ -3,7 +3,19 @@
     <uses-feature android:glEsVersion="0x00020000" android:required="true" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    <queries><provider android:authorities="com.raofflineproxy.config" /></queries>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <queries>
+        <provider android:authorities="com.raofflineproxy.config" />
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <package android:name="com.med.sleepmanager" />
+        <package android:name="com.github.catfriend1.syncthingandroid" />
+        <package android:name="com.nutomic.syncthingandroid" />
+        <package android:name="com.raofflineproxy" />
+    </queries>
     <application
         android:allowBackup="false"
         android:networkSecurityConfig="@xml/ra_network_security_config"
@@ -20,7 +32,17 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Never changes the home app silently; user explicitly grants
+                 Home role via Apps -> Set as Home. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
+        <activity android:name=".AppsActivity"
+            android:exported="false"
+            android:screenOrientation="landscape" />
         <activity android:name=".CartStudioActivity"
             android:exported="false"
             android:screenOrientation="landscape" />
