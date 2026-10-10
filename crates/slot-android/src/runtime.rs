@@ -211,8 +211,8 @@ const MENU_TEXT: [&str; 48] = [
     "Rewind",                           // 37
     "Turbo Buttons",                    // 38
     "Auto Save on Eject",               // 39
-    "Personalization",                  // 40
-    "PERSONALIZATION",                  // 41
+    "Customize",                        // 40
+    "CUSTOMIZE",                        // 41
     "Import Theme",                     // 42
     "Import Wallpaper",                 // 43
     "Reset Theme",                      // 44
@@ -262,6 +262,8 @@ struct Engine {
     setting_carets: [(slot_gfx::TexId, u32, u32); 2],
     settings_hints: [(slot_gfx::TexId, u32); 2],
     about_texture: Option<slot_gfx::TexId>,
+    // Rebuilt when opening Customize, not queried from disk each GL frame.
+    customize_items: Vec<usize>,
     menu_seen: u8,
     menu_opened: Instant,
     menu_cursor_y: f32,
@@ -486,6 +488,7 @@ impl Engine {
             setting_carets,
             settings_hints,
             about_texture,
+            customize_items: vec![43],
             menu_seen: 0,
             menu_opened: now,
             menu_cursor_y: 0.0,
@@ -1018,7 +1021,10 @@ impl Engine {
                                         },
                                         2 => ShelfOverlay::Achievements,
                                         3 => ShelfOverlay::Settings { row: 0 },
-                                        _ => ShelfOverlay::Personalization { row: 0 },
+                                        _ => {
+                                            self.refresh_customize_items();
+                                            ShelfOverlay::Personalization { row: 0 }
+                                        },
                                     };
                                 }
                                 97 | 108 => self.overlay = ShelfOverlay::None,
@@ -1051,11 +1057,16 @@ impl Engine {
                             },
                             ShelfOverlay::Personalization { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::Personalization {
-                                    row: move_menu_row(row, code, 6),
+                                    row: move_menu_row(row, code, self.customize_items.len()),
                                 },
                                 96 => {
-                                    let action = if row < 4 { 7 + row as i32 }
-                                                 else { 11 + (row - 4) as i32 };
+                                    let action = match self.customize_items.get(row).copied() {
+                                        Some(43) => 8,  // Import Wallpaper
+                                        Some(45) => 10, // Remove Wallpaper
+                                        Some(46) => 11, // Import Cart Label
+                                        Some(47) => 12, // Remove Cart Label
+                                        _ => return,
+                                    };
                                     if action >= 11 {
                                         if let Some(cart) = self.shelves[self.active].carts
                                             .get(self.shelves[self.active].index) {
@@ -1429,6 +1440,25 @@ impl Engine {
         }
     }
 
+    fn refresh_customize_items(&mut self) {
+        // Do not delete existing imported themes: simply hide their legacy
+        // controls. Import/reset can be reintroduced without data migration.
+        let root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .as_ref().map(|(root, _)| root.clone());
+        let mut items = vec![43]; // Import Wallpaper
+        if root.as_deref().is_some_and(|p| p.join("Wallpapers/user.png").is_file()) {
+            items.push(45); // Remove Wallpaper only when present
+        }
+        if let Some(cart) = self.shelves[self.active].carts
+            .get(self.shelves[self.active].index) {
+            items.push(46); // Import Selected Cart Label
+            if cart.label.as_deref().is_some_and(|p| p.is_file()) {
+                items.push(47); // Remove only when art exists
+            }
+        }
+        self.customize_items = items;
+    }
+
     fn prepare_about(&mut self) {
         if self.about_texture.is_none() {
             let sticker = sticker_face_konkr(&StickerFields {
@@ -1613,7 +1643,7 @@ impl Engine {
                 self.draw_original_style_menu(26, &[32, 33, 31], row, out);
             }
             ShelfOverlay::Personalization { row } => {
-                self.draw_original_style_menu(41, &[42, 43, 44, 45, 46, 47], row, out);
+                self.draw_original_style_menu(41, &self.customize_items, row, out);
             }
             ShelfOverlay::ScreenSettings { row } => {
                 self.draw_original_style_menu(32, &[34, 35, 29, 36], row, out);
@@ -1828,7 +1858,7 @@ impl Engine {
             ShelfOverlay::Settings { row } => (4u8, row, 3usize),
             ShelfOverlay::ScreenSettings { row } => (5u8, row, 4usize),
             ShelfOverlay::GameplaySettings { row } => (6u8, row, 6usize),
-            ShelfOverlay::Personalization { row } => (7u8, row, 6usize),
+            ShelfOverlay::Personalization { row } => (7u8, row, self.customize_items.len()),
             _ => (0, 0, 0),
         };
         if kind != self.menu_seen {
