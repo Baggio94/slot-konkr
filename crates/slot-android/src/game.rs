@@ -6,6 +6,7 @@ use crate::thumb;
 use crate::retroarch_state;
 use crate::rewind::{RewindThread, REWIND_BYTES};
 use std::path::{Path, PathBuf};
+use std::io::Read;
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "android")]
@@ -48,6 +49,8 @@ pub struct GameSession {
     rewind: RewindThread,
     rewind_frames: u8,
     frame_count: u32,
+    palette_live: bool,
+    core_kind: Core,
     pending_undo: Option<(Instant, PendingUndo)>,
     last_sram: Instant,
     pub sample_rate: i32,
@@ -57,7 +60,8 @@ pub struct GameSession {
 impl GameSession {
     pub fn open(rom: &Path, core_file: &Path, storage: &Path,
                 which: Core, platform: Platform, resume_state: bool,
-                rom_stem: &str, gb_palette: Option<&str>) -> Result<Self, String> {
+                rom_stem: &str, gb_palette: Option<&str>,
+                colour_correction: bool) -> Result<Self, String> {
         let opening_at = Instant::now();
         if !rom.exists() || !core_file.exists() {
             return Err(format!("ROM cache or {} core missing", which.text()));
@@ -96,20 +100,39 @@ impl GameSession {
         std::fs::create_dir_all(&bios).map_err(|e| e.to_string())?;
         let mut core = LibretroCore::open_with(core_file, &bios, &core_root)
             .map_err(|e| e.to_string())?;
+        // Exact upstream Slot libretro options for colour and Game Boy palettes.
+        // Read only the 336-byte header: never read the entire cached ROM.
+        let dmg_only = platform == Platform::Gb && which == Core::Mgba
+            && std::fs::File::open(rom).and_then(|mut file| {
+                let mut header = [0u8; 0x150];
+                file.read_exact(&mut header)?;
+                Ok(header[0x143] & 0x80 == 0)
+            }).unwrap_or(false);
+        let palette_live = dmg_only && gb_palette.is_some();
         match which {
             Core::Mgba => {
                 core.set_option("mgba_use_bios", "ON");
                 core.set_option("mgba_skip_bios", "OFF");
+                core.set_option("mgba_sgb_borders", "OFF");
+                core.set_option("mgba_force_gbp", "ON");
+                if let Some(name) = gb_palette.filter(|_| dmg_only) {
+                    core.set_option("mgba_gb_model", "Game Boy");
+                    core.set_option("mgba_gb_colors_preset", "0");
+                    core.set_option("mgba_gb_colors", name);
+                } else {
+                    core.set_option("mgba_gb_model", "Autodetect");
+                    core.set_option("mgba_gb_colors_preset", "1");
+                    core.set_option("mgba_gb_colors", "GBC Dark Green →A");
+                }
+                core.set_option("mgba_color_correction",
+                    if colour_correction { "Auto" } else { "OFF" });
             }
             Core::Gpsp => {
                 core.set_option("gpsp_bios", "auto");
                 core.set_option("gpsp_boot_mode", "bios");
+                core.set_option("gpsp_color_correction",
+                    if colour_correction { "enabled" } else { "disabled" });
             }
-        }
-        // mGBA supports live named GB presets through this libretro option.
-        // Never apply a monochrome GB palette to GBC, GBA or gpSP.
-        if platform == Platform::Gb && which == Core::Mgba {
-            if let Some(name) = gb_palette { core.set_option("mgba_gb_colors", name); }
         }
         core.load(rom).map_err(|e| e.to_string())?;
         let load_ms = opening_at.elapsed().as_millis();
@@ -169,7 +192,7 @@ impl GameSession {
         Ok(Self {
             core, save, rtc, manual_export_prefix, state, retroarch_export, retroarch_import, ring,
             rewind: RewindThread::spawn(REWIND_BYTES), rewind_frames: 0,
-            frame_count: 0,
+            frame_count: 0, palette_live, core_kind: which,
             pending_undo: None, last_sram: Instant::now(),
             sample_rate: sample_rate.clamp(8_000, 96_000),
             fps,
@@ -209,8 +232,25 @@ impl GameSession {
         true
     }
 
+    pub fn can_change_gb_palette(&self) -> bool {
+        self.palette_live
+    }
+
     pub fn set_gb_palette(&mut self, name: &str) {
-        self.core.set_option("mgba_gb_colors", name);
+        if self.palette_live {
+            self.core.set_option("mgba_gb_colors_preset", "0");
+            self.core.set_option("mgba_gb_colors", name);
+        }
+    }
+
+    pub fn set_colour_correction(&mut self, enabled: bool) {
+        let (key, value) = match self.core_kind {
+            Core::Mgba => ("mgba_color_correction",
+                if enabled { "Auto" } else { "OFF" }),
+            Core::Gpsp => ("gpsp_color_correction",
+                if enabled { "enabled" } else { "disabled" }),
+        };
+        self.core.set_option(key, value);
     }
 
     pub fn rumble_strength(&self) -> u16 {

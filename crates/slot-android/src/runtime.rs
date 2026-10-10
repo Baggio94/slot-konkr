@@ -277,7 +277,9 @@ impl Engine {
         let mut gpu = Compositor::new(&AndroidSurface { size }).map_err(|e| e.to_string())?;
         let settings = PATHS.lock().unwrap_or_else(|e| e.into_inner())
             .as_ref().map(|(root, _)| Settings::load(root)).unwrap_or_default();
-        gpu.set_colour_correction(settings.colour_correction);
+        // Upstream Slot delegates colour correction to libretro core options.
+        // Disable the dev13 approximate GPU grade to avoid double correction.
+        gpu.set_colour_correction(false);
         FF_AUDIO_ENABLED.store(settings.ff_sound, Ordering::Release);
         let visuals_root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
             .as_ref().map(|(root, _)| root.clone());
@@ -814,6 +816,7 @@ impl Engine {
                     // Use actual mGBA palette presets, and original Slot
                     // HUD toasts. Restrict to monochrome GB games.
                     if pressed && self.active == 1 && self.settings.gb_palettes
+                        && self.game.as_ref().is_some_and(|g| g.can_change_gb_palette())
                         && self.buttons & ButtonMask::SELECT != 0
                         && (code == 21 || code == 22) {
                         let index = if code == 22 {
@@ -1199,7 +1202,8 @@ impl Engine {
             let started = Instant::now();
             match GameSession::open(Path::new(local), &core_file, &storage,
                 core, platform, self.settings.eject_save && !self.fresh_launch,
-                rom_stem, self.settings.gb_palettes.then(|| self.settings.palette_name())) {
+                rom_stem, self.settings.gb_palettes.then(|| self.settings.palette_name()),
+                self.settings.colour_correction) {
                 Ok(session) => {
                     // Create libretro on the same GL thread, but defer audio
                     // and CRT presentation until Slot's seated hold completes.
@@ -1327,7 +1331,9 @@ impl Engine {
             AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
         }
         if key == 2 {
-            self.gpu.set_colour_correction(self.settings.colour_correction);
+            if let Some(game) = self.game.as_mut() {
+                game.set_colour_correction(self.settings.colour_correction);
+            }
         }
         self.persist_settings();
     }
