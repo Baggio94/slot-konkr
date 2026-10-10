@@ -7,6 +7,8 @@ import android.media.AudioTrack
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.os.BatteryManager
+import android.content.IntentFilter
 import android.util.AtomicFile
 import java.security.MessageDigest
 import java.io.File
@@ -80,6 +82,7 @@ class MainActivity : Activity() {
     external fun nativeAudioSampleRate(): Int
     external fun nativeReadAudio(): ShortArray
     external fun nativePollMessage(): String?
+    external fun nativeSystemStatus(clock: String, batteryPercent: Int, charging: Boolean)
     external fun nativePollUiAction(): Int
     external fun nativePollCartSfx(): Int
     external fun nativeCoreForUri(uri: String): String
@@ -95,6 +98,7 @@ class MainActivity : Activity() {
     private var audioThread: Thread? = null
     private val pulse = object : Runnable {
         override fun run() {
+            pollSystemStatus()
             if (resumed && nativeIsPlaying()) {
                 if (!audioRunning.get()) startAudio()
             } else if (audioRunning.get()) {
@@ -144,14 +148,14 @@ class MainActivity : Activity() {
                 6 -> openSharedFolderPicker(STATE_REQUEST)
             }
             nativePollMessage()?.let { message ->
-                Log.e(TAG, message)
-                status.visibility = View.VISIBLE
-                status.text = message + " — B returns to the shelf"
+                Log.w(TAG, message)
+                Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
             }
             if (!isDestroyed) uiHandler.postDelayed(this, 100L)
         }
     }
     private val scanSerial = AtomicInteger()
+    private var lastStatusPoll: Long = -15000L
     private lateinit var status: TextView
 
     private lateinit var view: GLSurfaceView
@@ -429,6 +433,23 @@ class MainActivity : Activity() {
                 }
             }
         }
+    }
+
+    private fun pollSystemStatus() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastStatusPoll < 15000L) return
+        lastStatusPoll = now
+        val clock = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+            .format(java.util.Date())
+        val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+        val percent = if (level >= 0 && scale > 0) (100 * level / scale).coerceIn(0, 100)
+            else -1
+        val state = battery?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+        val charging = state == BatteryManager.BATTERY_STATUS_CHARGING ||
+            state == BatteryManager.BATTERY_STATUS_FULL
+        nativeSystemStatus(clock, percent, charging)
     }
 
     private fun refreshLibrary() {
