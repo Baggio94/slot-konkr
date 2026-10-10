@@ -172,7 +172,7 @@ enum ShelfOverlay {
 const MENU_TEXT: [&str; 48] = [
     "MENU",                             // 0
     "Library",                          // 1
-    "Scraping",                         // 2
+    "Cart Studio",                      // 2
     "RetroAchievements",               // 3
     "A Select     B Back",              // 4
     "LIBRARY",                          // 5
@@ -181,7 +181,7 @@ const MENU_TEXT: [&str; 48] = [
     "Choose Save State Folder",        // 8
     "Refresh Library",                 // 9
     "RetroArch core folders",           // 10
-    "SCRAPING",                         // 11
+    "CART STUDIO",                      // 11
     "A: Open Cart Studio",             // 12
     "RETROACHIEVEMENTS",               // 13
     "A: Check RAOfflineProxy status",    // 14
@@ -1007,7 +1007,12 @@ impl Engine {
                                 96 => {
                                     self.overlay = match row {
                                         0 => ShelfOverlay::Library { row: 0 },
-                                        1 => ShelfOverlay::Scraping,
+                                        1 => {
+                                            // Show the entire indexed GB/GBC/GBA library.
+                                            UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
+                                                .push_back(14);
+                                            ShelfOverlay::None
+                                        },
                                         2 => ShelfOverlay::Achievements,
                                         3 => ShelfOverlay::Settings { row: 0 },
                                         _ => ShelfOverlay::Personalization { row: 0 },
@@ -1169,6 +1174,15 @@ impl Engine {
                 }
                 if pressed {
                     match code {
+                        // X edits the current cartridge directly without insertion.
+                        99 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
+                            let cart = &self.shelves[self.active].carts
+                                [self.shelves[self.active].index];
+                            *LABEL_PICK_REQUEST.lock().unwrap_or_else(|e| e.into_inner()) =
+                                Some(cart.rom.to_string_lossy().into_owned());
+                            UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(13);
+                            return;
+                        }
                         108 if !self.inserted => {
                             self.shelves[self.active].release_hold();
                             self.overlay = ShelfOverlay::Menu { row: 0 };
