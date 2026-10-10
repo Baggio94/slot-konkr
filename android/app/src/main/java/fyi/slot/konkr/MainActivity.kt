@@ -21,6 +21,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 import android.content.Intent
 import android.content.ActivityNotFoundException
 import android.graphics.Color
+import android.graphics.Bitmap
+import android.widget.ImageView
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import android.graphics.BitmapFactory
 import java.io.ByteArrayOutputStream
 import android.view.Gravity
@@ -184,6 +188,7 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
 
     private lateinit var view: GLSurfaceView
+    private var startupSplash: View? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -198,6 +203,10 @@ class MainActivity : Activity() {
                     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
                         ready = nativeSurfaceCreated()
                         if (!ready) Log.e(TAG, "Slot GLES initialization failed")
+                        else runOnUiThread {
+                            // Wait for the renderer to exist before revealing the shelf.
+                            uiHandler.postDelayed({ hideSlotStartupSplash() }, 650L)
+                        }
                     }
                     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
                         if (ready) nativeSurfaceChanged(width, height)
@@ -237,6 +246,7 @@ class MainActivity : Activity() {
             status,
             FrameLayout.LayoutParams(-1, -2, Gravity.TOP)
         )
+        showSlotStartupSplash(frame)
         setContentView(frame)
         immersive()
         uiHandler.post(pulse)
@@ -266,6 +276,76 @@ class MainActivity : Activity() {
         } else {
             status.text = "Press START to open the menu and add your ROMs."
         }
+    }
+
+    /** The unmodified, original Slot v1.5.0 firmware bootlogo.bmp is a 24-bit BMP.
+     *  Decode its BGR rows explicitly: Android BitmapFactory does not promise BMP support.
+     *  This is an in-app startup screen, never a device/firmware boot partition write.
+     */
+    private fun readOriginalSlotBootLogo(): Bitmap? = try {
+        val bytes = assets.open("slot-bootlogo.bmp").use { it.readBytes() }
+        if (bytes.size < 54 || bytes[0] != 'B'.code.toByte() ||
+            bytes[1] != 'M'.code.toByte()) {
+            null
+        } else {
+            val data = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+            val offset = data.getInt(10)
+            val width = data.getInt(18)
+            val height = data.getInt(22)
+            val planes = data.getShort(26).toInt() and 0xffff
+            val bitDepth = data.getShort(28).toInt() and 0xffff
+            val compression = data.getInt(30)
+            val stride = if (width > 0) ((width.toLong() * 3L + 3L) / 4L) * 4L else 0L
+            if (width <= 0 || height <= 0 || width > 2048 || height > 2048 ||
+                planes != 1 || bitDepth != 24 || compression != 0 ||
+                offset < 54 || offset.toLong() + stride * height > bytes.size) {
+                null
+            } else {
+                val pixels = IntArray(width * height)
+                for (y in 0 until height) {
+                    val row = offset + ((height - 1 - y) * stride).toInt()
+                    for (x in 0 until width) {
+                        val at = row + x * 3
+                        val b = bytes[at].toInt() and 0xff
+                        val g = bytes[at + 1].toInt() and 0xff
+                        val r = bytes[at + 2].toInt() and 0xff
+                        pixels[y * width + x] = Color.rgb(r, g, b)
+                    }
+                }
+                Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
+            }
+        }
+    } catch (error: Exception) {
+        Log.w(TAG, "Original Slot boot logo could not be loaded", error)
+        null
+    }
+
+    private fun showSlotStartupSplash(frame: FrameLayout) {
+        val logo = readOriginalSlotBootLogo() ?: return
+        val overlay = FrameLayout(this).apply {
+            setBackgroundColor(Color.rgb(17, 14, 11))
+            isFocusable = false
+            isClickable = false
+        }
+        val image = ImageView(this).apply {
+            setImageBitmap(logo)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            contentDescription = "slot. boot logo"
+        }
+        val width = (resources.displayMetrics.widthPixels * 0.55f).toInt()
+            .coerceAtLeast(logo.width)
+        val height = (width.toFloat() * logo.height / logo.width).toInt()
+        overlay.addView(image, FrameLayout.LayoutParams(width, height, Gravity.CENTER))
+        frame.addView(overlay, FrameLayout.LayoutParams(-1, -1))
+        startupSplash = overlay
+    }
+
+    private fun hideSlotStartupSplash() {
+        val splash = startupSplash ?: return
+        splash.animate().alpha(0f).setDuration(220L).withEndAction {
+            (splash.parent as? FrameLayout)?.removeView(splash)
+            startupSplash = null
+        }.start()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
