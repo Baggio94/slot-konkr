@@ -38,11 +38,16 @@ def package(root: Path, built: Path):
     # Bypass the single-cart catalogue step on KONKR: open its real editor
     # immediately. The original matching/painting work continues async and
     # refreshes the editor when ROM identity and artwork become available.
-    js = checked_replace(js, "  track(identify(session));",
-                         """  track(identify(session));
-  if (window.AndroidStudio && session.carts.length === 1) {
-    editor.open(session.carts[0]);
-  }""")
+    js = checked_replace(js,
+                         "  if (s !== session) return;\n  progress(total, total, '');",
+                         """  if (s !== session) return;
+  // ROM header, existing label, and shell have all been read by now.
+  // Open the selected editor BEFORE remote artwork/database requests,
+  // so offline or slow Wi-Fi never blocks native Cart Studio controls.
+  if (window.AndroidStudio && s.carts.length === 1) {
+    editor.open(s.carts[0]);
+  }
+  progress(total, total, '');""")
     js = checked_replace(js, "  document.body.dataset.ready = 'true';" ,
         """  document.body.dataset.ready = 'true';
   if (window.AndroidStudio) {
