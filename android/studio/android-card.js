@@ -73,10 +73,17 @@ export function fromAndroid(bridge) {
       });
     }
   }
+  // X path: prioritize its CRC/header before the background catalog sweep.
+  // START path keeps upstream library order and platform tabs.
+  const selectedKey = data.selectedKey || '';
+  if (selectedKey) {
+    carts.sort((a, b) => Number(b.slotId === selectedKey) -
+                         Number(a.slotId === selectedKey));
+  }
   return {
     carts,
     labels,
-    selectedKey: data.selectedKey || '',
+    selectedKey,
     direct: true,
     systemShells: async () => '',
     labelShells: async () => bridge.labelShells(),
