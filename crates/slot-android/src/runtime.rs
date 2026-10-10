@@ -1294,15 +1294,32 @@ impl Engine {
         }
     }
 
-    // Only rasterize visible cartridges. Recycling at most 42 GPU slots avoids
-    // allocating one image per ROM when users select a large ROMM library.
+    // Reuse up to 42 GPU textures. Full-colour GBA label PNG decoding can
+    // take multiple milliseconds on the KONKR, and doing ALL newly visible
+    // carts in one 60fps frame stalls carousel input. Prioritize the selected
+    // cart, prefetch one other per frame, and use LRU eviction (not FIFO) so
+    // revisiting the nearby games never repeatedly decodes the same PNGs.
     fn prepare_visible(&mut self) {
         let shelf_id = self.active;
-        let needed = self.shelves[shelf_id].on_screen();
+        let selected = self.shelves[shelf_id].index;
+        let mut needed: Vec<usize> = self.shelves[shelf_id].on_screen()
+            .into_iter().collect();
+        needed.sort_by_key(|&index| index.abs_diff(selected));
+        let mut rasterized = 0usize;
         for index in needed {
             if self.shelves[shelf_id].face(index).is_some() {
+                // Promote actually visible textures: a repeated scroll through
+                // a large GBA library no longer churns the oldest valid faces.
+                if let Some(pos) = self.texture_cache.iter()
+                    .position(|(s, i, _)| *s == shelf_id && *i == index)
+                {
+                    if let Some(entry) = self.texture_cache.remove(pos) {
+                        self.texture_cache.push_back(entry);
+                    }
+                }
                 continue;
             }
+            if rasterized >= 1 { continue; }
             let face = cart_face_with_material(&self.shelves[shelf_id].carts[index], None);
             let texture = if self.texture_cache.len() >= 42 {
                 let (old_shelf, old_index, tex) = self.texture_cache
@@ -1315,6 +1332,7 @@ impl Engine {
             };
             self.shelves[shelf_id].set_face(index, texture);
             self.texture_cache.push_back((shelf_id, index, texture));
+            rasterized += 1;
         }
     }
 
