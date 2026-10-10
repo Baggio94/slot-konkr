@@ -113,22 +113,36 @@ internal class CartStudioBridge(
     @Synchronized
     @JavascriptInterface
     fun saveLabel(platform: String, stem: String, encoded: String, replace: Boolean): String {
-        val rom = named(platform, stem)
-        require(encoded.length <= 3_000_000) { "Label too large" }
-        val target = label(context, rom.uri)
-        if (!replace && target.isFile) return "skipped"
-        val bytes = Base64.decode(encoded, Base64.DEFAULT)
-        require(bytes.size in 24..(2 * 1024 * 1024)) { "Invalid label size" }
-        val signature = byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)
-        require(bytes.copyOfRange(0, 8).contentEquals(signature)) { "Expected PNG" }
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-        require(bounds.outWidth in 1..2048 && bounds.outHeight in 1..2048) {
-            "Invalid label dimensions"
+        // WebView turns a Java exception into the unhelpful generic "Java
+        // exception was raised during method invocation". Return a precise
+        // result instead, and record the full underlying stack in logcat.
+        return try {
+            val rom = named(platform, stem)
+            // Actual generated PNG labels may exceed 2 MiB, especially GB/GBC
+            // full-colour scans. Validate decoded pixels, not a tiny arbitrary
+            // compressed size. Never write outside app-private storage.
+            require(encoded.length <= 12_000_000) { "Label exceeds 9 MiB" }
+            val target = label(context, rom.uri)
+            if (!replace && target.isFile) return "skipped"
+            val bytes = Base64.decode(encoded, Base64.DEFAULT)
+            require(bytes.size in 24..(9 * 1024 * 1024)) { "Invalid PNG length: ${bytes.size}" }
+            val signature = byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)
+            require(bytes.copyOfRange(0, 8).contentEquals(signature)) { "Expected PNG" }
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            require(bounds.outWidth in 1..4096 && bounds.outHeight in 1..4096) {
+                "Invalid PNG dimensions ${bounds.outWidth}x${bounds.outHeight}"
+            }
+            atomicWrite(target, bytes)
+            require(target.length() == bytes.size.toLong()) { "Incomplete label write" }
+            dirty.set(true)
+            "written"
+        } catch (error: Exception) {
+            android.util.Log.e("SlotStudioSave",
+                "Failed to write ${platform}/${stem}: ${error.message}", error)
+            val reason = error.message?.replace("\n", " ")?.take(240) ?: error.javaClass.simpleName
+            "error: ${reason}"
         }
-        atomicWrite(target, bytes)
-        dirty.set(true)
-        return "written"
     }
 
     @JavascriptInterface
