@@ -4,6 +4,7 @@ use std::ffi::{c_char, c_void, CString};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use crate::game::GameSession;
+use crate::settings::Settings;
 use crate::core_selection;
 use crate::core_picker::{CorePicker, Press};
 use slot_retro::ButtonMask;
@@ -25,6 +26,7 @@ use slot_ui::{
     CART_W, hint_face, arrows_hint_face, title_face, photo_face, Polaroids, Printed, HINT_H, HINT_EDGE,
     draw_footer, draw_slot_name, word_face, icon_face, Icon, BOLT_PX, HUD_INK,
     Hud, HudKind, FfState, Toast, toast_face, QUICK_PITCH, opening, edge, centred_hints, LEGEND_GAP,
+    sticker_face_konkr, StickerFields, STICKER_W, STICKER_H, quick_caret_face,
 };
 
 // Android GLSurfaceView owns EGL context creation, current context and buffer swaps.
@@ -84,7 +86,7 @@ const SCREEN_POWER_ON_S: f32 = 0.22;
 const SCREEN_POWER_OFF_S: f32 = 0.16;
 const EJECT_S: f32 = 0.45;
 const REWIND_STEP_S: f32 = 0.10;  // Original Slot's time-travel HUD + ~10 Hz restoration.
-const FF_FACTOR: f64 = 2.0;
+
 const FF_DOUBLE_TAP_MS: u128 = 320;
 static MESSAGE: Mutex<Option<String>> = Mutex::new(None);
 static PATHS: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
@@ -95,6 +97,8 @@ static SAMPLE_RATE: AtomicI32 = AtomicI32::new(0);
 // Expose the current transport speed separately from libretro's sample rate.
 static AUDIO_SPEED_PERMILLE: AtomicI32 = AtomicI32::new(1000);
 static FF_AUDIO_SUPPORTED: AtomicBool = AtomicBool::new(true);
+static FF_AUDIO_ENABLED: AtomicBool = AtomicBool::new(true);
+static RUMBLE_STRENGTH: AtomicI32 = AtomicI32::new(0);
 
 #[derive(Clone)]
 struct SystemStatus {
@@ -131,6 +135,8 @@ enum ShelfOverlay {
     None,
     Menu { row: usize },
     Library { row: usize },
+    Settings { row: usize },
+    About,
     Scraping,
     Achievements,
     Core,
@@ -138,7 +144,7 @@ enum ShelfOverlay {
     States,
 }
 
-const MENU_TEXT: [&str; 25] = [
+const MENU_TEXT: [&str; 32] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Scraping",                         // 2
@@ -164,6 +170,13 @@ const MENU_TEXT: [&str; 25] = [
     "Save States",                      // 22
     "A Select     B Back",              // 23
     "Choose BIOS Folder",               // 24
+    "Settings",                         // 25
+    "SETTINGS",                         // 26
+    "Fast Forward",                     // 27
+    "Fast Forward Sound",               // 28
+    "Color Correction",                 // 29
+    "Rumble",                           // 30
+    "About",                            // 31
 ];
 
 struct Engine {
@@ -193,6 +206,11 @@ struct Engine {
     prepared_rom: Option<String>,
     game_accum: f64,
     overlay: ShelfOverlay,
+    settings: Settings,
+    setting_values: Vec<(slot_gfx::TexId, u32, u32)>,
+    setting_carets: [(slot_gfx::TexId, u32, u32); 2],
+    settings_hints: [(slot_gfx::TexId, u32); 2],
+    about_texture: slot_gfx::TexId,
     menu_seen: u8,
     menu_opened: Instant,
     menu_cursor_y: f32,
@@ -233,6 +251,10 @@ impl Engine {
     fn new(library_version: u64, library: Option<&[RomEntry]>) -> Result<Self, String> {
         let size = (960, 640);
         let mut gpu = Compositor::new(&AndroidSurface { size }).map_err(|e| e.to_string())?;
+        let settings = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .as_ref().map(|(root, _)| Settings::load(root)).unwrap_or_default();
+        gpu.set_colour_correction(settings.colour_correction);
+        FF_AUDIO_ENABLED.store(settings.ff_sound, Ordering::Release);
         let mut shelves = Vec::new();
 
         // First-run empty shelf: never synthesize fake demo cartridges.
@@ -273,6 +295,29 @@ impl Engine {
             let tex = gpu.create_texture(face.w, face.h, &face.rgba);
             (tex, face.w)
         });
+        let setting_values = ["2×", "3×", "4×", "6×", "ON", "OFF"]
+            .into_iter().map(|value| {
+                let face = quick_value_face(value, true);
+                let tex = gpu.create_texture(face.w, face.h, &face.rgba);
+                (tex, face.w, face.h)
+            }).collect();
+        let setting_carets = [false, true].map(|right| {
+            let face = quick_caret_face(right);
+            let tex = gpu.create_texture(face.w, face.h, &face.rgba);
+            (tex, face.w, face.h)
+        });
+        let settings_hints = [
+            hint_face("B", "Back"), arrows_hint_face("Change")
+        ].map(|face| {
+            let tex = gpu.create_texture(face.w, face.h, &face.rgba);
+            (tex, face.w)
+        });
+        let about_face = sticker_face_konkr(&StickerFields {
+            battery: None, serial: "0000130", dirty_digit: '0',
+        });
+        let about_texture = gpu.create_texture(
+            about_face.w, about_face.h, &about_face.rgba,
+        );
         let chip = chip_face(Some(Core::Mgba));
         let chip_texture = gpu.create_texture(chip.w, chip.h, &chip.rgba);
         let socket_textures = Core::ALL.map(|core| {
@@ -346,6 +391,11 @@ impl Engine {
             prepared_rom: None,
             game_accum: 0.0,
             overlay: ShelfOverlay::None,
+            settings,
+            setting_values,
+            setting_carets,
+            settings_hints,
+            about_texture,
             menu_seen: 0,
             menu_opened: now,
             menu_cursor_y: 0.0,
