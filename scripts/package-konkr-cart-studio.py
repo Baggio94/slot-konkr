@@ -175,8 +175,11 @@ function syncNativeToolbar() {
           c.result = 'failed';""")
     js = checked_replace(js,
         "        if (problems.length) banner(problems.join(' '));",
-        """        if (problems.length) banner(problems.join(' '));
-        else if (window.AndroidToolbar)
+        """        if (problems.length) {
+          // The Android bridge already showed the precise game + write error.
+          // Do not overwrite it with a generic "1 label couldn't be written".
+          if (!window.AndroidStudio || count.failed === 0) banner(problems.join(' '));
+        } else if (window.AndroidToolbar)
           window.AndroidToolbar.saved(count.written, shells.length, count.skipped);""")
     editorFile = target / "editor.js"
     ed = editorFile.read_text("utf-8")
@@ -184,6 +187,9 @@ function syncNativeToolbar() {
         """    $('ed-query').value = window.AndroidStudio
       ? api.name(cart).replace(/\s*\([^)]*\)/g, '').trim()
       : api.name(cart);""")
+    ed = checked_replace(ed,
+        "    renderTiles(c);\n\n    const bg = api.background(c);",
+        "    renderTiles(c);\n    if (window.AndroidStudio && !$('ed-games').hidden) showGames();\n\n    const bg = api.background(c);")
     editorFile.write_text(ed, encoding="utf-8")
     # Original libretro DAT URLs via native cache on Android only.
     datFile = target / "libretro.js"
