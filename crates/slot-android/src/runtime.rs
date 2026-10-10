@@ -210,7 +210,7 @@ struct Engine {
     setting_values: Vec<(slot_gfx::TexId, u32, u32)>,
     setting_carets: [(slot_gfx::TexId, u32, u32); 2],
     settings_hints: [(slot_gfx::TexId, u32); 2],
-    about_texture: slot_gfx::TexId,
+    about_texture: Option<slot_gfx::TexId>,
     menu_seen: u8,
     menu_opened: Instant,
     menu_cursor_y: f32,
@@ -312,12 +312,9 @@ impl Engine {
             let tex = gpu.create_texture(face.w, face.h, &face.rgba);
             (tex, face.w)
         });
-        let about_face = sticker_face_konkr(&StickerFields {
-            battery: None, serial: "0000130", dirty_digit: '0',
-        });
-        let about_texture = gpu.create_texture(
-            about_face.w, about_face.h, &about_face.rgba,
-        );
+        // Rasterize the detailed barcode About label only when opened.
+        // Creating SVG / fonts during every cold boot needlessly delays shelf.
+        let about_texture = None;
         let chip = chip_face(Some(Core::Mgba));
         let chip_texture = gpu.create_texture(chip.w, chip.h, &chip.rgba);
         let socket_textures = Core::ALL.map(|core| {
@@ -453,10 +450,12 @@ impl Engine {
             self.battery_percent = percent;
             // Just as with original Slot, the About label reflects the live
             // battery without rebuilding it on every animation frame.
-            let sticker = sticker_face_konkr(&StickerFields {
-                battery: percent, serial: "0000130", dirty_digit: '0',
-            });
-            self.gpu.update_texture(self.about_texture, sticker.w, sticker.h, &sticker.rgba);
+            if let Some(tex) = self.about_texture {
+                let sticker = sticker_face_konkr(&StickerFields {
+                    battery: percent, serial: "0000130", dirty_digit: '0',
+                });
+                self.gpu.update_texture(tex, sticker.w, sticker.h, &sticker.rgba);
+            }
             if let Some(percent) = percent {
                 let face = word_face(&format!("{percent}%"));
                 let tex = match self.battery_texture {
@@ -827,7 +826,10 @@ impl Engine {
                                     row: move_menu_row(row, code, 5),
                                 },
                                 21 | 22 => self.change_setting(row, code == 22),
-                                96 if row == 4 => self.overlay = ShelfOverlay::About,
+                                96 if row == 4 => {
+                                    self.prepare_about();
+                                    self.overlay = ShelfOverlay::About;
+                                },
                                 97 => self.overlay = ShelfOverlay::Menu { row: 3 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
@@ -1112,6 +1114,17 @@ impl Engine {
         }
     }
 
+    fn prepare_about(&mut self) {
+        if self.about_texture.is_none() {
+            let sticker = sticker_face_konkr(&StickerFields {
+                battery: self.battery_percent, serial: "0000130", dirty_digit: '0',
+            });
+            self.about_texture = Some(self.gpu.create_texture(
+                sticker.w, sticker.h, &sticker.rgba,
+            ));
+        }
+    }
+
     fn change_setting(&mut self, row: usize, right: bool) {
         if !self.settings.change(row, right) { return; }
         if row == 1 {
@@ -1236,12 +1249,14 @@ impl Engine {
                     x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
                     colour: [0.055, 0.055, 0.065, 1.0],
                 });
-                out.push(Draw::Tex {
-                    x: (OUT_W - STICKER_W) as f32 / 2.0,
-                    y: (OUT_H - STICKER_H) as f32 / 2.0,
-                    w: STICKER_W as f32, h: STICKER_H as f32,
-                    tex: self.about_texture, alpha: 1.0,
-                });
+                if let Some(tex) = self.about_texture {
+                    out.push(Draw::Tex {
+                        x: (OUT_W - STICKER_W) as f32 / 2.0,
+                        y: (OUT_H - STICKER_H) as f32 / 2.0,
+                        w: STICKER_W as f32, h: STICKER_H as f32,
+                        tex, alpha: 1.0,
+                    });
+                }
             }
             ShelfOverlay::Scraping | ShelfOverlay::Achievements => {
                 self.modal(110.0, 127.0, 500.0, 227.0, out, 0.78);
