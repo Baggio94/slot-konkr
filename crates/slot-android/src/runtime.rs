@@ -724,7 +724,11 @@ impl Engine {
             let platform = self.shelves[self.active].carts
                 .get(self.shelves[self.active].index)
                 .map_or(Platform::Gba, |cart|cart.platform);
-            match GameSession::open(Path::new(local), &core_file, &storage, core, platform, !self.fresh_launch) {
+            let rom_stem = self.shelves[self.active].carts
+                .get(self.shelves[self.active].index)
+                .map_or("", |cart| cart.stem.as_str());
+            match GameSession::open(Path::new(local), &core_file, &storage,
+                core, platform, !self.fresh_launch, rom_stem) {
                 Ok(session) => {
                     self.buttons = 0;
                     SAMPLE_RATE.store(session.sample_rate, Ordering::Release);
