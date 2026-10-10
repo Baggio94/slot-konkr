@@ -1459,6 +1459,20 @@ mod ui_feedback_tests {
     use super::*;
 
     #[test]
+    fn in_game_shortcut_keycaps_fit_720x480_without_clipping() {
+        let widths = [
+            slot_ui::hint_width("B", "Back"),
+            slot_ui::hint_width("SEL+R1", "Save"),
+            slot_ui::hint_width("SEL+L1", "Load"),
+        ];
+        let visible = widths.iter()
+            .map(|w| w.saturating_sub(HINT_EDGE) as f32)
+            .sum::<f32>() + 2.0 * 15.0;
+        assert!(visible < OUT_W as f32 - 2.0 * 30.0,
+            "original keycap hints must stay visible on the KONKR 3:2 screen");
+    }
+
+    #[test]
     fn paused_game_menu_dpad_up_down_wrap_correctly() {
         assert_eq!(move_menu_row(0, 19, 3), 2);
         assert_eq!(move_menu_row(2, 20, 3), 0);
