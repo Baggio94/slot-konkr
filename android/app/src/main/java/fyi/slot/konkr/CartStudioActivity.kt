@@ -11,6 +11,9 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
+import android.webkit.JavascriptInterface
+import android.graphics.drawable.GradientDrawable
+import android.widget.LinearLayout
 import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -223,6 +226,55 @@ class CartStudioActivity : Activity() {
         }
         val backWidth = (116 * resources.displayMetrics.density + 0.5f).toInt()
         toolbar.addView(close, FrameLayout.LayoutParams(backWidth, -1, Gravity.START))
+        // Native header actions stay visible as the shelf scrolls. The
+        // original Studio owns their enabled state and action semantics.
+        val density = resources.displayMetrics.density
+        val toolbarButtons = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 0, (10 * density).toInt(), 0)
+        }
+        fun action(label: String, pale: Boolean): TextView {
+            return TextView(this).apply {
+                text = label
+                textSize = 12f
+                isAllCaps = false
+                gravity = Gravity.CENTER
+                setTextColor(if (pale) Color.rgb(24, 24, 29) else Color.WHITE)
+                setPadding((12 * density).toInt(), 0, (12 * density).toInt(), 0)
+                background = GradientDrawable().apply {
+                    setColor(if (pale) Color.rgb(244, 244, 250) else Color.rgb(59, 59, 70))
+                    cornerRadius = 7 * density
+                }
+                visibility = View.GONE
+                isFocusable = true
+            }
+        }
+        val fill = action("Fill unlabelled", false)
+        val save = action("Save to slot.", true)
+        toolbarButtons.addView(fill, LinearLayout.LayoutParams(-2, (34 * density).toInt()).apply {
+            rightMargin = (8 * density).toInt()
+        })
+        toolbarButtons.addView(save, LinearLayout.LayoutParams(-2, (34 * density).toInt()))
+        toolbar.addView(toolbarButtons,
+            FrameLayout.LayoutParams(-2, -1, Gravity.END or Gravity.CENTER_VERTICAL))
+        fill.setOnClickListener {
+            w.evaluateJavascript("document.getElementById('fill-open')?.click()", null)
+        }
+        save.setOnClickListener {
+            w.evaluateJavascript("document.getElementById('write')?.click()", null)
+        }
+        w.addJavascriptInterface(object {
+            @JavascriptInterface
+            fun actions(canSave: Boolean, canFill: Boolean) {
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        save.visibility = if (canSave) View.VISIBLE else View.GONE
+                        fill.visibility = if (canFill) View.VISIBLE else View.GONE
+                    }
+                }
+            }
+        }, "AndroidToolbar")
         val rule = View(this).apply { setBackgroundColor(Color.rgb(58, 58, 70)) }
         toolbar.addView(rule, FrameLayout.LayoutParams(-1,
             (resources.displayMetrics.density + 0.5f).toInt().coerceAtLeast(1),
@@ -280,6 +332,7 @@ class CartStudioActivity : Activity() {
         web?.apply {
             stopLoading()
             removeJavascriptInterface("AndroidStudio")
+            removeJavascriptInterface("AndroidToolbar")
             destroy()
         }
         web = null
