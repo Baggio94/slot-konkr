@@ -194,9 +194,23 @@ pub fn label_size(cart: &Cart) -> (u32, u32) {
 }
 
 pub fn cart_face_with(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
+    render_cart(cart, art, false)
+}
+
+/// KONKR-specific satin plastic finish, leaving the original Slot silhouette,
+/// label, colours, embossing and moulding untouched. Only the pre-label body
+/// gets a subtle deterministic micrograin; never randomise it frame-to-frame.
+pub fn cart_face_with_material(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
+    render_cart(cart, art, true)
+}
+
+fn render_cart(cart: &Cart, art: Option<Vec<u8>>, satin_plastic: bool) -> CartFace {
     let s = spec(shape_of(cart));
     let shell = shell_for(cart);
     let mut face = shell_face(&s, &shell);
+    if satin_plastic {
+        satin_micrograin(&s, &shell, &mut face);
+    }
     let label = match art {
         Some(rgba) => rgba,
         None => generated_label(&s, &label_text(cart)),
@@ -206,6 +220,31 @@ pub fn cart_face_with(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
     paste_label(&s, &mut face, &label);
     clip_to_silhouette(&s, &mut face);
     face
+}
+
+/// Low-amplitude resin grain, based solely on pixel coordinates. It is
+/// computed once when a cartridge enters the face cache, never on the GPU.
+fn satin_micrograin(s: &Spec, shell: &Shell, face: &mut CartFace) {
+    for (i, px) in face.rgba.chunks_exact_mut(4).enumerate() {
+        if s.mask[i] == 0 { continue; }
+        let x = i as u32 % s.w;
+        let y = i as u32 / s.w;
+        // Stable hash without speckles or flicker. Translucent shells receive
+        // half-strength grain so the internal PCB remains the focus.
+        let mut seed = x.wrapping_mul(0x9e3779b9)
+            ^ y.wrapping_mul(0x85ebca6b);
+        seed ^= seed >> 16;
+        seed = seed.wrapping_mul(0x7feb352d);
+        seed ^= seed >> 15;
+        let noise = (seed % 17) as i16 - 8;
+        let diff = match shell.finish {
+            Finish::Solid => noise / 3,
+            Finish::Translucent | Finish::Glitter => noise / 6,
+        };
+        for channel in px.iter_mut().take(3) {
+            *channel = (*channel as i16 + diff).clamp(0, 255) as u8;
+        }
+    }
 }
 
 fn clip_to_silhouette(s: &Spec, face: &mut CartFace) {
