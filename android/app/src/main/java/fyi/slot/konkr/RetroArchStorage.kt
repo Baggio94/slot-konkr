@@ -107,7 +107,18 @@ internal object RetroArchStorage {
                 failures.add("Save sync failed: " + (e.message ?: "access denied"))
             }
         }
-        if (target.statesTree != null && target.stateExportLocal.isFile) {
+        if (target.savesTree != null && target.rtcLocal.isFile) {
+            try {
+                val data = target.rtcLocal.readBytes()
+                require(data.size in 1..4096) { "Invalid RTC size" }
+                writeSaf(context, target.savesTree, target.core,
+                    target.stem + ".rtc", data, isState = false)
+            } catch (e: Exception) {
+                Log.e(TAG, "RetroArch RTC export failed", e)
+                failures.add("RTC sync failed: " + (e.message ?: "access denied"))
+            }
+        }
+        if (target.stateExportLocal.isFile) {
             try {
                 val bytes = target.stateExportLocal.readBytes()
                 require(bytes.size in 16..MAX_STATE && bytes.startsWithRASTATE()) {
@@ -115,8 +126,16 @@ internal object RetroArchStorage {
                 }
                 // Keep the exact #RZIPv1# format used by this KONKR RetroArch.
                 val compressed = RetroArchCompression.encode(bytes)
-                writeSaf(context, target.statesTree, target.core,
-                    target.stem + ".state.auto", compressed, isState = true)
+                if (target.statesTree != null) {
+                    writeSaf(context, target.statesTree, target.core,
+                        target.stem + ".state.auto", compressed, isState = true)
+                } else {
+                    // Private defaults use the same per-core RZIP layout as RetroArch.
+                    stage(target.stateDefaultLocal, compressed)
+                    check(target.stateDefaultLocal.readBytes().contentEquals(compressed)) {
+                        "Default state verification failed"
+                    }
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "RetroArch state export failed", e)
                 failures.add("State sync skipped: " + (e.message ?: "unsupported format"))
