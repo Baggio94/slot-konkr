@@ -29,6 +29,7 @@ def package(root: Path, built: Path):
     shutil.copy2(root / "android/studio/android-card.js", target / "android-card.js")
     # Only the Android-packaged web app gets compact embedded CSS.
     shutil.copy2(root / "android/studio/embedded.css", target / "embedded.css")
+    shutil.copy2(root / "android/studio/controller.js", target / "controller.js")
 
     jsfile = target / "studio.js"
     js = jsfile.read_text("utf-8")
@@ -250,7 +251,7 @@ function observeAndroidCarts(s) {
  object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none';
 ">""")
     html = checked_replace(html, '<link rel="stylesheet" href="studio.css">',
-        '<link rel="stylesheet" href="studio.css">\n<link rel="stylesheet" href="embedded.css">')
+        '<link rel="stylesheet" href="studio.css">\n<link rel="stylesheet" href="embedded.css">\n<script defer src="controller.js"></script>')
     htmlfile.write_text(html, encoding="utf-8")
     assert 'editor.open(selected)' in js
     assert 'embedded.css' in html
