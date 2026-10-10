@@ -56,6 +56,41 @@ def package(root: Path, built: Path):
       banner('Could not open selected cartridge: ' + error.message);
     }
   }""")
+    # Load the official art index concurrently with local library setup:
+    # the three tabs and edited cartridge remain usable with slow/offline Wi-Fi.
+    js = checked_replace(js, "let artIndex = null;",
+        "let artIndex = null;\\nlet androidIndexReady = Promise.resolve();")
+    js = checked_replace(js,
+        "async function match(s) {\\n  // One database per platform",
+        "async function match(s) {\\n  await androidIndexReady;\\n  // One database per platform")
+    js = checked_replace(js,
+        """  if (ART_BASE) {
+    try {
+      artIndex = await fetchIndex(ART_BASE);
+      console.info(`art set: ${Object.keys(artIndex).length} checksums from ${ART_BASE}`);
+    } catch (e) {
+      banner(`The art set at ${ART_BASE} didn’t load (${e.message}), so carts get slot’s own labels.`);
+    }
+  }""",
+        """  if (ART_BASE) {
+    const loadIndex = async () => {
+      try {
+        artIndex = await fetchIndex(ART_BASE);
+        console.info(`art set: ${Object.keys(artIndex).length} checksums from ${ART_BASE}`);
+      } catch (e) {
+        banner(`The art set at ${ART_BASE} didn’t load (${e.message}), so carts get slot’s own labels.`);
+      }
+    };
+    if (window.AndroidStudio) {
+      // Never block entering the editor on a remote service.
+      androidIndexReady = Promise.race([
+        loadIndex(),
+        new Promise((resolve) => setTimeout(resolve, 12000)),
+      ]);
+    } else {
+      await loadIndex();
+    }
+  }""")
     js = js.replace("'Write to card'", "'Save to Slot'")
     jsfile.write_text(js, encoding="utf-8")
 
