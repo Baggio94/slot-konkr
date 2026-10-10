@@ -85,7 +85,8 @@ internal object RomLibrary {
                             .takeIf { it.all { c -> c in 'A'..'Z' || c in '0'..'9' } }
                             ?: ""
                     } else ""
-                    val title = name.substringBeforeLast('.').trim()
+                    // Keep the shelf title identical to the RetroArch save basename.
+                    val title = name.substringBeforeLast('.').trim().take(200)
                     if (title.isEmpty()) continue
                     games.put(
                         JSONObject()
