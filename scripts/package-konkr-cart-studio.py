@@ -79,7 +79,7 @@ def package(root: Path, built: Path):
     html = checked_replace(html, '<link rel="stylesheet" href="studio.css">',
         '<link rel="stylesheet" href="studio.css">\n<link rel="stylesheet" href="embedded.css">')
     htmlfile.write_text(html, encoding="utf-8")
-    assert 'editor.open(session.carts[0])' in js
+    assert 'editor.open(s.carts[0])' in js
     assert 'embedded.css' in html
     assert (target / 'embedded.css').is_file()
     print("Original Cart Studio packaged:", target,
