@@ -20,6 +20,7 @@ pub struct GameSession {
     core: LibretroCore,
     save: PathBuf,
     rtc: PathBuf,
+    manual_export_prefix: PathBuf,
     state: PathBuf,
     retroarch_export: PathBuf,
     retroarch_import: PathBuf,
@@ -59,6 +60,9 @@ impl GameSession {
         let state = root.join(format!("{id}.{}.state", which.as_str()));
         let retroarch_export = root.join(format!("{id}.{}.retroarch-export.state.auto", which.as_str()));
         let retroarch_import = root.join(format!("{id}.{}.retroarch-import.state.auto", which.as_str()));
+        let manual_dir = root.join("ManualExports");
+        std::fs::create_dir_all(&manual_dir).map_err(|e| e.to_string())?;
+        let manual_export_prefix = manual_dir.join(format!("{id}.{}", which.as_str()));
         let ring = StateRing::new(storage, platform, which, id);
         // mGBA's libretro core looks for gba_bios.bin / gb_bios.bin /
         // gbc_bios.bin in RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY.
@@ -128,7 +132,7 @@ impl GameSession {
         let sample_rate = core.av_info().sample_rate.round() as i32;
         let fps = core.av_info().fps.clamp(30.0, 120.0);
         Ok(Self {
-            core, save, rtc, state, retroarch_export, retroarch_import, ring,
+            core, save, rtc, manual_export_prefix, state, retroarch_export, retroarch_import, ring,
             pending_undo: None, last_sram: Instant::now(),
             sample_rate: sample_rate.clamp(8_000, 96_000),
             fps,
@@ -195,7 +199,7 @@ impl GameSession {
     }
     /// Original Slot ring: 10 timestamped states per ROM/core, each with
     /// a 240×160 PNG thumbnail. Independent from RetroArch's manual slots.
-    pub fn save_manual(&mut self) -> Result<(), String> {
+    pub fn save_manual(&mut self) -> Result<String, String> {
         let state = self.core.serialize().map_err(|e|e.to_string())?;
         let preview = thumb::png(self.core.video_xrgb8888()).unwrap_or_default();
         let entries = self.ring.list().map_err(|e|e.to_string())?;
@@ -211,8 +215,19 @@ impl GameSession {
                     .map(|(state, thumb)|(item.stamp.clone(),state,thumb)))
         } else {None};
         self.ring.push(&state, &preview, &stamp).map_err(|e|e.to_string())?;
-        self.pending_undo = Some((Instant::now(), PendingUndo::Saved {stamp, evicted}));
-        Ok(())
+        self.pending_undo = Some((Instant::now(), PendingUndo::Saved {
+            stamp: stamp.clone(), evicted
+        }));
+        // Keep Slot's Polaroid history private. The Android storage worker
+        // publishes a distinct, verified RetroArch .stateN after this returns.
+        let encoded = retroarch_state::encode(&state)?;
+        let export = self.manual_export_prefix.with_extension("");
+        let export = std::path::PathBuf::from(format!(
+            "{}.{}.rastate", export.display(), stamp
+        ));
+        atomic_write(&export, &encoded).map_err(|error|
+            format!("Polaroid saved, manual RetroArch export failed: {error}"))?;
+        Ok(stamp)
     }
 
     pub fn history(&self) -> Vec<StateEntry> {
