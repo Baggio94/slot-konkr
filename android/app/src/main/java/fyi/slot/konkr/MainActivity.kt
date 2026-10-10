@@ -178,6 +178,7 @@ class MainActivity : Activity() {
                 11 -> openCartLabelPicker()
                 12 -> removeSelectedCartLabel()
                 13 -> openSelectedCartStudio()
+                14 -> openAllCartStudio()
             }
             nativePollMessage()?.let { message ->
                 Log.w(TAG, message)
@@ -809,17 +810,24 @@ class MainActivity : Activity() {
         return File(File(filesDir, "Labels"), "$name.png")
     }
 
+    private fun openCartStudio(selected: String?) {
+        pendingCartStudioUri = selected
+        val intent = Intent(this, CartStudioActivity::class.java).apply {
+            if (selected != null) putExtra(CartStudioActivity.EXTRA_ROM, selected)
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, CART_STUDIO_REQUEST)
+    }
+
+    private fun openAllCartStudio() = openCartStudio(null)
+
     private fun openSelectedCartStudio() {
         val selected = nativePollCartLabelUri()
         if (selected.isNullOrBlank()) {
             Toast.makeText(this, "Select a cartridge first", Toast.LENGTH_SHORT).show()
             return
         }
-        pendingCartStudioUri = selected
-        val intent = Intent(this, CartStudioActivity::class.java)
-            .putExtra(CartStudioActivity.EXTRA_ROM, selected)
-        @Suppress("DEPRECATION")
-        startActivityForResult(intent, CART_STUDIO_REQUEST)
+        openCartStudio(selected)
     }
 
     private fun setStudioOverrides(json: String): Int =
@@ -897,17 +905,19 @@ class MainActivity : Activity() {
         if (requestCode == CART_STUDIO_REQUEST) {
             val selected = pendingCartStudioUri
             pendingCartStudioUri = null
-            if (resultCode == RESULT_OK && selected != null) {
-                // Rebuild the private shell/label textures from the existing ROM
-                // index; never request a new filesystem scan or touch save files.
+            if (resultCode == RESULT_OK) {
+                // Rebuild every edited cart in the in-memory shelf from cached
+                // library metadata. No ROM rescan, game saves or state edits.
                 try {
                     val cache = File(filesDir, ROM_CACHE_NAME)
                     val json = JSONObject(cache.readText(Charsets.UTF_8))
                         .getJSONArray("games").toString()
                     if (setStudioOverrides(json) < 0) error("Studio library reload failed")
-                    nativeReloadCartLabel(selected)
+                    // nativeSetLibrary refreshes *all* GBA/GB/GBC label and shell
+                    // material textures; keep the selected-cart path for focus.
+                    if (selected != null) nativeReloadCartLabel(selected)
                 } catch (error: Exception) {
-                    Log.e(TAG, "Studio change could not refresh shelf", error)
+                    Log.e(TAG, "Studio changes could not refresh shelf", error)
                     Toast.makeText(this, "Reopen Slot to show studio changes",
                         Toast.LENGTH_LONG).show()
                 }
