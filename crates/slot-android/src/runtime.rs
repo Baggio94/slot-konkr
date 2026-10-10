@@ -445,25 +445,6 @@ impl Engine {
                     }
                     return;
                 }
-                if self.game.is_some() && matches!(self.overlay, ShelfOverlay::States) {
-            // Slot's original Polaroid state browser, including photo previews,
-            // timestamp, dots, back/delete/load/undo key hints.
-            self.game_accum=0.0;
-            let mut draw=Vec::new();
-            if let Some(p)=self.polaroids.as_mut() {
-                if self.game.as_ref().is_some_and(|game|game.undo_available()) {
-                    p.set_undo(Some("undo"));
-                } else {
-                    p.set_undo(None);
-                }
-                p.draw(None,Printed::default(),None,Printed::default(),&mut draw);
-            }
-            self.gpu.fit(self.size);
-            self.gpu.begin_frame();
-            self.gpu.draw_list(&draw);
-            self.gpu.end_frame(self.size);
-            return;
-        }
         if self.game.is_some() && matches!(self.overlay, ShelfOverlay::GameMenu { .. }) {
                     if pressed {
                         match self.overlay {
@@ -1059,6 +1040,24 @@ impl Engine {
             }
         }
 
+        if self.game.is_some() && matches!(self.overlay, ShelfOverlay::States) {
+            // Polaroids are a full-screen, paused overlay. Render once per
+            // display frame (not from a key event) and never advance libretro
+            // or enqueue audio while browsing saved states.
+            self.game_accum = 0.0;
+            let mut commands = Vec::new();
+            if let Some(p) = self.polaroids.as_mut() {
+                p.set_undo(self.game.as_ref()
+                    .is_some_and(|game| game.undo_available())
+                    .then_some("undo"));
+                p.draw(None, Printed::default(), None, Printed::default(), &mut commands);
+            }
+            self.gpu.fit(self.size);
+            self.gpu.begin_frame();
+            self.gpu.draw_list(&commands);
+            self.gpu.end_frame(self.size);
+            return;
+        }
         if self.game.is_some() && matches!(self.overlay, ShelfOverlay::GameMenu { .. }) {
             // Rendering the pause menu does not borrow an active libretro session
             // or advance the core, so input and audio stay frozen.
