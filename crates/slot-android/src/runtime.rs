@@ -1402,20 +1402,45 @@ impl Engine {
             return;
         }
         if let Some(session) = self.game.as_mut() {
-            // Independent from display refresh: a 120 Hz panel must not run mGBA at 2x speed.
-            self.game_accum = (self.game_accum + f64::from(dt)).min(0.10);
-            let period = 1.0 / session.fps;
             let mut stepped = 0;
-            while self.game_accum >= period && stepped < 4 {
-                session.advance(self.buttons);
-                self.game_accum -= period;
-                stepped += 1;
-                let samples = session.take_audio();
-                if !samples.is_empty() {
-                    let mut audio = AUDIO.lock().unwrap_or_else(|e| e.into_inner());
-                    let overflow = audio.len().saturating_add(samples.len()).saturating_sub(96_000);
-                    for _ in 0..overflow.min(audio.len()) { audio.pop_front(); }
-                    audio.extend(samples);
+            if self.rewind_held {
+                // Rewind is mutually exclusive with forward libretro frames.
+                // Restore up to 3 historical snapshots per render frame and
+                // never pass rewound audio into the normal AudioTrack.
+                self.game_accum = 0.0;
+                self.rewind_accum = (self.rewind_accum + dt).min(0.30);
+                while self.rewind_accum >= REWIND_STEP_S && stepped < 3 {
+                    self.rewind_accum -= REWIND_STEP_S;
+                    if !session.rewind_step() {
+                        self.rewind_accum = 0.0;
+                        break;
+                    }
+                    stepped += 1;
+                }
+                AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+                self.hud.show(HudKind::Rewind, session.rewind_fill(), false,
+                    self.born.elapsed().as_millis() as u64);
+            } else {
+                // Keep game speed based on libretro FPS, never screen refresh.
+                // At 2x, consume up to 8 core frames per render tick. Silent FF
+                // avoids unsupported resampling/pitch changes in AudioTrack.
+                let fast = self.ff_held || self.ff_latched;
+                self.game_accum = (self.game_accum + f64::from(dt) *
+                    if fast { FF_FACTOR } else { 1.0 })
+                    .min(if fast { 0.20 } else { 0.10 });
+                let period = 1.0 / session.fps;
+                let frame_limit = if fast { 8 } else { 4 };
+                while self.game_accum >= period && stepped < frame_limit {
+                    session.advance(self.buttons);
+                    self.game_accum -= period;
+                    stepped += 1;
+                    let samples = session.take_audio();
+                    if !fast && !samples.is_empty() {
+                        let mut audio = AUDIO.lock().unwrap_or_else(|e| e.into_inner());
+                        let overflow = audio.len().saturating_add(samples.len()).saturating_sub(96_000);
+                        for _ in 0..overflow.min(audio.len()) { audio.pop_front(); }
+                        audio.extend(samples);
+                    }
                 }
             }
             if stepped > 0 { self.gpu.upload_game(session.frame()); }
