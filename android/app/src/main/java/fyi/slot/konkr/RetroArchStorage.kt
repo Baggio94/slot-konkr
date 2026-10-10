@@ -309,6 +309,16 @@ internal object RetroArchStorage {
         } ?: error("Cannot read RetroArch file")
 
     private fun stage(local: File, bytes: ByteArray) {
+        // Opening the same game must not rewrite and fsync an unchanged SRAM
+        // or automatic state every time. Read+compare is cheap for these
+        // bounded files and preserves the exact externally supplied bytes.
+        if (local.isFile && local.length() == bytes.size.toLong()) {
+            try {
+                if (local.readBytes().contentEquals(bytes)) return
+            } catch (_: java.io.IOException) {
+                // Existing file cannot be read; replace it atomically below.
+            }
+        }
         val pending = File(local.parentFile, local.name + ".partial")
         try {
             pending.outputStream().use { it.write(bytes); it.fd.sync() }
