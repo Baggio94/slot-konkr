@@ -1370,6 +1370,19 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 #[cfg(test)]
 mod ui_feedback_tests {
     use super::*;
+
+    #[test]
+    fn cartridge_timelines_shorten_idle_hold_and_overlap_screen_shutdown() {
+        let from_seated = advance_cart(1.0, false, SCREEN_POWER_OFF_S);
+        // After the 160ms CRT shutdown, the cartridge is already ejecting;
+        // it must NOT wait to begin a fresh 450ms mechanical animation.
+        assert!(from_seated < 0.70 && from_seated > 0.60);
+        assert_eq!(advance_cart(from_seated, false, EJECT_S - SCREEN_POWER_OFF_S), 0.0);
+        assert_eq!(advance_cart(0.0, true, INSERT_S), 1.0);
+        assert!(INSERT_S < 0.73);
+        assert!((INSERT_S * INSERT_SOUND_PROGRESS + 0.24 - INSERT_S).abs() < 0.001);
+    }
+
     #[test]
     fn empty_shelves_are_skipped_in_both_directions() {
         let mut shelves: Vec<Shelf> = (0..3).map(|_| Shelf::new(vec![])).collect();
