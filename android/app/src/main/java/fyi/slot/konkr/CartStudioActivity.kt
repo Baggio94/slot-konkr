@@ -274,11 +274,11 @@ class CartStudioActivity : Activity() {
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) {
                         val message = when {
-                            written + shells > 0 -> "Saved to slot.: $written labels, $shells shell changes"
-                            skipped > 0 -> "Labels already saved ($skipped skipped)"
-                            else -> "Nothing to save"
+                            written + shells > 0 -> "Saved! $written labels and $shells shell changes."
+                            skipped > 0 -> "All cart labels are already saved."
+                            else -> "No changes to save."
                         }
-                        Toast.makeText(this@CartStudioActivity, message, Toast.LENGTH_SHORT).show()
+                        SlotToast.makeText(this@CartStudioActivity, message, Toast.LENGTH_SHORT).show()
                     }
                 }
             }
