@@ -565,8 +565,9 @@ impl Engine {
                         match self.overlay {
                             ShelfOverlay::GameMenu { row } => match code {
                                 19 | 20 => {
-                                    let next = (row + 1) % 3;
-                                    self.overlay = ShelfOverlay::GameMenu { row: next };
+                                    self.overlay = ShelfOverlay::GameMenu {
+                                        row: move_menu_row(row, code, 3),
+                                    };
                                 }
                                 96 => {
                                     match row {
@@ -1420,6 +1421,17 @@ impl Engine {
     }
 }
 
+/// Physical D-pad UP and DOWN must move the selection in opposite
+/// directions, including wraparound; never leak navigation to libretro.
+fn move_menu_row(row: usize, key: i32, count: usize) -> usize {
+    if count == 0 { return 0; }
+    match key {
+        19 => (row + count - 1) % count,
+        20 => (row + 1) % count,
+        _ => row % count,
+    }
+}
+
 /// Match Slot's centred menu row layout on the 720x480 design canvas.
 fn settings_row_top(rows: usize) -> f32 {
     ((OUT_H as f32 - QUICK_PITCH * rows as f32) / 2.0).round()
@@ -1445,6 +1457,15 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 #[cfg(test)]
 mod ui_feedback_tests {
     use super::*;
+
+    #[test]
+    fn paused_game_menu_dpad_up_down_wrap_correctly() {
+        assert_eq!(move_menu_row(0, 19, 3), 2);
+        assert_eq!(move_menu_row(2, 20, 3), 0);
+        assert_eq!(move_menu_row(1, 19, 3), 0);
+        assert_eq!(move_menu_row(1, 20, 3), 2);
+        assert_eq!(move_menu_row(1, 96, 3), 1);
+    }
 
     #[test]
     fn original_settings_menu_rows_are_on_screen_and_outside_footer() {
