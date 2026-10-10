@@ -53,3 +53,23 @@ mod original_picker_integration_tests {
         assert_eq!(picker.chip(500 + HOP_MS).seated, Some(Core::Gpsp));
     }
 }
+
+#[cfg(test)]
+mod upstream_rewind_integration_tests {
+    use super::rewind::{Rewind, REWIND_BYTES};
+    #[test]
+    fn original_ring_walks_back_through_snapshots_with_bounded_memory() {
+        let mut ring = Rewind::new(REWIND_BYTES);
+        for frame in 0..30u8 {
+            let snapshot = vec![frame; 200_000];
+            ring.push(&snapshot);
+        }
+        assert!(ring.bytes_used() <= REWIND_BYTES);
+        assert_eq!(ring.depth(), 30);
+        for frame in (1..30u8).rev() {
+            assert_eq!(ring.pop(), Some(vec![frame; 200_000]));
+        }
+        assert_eq!(ring.pop(), Some(vec![0u8; 200_000]));
+        assert_eq!(ring.pop(), None);
+    }
+}
