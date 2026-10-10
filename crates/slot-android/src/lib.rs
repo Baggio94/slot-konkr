@@ -2,6 +2,7 @@
 //!
 //! Stage M1: display-only preview carts, not executable games.
 mod library;
+mod settings;
 #[path = "../../slot/src/thumb.rs"]
 mod thumb;
 mod retroarch_state;
