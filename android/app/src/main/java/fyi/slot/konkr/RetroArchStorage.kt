@@ -301,6 +301,18 @@ internal object RetroArchStorage {
         val target = existing ?: DocumentsContract.createDocument(resolver, folder,
             "application/octet-stream", name)
             ?: error("Cannot create RetroArch save")
+        if (createOnly) {
+            // Some SAF providers silently rename a duplicate filename. Never
+            // misreport that as an available RetroArch slot.
+            val actual = resolver.query(target, arrayOf(OpenableColumns.DISPLAY_NAME),
+                null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) else null
+            }
+            if (actual != name) {
+                DocumentsContract.deleteDocument(resolver, target)
+                error("Manual state slot name collision; external file preserved")
+            }
+        }
         // Android SAF generally has no cross-provider atomic rename guarantee.
         // Write with truncate, and verify contents. The untouched .before-slot
         // copy remains recoverable if a provider fails mid-write.
