@@ -9,6 +9,8 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.os.BatteryManager
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.content.IntentFilter
 import android.util.AtomicFile
 import java.security.MessageDigest
@@ -89,6 +91,7 @@ class MainActivity : Activity() {
     external fun nativeSystemStatus(clock: String, batteryPercent: Int, charging: Boolean)
     external fun nativePollUiAction(): Int
     external fun nativePollCartSfx(): Int
+    external fun nativePollRumbleStrength(): Int
     external fun nativeCoreForUri(uri: String): String
     external fun nativePollSaveFlush(): String?
 
@@ -98,11 +101,14 @@ class MainActivity : Activity() {
     private val activeTargets = ConcurrentHashMap<String, RetroArchStorage.Target>()
     private val uiHandler = Handler(Looper.getMainLooper())
     private val audioRunning = AtomicBoolean(false)
+    private val vibrator by lazy { getSystemService(VIBRATOR_SERVICE) as? Vibrator }
+    private var lastRumbleAt = 0L
     @Volatile private var resumed = false
     private var audioThread: Thread? = null
     private val pulse = object : Runnable {
         override fun run() {
             pollSystemStatus()
+            pollRumble()
             if (resumed && nativeIsPlaying()) {
                 if (!audioRunning.get()) startAudio()
             } else if (audioRunning.get()) {
@@ -366,6 +372,23 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun pollRumble() {
+        if (!resumed || !nativeIsPlaying()) return
+        val strength = nativePollRumbleStrength()
+        if (strength <= 4096) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastRumbleAt < 100L) return
+        lastRumbleAt = now
+        val device = vibrator ?: return
+        if (!device.hasVibrator()) return
+        try {
+            val intensity = (strength / 257).coerceIn(10, 255)
+            device.vibrate(VibrationEffect.createOneShot(45L, intensity))
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "KONKR rumble unavailable", error)
+        }
+    }
+
     private fun startAudio() {
         if (!audioRunning.compareAndSet(false, true)) return
         audioThread = Thread({
@@ -404,12 +427,12 @@ class MainActivity : Activity() {
                         requestedSpeed = 0
                         player.play()
                     }
-                    val speed = if (nativeAudioSpeedPermille() >= 1500) 2000 else 1000
+                    val speed = nativeAudioSpeedPermille().coerceIn(1000, 6000)
                     if (speed != requestedSpeed) {
                         requestedSpeed = speed
                         try {
-                            // Android time-stretches to 2x while preserving
-                            // the ORIGINAL sample pitch (not 2x chipmunk audio).
+                            // Android time-stretches at the selected speed while preserving
+                            // the ORIGINAL sample pitch (not chipmunk audio).
                             // If the Audio HAL cannot stretch, mute rather
                             // than silently playing an incorrect-pitch stream.
                             val params = PlaybackParams()
