@@ -98,7 +98,7 @@ internal object RetroArchCompression {
                     memoryFound = true
                 }
                 "END " -> {
-                    require(memoryFound && payloadSize == 0L) {
+                    require(memoryFound && payloadSize == 0L && end == decoded.size.toLong()) {
                         "Incomplete RetroArch container; preserved"
                     }
                     return
