@@ -22,10 +22,6 @@ import android.content.Intent
 import android.content.ActivityNotFoundException
 import android.graphics.Color
 import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.Rect
-import android.graphics.RectF
 import android.widget.ImageView
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -325,32 +321,21 @@ class MainActivity : Activity() {
     }
 
     private fun showSlotStartupSplash(frame: FrameLayout) {
-        val logo = readOriginalSlotBootLogo() ?: return
-        // Target the KONKR Pocket Advance panel at native 960x640 pixels.
-        // Reconstruct a true full-resolution splash canvas from the upstream
-        // BMP rather than allowing ImageView to enlarge a 196x75 bitmap.
-        val targetW = 960
-        val targetH = 640
-        val highRes = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
-        val screen = Canvas(highRes)
-        screen.drawColor(logo.getPixel(0, 0))
-        val wantedW = (targetW * 0.66f).toInt()
-        val wantedH = (wantedW.toFloat() * logo.height / logo.width).toInt()
-        val left = (targetW - wantedW) / 2f
-        val top = (targetH - wantedH) / 2f
-        screen.drawBitmap(
-            logo, Rect(0, 0, logo.width, logo.height),
-            RectF(left, top, left + wantedW, top + wantedH),
-            Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-        )
-        logo.recycle()
+        // High-quality, native KONKR 960x640 image derived from the original
+        // 196x75 Slot v1.5.0 BMP. Keep original BMP in assets as provenance.
+        val logo = try {
+            assets.open("slot-bootlogo-kpa-960x640.png").use(BitmapFactory::decodeStream)
+        } catch (error: Exception) {
+            Log.w(TAG, "High resolution slot boot logo unavailable", error)
+            null
+        } ?: return
         val overlay = FrameLayout(this).apply {
-            setBackgroundColor(Color.rgb(17, 14, 11))
+            setBackgroundColor(Color.rgb(11, 14, 17))
             isFocusable = false
             isClickable = false
         }
         val image = ImageView(this).apply {
-            setImageBitmap(highRes)
+            setImageBitmap(logo)
             scaleType = ImageView.ScaleType.FIT_CENTER
             contentDescription = "slot. boot logo"
         }
