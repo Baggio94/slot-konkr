@@ -35,6 +35,27 @@ class RetroArchCompressionTest {
         }
     }
 
+    @Test fun existingRastateMustBeCompleteBeforeOverwrite() {
+        RetroArchCompression.requireSupportedContainer(raw)
+        RetroArchCompression.requireSupportedContainer(fixture)
+        RetroArchCompression.requireSupportedContainer(RetroArchCompression.encode(raw))
+        assertThrows(IllegalArgumentException::class.java) {
+            RetroArchCompression.requireSupportedContainer("unknown legacy state".toByteArray())
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            RetroArchCompression.requireSupportedContainer(byteArrayOf(82,65,83,84,65,84,69,1))
+        }
+        val v2 = fixture.copyOf()
+        v2[6] = 2
+        assertThrows(IllegalArgumentException::class.java) {
+            RetroArchCompression.requireSupportedContainer(v2)
+        }
+        val truncated = raw.copyOfRange(0, raw.size - 8)
+        assertThrows(IllegalStateException::class.java) {
+            RetroArchCompression.requireSupportedContainer(truncated)
+        }
+    }
+
     @Test fun corruptTruncatedAndFutureVersionAreNeverAccepted() {
         assertThrows(IllegalArgumentException::class.java) {
             RetroArchCompression.decode(fixture.copyOfRange(0, 22))
