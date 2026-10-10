@@ -222,27 +222,49 @@ fn render_cart(cart: &Cart, art: Option<Vec<u8>>, satin_plastic: bool) -> CartFa
     face
 }
 
-/// Low-amplitude resin grain, based solely on pixel coordinates. It is
-/// computed once when a cartridge enters the face cache, never on the GPU.
+/// Directional softbox light, edge falloff and fine resin grain. All values
+/// are baked once into a cartridge's face, so the shelf remains GPU-cheap.
+/// Original Slot's alpha silhouette, exact label and embossed details stay
+/// untouched; translucent cartridges keep their visible circuit boards.
 fn satin_micrograin(s: &Spec, shell: &Shell, face: &mut CartFace) {
+    let width = s.w.max(1) as f32;
+    let height = s.h.max(1) as f32;
+    let rim = s.rim.max(1) as f32;
     for (i, px) in face.rgba.chunks_exact_mut(4).enumerate() {
         if s.mask[i] == 0 { continue; }
-        let x = i as u32 % s.w;
-        let y = i as u32 / s.w;
-        // Stable hash without speckles or flicker. Translucent shells receive
-        // half-strength grain so the internal PCB remains the focus.
-        let mut seed = x.wrapping_mul(0x9e3779b9)
-            ^ y.wrapping_mul(0x85ebca6b);
+        let x = (i as u32 % s.w) as f32 / width;
+        let y = (i as u32 / s.w) as f32 / height;
+
+        // Diffuse light from top left with a soft reflection near the upper
+        // shoulder. Avoid stark CGI-looking white streaks on dark plastics.
+        let diffuse = (0.46 - y) * 18.0 + (0.42 - x) * 12.0;
+        let softbox = (1.0 - ((x - 0.25) / 0.27).abs())
+            .max(0.0).powi(2) * 10.0;
+
+        // The original alpha/depth masks describe the molded plastic rim.
+        // Light the upper-left lip and shade the lower-right lip, preserving
+        // the real silhouette and the original embossing underneath.
+        let bevel = (1.0 - s.depth[i] as f32 / rim).clamp(0.0, 1.0);
+        let edge_light = bevel * (0.5 - x + 0.55 * (0.5 - y)) * 24.0;
+
+        let ix = i as u32 % s.w;
+        let iy = i as u32 / s.w;
+        let mut seed = ix.wrapping_mul(0x9e3779b9)
+            ^ iy.wrapping_mul(0x85ebca6b);
         seed ^= seed >> 16;
         seed = seed.wrapping_mul(0x7feb352d);
         seed ^= seed >> 15;
-        let noise = (seed % 17) as i16 - 8;
-        let diff = match shell.finish {
-            Finish::Solid => noise / 3,
-            Finish::Translucent | Finish::Glitter => noise / 6,
+        let grain = ((seed % 17) as i16 - 8) as f32 * 0.38;
+
+        let finish_scale = match shell.finish {
+            Finish::Solid => 1.0,
+            Finish::Translucent => 0.70,
+            Finish::Glitter => 0.62,
         };
+        let delta = ((diffuse + softbox + edge_light) * finish_scale + grain)
+            .round().clamp(-26.0, 26.0) as i16;
         for channel in px.iter_mut().take(3) {
-            *channel = (*channel as i16 + diff).clamp(0, 255) as u8;
+            *channel = (*channel as i16 + delta).clamp(0, 255) as u8;
         }
     }
 }
