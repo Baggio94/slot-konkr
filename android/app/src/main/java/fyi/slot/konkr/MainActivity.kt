@@ -7,6 +7,7 @@ import android.media.AudioTrack
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.AtomicFile
 import java.security.MessageDigest
 import java.io.File
 import java.util.concurrent.CountDownLatch
@@ -21,6 +22,7 @@ import android.widget.TextView
 import android.widget.Toast
 import android.net.Uri
 import org.json.JSONObject
+import org.json.JSONArray
 import java.util.concurrent.ConcurrentHashMap
 import android.provider.DocumentsContract
 import java.util.concurrent.Executors
@@ -48,6 +50,9 @@ class MainActivity : Activity() {
         private const val BIOS_ROOT = "bios_root_uri"
         private const val SAVE_ROOT = "saves_root_uri"
         private const val STATE_ROOT = "states_root_uri"
+        private const val ROM_CACHE_NAME = "rom-library-cache-v1.json"
+        private const val ROM_CACHE_SCHEMA = 1
+        private const val ROM_CACHE_MAX_BYTES = 8 * 1024 * 1024
         private val BUTTONS = setOf(
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
@@ -225,7 +230,7 @@ class MainActivity : Activity() {
             if (contentResolver.persistedUriPermissions.any {
                     it.uri == uri && it.isReadPermission
                 }) {
-                scanFolder(uri)
+                if (!restoreCachedLibrary(uri)) scanFolder(uri)
             } else {
                 status.text = "ROM folder permission expired — START to choose again"
             }
@@ -559,6 +564,58 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Load a previously indexed SAF ROM shelf without enumerating ROMs again.
+     * The cache never grants access: the persisted SAF permission is checked by
+     * the caller and opening an individual ROM still uses ContentResolver.
+     */
+    private fun restoreCachedLibrary(root: Uri): Boolean {
+        val file = File(filesDir, ROM_CACHE_NAME)
+        if (!file.isFile || file.length() !in 1L..ROM_CACHE_MAX_BYTES.toLong()) return false
+        return try {
+            val metadata = JSONObject(file.readText(Charsets.UTF_8))
+            if (metadata.optInt("schema") != ROM_CACHE_SCHEMA ||
+                metadata.optString("root") != root.toString()) return false
+            val games = metadata.optJSONArray("games") ?: return false
+            val count = nativeSetLibrary(games.toString())
+            if (count < 0) return false
+            if (count == 0) {
+                status.visibility = View.VISIBLE
+                status.text = "No .gb/.gbc/.gba games found — START choose another folder"
+            } else {
+                status.visibility = View.GONE
+            }
+            Log.i(TAG, "Restored $count cached ROMs without a SAF rescan")
+            true
+        } catch (error: Exception) {
+            Log.w(TAG, "ROM library cache invalid; performing a fresh scan", error)
+            false
+        }
+    }
+
+    /** Commit the complete ROM index only after native import succeeds.
+     * AtomicFile keeps the previous shelf intact on a failed/partial refresh.
+     */
+    private fun storeCachedLibrary(root: Uri, json: String) {
+        val payload = JSONObject()
+            .put("schema", ROM_CACHE_SCHEMA)
+            .put("root", root.toString())
+            .put("games", JSONArray(json))
+            .toString().toByteArray(Charsets.UTF_8)
+        if (payload.size > ROM_CACHE_MAX_BYTES) {
+            Log.w(TAG, "ROM library cache too large; future launches will rescan")
+            return
+        }
+        val atomic = AtomicFile(File(filesDir, ROM_CACHE_NAME))
+        val stream = atomic.startWrite()
+        try {
+            stream.write(payload)
+            atomic.finishWrite(stream)
+        } catch (error: Exception) {
+            atomic.failWrite(stream)
+            throw error
+        }
+    }
+
     private fun scanFolder(uri: Uri) {
         val serial = scanSerial.incrementAndGet()
         status.visibility = View.VISIBLE
@@ -568,6 +625,13 @@ class MainActivity : Activity() {
                 val result = RomLibrary.scan(this, uri)
                 if (scanSerial.get() != serial) return@execute
                 val count = nativeSetLibrary(result.json)
+                if (count >= 0) {
+                    try {
+                        storeCachedLibrary(uri, result.json)
+                    } catch (error: Exception) {
+                        Log.w(TAG, "Cannot cache ROM library; games remain available", error)
+                    }
+                }
                 runOnUiThread {
                     if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
                     if (count < 0) {
