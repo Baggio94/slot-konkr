@@ -67,23 +67,28 @@ internal object RetroArchStorage {
                 val bytes = read(context, doc, MAX_SAVE)
                 stage(target.saveLocal, bytes)
             }
+            find(context, root, target.core, target.stem + ".rtc")?.let { doc ->
+                val bytes = read(context, doc, 4096)
+                require(bytes.isNotEmpty()) { "Empty RetroArch RTC" }
+                stage(target.rtcLocal, bytes)
+            }
         }
-        target.statesTree?.let { root ->
-            val file = find(context, root, target.core, target.stem + ".state.auto")
-            if (file != null) {
-                val bytes = read(context, file, MAX_STATE)
-                // The Rust decoder validates the full RASTATE structure.
-                // Reject RZIP here and leave the previously working private
-                // resume state untouched. Don't overwrite the external file.
-                try {
-                    stage(target.stateImportLocal, RetroArchCompression.decode(bytes))
-                } catch (error: Exception) {
-                    Log.w(TAG, "RetroArch state not importable; existing private save preserved", error)
-                    target.stateImportLocal.delete()
-                }
-            } else {
+        val incoming = if (target.statesTree != null) {
+            find(context, target.statesTree, target.core, target.stem + ".state.auto")
+                ?.let { read(context, it, MAX_STATE) }
+        } else if (target.stateDefaultLocal.isFile) {
+            target.stateDefaultLocal.readBytes()
+        } else null
+        if (incoming != null) {
+            try {
+                // Rust validates RASTATE before passing the memory to libretro.
+                stage(target.stateImportLocal, RetroArchCompression.decode(incoming))
+            } catch (error: Exception) {
+                Log.w(TAG, "RetroArch state not importable; private fallback preserved", error)
                 target.stateImportLocal.delete()
             }
+        } else {
+            target.stateImportLocal.delete()
         }
     }
 
