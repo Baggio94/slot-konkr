@@ -27,7 +27,7 @@ function loadFile(bridge, cart) {
   let file = null;
   return async () => {
     if (!file) {
-      const fingerprint = JSON.parse(bridge.fingerprint(cart.id));
+      const fingerprint = cart.fingerprint || JSON.parse(bridge.fingerprint(cart.id));
       if (!Number.isSafeInteger(fingerprint.crc) || fingerprint.crc < 0 ||
           fingerprint.crc > 0xffffffff) throw new Error('Invalid cartridge CRC32');
       const header = decode(fingerprint.head);
@@ -67,7 +67,9 @@ export function fromAndroid(bridge) {
                  file: loadFile(bridge, cart), slotId: cart.id });
     if (cart.hasLabel) {
       labels.set(token, async () => {
-        const bytes = decode(bridge.readLabel(cart.id));
+        const encoded = bridge.readLabel(cart.id);
+        if (encoded.startsWith('error:')) throw new Error(encoded);
+        const bytes = decode(encoded);
         if (!bytes.length) throw new Error('Saved label missing for ' + cart.stem);
         return new Blob([bytes], { type: 'image/png' });
       });
@@ -84,6 +86,7 @@ export function fromAndroid(bridge) {
     carts,
     labels,
     selectedKey,
+    allCached: data.allCached === true,
     focused: !!selectedKey,
     direct: true,
     systemShells: async () => '',
