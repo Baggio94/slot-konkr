@@ -13,6 +13,8 @@ internal class CartSounds(context: Context) {
         const val INSERT = 1
         const val EJECT = 2
         private const val RATE = 48_000
+        // Slight increase over the previous 0.85 without changing game audio.
+        private const val CART_SFX_VOLUME = 0.98f
     }
     private val soundPool = SoundPool.Builder().setMaxStreams(2)
         .setAudioAttributes(AudioAttributes.Builder()
@@ -41,7 +43,7 @@ internal class CartSounds(context: Context) {
         if (closed || kind !in INSERT..EJECT) return
         val id = samples[kind]
         if (id == 0 || !synchronized(loaded) { loaded.contains(id) }) return
-        soundPool.play(id, 0.85f, 0.85f, 1, 0, 1f)
+        soundPool.play(id, CART_SFX_VOLUME, CART_SFX_VOLUME, 1, 0, 1f)
     }
 
     fun pause() { if (!closed) soundPool.autoPause() }
