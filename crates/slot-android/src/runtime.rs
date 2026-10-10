@@ -942,7 +942,7 @@ impl Engine {
             x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
             colour: opening(),
         });
-        let top = ((OUT_H as f32 - QUICK_PITCH * items.len() as f32) / 2.0).round();
+        let top = settings_row_top(items.len());
         let cursor = if self.menu_cursor_y.is_finite() { self.menu_cursor_y }
             else { top + selected as f32 * QUICK_PITCH };
         let intro = (self.menu_opened.elapsed().as_secs_f32() / 0.16).clamp(0.0, 1.0);
@@ -1181,13 +1181,11 @@ impl Engine {
             self.menu_seen = kind;
             self.menu_opened = now;
             if count > 0 {
-                self.menu_cursor_y = ((OUT_H as f32 -
-                    QUICK_PITCH * count as f32) / 2.0).round()
+                self.menu_cursor_y = settings_row_top(count)
                     + selected as f32 * QUICK_PITCH;
             }
         } else if count > 0 {
-            let goal = ((OUT_H as f32 - QUICK_PITCH * count as f32) / 2.0).round()
-                + selected as f32 * QUICK_PITCH;
+            let goal = settings_row_top(count) + selected as f32 * QUICK_PITCH;
             let response = 1.0 - (-dt * 24.0).exp();
             self.menu_cursor_y += (goal - self.menu_cursor_y) * response;
         }
@@ -1411,6 +1409,11 @@ impl Engine {
     }
 }
 
+/// Match Slot's centred menu row layout on the 720x480 design canvas.
+fn settings_row_top(rows: usize) -> f32 {
+    ((OUT_H as f32 - QUICK_PITCH * rows as f32) / 2.0).round()
+}
+
 /// Same easing timeline for the shelf and CRT-composited exit frames.
 /// Separating progress from rendering makes the animation durations testable.
 fn advance_cart(progress: f32, inserted: bool, dt: f32) -> f32 {
@@ -1431,6 +1434,18 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 #[cfg(test)]
 mod ui_feedback_tests {
     use super::*;
+
+    #[test]
+    fn original_settings_menu_rows_are_on_screen_and_outside_footer() {
+        for rows in [3, 5] {
+            let top = settings_row_top(rows);
+            assert!(top > 80.0);
+            assert!(top + rows as f32 * QUICK_PITCH < 427.0,
+                "settings text must not overlap Slot keycap legend");
+            assert_eq!(top + (rows - 1) as f32 * QUICK_PITCH,
+                settings_row_top(rows) + (rows - 1) as f32 * QUICK_PITCH);
+        }
+    }
 
     #[test]
     fn cartridge_timelines_match_upstream_seating_hold_and_ejection() {
