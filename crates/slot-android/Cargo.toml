@@ -13,6 +13,7 @@ crate-type = ["cdylib"]
 [dependencies]
 slot-gfx = { path = "../slot-gfx", default-features = false }
 slot-store = { path = "../slot-store" }
+slot-power = { path = "../slot-power" }
 slot-ui = { path = "../slot-ui" }
 slot-retro = { path = "../slot-retro" }
 png = { workspace = true }
