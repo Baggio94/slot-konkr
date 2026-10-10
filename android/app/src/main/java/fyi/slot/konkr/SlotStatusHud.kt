@@ -135,7 +135,7 @@ internal class SlotStatusHud(private val context: Context, private val frame: Fr
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         val connected = try {
             val n = cm?.activeNetwork
-            n != null && cm.getNetworkCapabilities(n)?.hasTransport(
+            n != null && cm?.getNetworkCapabilities(n)?.hasTransport(
                 NetworkCapabilities.TRANSPORT_WIFI) == true
         } catch (_: Exception) { false }
         val wifiOn = try { wm?.isWifiEnabled == true } catch (_: Exception) { false }
