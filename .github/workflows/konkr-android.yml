@@ -75,6 +75,9 @@ jobs:
         run: |
           set -euo pipefail
           cp -a third_party/slot-cart-studio studio-upstream/slot-cart-studio
+          # Isolate the pinned upstream Cargo project from our parent workspace.
+          # This edit affects the ephemeral CI copy only; vendored sources stay exact.
+          printf '\n[workspace]\n' >> studio-upstream/slot-cart-studio/Cargo.toml
           test "$(tr -d '\r\n' < studio-upstream/slot-cart-studio/slot.ref)" = \
                "$(git -C studio-upstream/slot rev-parse HEAD)"
           node --test studio-upstream/slot-cart-studio/web/*.test.mjs
