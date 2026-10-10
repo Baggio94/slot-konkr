@@ -321,21 +321,32 @@ class MainActivity : Activity() {
     }
 
     private fun showSlotStartupSplash(frame: FrameLayout) {
-        // High-quality, native KONKR 960x640 image derived from the original
-        // 196x75 Slot v1.5.0 BMP. Keep original BMP in assets as provenance.
-        val logo = try {
+        // Use the original approved Slot. v1 wordmark as a VectorDrawable.
+        // The old 960x640 bitmap was enlarged from a 196x75 firmware logo and
+        // looks soft at KONKR resolution. Preserve the original image as a
+        // fallback, without touching firmware assets or the emulation UI.
+        val vectorLogo = try {
+            getDrawable(R.drawable.slot_boot_wordmark_vector)
+        } catch (error: Exception) {
+            Log.w(TAG, "Vector Slot boot wordmark unavailable", error)
+            null
+        }
+        val fallbackBitmap = if (vectorLogo == null) try {
             assets.open("slot-bootlogo-kpa-960x640.png").use(BitmapFactory::decodeStream)
         } catch (error: Exception) {
-            Log.w(TAG, "High resolution slot boot logo unavailable", error)
+            Log.w(TAG, "Original Slot boot logo fallback unavailable", error)
             null
-        } ?: return
+        } else null
+        if (vectorLogo == null && fallbackBitmap == null) return
+
         val overlay = FrameLayout(this).apply {
             setBackgroundColor(Color.rgb(11, 14, 17))
             isFocusable = false
             isClickable = false
         }
         val image = ImageView(this).apply {
-            setImageBitmap(logo)
+            if (vectorLogo != null) setImageDrawable(vectorLogo)
+            else setImageBitmap(fallbackBitmap)
             scaleType = ImageView.ScaleType.FIT_CENTER
             contentDescription = "slot. boot logo"
         }
