@@ -30,9 +30,19 @@ internal object RomLibrary {
      */
     fun scan(context: Context, treeUri: Uri, oldGamesJson: String? = null): ScanResult {
         val previous = HashMap<String, JSONObject>()
-        if (oldGamesJson != null) {
+        val cachedJson = oldGamesJson ?: try {
+            val cache = java.io.File(context.filesDir, "rom-library-cache-v1.json")
+            if (cache.length() > 8L * 1024 * 1024) null
+            else JSONObject(cache.readText(Charsets.UTF_8)).let { meta ->
+                if (meta.optInt("schema") == 1 &&
+                    meta.optString("root") == treeUri.toString())
+                    meta.optJSONArray("games")?.toString()
+                else null
+            }
+        } catch (_: Exception) { null }
+        if (cachedJson != null) {
             try {
-                val cached = JSONArray(oldGamesJson)
+                val cached = JSONArray(cachedJson)
                 for (index in 0 until cached.length().coerceAtMost(MAX_ROMS)) {
                     val entry = cached.optJSONObject(index) ?: continue
                     val uri = entry.optString("uri")
