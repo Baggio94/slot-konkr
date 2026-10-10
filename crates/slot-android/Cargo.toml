@@ -17,6 +17,7 @@ slot-power = { path = "../slot-power" }
 slot-ui = { path = "../slot-ui" }
 slot-retro = { path = "../slot-retro" }
 png = { workspace = true }
+lz4_flex = { workspace = true }
 
 jni = "0.21"
 serde = { version = "1", features = ["derive"] }
