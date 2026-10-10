@@ -8,7 +8,6 @@ use crate::settings::Settings;
 use crate::core_selection;
 use crate::core_picker::{CorePicker, Press};
 use slot_retro::ButtonMask;
-use slot_gfx::ScreenEffect;
 use jni::{JNIEnv, objects::{JObject, JString}, sys::{jint, jboolean, jshortArray, jstring}};
 use std::sync::Mutex;
 use std::time::Instant;
@@ -136,6 +135,8 @@ enum ShelfOverlay {
     Menu { row: usize },
     Library { row: usize },
     Settings { row: usize },
+    ScreenSettings { row: usize },
+    GameplaySettings { row: usize },
     About,
     Scraping,
     Achievements,
@@ -144,7 +145,7 @@ enum ShelfOverlay {
     States,
 }
 
-const MENU_TEXT: [&str; 32] = [
+const MENU_TEXT: [&str; 40] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Scraping",                         // 2
@@ -177,6 +178,14 @@ const MENU_TEXT: [&str; 32] = [
     "Color Correction",                 // 29
     "Rumble",                           // 30
     "About",                            // 31
+    "SCREEN",                           // 32
+    "GAMEPLAY",                         // 33
+    "GBA Shader",                       // 34
+    "GB / GBC Shader",                  // 35
+    "GB Palettes",                      // 36
+    "Rewind",                           // 37
+    "Turbo Buttons",                    // 38
+    "Auto Save on Eject",               // 39
 ];
 
 struct Engine {
@@ -295,7 +304,8 @@ impl Engine {
             let tex = gpu.create_texture(face.w, face.h, &face.rgba);
             (tex, face.w)
         });
-        let setting_values = ["2×", "3×", "4×", "6×", "ON", "OFF"]
+        let setting_values = ["2×", "3×", "4×", "6×", "ON", "OFF",
+                              "LCD3x", "Grid", "Dot", "Simpletex"]
             .into_iter().map(|value| {
                 let face = quick_value_face(value, true);
                 let tex = gpu.create_texture(face.w, face.h, &face.rgba);
@@ -520,7 +530,7 @@ impl Engine {
                 // The reversed cart animation will emit the original eject sound.
                 if self.progress > 0.0 || self.inserted { self.eject_sound_armed = true; }
                 if let Some(mut session) = self.game.take() {
-                    let saved = session.save(true);
+                    let saved = session.save(self.settings.eject_save);
                     if saved {
                         if let Some(uri) = self.requested_uri.as_deref() {
                             let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -685,6 +695,7 @@ impl Engine {
                     // double tap to latch), L2 rewind. Handle these BEFORE
                     // libretro, so trigger presses never reach a game.
                     if code == 104 {
+                        if !self.settings.rewind { return; }
                         if pressed {
                             self.rewind_held = true;
                             self.rewind_accum = 0.0;
@@ -734,6 +745,25 @@ impl Engine {
                             (false, true) => FfState::Held,
                             (false, false) => FfState::Off,
                         });
+                        return;
+                    }
+                    // Use actual mGBA palette presets, and original Slot
+                    // HUD toasts. Restrict to monochrome GB games.
+                    if pressed && self.active == 1 && self.settings.gb_palettes
+                        && self.buttons & ButtonMask::SELECT != 0
+                        && (code == 21 || code == 22) {
+                        let index = if code == 22 {
+                            (self.settings.gb_palette + 1) % 48
+                        } else { (self.settings.gb_palette + 47) % 48 };
+                        self.settings.gb_palette = index;
+                        if let Some(game) = self.game.as_mut() {
+                            game.set_gb_palette(self.settings.palette_name());
+                        }
+                        let palette = slot_store::GbPalette::all().nth(index as usize)
+                            .unwrap_or(slot_store::GbPalette::DEFAULT);
+                        self.hud.toast(Toast::Palette(palette),
+                            self.born.elapsed().as_millis() as u64);
+                        self.persist_settings();
                         return;
                     }
                     // Restore upstream SELECT+R1/L1 save/load shortcuts.
@@ -823,19 +853,40 @@ impl Engine {
                             },
                             ShelfOverlay::Settings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::Settings {
-                                    row: move_menu_row(row, code, 5),
+                                    row: move_menu_row(row, code, 3),
                                 },
-                                21 | 22 => self.change_setting(row, code == 22),
-                                96 if row == 4 => {
-                                    self.prepare_about();
-                                    self.overlay = ShelfOverlay::About;
+                                96 => match row {
+                                    0 => self.overlay = ShelfOverlay::ScreenSettings { row: 0 },
+                                    1 => self.overlay = ShelfOverlay::GameplaySettings { row: 0 },
+                                    _ => {
+                                        self.prepare_about();
+                                        self.overlay = ShelfOverlay::About;
+                                    }
                                 },
                                 97 => self.overlay = ShelfOverlay::Menu { row: 3 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
+                            ShelfOverlay::ScreenSettings { row } => match code {
+                                19 | 20 => self.overlay = ShelfOverlay::ScreenSettings {
+                                    row: move_menu_row(row, code, 4),
+                                },
+                                21 | 22 => self.change_setting(row, code == 22),
+                                97 => self.overlay = ShelfOverlay::Settings { row: 0 },
+                                108 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
+                            ShelfOverlay::GameplaySettings { row } => match code {
+                                19 | 20 => self.overlay = ShelfOverlay::GameplaySettings {
+                                    row: move_menu_row(row, code, 6),
+                                },
+                                21 | 22 => self.change_setting(row + 4, code == 22),
+                                97 => self.overlay = ShelfOverlay::Settings { row: 1 },
+                                108 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
                             ShelfOverlay::About => match code {
-                                97 | 96 => self.overlay = ShelfOverlay::Settings { row: 4 },
+                                97 | 96 => self.overlay = ShelfOverlay::Settings { row: 2 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -1045,7 +1096,8 @@ impl Engine {
                 .map_or("", |cart| cart.stem.as_str());
             let started = Instant::now();
             match GameSession::open(Path::new(local), &core_file, &storage,
-                core, platform, !self.fresh_launch, rom_stem) {
+                core, platform, self.settings.eject_save && !self.fresh_launch,
+                rom_stem, self.settings.gb_palettes.then(|| self.settings.palette_name())) {
                 Ok(session) => {
                     // Create libretro on the same GL thread, but defer audio
                     // and CRT presentation until Slot's seated hold completes.
@@ -1125,20 +1177,83 @@ impl Engine {
         }
     }
 
-    fn change_setting(&mut self, row: usize, right: bool) {
-        if !self.settings.change(row, right) { return; }
-        if row == 1 {
-            FF_AUDIO_ENABLED.store(self.settings.ff_sound, Ordering::Release);
-            AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        }
-        if row == 2 {
-            self.gpu.set_colour_correction(self.settings.colour_correction);
-        }
-        // All configuration writes are on the GL/UI thread and atomic.
+    fn persist_settings(&self) {
         if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             if let Err(error) = self.settings.save(root) {
                 set_message(format!("Cannot save Settings: {error}"));
             }
+        }
+    }
+
+    fn change_setting(&mut self, key: usize, right: bool) {
+        if !self.settings.change(key, right) { return; }
+        if key == 5 {
+            FF_AUDIO_ENABLED.store(self.settings.ff_sound, Ordering::Release);
+            AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        }
+        if key == 2 {
+            self.gpu.set_colour_correction(self.settings.colour_correction);
+        }
+        self.persist_settings();
+    }
+
+    fn setting_value(&self, key: usize) -> usize {
+        use crate::settings::Shader;
+        let shader = |shader| match shader {
+            Shader::Off => 5, Shader::Lcd3x => 6, Shader::Grid => 7,
+            Shader::Dot => 8, Shader::Simpletex => 9,
+        };
+        match key {
+            0 => shader(self.settings.shader_gba),
+            1 => shader(self.settings.shader_gb),
+            2 => if self.settings.colour_correction { 4 } else { 5 },
+            3 => if self.settings.gb_palettes { 4 } else { 5 },
+            4 => match self.settings.ff_speed { 2 => 0, 3 => 1, 4 => 2, _ => 3 },
+            5 => if self.settings.ff_sound { 4 } else { 5 },
+            6 => if self.settings.rewind { 4 } else { 5 },
+            7 => if self.settings.turbo { 4 } else { 5 },
+            8 => if self.settings.rumble { 4 } else { 5 },
+            _ => if self.settings.eject_save { 4 } else { 5 },
+        }
+    }
+
+    fn draw_setting_values(&self, row: usize, keys: &[usize], out: &mut Vec<Draw>) {
+        let top = settings_row_top(keys.len());
+        for (index, key) in keys.iter().copied().enumerate() {
+            let (tex, width, height) = self.setting_values[self.setting_value(key)];
+            let y = top + index as f32 * QUICK_PITCH + 8.0;
+            let scale = 0.79;
+            let w = width as f32 * scale;
+            let right = OUT_W as f32 - 34.0;
+            let chosen = row == index;
+            let x = right - w - if chosen { 22.0 } else { 0.0 };
+            out.push(Draw::Tex {
+                x, y, w, h: height as f32 * scale,
+                tex, alpha: if chosen { 1.0 } else { 0.62 },
+            });
+            if chosen {
+                let (left, lw, lh) = self.setting_carets[0];
+                let (right_tex, rw, rh) = self.setting_carets[1];
+                out.push(Draw::Tex {
+                    x: x - lw as f32 - 8.0, y, w: lw as f32,
+                    h: lh as f32, tex: left, alpha: 1.0,
+                });
+                out.push(Draw::Tex {
+                    x: right - rw as f32, y, w: rw as f32,
+                    h: rh as f32, tex: right_tex, alpha: 1.0,
+                });
+            }
+        }
+        // The original Back / Change physical keycap legend.
+        out.push(Draw::Rect {
+            x: 0.0, y: 420.0, w: OUT_W as f32, h: 60.0,
+            colour: opening(),
+        });
+        for (tex, w, x) in centred_hints(&self.settings_hints, LEGEND_GAP) {
+            out.push(Draw::Tex {
+                x, y: 427.0, w: w as f32, h: HINT_H as f32,
+                tex, alpha: 1.0,
+            });
         }
     }
 
@@ -1197,52 +1312,15 @@ impl Engine {
                 self.draw_original_style_menu(5, &[6, 24, 7, 8, 9], row, out);
             }
             ShelfOverlay::Settings { row } => {
-                self.draw_original_style_menu(26, &[27, 28, 29, 30, 31], row, out);
-                let top = settings_row_top(5);
-                for index in 0..4 {
-                    let choice = match index {
-                        0 => match self.settings.ff_speed {
-                            2 => 0, 3 => 1, 4 => 2, _ => 3,
-                        },
-                        1 => if self.settings.ff_sound { 4 } else { 5 },
-                        2 => if self.settings.colour_correction { 4 } else { 5 },
-                        _ => if self.settings.rumble { 4 } else { 5 },
-                    };
-                    let (tex, width, height) = self.setting_values[choice];
-                    let y = top + index as f32 * QUICK_PITCH + 8.0;
-                    let scale = 0.79;
-                    let w = width as f32 * scale;
-                    let right = OUT_W as f32 - 34.0;
-                    let chosen = row == index;
-                    let x = right - w - if chosen { 22.0 } else { 0.0 };
-                    out.push(Draw::Tex {
-                        x, y, w, h: height as f32 * scale,
-                        tex, alpha: if chosen { 1.0 } else { 0.62 },
-                    });
-                    if chosen {
-                        let (left, lw, lh) = self.setting_carets[0];
-                        let (right_tex, rw, rh) = self.setting_carets[1];
-                        out.push(Draw::Tex {
-                            x: x - lw as f32 - 8.0, y, w: lw as f32,
-                            h: lh as f32, tex: left, alpha: 1.0,
-                        });
-                        out.push(Draw::Tex {
-                            x: right - rw as f32, y, w: rw as f32,
-                            h: rh as f32, tex: right_tex, alpha: 1.0,
-                        });
-                    }
-                }
-                // Original Back / Change keycap legend, not generic Select.
-                out.push(Draw::Rect {
-                    x: 0.0, y: 420.0, w: OUT_W as f32, h: 60.0,
-                    colour: opening(),
-                });
-                for (tex, w, x) in centred_hints(&self.settings_hints, LEGEND_GAP) {
-                    out.push(Draw::Tex {
-                        x, y: 427.0, w: w as f32, h: HINT_H as f32,
-                        tex, alpha: 1.0,
-                    });
-                }
+                self.draw_original_style_menu(26, &[32, 33, 31], row, out);
+            }
+            ShelfOverlay::ScreenSettings { row } => {
+                self.draw_original_style_menu(32, &[34, 35, 29, 36], row, out);
+                self.draw_setting_values(row, &[0, 1, 2, 3], out);
+            }
+            ShelfOverlay::GameplaySettings { row } => {
+                self.draw_original_style_menu(33, &[27, 28, 37, 38, 30, 39], row, out);
+                self.draw_setting_values(row, &[4, 5, 6, 7, 8, 9], out);
             }
             ShelfOverlay::About => {
                 out.push(Draw::Rect {
@@ -1446,7 +1524,9 @@ impl Engine {
             ShelfOverlay::Menu { row } => (1u8, row, 4usize),
             ShelfOverlay::Library { row } => (2u8, row, 5usize),
             ShelfOverlay::GameMenu { row } => (3u8, row, 3usize),
-            ShelfOverlay::Settings { row } => (4u8, row, 5usize),
+            ShelfOverlay::Settings { row } => (4u8, row, 3usize),
+            ShelfOverlay::ScreenSettings { row } => (5u8, row, 4usize),
+            ShelfOverlay::GameplaySettings { row } => (6u8, row, 6usize),
             _ => (0, 0, 0),
         };
         if kind != self.menu_seen {
@@ -1541,7 +1621,10 @@ impl Engine {
                     SAMPLE_RATE.store(session.sample_rate, Ordering::Release);
                     self.game = Some(session);
                     self.game_accum = 0.0;
-                    self.gpu.set_screen_effect(ScreenEffect::None);
+                    let shader = if self.active == 0 {
+                        self.settings.shader_gba
+                    } else { self.settings.shader_gb };
+                    self.gpu.set_screen_effect(shader.effect());
                     self.screen_power = 0.0;
                     self.exiting_screen = false;
                     self.gpu.set_screen_power(0.0);
@@ -1609,7 +1692,7 @@ impl Engine {
                 let frame_limit = if fast { usize::from(self.settings.ff_speed) * 4 }
                     else { 4 };
                 while self.game_accum >= period && stepped < frame_limit {
-                    session.advance(self.buttons);
+                    session.advance(self.buttons, self.settings.turbo, self.settings.rewind);
                     self.game_accum -= period;
                     stepped += 1;
                     let samples = session.take_audio();

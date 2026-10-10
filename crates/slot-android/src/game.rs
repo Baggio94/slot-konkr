@@ -47,6 +47,7 @@ pub struct GameSession {
     ring: StateRing,
     rewind: RewindThread,
     rewind_frames: u8,
+    frame_count: u32,
     pending_undo: Option<(Instant, PendingUndo)>,
     last_sram: Instant,
     pub sample_rate: i32,
@@ -56,7 +57,7 @@ pub struct GameSession {
 impl GameSession {
     pub fn open(rom: &Path, core_file: &Path, storage: &Path,
                 which: Core, platform: Platform, resume_state: bool,
-                rom_stem: &str) -> Result<Self, String> {
+                rom_stem: &str, gb_palette: Option<&str>) -> Result<Self, String> {
         let opening_at = Instant::now();
         if !rom.exists() || !core_file.exists() {
             return Err(format!("ROM cache or {} core missing", which.text()));
@@ -104,6 +105,11 @@ impl GameSession {
                 core.set_option("gpsp_bios", "auto");
                 core.set_option("gpsp_boot_mode", "bios");
             }
+        }
+        // mGBA supports live named GB presets through this libretro option.
+        // Never apply a monochrome GB palette to GBC, GBA or gpSP.
+        if platform == Platform::Gb && which == Core::Mgba {
+            if let Some(name) = gb_palette { core.set_option("mgba_gb_colors", name); }
         }
         core.load(rom).map_err(|e| e.to_string())?;
         let load_ms = opening_at.elapsed().as_millis();
@@ -163,23 +169,30 @@ impl GameSession {
         Ok(Self {
             core, save, rtc, manual_export_prefix, state, retroarch_export, retroarch_import, ring,
             rewind: RewindThread::spawn(REWIND_BYTES), rewind_frames: 0,
+            frame_count: 0,
             pending_undo: None, last_sram: Instant::now(),
             sample_rate: sample_rate.clamp(8_000, 96_000),
             fps,
         })
     }
 
-    pub fn advance(&mut self, buttons: u16) {
-        self.core.run_frame(ButtonMask(buttons));
-        self.rewind_frames += 1;
-        if self.rewind_frames >= REWIND_CAPTURE_FRAMES {
-            self.rewind_frames = 0;
-            // Original Slot LZ4/XOR ring with 20 MiB bounded history.
-            // Snapshots are private in memory and NEVER exported to RetroArch.
-            if let Ok(snapshot) = self.core.serialize() {
-                self.rewind.push(snapshot);
+    pub fn advance(&mut self, buttons: u16, turbo: bool, record_rewind: bool) {
+        // Reuse Slot's actual 3-on/3-off X/Y to A/B turbo algorithm.
+        let pressed = ButtonMask(buttons);
+        let mapped = if turbo { pressed.turbo(self.frame_count) }
+            else { pressed.without_turbo() };
+        self.core.run_frame(mapped);
+        self.frame_count = self.frame_count.wrapping_add(1);
+        if record_rewind {
+            self.rewind_frames += 1;
+            if self.rewind_frames >= REWIND_CAPTURE_FRAMES {
+                self.rewind_frames = 0;
+                // Original XOR/LZ4 history; never export it to RetroArch.
+                if let Ok(snapshot) = self.core.serialize() {
+                    self.rewind.push(snapshot);
+                }
             }
-        }
+        } else { self.rewind_frames = 0; }
         if self.last_sram.elapsed() >= SRAM_PERIOD {
             self.save_sram();
         }
@@ -194,6 +207,10 @@ impl GameSession {
         let _ = self.core.take_audio();
         self.rewind_frames = 0;
         true
+    }
+
+    pub fn set_gb_palette(&mut self, name: &str) {
+        self.core.set_option("mgba_gb_colors", name);
     }
 
     pub fn rumble_strength(&self) -> u16 {
