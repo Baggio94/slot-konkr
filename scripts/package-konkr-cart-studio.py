@@ -105,6 +105,47 @@ def package(root: Path, built: Path):
       await loadIndex();
     }
   }""")
+    # WebView render budget: never compose 125 offscreen cart PNG canvases.
+    # The official renderer/label functions stay untouched. Every visible card
+    # is painted as it enters the viewport; hidden tabs do no canvas work.
+    js = checked_replace(js, "let lastNativeActionState = '';",
+        """let lastNativeActionState = '';
+let androidCartObserver = null;
+function observeAndroidCarts(s) {
+  if (!window.AndroidStudio || !('IntersectionObserver' in window)) return;
+  androidCartObserver?.disconnect();
+  androidCartObserver = new IntersectionObserver((entries) => {
+    if (s !== session) return;
+    for (const entry of entries) {
+      const c = entry.target.slotCart;
+      if (!c) continue;
+      c.androidVisible = entry.isIntersecting;
+      if (c.androidVisible) schedulePaint(c);
+    }
+  }, { rootMargin: '200px 0px' });
+  for (const c of s.carts) {
+    c.androidVisible = false;
+    c.el.root.slotCart = c;
+    androidCartObserver.observe(c.el.root);
+  }
+}""")
+    js = checked_replace(js,
+        "  $('grid').replaceChildren(...session.carts.map(buildCard));",
+        "  $('grid').replaceChildren(...session.carts.map(buildCard));\n  observeAndroidCarts(session);")
+    js = checked_replace(js,
+        "function paint(c) {\n  if (fatal) return;",
+        """function paint(c) {
+  if (fatal) return;
+  if (window.AndroidStudio && androidCartObserver &&
+      !c.androidVisible && editor.current() !== c) {
+    const state = stateOf(c);
+    c.el.root.dataset.state = state;
+    c.el.game.textContent = describe(c, state);
+    c.el.print.textContent = smallPrint(c.platform, c.code, c.tags);
+    updateWriteBar();
+    updateFillButton();
+    return;
+  }""")
     # X focuses one game: never ask the bulk Real Label / Logo Only wizard.
     js = checked_replace(js,
         "if (s === session && !fatal && s.fill == null) await fillOrAsk(s);",
