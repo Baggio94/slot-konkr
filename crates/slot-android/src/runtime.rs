@@ -67,6 +67,7 @@ enum Input {
     GameError { uri: String, message: String },
     Exit,
     Suspend,
+    ReloadVisuals,
 }
 
 static INPUT: Mutex<VecDeque<Input>> = Mutex::new(VecDeque::new());
@@ -138,6 +139,7 @@ enum ShelfOverlay {
     Settings { row: usize },
     ScreenSettings { row: usize },
     GameplaySettings { row: usize },
+    Personalization { row: usize },
     About,
     Scraping,
     Achievements,
@@ -146,7 +148,7 @@ enum ShelfOverlay {
     States,
 }
 
-const MENU_TEXT: [&str; 40] = [
+const MENU_TEXT: [&str; 46] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Scraping",                         // 2
@@ -187,6 +189,12 @@ const MENU_TEXT: [&str; 40] = [
     "Rewind",                           // 37
     "Turbo Buttons",                    // 38
     "Auto Save on Eject",               // 39
+    "Personalization",                  // 40
+    "PERSONALIZATION",                  // 41
+    "Import Theme",                     // 42
+    "Import Wallpaper",                 // 43
+    "Reset Theme",                      // 44
+    "Remove Wallpaper",                 // 45
 ];
 
 struct Engine {
@@ -218,6 +226,7 @@ struct Engine {
     overlay: ShelfOverlay,
     settings: Settings,
     video_mode: VideoMode,
+    wallpaper_texture: Option<slot_gfx::TexId>,
     setting_values: Vec<(slot_gfx::TexId, u32, u32)>,
     setting_carets: [(slot_gfx::TexId, u32, u32); 2],
     settings_hints: [(slot_gfx::TexId, u32); 2],
@@ -266,6 +275,15 @@ impl Engine {
             .as_ref().map(|(root, _)| Settings::load(root)).unwrap_or_default();
         gpu.set_colour_correction(settings.colour_correction);
         FF_AUDIO_ENABLED.store(settings.ff_sound, Ordering::Release);
+        let visuals_root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .as_ref().map(|(root, _)| root.clone());
+        if let Some(root) = visuals_root.as_deref() {
+            slot_ui::set_theme(slot_store::Theme::read(root));
+        }
+        let wallpaper_texture = visuals_root.as_deref()
+            .and_then(|root| crate::wallpaper::pick(root, 0))
+            .as_deref().and_then(slot_ui::wallpaper_face)
+            .map(|rgba| gpu.create_texture(OUT_W, OUT_H, &rgba));
         let mut shelves = Vec::new();
 
         // First-run empty shelf: never synthesize fake demo cartridges.
@@ -402,6 +420,7 @@ impl Engine {
             overlay: ShelfOverlay::None,
             settings,
             video_mode: VideoMode::Actual,
+            wallpaper_texture,
             setting_values,
             setting_carets,
             settings_hints,
@@ -496,6 +515,24 @@ impl Engine {
 
     fn handle(&mut self, input: Input) {
         match input {
+            Input::ReloadVisuals => {
+                // Triggered from Android SAF, applied on the GL thread only.
+                let root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+                    .as_ref().map(|(root, _)| root.clone());
+                if let Some(root) = root {
+                    slot_ui::set_theme(slot_store::Theme::read(&root));
+                    let wallpaper = crate::wallpaper::pick(&root, 0)
+                        .as_deref().and_then(slot_ui::wallpaper_face);
+                    self.wallpaper_texture = wallpaper.map(|rgba| {
+                        if let Some(tex) = self.wallpaper_texture {
+                            self.gpu.update_texture(tex, OUT_W, OUT_H, &rgba);
+                            tex
+                        } else {
+                            self.gpu.create_texture(OUT_W, OUT_H, &rgba)
+                        }
+                    });
+                }
+            }
             Input::Reset => {
                 self.reset_time_controls();
                 self.buttons = 0;
@@ -828,14 +865,15 @@ impl Engine {
                         match self.overlay {
                             ShelfOverlay::Menu { row } => match code {
                                 19 | 20 => {
-                                    self.overlay = ShelfOverlay::Menu { row: move_menu_row(row, code, 4) };
+                                    self.overlay = ShelfOverlay::Menu { row: move_menu_row(row, code, 5) };
                                 }
                                 96 => {
                                     self.overlay = match row {
                                         0 => ShelfOverlay::Library { row: 0 },
                                         1 => ShelfOverlay::Scraping,
                                         2 => ShelfOverlay::Achievements,
-                                        _ => ShelfOverlay::Settings { row: 0 },
+                                        3 => ShelfOverlay::Settings { row: 0 },
+                                        _ => ShelfOverlay::Personalization { row: 0 },
                                     };
                                 }
                                 97 | 108 => self.overlay = ShelfOverlay::None,
@@ -863,6 +901,18 @@ impl Engine {
                                     _ => {}
                                 },
                                 97 => self.overlay = ShelfOverlay::Menu { row: 0 },
+                                108 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
+                            ShelfOverlay::Personalization { row } => match code {
+                                19 | 20 => self.overlay = ShelfOverlay::Personalization {
+                                    row: move_menu_row(row, code, 4),
+                                },
+                                96 => {
+                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
+                                        .push_back(7 + row as i32);
+                                }
+                                97 => self.overlay = ShelfOverlay::Menu { row: 4 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -1354,13 +1404,16 @@ impl Engine {
         match self.overlay {
             ShelfOverlay::None => {}
             ShelfOverlay::Menu { row } => {
-                self.draw_original_style_menu(0, &[1, 2, 3, 25], row, out);
+                self.draw_original_style_menu(0, &[1, 2, 3, 25, 40], row, out);
             }
             ShelfOverlay::Library { row } => {
                 self.draw_original_style_menu(5, &[6, 24, 7, 8, 9], row, out);
             }
             ShelfOverlay::Settings { row } => {
                 self.draw_original_style_menu(26, &[32, 33, 31], row, out);
+            }
+            ShelfOverlay::Personalization { row } => {
+                self.draw_original_style_menu(41, &[42, 43, 44, 45], row, out);
             }
             ShelfOverlay::ScreenSettings { row } => {
                 self.draw_original_style_menu(32, &[34, 35, 29, 36], row, out);
@@ -1569,12 +1622,13 @@ impl Engine {
         // Update full-screen menus and spring-smooth the selection bar.
         // Keep animation entirely in rendering: never delay controller input.
         let (kind, selected, count) = match self.overlay {
-            ShelfOverlay::Menu { row } => (1u8, row, 4usize),
+            ShelfOverlay::Menu { row } => (1u8, row, 5usize),
             ShelfOverlay::Library { row } => (2u8, row, 5usize),
             ShelfOverlay::GameMenu { row } => (3u8, row, 3usize),
             ShelfOverlay::Settings { row } => (4u8, row, 3usize),
             ShelfOverlay::ScreenSettings { row } => (5u8, row, 4usize),
             ShelfOverlay::GameplaySettings { row } => (6u8, row, 6usize),
+            ShelfOverlay::Personalization { row } => (7u8, row, 4usize),
             _ => (0, 0, 0),
         };
         if kind != self.menu_seen {
@@ -1809,6 +1863,8 @@ impl Engine {
             h: OUT_H as f32,
             colour: [0.085, 0.085, 0.093, 1.0],
         }];
+        // Exact upstream Slot wallpaper compositor, behind its cartridge shelf.
+        slot_ui::draw_backdrop(self.wallpaper_texture, &mut commands);
         if self.progress == 0.0 {
             if let Some(picker) = self.picker {
                 let t = slot_ui::ease(picker.openness(self.born.elapsed().as_millis() as u64));
@@ -2001,6 +2057,14 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceChanged(
             engine.size = (width.max(1) as u32, height.max(1) as u32);
         }
     });
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeReloadVisualAssets(
+    _env: *mut c_void,
+    _activity: *mut c_void,
+) {
+    INPUT.lock().unwrap_or_else(|e| e.into_inner()).push_back(Input::ReloadVisuals);
 }
 
 #[unsafe(no_mangle)]

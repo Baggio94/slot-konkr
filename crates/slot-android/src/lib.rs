@@ -3,6 +3,9 @@
 //! Stage M1: display-only preview carts, not executable games.
 mod library;
 mod settings;
+// Reuse the exact upstream Slot wallpaper ordering and filtering.
+#[path = "../../slot/src/wallpaper.rs"]
+mod wallpaper;
 // Use Slot's original per-game Actual/Stretch geometry and video_mode.ini.
 #[path = "../../slot/src/video_mode.rs"]
 mod video_mode;

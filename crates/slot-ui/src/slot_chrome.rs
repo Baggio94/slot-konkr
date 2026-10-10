@@ -34,14 +34,18 @@ const RIM_W: f32 = 2.0;
 const CX: f32 = OUT_W as f32 / 2.0;
 const SCOOP_FLAT: f32 = 4.0;
 
-static THEME: OnceLock<Theme> = OnceLock::new();
+// A user-imported theme can replace the default without restarting Android.
+// The original rendering primitives still read the same Theme struct.
+static THEME: OnceLock<std::sync::RwLock<Theme>> = OnceLock::new();
 
 pub fn set_theme(theme: Theme) {
-    let _ = THEME.set(theme);
+    let holder = THEME.get_or_init(|| std::sync::RwLock::new(Theme::default()));
+    *holder.write().unwrap_or_else(|e| e.into_inner()) = theme;
 }
 
-pub fn theme() -> &'static Theme {
-    THEME.get_or_init(Theme::default)
+pub fn theme() -> Theme {
+    let holder = THEME.get_or_init(|| std::sync::RwLock::new(Theme::default()));
+    *holder.read().unwrap_or_else(|e| e.into_inner())
 }
 
 fn rgb(c: [u8; 3]) -> [f32; 4] {

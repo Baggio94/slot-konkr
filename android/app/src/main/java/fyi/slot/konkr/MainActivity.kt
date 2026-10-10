@@ -21,6 +21,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import android.content.Intent
 import android.content.ActivityNotFoundException
 import android.graphics.Color
+import android.graphics.BitmapFactory
+import java.io.ByteArrayOutputStream
 import android.view.Gravity
 import android.widget.FrameLayout
 import android.widget.TextView
@@ -50,6 +52,8 @@ class MainActivity : Activity() {
         private const val BIOS_REQUEST = 4702
         private const val SAVE_REQUEST = 4703
         private const val STATE_REQUEST = 4704
+        private const val THEME_REQUEST = 4705
+        private const val WALLPAPER_REQUEST = 4706
         private const val PREFS = "slot_konkr_library"
         private const val ROM_ROOT = "rom_root_uri"
         private const val BIOS_ROOT = "bios_root_uri"
@@ -90,6 +94,7 @@ class MainActivity : Activity() {
     external fun nativePollMessage(): String?
     external fun nativeSystemStatus(clock: String, batteryPercent: Int, charging: Boolean)
     external fun nativePollUiAction(): Int
+    external fun nativeReloadVisualAssets()
     external fun nativePollCartSfx(): Int
     external fun nativePollRumbleStrength(): Int
     external fun nativeCoreForUri(uri: String): String
@@ -156,6 +161,10 @@ class MainActivity : Activity() {
                 4 -> openBiosFolderPicker()
                 5 -> openSharedFolderPicker(SAVE_REQUEST)
                 6 -> openSharedFolderPicker(STATE_REQUEST)
+                7 -> openVisualPicker(THEME_REQUEST)
+                8 -> openVisualPicker(WALLPAPER_REQUEST)
+                9 -> resetVisualFile(THEME_REQUEST)
+                10 -> resetVisualFile(WALLPAPER_REQUEST)
             }
             nativePollMessage()?.let { message ->
                 Log.w(TAG, message)
@@ -607,9 +616,87 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun openVisualPicker(kind: Int) {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = if (kind == THEME_REQUEST) "text/plain" else "image/png"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, kind)
+        } catch (error: ActivityNotFoundException) {
+            Toast.makeText(this, "Android file picker unavailable", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun visualFile(kind: Int): File {
+        return if (kind == THEME_REQUEST) File(filesDir, "Config/theme.txt")
+               else File(filesDir, "Wallpapers/user.png")
+    }
+
+    private fun resetVisualFile(kind: Int) {
+        val file = visualFile(kind)
+        if (file.exists() && !file.delete()) {
+            Toast.makeText(this, "Could not remove visual setting", Toast.LENGTH_LONG).show()
+            return
+        }
+        nativeReloadVisualAssets()
+    }
+
+    private fun importVisualFile(kind: Int, uri: Uri) {
+        try {
+            val maxBytes = if (kind == THEME_REQUEST) 64 * 1024 else 6 * 1024 * 1024
+            val bytes = contentResolver.openInputStream(uri)?.use { stream ->
+                val output = ByteArrayOutputStream()
+                val chunk = ByteArray(8192)
+                while (true) {
+                    val count = stream.read(chunk)
+                    if (count < 0) break
+                    if (output.size() + count > maxBytes) {
+                        throw IllegalArgumentException("Selected file is too large")
+                    }
+                    output.write(chunk, 0, count)
+                }
+                output.toByteArray()
+            } ?: throw IllegalArgumentException("Selected file could not be opened")
+            if (kind == WALLPAPER_REQUEST) {
+                val png = byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)
+                require(bytes.size >= 8 && bytes.copyOfRange(0, 8).contentEquals(png)) {
+                    "Wallpaper must be a PNG"
+                }
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                require(bounds.outWidth in 1..4096 && bounds.outHeight in 1..4096) {
+                    "Unsupported wallpaper dimensions"
+                }
+            }
+            val target = visualFile(kind)
+            target.parentFile?.mkdirs()
+            val atomic = AtomicFile(target)
+            val output = atomic.startWrite()
+            try {
+                output.write(bytes)
+                atomic.finishWrite(output)
+            } catch (error: Exception) {
+                atomic.failWrite(output)
+                throw error
+            }
+            nativeReloadVisualAssets()
+            Toast.makeText(this, "Slot. personalization updated", Toast.LENGTH_SHORT).show()
+        } catch (error: Exception) {
+            Log.e(TAG, "Cannot import Slot visual file", error)
+            Toast.makeText(this, "Import failed: " + error.message, Toast.LENGTH_LONG).show()
+        }
+    }
+
     @Deprecated("Android 12 SAF activity result")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == THEME_REQUEST || requestCode == WALLPAPER_REQUEST) {
+            if (resultCode == RESULT_OK) data?.data?.let { importVisualFile(requestCode, it) }
+            return
+        }
         if (requestCode !in setOf(FOLDER_REQUEST, BIOS_REQUEST,
                 SAVE_REQUEST, STATE_REQUEST) || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
