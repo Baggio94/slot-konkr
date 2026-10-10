@@ -651,8 +651,22 @@ class MainActivity : Activity() {
             // Fetch read-only external status off the main/UI thread.
             scanner.execute {
                 val status = RaEndpoint.discover(applicationContext)
+                // Syncthing-Fork's documented read-only localhost health check.
+                // HTTP 200 proves it is active; no response is UNKNOWN, not OFF.
+                val syncthingRunning = try {
+                    val connection = java.net.URL("http://127.0.0.1:8384/rest/noauth/health")
+                        .openConnection() as java.net.HttpURLConnection
+                    connection.connectTimeout = 350
+                    connection.readTimeout = 350
+                    connection.instanceFollowRedirects = false
+                    try { connection.responseCode == 200 }
+                    finally { connection.disconnect() }
+                } catch (_: Exception) { false }
                 runOnUiThread {
-                    if (!isDestroyed) statusHud.raRunning(status?.running)
+                    if (!isDestroyed) {
+                        statusHud.raRunning(status?.running)
+                        statusHud.syncthingRunning(if (syncthingRunning) true else null)
+                    }
                 }
             }
             try {
