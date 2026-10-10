@@ -10,7 +10,7 @@
         android:label="slot. for KONKR"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:theme="@android:style/Theme.Material.NoActionBar">
+        android:theme="@style/Theme.SlotKonkr">
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"
