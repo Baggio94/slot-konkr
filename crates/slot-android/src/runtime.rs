@@ -141,6 +141,8 @@ static PATHS: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
 static AUDIO: Mutex<VecDeque<i16>> = Mutex::new(VecDeque::new());
 static PLAYING: AtomicBool = AtomicBool::new(false);
 static SAMPLE_RATE: AtomicI32 = AtomicI32::new(0);
+static AUDIO_BUFFER_MS: AtomicI32 = AtomicI32::new(0);
+static GPU_SYNC: AtomicBool = AtomicBool::new(false);
 // Android AudioTrack time-stretches 2x game audio while preserving pitch.
 // Expose the current transport speed separately from libretro's sample rate.
 static AUDIO_SPEED_PERMILLE: AtomicI32 = AtomicI32::new(1000);
@@ -2075,7 +2077,7 @@ impl Engine {
 
         // FPS is a *real* libretro simulation measurement, not the display
         // refresh rate; the separate draw rate reveals missed vsyncs.
-        if self.game.is_some() && self.settings.show_fps {
+        if self.game.is_some() && self.current_emulation().show_fps {
             PERF_ACTIVE.store(true, Ordering::Release);
             self.perf_rendered += 1;
             let span = self.perf_last.elapsed().as_secs_f64();
@@ -2280,6 +2282,19 @@ impl Engine {
             self.select_forwarded = true;
             self.buttons |= ButtonMask::SELECT;
         }
+        let profile = self.current_emulation();
+        GPU_SYNC.store(self.game.is_some() && profile.gpu_sync, Ordering::Release);
+        AUDIO_BUFFER_MS.store(if self.game.is_some() {
+            i32::from(profile.audio_latency_ms)
+        } else { 0 }, Ordering::Release);
+        // Experimental bounded frame delay: defer the final input sample by
+        // 1-2ms. Only useful if GL timing allows it; OFF is the safe default.
+        if self.game.is_some() && profile.frame_delay_ms > 0 && !self.rewind_held {
+            std::thread::sleep(Duration::from_millis(u64::from(profile.frame_delay_ms)));
+            let late: Vec<Input> = INPUT.lock().unwrap_or_else(|e| e.into_inner())
+                .drain(..).collect();
+            for event in late { self.handle(event); }
+        }
         if let Some(session) = self.game.as_mut() {
             let mut stepped = 0;
             if self.rewind_held {
@@ -2308,7 +2323,7 @@ impl Engine {
                 // frames after a missed vsync. It can reduce delayed input,
                 // at the cost of slower game time on an overloaded device.
                 // STANDARD preserves the proven RC3 scheduler unchanged.
-                let responsive = self.settings.responsive_pacing && !fast;
+                let responsive = profile.responsive_pacing && !fast;
                 self.game_accum = crate::settings::frame_debt(
                     self.game_accum, f64::from(dt), multiplier, period, fast, responsive
                 );
@@ -2329,6 +2344,13 @@ impl Engine {
                         audio.extend(samples);
                     }
                 }
+            }
+            if stepped > 0 && !self.rewind_held && !self.ff_held && !self.ff_latched
+                && self.active == 0 && profile.run_ahead_frames > 0 {
+                // The normal frames and their audio are already consumed.
+                // Predicted video never advances the real saved/RA timeline.
+                session.prepare_runahead(self.buttons, self.settings.turbo,
+                    profile.run_ahead_frames);
             }
             if stepped > 1 {
                 self.perf_catchup = self.perf_catchup.saturating_add(1);
@@ -2853,6 +2875,23 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeExternalReturn(
     _env: *mut c_void, _activity: *mut c_void,
 ) {
     push(Input::ExternalReturn);
+}
+
+/// Android audio worker can rebuild its AudioTrack on a latency preset change.
+/// Zero preserves the exact legacy buffer sizing of RC4 Beta 1.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeAudioBufferMs(
+    _env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jint {
+    AUDIO_BUFFER_MS.load(Ordering::Acquire)
+}
+
+/// Optional GLES fence; only call glFinish when a game opted into GPU Sync.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeGpuSyncEnabled(
+    _env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jboolean {
+    if GPU_SYNC.load(Ordering::Acquire) { 1 } else { 0 }
 }
 
 /// Null when show-FPS is OFF, the game is not running or measurement isn't ready.
