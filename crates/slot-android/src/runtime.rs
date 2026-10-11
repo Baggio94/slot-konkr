@@ -802,7 +802,6 @@ impl Engine {
                 self.buttons = 0;
                 self.mode_down_at = None;
                 self.mode_last_tap = None;
-                self.home_launch_held = false;
                 self.polaroids = None;
                 // Android calls Reset onPause. Retain the *native menu* behind
                 // Apps/Studio while the new Activity animates in, otherwise
@@ -2116,28 +2115,18 @@ impl Engine {
                 let catchup = 100.0 * self.perf_catchup as f64 /
                     self.perf_rendered.max(1) as f64;
                 let target = self.game.as_ref().map_or(60.0, |g| g.fps);
-                let idle = 100.0 * self.perf_idle as f64 /
-                    self.perf_rendered.max(1) as f64;
                 *PERF_STATUS.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(format!(
-                        "EMU {emu:.1}/{target:.1} | DISPLAY {render:.1} | CATCHUP {catchup:.0}%\n{}\nPACE: IDLE {idle:.0}% | LOST {:.2}fr/s",
-                        self.perf_timings.line(), self.perf_debt_loss / span));
+                    Some(format!("EMU {emu:.1}/{target:.1} | DISPLAY {render:.1} | CATCHUP {catchup:.0}%"));
                 self.perf_last = now;
                 self.perf_rendered = 0;
                 self.perf_emulated = 0;
                 self.perf_catchup = 0;
-                self.perf_idle = 0;
-                self.perf_debt_loss = 0.0;
-                self.perf_timings = PerfTimings::default();
             }
         } else {
             self.perf_last = now;
             self.perf_rendered = 0;
             self.perf_emulated = 0;
             self.perf_catchup = 0;
-            self.perf_idle = 0;
-            self.perf_debt_loss = 0.0;
-            self.perf_timings = PerfTimings::default();
             if PERF_ACTIVE.swap(false, Ordering::AcqRel) {
                 *PERF_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = None;
             }
@@ -2322,23 +2311,11 @@ impl Engine {
             self.buttons |= ButtonMask::SELECT;
         }
         let profile = self.current_emulation();
-        GPU_SYNC.store(self.game.is_some() && profile.gpu_sync, Ordering::Release);
         // Android's frame callback changes GLSurfaceView renderMode only when
         // an active game explicitly selected DISPLAY SYNC. No engine work or
         // GL resource ownership ever moves away from the GL render thread.
         DISPLAY_SYNC.store(self.game.is_some() && profile.display_sync_pacing,
             Ordering::Release);
-        AUDIO_BUFFER_MS.store(if self.game.is_some() {
-            i32::from(profile.audio_latency_ms)
-        } else { 0 }, Ordering::Release);
-        // Experimental bounded frame delay: defer the final input sample by
-        // 1-2ms. Only useful if GL timing allows it; OFF is the safe default.
-        if self.game.is_some() && profile.frame_delay_ms > 0 && !self.rewind_held {
-            std::thread::sleep(Duration::from_millis(u64::from(profile.frame_delay_ms)));
-            let late: Vec<Input> = INPUT.lock().unwrap_or_else(|e| e.into_inner())
-                .drain(..).collect();
-            for event in late { self.handle(event); }
-        }
         if let Some(session) = self.game.as_mut() {
             let mut stepped = 0;
             if self.rewind_held {
@@ -2373,30 +2350,17 @@ impl Engine {
                 // opt-in DISPLAY SYNC mode ONLY. No extra libretro frames
                 // can run in any single callback; Beta 4 catch-up stays gone.
                 if profile.display_sync_pacing && responsive {
-                    let (debt, discarded) = crate::settings::frame_debt_display_sync(
+                    let (debt, _) = crate::settings::frame_debt_display_sync(
                         self.game_accum, f64::from(dt), multiplier, period);
                     self.game_accum = debt;
-                    if profile.show_fps { self.perf_debt_loss += discarded; }
                 } else {
-                    if responsive && profile.show_fps {
-                        // Diagnostic only: old RESPONSIVE still uses the
-                        // exact Beta 7 1.5-frame cap and one-step scheduler.
-                        self.perf_debt_loss +=
-                            (self.game_accum + f64::from(dt) * multiplier
-                                - period * 1.5).max(0.0) / period;
-                    }
                     self.game_accum = crate::settings::frame_debt(
                         self.game_accum, f64::from(dt), multiplier, period, fast, responsive);
                 }
                 let frame_limit = if fast { usize::from(self.settings.ff_speed) * 4 }
                     else if responsive { 1 } else { 4 };
                 while self.game_accum >= period && stepped < frame_limit {
-                    let started = profile.show_fps.then(Instant::now);
                     session.advance(self.buttons, self.settings.turbo, self.settings.rewind);
-                    if let Some(t) = started {
-                        self.perf_timings.core_ns += t.elapsed().as_nanos();
-                        self.perf_timings.core_frames += 1;
-                    }
                     self.perf_emulated = self.perf_emulated.saturating_add(1);
                     self.game_accum -= period;
                     stepped += 1;
@@ -2415,31 +2379,18 @@ impl Engine {
                 && self.active == 0 && profile.run_ahead_frames > 0 {
                 // The normal frames and their audio are already consumed.
                 // Predicted video never advances the real saved/RA timeline.
-                let started = profile.show_fps.then(Instant::now);
                 session.prepare_runahead(self.buttons, self.settings.turbo,
                     profile.run_ahead_frames);
-                if let Some(t) = started {
-                    self.perf_timings.ahead_ns += t.elapsed().as_nanos();
-                    self.perf_timings.ahead_calls += 1;
-                }
             }
             if stepped > 1 {
                 self.perf_catchup = self.perf_catchup.saturating_add(1);
-            }
-            if stepped == 0 && !self.rewind_held && profile.show_fps {
-                self.perf_idle = self.perf_idle.saturating_add(1);
             }
             if stepped > 0 {
                 if self.select_tap_frames > 0 {
                     self.select_tap_frames = self.select_tap_frames.saturating_sub(stepped as u8);
                     if self.select_tap_frames == 0 { self.buttons &= !ButtonMask::SELECT; }
                 }
-                let started = profile.show_fps.then(Instant::now);
                 self.gpu.upload_game(session.frame());
-                if let Some(t) = started {
-                    self.perf_timings.upload_ns += t.elapsed().as_nanos();
-                    self.perf_timings.uploads += 1;
-                }
                 RUMBLE_STRENGTH.store(
                     if self.settings.rumble && !self.rewind_held {
                         i32::from(session.rumble_strength())
@@ -2447,17 +2398,12 @@ impl Engine {
                     Ordering::Release,
                 );
             }
-            let started = profile.show_fps.then(Instant::now);
             self.gpu.fit(self.size);
             self.gpu.begin_frame();
             let mut commands = vec![Draw::Game];
             self.hud.draw(self.born.elapsed().as_millis() as u64, &mut commands);
             self.gpu.draw_list(&commands);
             self.gpu.end_frame(self.size);
-            if let Some(t) = started {
-                self.perf_timings.gl_ns += t.elapsed().as_nanos();
-                self.perf_timings.draws += 1;
-            }
             return;
         }
 
@@ -2961,15 +2907,6 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeExternalReturn(
     push(Input::ExternalReturn);
 }
 
-/// Android audio worker can rebuild its AudioTrack on a latency preset change.
-/// Zero preserves the exact legacy buffer sizing of RC4 Beta 1.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeAudioBufferMs(
-    _env: JNIEnv<'_>, _this: JObject<'_>,
-) -> jint {
-    AUDIO_BUFFER_MS.load(Ordering::Acquire)
-}
-
 /// Choreographer pacing experiment: this is only a render-request policy.
 /// The underlying libretro emulation budget remains RESPONSIVE (one frame).
 #[unsafe(no_mangle)]
@@ -2977,14 +2914,6 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDisplaySyncEnabled
     _env: JNIEnv<'_>, _this: JObject<'_>,
 ) -> jboolean {
     if DISPLAY_SYNC.load(Ordering::Acquire) { 1 } else { 0 }
-}
-
-/// Optional GLES fence; only call glFinish when a game opted into GPU Sync.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeGpuSyncEnabled(
-    _env: JNIEnv<'_>, _this: JObject<'_>,
-) -> jboolean {
-    if GPU_SYNC.load(Ordering::Acquire) { 1 } else { 0 }
 }
 
 /// Null when show-FPS is OFF, the game is not running or measurement isn't ready.
