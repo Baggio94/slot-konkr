@@ -185,3 +185,61 @@ Relevant primary references:
 - The previous installed APK does **not** contain the new top-left notice
   or immediate reconnect callback. Finish the ongoing test before any
   installation upgrade, to avoid terminating the active RA session.
+
+
+## 11 October — KONKR Smart Cache beta feedback: account/diagnostics safety
+
+Hardware screenshots from KONKR show the Android status dialog at 6–7% while "Engine:
+Connecting/preparing cache" and, later, "Engine: Online / Pending work: no".
+The percentage was NOT "percent of games cached": `network::cache_progress()`
+primarily mixed Linux `Games/GBA` scan and dynamic badge download counts. New
+patches add badge identities, increasing the denominator and even decreasing
+the percentage. No claim of a stalled cache or 100% completion is justified
+by this legacy indicator.
+
+The misleading `Proxy status` button read the separate RAOfflineProxy app's
+`pendingAwards` field (which can be null => "unknown"), NOT the native Slot
+queue, and the optional proxy was never used by native Rust transport. It is
+removed from the normal account panel.
+
+**Implemented in the next draft test build:**
+
+- `RaDiagnostics.kt` reads the existing per-account native `unlocks.json`
+  and counts `synced: false` separately, without treating broken files as
+  empty. Reads native prepared patch arrays by MD5 and the existing Android
+  SAF fingerprint index; reports GBA ROMs in the library, indexed ROM hashes,
+  and actual prepared GBA definitions instead of misleading badges %. Reads
+  persisted Smart Cache prefetch budget to display requests/30 min and a
+  next-batch ETA when exhausted.
+- `RaPanelDialog.kt` replaces the logged-in Android `AlertDialog` with a
+  lightweight dark Slot-style panel using the ORIGINAL upstream `label.ttf`
+  (bundled with its OFL license). Supports controller A/B and touch, focus
+  indications and refresh; also displays direct connection, Casual, unsupported
+  GB/GBC, pending count and local awards count. The OS sign-in password prompt
+  stays native for keyboard and credential safety.
+- `RaAccount.kt` two-stage sign-out: the user is warned about pending awards
+  and confirms **Keep local achievements**. An atomic sign-out marker is
+  written then Slot closes to terminate the old Rust evaluator/HTTP worker.
+  On next app launch, the marker removes the account's TOML and `auth.json`
+  token BEFORE creating a native RA worker; it leaves
+  `Saves/RetroAchievements/<account>/unlocks.json`, cached patches, badges
+  and Smart Cache fingerprint index untouched. A different account can then
+  sign in with a fresh token. No cross-account upload.
+- Sign-out is blocked during gameplay and if the native worker reports award
+  records still **only in memory** due to storage write failure. An unreadable
+  ledger triggers an explicit warning with the file preserved, never a silent
+  count of zero.
+- A damaged/unsupported ROM prefetch no longer retries the same hash every
+  second and monopolizes the quota. It can be reconsidered after relaunch.
+- Only **GBA Casual** supported. Android automatic sync while Slot is fully
+  closed, user-initiated deletion/export of account data, and GB/GBC remain
+  separate backlog items. Offline awards can still hit server age limits
+  and should never be promised as confirmed until uploaded.
+
+**Acceptance matrix before release:** screen layout at native KONKR 960x640;
+A/B/DPAD focus and scroll; async status progress accuracy; zero and multiple
+pending awards; logging out with pending awards and closing Slot; same-account
+relogin and upload; different-account login without cross-account data;
+no logout while a game is open; corrupted ledger never erased; offline
+logout/online re-login; before/after signature update preserving user data.
+PR remains DRAFT until physical validation.
