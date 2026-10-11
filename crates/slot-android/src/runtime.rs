@@ -103,6 +103,28 @@ const REWIND_STEP_S: f32 = 0.10;  // Original Slot's time-travel HUD + ~10 Hz re
 
 const FF_DOUBLE_TAP_MS: u128 = 320;
 static MESSAGE: Mutex<Option<String>> = Mutex::new(None);
+// RA worker runs off the GL thread. The engine samples its nonblocking status
+// and forwards bounded, sanitized user-facing notices to Android's main thread.
+static RA_NOTICES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+static RA_STATUS: Mutex<Option<String>> = Mutex::new(None);
+const RA_NOTICE_LIMIT: usize = 8;
+
+fn ra_notice_payload(title: &str, detail: &str, earned: bool) -> String {
+    let clean = |value: &str, limit: usize| -> String {
+        value.chars().filter(|ch| !ch.is_control()).take(limit).collect()
+    };
+    serde_json::json!({
+        "title": clean(title, 100),
+        "detail": clean(detail, 160),
+        "earned": earned,
+    }).to_string()
+}
+
+fn queue_ra_notice(queue: &mut VecDeque<String>, payload: String) {
+    if queue.len() >= RA_NOTICE_LIMIT { queue.pop_front(); }
+    queue.push_back(payload);
+}
+
 static PATHS: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
 static AUDIO: Mutex<VecDeque<i16>> = Mutex::new(VecDeque::new());
 static PLAYING: AtomicBool = AtomicBool::new(false);
@@ -1851,6 +1873,30 @@ impl Engine {
 
     fn draw(&mut self) {
         self.refresh_system_status();
+        // Poll the already-running achievement evaluator without blocking GL.
+        // Only Android's foreground UI displays notices; the worker never
+        // touches JNI, an Activity, the renderer or the filesystem here.
+        if let Some(service) = self.ra_service.as_ref() {
+            let status = format!("{:?}", service.sync_status());
+            let progress = service.sync_progress();
+            let pending = service.sync_pending();
+            let snapshot = serde_json::json!({
+                "state": status,
+                "pending": pending,
+                "progress": progress,
+            }).to_string();
+            *RA_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = Some(snapshot);
+            // Bound per-frame overhead and pending Android UI messages.
+            for _ in 0..4 {
+                let Some(notice) = service.take_notice() else { break };
+                let payload = ra_notice_payload(
+                    &notice.title, &notice.detail,
+                    notice.kind == slot_achievements::NoticeKind::Earned,
+                );
+                let mut queue = RA_NOTICES.lock().unwrap_or_else(|e| e.into_inner());
+                queue_ra_notice(&mut queue, payload);
+            }
+        }
         let now = Instant::now();
         let dt = (now - self.last).as_secs_f32().min(0.05);
         self.last = now;
@@ -2329,6 +2375,25 @@ mod ui_feedback_tests {
     }
 
     #[test]
+    fn ra_notice_bridge_removes_control_characters_and_bounds_payload() {
+        let text = ra_notice_payload(&("X".repeat(200) + "\nsecret"), "Line\rTwo", true);
+        let data: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(data["title"].as_str().unwrap().chars().count(), 100);
+        assert!(!data["title"].as_str().unwrap().contains("secret"));
+        assert_eq!(data["detail"], "LineTwo");
+        assert_eq!(data["earned"], true);
+    }
+
+    #[test]
+    fn ra_notice_bridge_never_builds_an_unbounded_queue() {
+        let mut notices = VecDeque::new();
+        for index in 0..32 { queue_ra_notice(&mut notices, index.to_string()); }
+        assert_eq!(notices.len(), RA_NOTICE_LIMIT);
+        assert_eq!(notices.front().map(String::as_str), Some("24"));
+        assert_eq!(notices.back().map(String::as_str), Some("31"));
+    }
+
+    #[test]
     fn select_chords_have_distinct_consumed_release_bits() {
         let mut combined = 0u16;
         for code in [96, 97, 100, 102, 103, 104, 105] {
@@ -2396,6 +2461,8 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
     ENGINE.with(|holder| {
         let started = Instant::now();
         *holder.borrow_mut() = None;
+        *RA_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        RA_NOTICES.lock().unwrap_or_else(|e| e.into_inner()).clear();
         PLAYING.store(false, Ordering::Release);
         SAMPLE_RATE.store(0, Ordering::Release);
         let (version, snapshot) = {
@@ -2545,6 +2612,26 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollSaveFlush(
         Some(s)=>s.into_raw(),
         None=>std::ptr::null_mut(),
     }
+}
+
+// The Activity reads RA messages on its own main thread; it must not
+// access the GL-thread-only ENGINE RefCell from Kotlin.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollRaNotice(
+    env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jstring {
+    let notice = RA_NOTICES.lock().unwrap_or_else(|e| e.into_inner()).pop_front();
+    notice.and_then(|s| env.new_string(s).ok())
+        .map_or(std::ptr::null_mut(), |s| s.into_raw())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaStatus(
+    env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jstring {
+    let state = RA_STATUS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    state.and_then(|s| env.new_string(s).ok())
+        .map_or(std::ptr::null_mut(), |s| s.into_raw())
 }
 
 #[unsafe(no_mangle)]
