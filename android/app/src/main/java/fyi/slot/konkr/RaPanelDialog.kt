@@ -214,5 +214,7 @@ internal class RaPanelDialog(
         })
     }
 
+    fun isShowing(): Boolean = dialog.isShowing
+
     fun dismiss() = dialog.dismiss()
 }
