@@ -2345,6 +2345,9 @@ impl Engine {
         DISPLAY_SYNC.store(self.game.is_some() && profile.display_sync_pacing,
             Ordering::Release);
         if let Some(session) = self.game.as_mut() {
+            // In-game HUD replaces the shelf chrome; never let the upper
+            // Android indicators remain visible on the first game frame.
+            SHELF_INDICATOR_FLAGS.store(0, Ordering::Release);
             let mut stepped = 0;
             if self.rewind_held {
                 // Rewind is mutually exclusive with forward libretro frames.
