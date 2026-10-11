@@ -245,6 +245,9 @@ struct Engine {
     cart_render: CartRender,
     game: Option<GameSession>,
     pending_game: Option<GameSession>,
+    // A single account-scoped engine outlives individual games, allowing
+    // queued offline awards to sync even after the cartridge is ejected.
+    ra_service: Option<slot_achievements::Service>,
     buttons: u16,
     ff_held: bool,
     ff_latched: bool,
@@ -471,6 +474,7 @@ impl Engine {
             cart_render: CartRender::start()?,
             game: None,
             pending_game: None,
+            ra_service: None,
             buttons: 0,
             ff_held: false,
             ff_latched: false,
@@ -1372,11 +1376,20 @@ impl Engine {
             let rom_stem = self.shelves[self.active].carts
                 .get(self.shelves[self.active].index)
                 .map_or("", |cart| cart.stem.as_str());
+            // No login UI in this milestone: never start the RA worker unless
+            // an explicit user-enabled private config file already exists.
+            // GB/GBC memory/hash layouts are not yet verified.
+            if platform == Platform::Gba && self.ra_service.is_none()
+                && storage.join("Config/retroachievements.toml").is_file()
+            {
+                self.ra_service = Some(slot_achievements::Service::start(storage.clone()));
+            }
             let started = Instant::now();
             match GameSession::open(Path::new(local), &core_file, &storage,
                 core, platform, self.settings.eject_save && !self.fresh_launch,
                 rom_stem, self.settings.gb_palettes.then(|| self.settings.palette_name()),
-                self.settings.colour_correction) {
+                self.settings.colour_correction,
+                if platform == Platform::Gba { self.ra_service.as_ref() } else { None }) {
                 Ok(session) => {
                     // Create libretro on the same GL thread, but defer audio
                     // and CRT presentation until Slot's seated hold completes.
