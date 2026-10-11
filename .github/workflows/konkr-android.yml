@@ -20,6 +20,8 @@ on:
       - 'scripts/build-konkr-android.sh'
       - 'scripts/build-mgba-android.sh'
       - 'scripts/build-gpsp-android.sh'
+      - 'scripts/patch-mgba-speculative-audio.py'
+      - 'scripts/patch-gpsp-speculative-audio.py'
       - 'scripts/package-konkr-cart-studio.py'
       - '.github/workflows/konkr-android.yml'
 
@@ -78,6 +80,8 @@ jobs:
         run: cargo test -p slot-android --lib
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
+      - name: Validate pinned speculative-audio patch scripts
+        run: python3 -m py_compile scripts/patch-mgba-speculative-audio.py scripts/patch-gpsp-speculative-audio.py
       - name: Build mGBA arm64 libretro core
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
