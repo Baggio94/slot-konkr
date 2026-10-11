@@ -748,7 +748,7 @@ class MainActivity : Activity() {
                 }
                 AlertDialog.Builder(this)
                     .setTitle("SIGN OUT — KEEP LOCAL ACHIEVEMENTS")
-                    .setMessage("$message\n\nslot. must close to safely stop the old account's RA engine.")
+                    .setMessage("$message\n\nSigning in again requires internet. slot. must close to safely stop the old account's RA engine.")
                     .setNegativeButton("Stay signed in", null)
                     .setPositiveButton("Sign out & close slot.") { _, _ ->
                         val unsavedInMemory = runCatching {
