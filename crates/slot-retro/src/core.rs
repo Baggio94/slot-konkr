@@ -101,6 +101,12 @@ pub trait RetroCore: Send {
     /// Optional reusable audio storage for worker-wrapped libretro cores.
     fn recycle_audio(&mut self, _audio: Vec<i16>) {}
     fn serialize(&mut self) -> Result<Vec<u8>, CoreError>;
+    /// Reuse a caller-owned buffer for per-frame speculative snapshots.
+    /// The fallback preserves compatibility with existing RetroCore mocks.
+    fn serialize_into(&mut self, output: &mut Vec<u8>) -> Result<(), CoreError> {
+        *output = self.serialize()?;
+        Ok(())
+    }
     fn unserialize(&mut self, data: &[u8]) -> Result<(), CoreError>;
     /// Revert speculative execution without announcing a user timeline jump.
     fn restore_speculative_state(&mut self, data: &[u8]) -> Result<(), CoreError> {
