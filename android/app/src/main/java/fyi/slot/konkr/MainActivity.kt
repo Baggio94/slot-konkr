@@ -203,7 +203,16 @@ class MainActivity : Activity() {
             when (nativePollUiAction()) {
                 1 -> openRomFolderPicker()
                 2 -> refreshLibrary()
-                3 -> openRetroAchievementsAccount()
+                3 -> {
+                    // Keep the native Slot menu visible until the Android
+                    // account Dialog.show() has returned, avoiding the shelf flash.
+                    // Finally also unwinds the native guard on dialog errors.
+                    try {
+                        openRetroAchievementsAccount()
+                    } finally {
+                        nativeExternalReturn()
+                    }
+                }
                 4 -> openBiosFolderPicker()
                 5 -> openSharedFolderPicker(SAVE_REQUEST)
                 6 -> openSharedFolderPicker(STATE_REQUEST)
