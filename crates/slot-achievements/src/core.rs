@@ -120,6 +120,14 @@ impl RetroCore for Tracked {
     fn load_save_ram(&mut self, data: &[u8]) -> Result<(), CoreError> {
         self.core.load_save_ram(data)
     }
+    // KONKR 2026-10-11: preserve the Android port's independently mapped
+    // Game Boy/Color battery-backed RTC; the Linux fork did not expose it.
+    fn save_rtc(&self) -> Option<Vec<u8>> {
+        self.core.save_rtc()
+    }
+    fn load_rtc(&mut self, data: &[u8]) -> Result<(), CoreError> {
+        self.core.load_rtc(data)
+    }
     fn av_info(&self) -> AvInfo {
         self.core.av_info()
     }
