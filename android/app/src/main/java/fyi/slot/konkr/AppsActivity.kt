@@ -364,6 +364,11 @@ class AppsActivity : Activity() {
             Toast.LENGTH_LONG).show()
     }
 
+    override fun finish() {
+        super.finish()
+        SlotTransitions.close(this)
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // Intercept *before* GridView gets first refusal. This applies to the
         // KONKR controls and standard keyboard D-pad events.
