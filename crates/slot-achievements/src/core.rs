@@ -114,6 +114,11 @@ impl RetroCore for Tracked {
     fn serialize(&mut self) -> Result<Vec<u8>, CoreError> {
         self.core.serialize()
     }
+    fn serialize_into(&mut self, output: &mut Vec<u8>) -> Result<(), CoreError> {
+        // Forward directly to the underlying core. Speculative snapshots
+        // never notify the RetroAchievements evaluator.
+        self.core.serialize_into(output)
+    }
     fn unserialize(&mut self, data: &[u8]) -> Result<(), CoreError> {
         self.core.unserialize(data)?;
         self.timeline += 1;
