@@ -204,13 +204,16 @@ class MainActivity : Activity() {
                 1 -> openRomFolderPicker()
                 2 -> refreshLibrary()
                 3 -> {
-                    // Keep the native Slot menu visible until the Android
-                    // account Dialog.show() has returned, avoiding the shelf flash.
-                    // Finally also unwinds the native guard on dialog errors.
                     try {
+                        // Dialog.show() returns before Android's first
+                        // composited frame. The RA dialog's dismiss callback,
+                        // not this call, owns closing the native Slot Menu.
                         openRetroAchievementsAccount()
-                    } finally {
+                    } catch (error: Exception) {
                         nativeExternalReturn()
+                        Log.e(TAG, "Unable to open RetroAchievements", error)
+                        SlotToast.makeText(this@MainActivity,
+                            "Unable to open RetroAchievements.", Toast.LENGTH_SHORT).show()
                     }
                 }
                 4 -> openBiosFolderPicker()
@@ -886,7 +889,8 @@ class MainActivity : Activity() {
             panel = RaPanelDialog(
                 activity = this, username = existing,
                 onRefresh = { refreshRaPanel(panel, existing) },
-                onSignOut = { confirmRaSignOut(panel, existing) }
+                onSignOut = { confirmRaSignOut(panel, existing) },
+                onDismiss = { nativeExternalReturn() }
             )
             panel.show()
             // Show last known values immediately when reopening the dashboard.
@@ -913,7 +917,8 @@ class MainActivity : Activity() {
             "RETROACHIEVEMENTS",
             "Connect directly to RetroAchievements using HTTPS. " +
                 "Your password is never stored; only the returned account token " +
-                "is kept in app-private storage. GBA uses Casual (softcore)."
+                "is kept in app-private storage. GBA uses Casual (softcore).",
+            onDismiss = { nativeExternalReturn() }
         )
         val username = login.addInput("USERNAME", "RetroAchievements username")
         val password = login.addInput("PASSWORD", "Password (not saved)", password = true)
