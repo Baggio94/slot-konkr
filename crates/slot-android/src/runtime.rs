@@ -1137,7 +1137,8 @@ impl Engine {
                                 19 | 20 => {
                                     self.overlay = ShelfOverlay::Menu { row: move_menu_row(row, code, 6) };
                                 }
-                                96 => {
+                                // Debounce taps while Apps, Studio or RA is opening.
+                                96 if !self.external_pending => {
                                     self.overlay = match row {
                                         0 => ShelfOverlay::Library { row: 0 },
                                         1 => {
