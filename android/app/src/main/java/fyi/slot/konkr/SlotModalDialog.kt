@@ -155,6 +155,7 @@ internal class SlotModalDialog(
     fun show() {
         dialog.show()
         dialog.window?.apply {
+            setWindowAnimations(R.style.SlotWindowAnimation)
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
             setDimAmount(.74f)
