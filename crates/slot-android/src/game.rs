@@ -255,8 +255,8 @@ impl GameSession {
             else { pressed.without_turbo() };
         for _ in 0..frames {
             self.core.run_speculative_frame(mapped);
-            // The audio and rumble of speculative frames must never reach Android.
-            let _ = self.core.take_audio();
+            // Discard predicted audio without reallocating libretro's buffer.
+            self.core.discard_audio();
         }
         self.runahead_video.extend_from_slice(self.core.video_xrgb8888());
         if let Err(error) = self.core.restore_speculative_state(&self.runahead_state) {
