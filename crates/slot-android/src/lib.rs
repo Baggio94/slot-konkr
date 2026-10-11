@@ -3,6 +3,7 @@
 //! Stage M1: display-only preview carts, not executable games.
 mod library;
 mod settings;
+mod emulation;
 // Directly compile the original Cart Studio No-Intro DAT matching code and tests.
 // Pinned verbatim at third_party/slot-cart-studio, never reinterpret CRCs.
 #[allow(dead_code)]
