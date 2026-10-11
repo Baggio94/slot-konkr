@@ -842,7 +842,7 @@ class MainActivity : Activity() {
         val username = login.addInput("USERNAME", "RetroAchievements username")
         val password = login.addInput("PASSWORD", "Password (not saved)", password = true)
         login.addButton("CANCEL") { login.dismiss() }
-        login.addButton("SIGN IN") {
+        val signIn = login.addButton("SIGN IN") {
             val name = username.text.toString().trim()
             val secret = password.text.toString()
             if (name.isEmpty() || secret.isEmpty()) {
@@ -873,6 +873,12 @@ class MainActivity : Activity() {
                     }
                 }
             }
+        }
+        password.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                signIn.performClick()
+                true
+            } else false
         }
         login.show()
     }
