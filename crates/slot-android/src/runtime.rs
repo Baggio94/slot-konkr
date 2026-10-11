@@ -2351,9 +2351,8 @@ impl Engine {
                 // opt-in DISPLAY SYNC mode ONLY. No extra libretro frames
                 // can run in any single callback; Beta 4 catch-up stays gone.
                 if profile.display_sync_pacing && responsive {
-                    let (debt, _) = crate::settings::frame_debt_display_sync(
+                    self.game_accum = crate::settings::frame_debt_display_sync(
                         self.game_accum, f64::from(dt), multiplier, period);
-                    self.game_accum = debt;
                 } else {
                     self.game_accum = crate::settings::frame_debt(
                         self.game_accum, f64::from(dt), multiplier, period, fast, responsive);
