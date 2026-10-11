@@ -23,6 +23,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import java.util.concurrent.Executors
 
 /**
  * Optional HOME launcher with a manually managed D-pad selection.
@@ -36,10 +37,23 @@ class AppsActivity : Activity() {
     companion object {
         private const val TAG = "SlotApps"
         private const val COLUMNS = 5
+        // A reopened Apps activity in the same slot. process can show the
+        // previous list immediately. Every opening refreshes it in the worker
+        // so installation/uninstallation changes are still picked up.
+        @Volatile private var lastEntries: List<Entry> = emptyList()
+        // Drawable constant states carry no Activity views. Reopening Apps
+        // keeps decoded launcher artwork rather than flashing placeholders.
+        private val lastIconStates = LinkedHashMap<String, Drawable.ConstantState>()
     }
 
     private data class Entry(val label: String, val packageName: String, val launch: Intent)
-    private var entries: List<Entry> = emptyList()
+    private var entries: List<Entry> = lastEntries
+    private val appLoader = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "slot-app-list-and-icons").apply {
+            priority = Thread.NORM_PRIORITY - 1
+        }
+    }
+    private val iconRequests = HashSet<String>()
     private lateinit var grid: GridView
     private lateinit var homeButton: TextView
     private lateinit var appsAdapter: BaseAdapter
@@ -66,9 +80,9 @@ class AppsActivity : Activity() {
         if (selected) setStroke(dp(2), SlotUi.ink)
     }
 
-    private fun loadApps() {
+    private fun loadApps(): List<Entry> {
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        entries = packageManager.queryIntentActivities(intent, 0)
+        return packageManager.queryIntentActivities(intent, 0)
             .mapNotNull { info ->
                 val component = info.activityInfo ?: return@mapNotNull null
                 if (component.packageName == packageName) return@mapNotNull null
@@ -92,11 +106,12 @@ class AppsActivity : Activity() {
             View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
             View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
         )
-        loadApps()
+        // Never synchronously enumerate all package metadata on the Android
+        // main thread before the first Apps frame can be presented.
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(SlotUi.background)
-            setPadding(dp(22), dp(10), dp(22), dp(15))
+            setPadding(dp(22), dp(10), dp(22), dp(4))
             isFocusableInTouchMode = true
         }
         setContentView(root)
@@ -125,6 +140,11 @@ class AppsActivity : Activity() {
             verticalSpacing = dp(12)
             stretchMode = GridView.STRETCH_COLUMN_WIDTH
             selector = plate(Color.TRANSPARENT)
+            // Hide Android's scrollbar, never the controller-scrolled content.
+            isVerticalScrollBarEnabled = false
+            isHorizontalScrollBarEnabled = false
+            isSmoothScrollbarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
             clipToPadding = false
             setPadding(0, dp(3), 0, dp(8))
         }
@@ -160,11 +180,13 @@ class AppsActivity : Activity() {
                     tile = Tile(icon, title)
                     root.tag = tile
                 }
-                val cached = iconCache.getOrPut(entry.packageName) {
-                    runCatching { packageManager.getApplicationIcon(entry.packageName) }
-                        .getOrElse { packageManager.defaultActivityIcon }
-                }
-                tile.icon.setImageDrawable(cached.constantState?.newDrawable(resources) ?: cached)
+                val cached = iconCache[entry.packageName]
+                    ?: lastIconStates[entry.packageName]?.newDrawable(resources)
+                tile.icon.setImageDrawable(
+                    cached?.constantState?.newDrawable(resources)
+                        ?: cached ?: packageManager.defaultActivityIcon
+                )
+                if (cached == null) requestIcon(entry.packageName)
                 tile.title.text = entry.label
                 root.contentDescription = entry.label
                 val selected = !homeSelected && position == selectedIndex
@@ -188,6 +210,62 @@ class AppsActivity : Activity() {
         root.addView(controllerLegend())
         updateSelection(null, false)
         root.requestFocus()
+        refreshAppsAsync()
+    }
+
+    private fun refreshAppsAsync() {
+        appLoader.execute {
+            val fresh = runCatching { loadApps() }.getOrElse { error ->
+                Log.w(TAG, "Unable to refresh installed app list", error)
+                return@execute
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                lastEntries = fresh
+                val current = entries.getOrNull(selectedIndex)?.launch?.component
+                entries = fresh
+                val retained = entries.indexOfFirst { it.launch.component == current }
+                selectedIndex = if (retained >= 0) retained
+                    else selectedIndex.coerceIn(0, (entries.size - 1).coerceAtLeast(0))
+                appsAdapter.notifyDataSetChanged()
+                updateSelection(null, !homeSelected)
+            }
+        }
+    }
+
+    /** Decode launcher icons in the background, applying only to matching tiles. */
+    private fun requestIcon(appPackage: String) {
+        if (!iconRequests.add(appPackage)) return
+        appLoader.execute {
+            val icon = runCatching { packageManager.getApplicationIcon(appPackage) }
+                .getOrElse { packageManager.defaultActivityIcon }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                iconCache[appPackage] = icon
+                icon.constantState?.let { state ->
+                    lastIconStates[appPackage] = state
+                    // Keep a bounded icon cache, not the entire system icon DB.
+                    if (lastIconStates.size > 200) {
+                        val oldest = lastIconStates.keys.firstOrNull()
+                        if (oldest != null) lastIconStates.remove(oldest)
+                    }
+                }
+                iconRequests.remove(appPackage)
+                val first = grid.firstVisiblePosition
+                for (i in 0 until grid.childCount) {
+                    if (entries.getOrNull(first + i)?.packageName != appPackage) continue
+                    val tile = grid.getChildAt(i)?.tag as? Tile ?: continue
+                    tile.icon.setImageDrawable(
+                        icon.constantState?.newDrawable(resources) ?: icon
+                    )
+                }
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        appLoader.shutdownNow()
+        super.onDestroy()
     }
 
     /**
@@ -225,7 +303,11 @@ class AppsActivity : Activity() {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(0, dp(8), 0, dp(7))
+            // Midpoint between RC2's tightly fitted band and RC3's 52dp:
+            // keep the actual upstream controller hint PNGs unchanged and
+            // centered on both axes with NO extra internal padding.
+            minimumHeight = dp(46)
+            setPadding(0, 0, 0, 0)
             addView(hint("move"))
             val open = hint("open")
             (open.layoutParams as LinearLayout.LayoutParams).leftMargin = spacing
@@ -355,6 +437,11 @@ class AppsActivity : Activity() {
         SlotToast.makeText(this,
             "This device doesn't provide a Home app chooser.",
             Toast.LENGTH_LONG).show()
+    }
+
+    override fun finish() {
+        super.finish()
+        SlotTransitions.close(this)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {

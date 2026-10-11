@@ -26,6 +26,21 @@ internal object RaDiagnostics {
         val badgesPercent: Int?,
     )
 
+    private data class PatchEntry(
+        val length: Long, val modified: Long,
+        val prepared: Boolean, val badgeIds: Set<String>
+    )
+    private data class BadgeEntry(val length: Long, val modified: Long, val valid: Boolean)
+
+    // Heavy decoding is performed by the single scanner executor, not Android
+    // UI/GL. A change in file size/mtime invalidates a memoized entry.
+    private val patches = HashMap<String, PatchEntry>()
+    private val badgeFiles = HashMap<String, BadgeEntry>()
+    private val lastSnapshots = HashMap<String, Snapshot>()
+
+    @Synchronized
+    fun lastSnapshot(username: String): Snapshot? = lastSnapshots[accountKey(username)]
+
     /** Unknown denominator must not be misrepresented as 0% or 100%. */
     internal fun badgePercentage(downloaded: Int, total: Int): Int? =
         if (total <= 0) null else downloaded.coerceIn(0, total) * 100 / total
@@ -40,7 +55,10 @@ internal object RaDiagnostics {
         if (!file.isFile || file.length() !in 1L..limit) null
         else runCatching { JSONObject(file.readText(Charsets.UTF_8)) }.getOrNull()
 
-    fun inspect(root: File, username: String): Snapshot {
+    fun inspect(
+        root: File, username: String,
+        onRulesReady: ((Snapshot) -> Unit)? = null,
+    ): Snapshot {
         val account = File(root, "Saves/RetroAchievements/" + accountKey(username))
         val ledger = File(account, "unlocks.json")
         var pending: Int? = 0
@@ -119,34 +137,63 @@ internal object RaDiagnostics {
             }
         }
         var cached = 0
-        // Include only unique official achievement badge IDs referenced by
-        // valid, account-scoped GBA patches. The total grows as new games are
-        // prepared, so this is "known badges", NOT percent of game preparation.
+        // The patch index changes rarely; reuse a parsed patch only if its
+        // account-specific file identity and metadata still match.
         val badgeIds = HashSet<String>()
         for (hash in discovered) {
             val file = File(account, "$hash.json")
             if (!file.isFile || file.length() !in 4L..(8L * 1024 * 1024)) continue
-            // A cached game is a [patch, unlockedIds] array, not an icon download.
-            val prepared = runCatching {
-                val data = JSONArray(file.readText(Charsets.UTF_8))
-                val patch = data.optJSONObject(0)
-                if (data.length() != 2 || patch?.optInt("ConsoleID") != 5) false
-                else {
-                    val achievements = patch.optJSONArray("Achievements")
-                    if (achievements != null) {
-                        for (i in 0 until achievements.length()) {
-                            val a = achievements.optJSONObject(i) ?: continue
-                            if (a.optInt("Flags", 0) != 3) continue
-                            val badge = a.optString("BadgeName")
-                            if (badge.matches(Regex("[A-Za-z0-9_]{1,64}")))
-                                badgeIds.add(badge)
+            val fileKey = file.absolutePath
+            val size = file.length()
+            val modified = file.lastModified()
+            val old = patches[fileKey]
+            val entry = if (old != null && old.length == size && old.modified == modified) {
+                old
+            } else {
+                val parsed = runCatching {
+                    val data = JSONArray(file.readText(Charsets.UTF_8))
+                    val patch = data.optJSONObject(0)
+                    if (data.length() != 2 || patch?.optInt("ConsoleID") != 5)
+                        Pair(false, emptySet<String>())
+                    else {
+                        val ids = HashSet<String>()
+                        val achievements = patch.optJSONArray("Achievements")
+                        if (achievements != null) {
+                            for (i in 0 until achievements.length()) {
+                                val a = achievements.optJSONObject(i) ?: continue
+                                if (a.optInt("Flags", 0) != 3) continue
+                                val badge = a.optString("BadgeName")
+                                if (badge.matches(Regex("[A-Za-z0-9_]{1,64}")))
+                                    ids.add(badge)
+                            }
                         }
+                        Pair(true, ids.toSet())
                     }
-                    true
-                }
-            }.getOrDefault(false)
-            if (prepared) cached++
+                }.getOrElse { Pair(false, emptySet<String>()) }
+                PatchEntry(size, modified, parsed.first, parsed.second)
+                    .also { patches[fileKey] = it }
+            }
+            if (entry.prepared) {
+                cached++
+                badgeIds.addAll(entry.badgeIds)
+            }
         }
+
+        val preliminary = Snapshot(
+            libraryGba = if (games != null) totalGba else null,
+            indexedGba = if (games != null) discovered.size else null,
+            cachedGba = if (games != null) cached else null,
+            pendingAwards = pending,
+            recordedAwards = recorded,
+            warning = warning,
+            prefetchBudgetUsed = budgetUsed,
+            nextBatchMinutes = nextBatchMinutes,
+            badgesDownloaded = null,
+            badgesTotal = badgeIds.size.takeIf { it > 0 },
+            badgesPercent = null,
+        )
+        onRulesReady?.invoke(preliminary)
+
         // This is deliberately run on the diagnostics I/O executor, never the
         // UI or GL thread. Bounding file size/dimensions prevents malformed or
         // missing images being counted as successfully downloaded badges.
@@ -155,15 +202,27 @@ internal object RaDiagnostics {
         for (name in badgeIds) {
             val file = File(badgeRoot, "$name.png")
             if (!file.isFile || file.length() !in 1L..(128L * 1024)) continue
-            val valid = runCatching {
-                val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeFile(file.absolutePath, opts)
-                opts.outWidth in 1..256 && opts.outHeight in 1..256
-            }.getOrDefault(false)
-            if (valid) validBadgeCount++
+            val fileKey = file.absolutePath
+            val size = file.length()
+            val modified = file.lastModified()
+            val previous = badgeFiles[fileKey]
+            val isValid = if (previous != null &&
+                previous.length == size && previous.modified == modified
+            ) {
+                previous.valid
+            } else {
+                val decoded = runCatching {
+                    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeFile(file.absolutePath, opts)
+                    opts.outWidth in 1..256 && opts.outHeight in 1..256
+                }.getOrDefault(false)
+                badgeFiles[fileKey] = BadgeEntry(size, modified, decoded)
+                decoded
+            }
+            if (isValid) validBadgeCount++
         }
         val badgeTotal = badgeIds.size.takeIf { it > 0 }
-        return Snapshot(
+        val result = Snapshot(
             libraryGba = if (games != null) totalGba else null,
             indexedGba = if (games != null) discovered.size else null,
             cachedGba = if (games != null) cached else null,
@@ -176,5 +235,23 @@ internal object RaDiagnostics {
             badgesTotal = badgeTotal,
             badgesPercent = badgePercentage(validBadgeCount, badgeIds.size),
         )
+        synchronized(this) { lastSnapshots[accountKey(username)] = result }
+        return result
+    }
+
+    /** Only the journal is needed for logout; never scan 115 ROMs + PNGs. */
+    fun pendingForSignOut(root: File, username: String): Int? {
+        val journal = File(root, "Saves/RetroAchievements/" +
+            accountKey(username) + "/unlocks.json")
+        if (!journal.exists()) return 0
+        val data = readJson(journal) ?: return null
+        val keys = data.keys()
+        var pending = 0
+        while (keys.hasNext()) {
+            val award = data.optJSONObject(keys.next()) ?: return null
+            if (!award.has("synced")) return null
+            if (!award.optBoolean("synced")) pending++
+        }
+        return pending
     }
 }
