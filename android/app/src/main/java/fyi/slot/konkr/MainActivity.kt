@@ -818,6 +818,16 @@ class MainActivity : Activity() {
             )
             panel.show()
             refreshRaPanel(panel, existing)
+            // Badge downloads continue in the native HTTP worker; update this
+            // read-only dashboard automatically without requiring a new tap.
+            val liveUpdates = object : Runnable {
+                override fun run() {
+                    if (isDestroyed || !panel.isShowing()) return
+                    refreshRaPanel(panel, existing)
+                    uiHandler.postDelayed(this, 15_000L)
+                }
+            }
+            uiHandler.postDelayed(liveUpdates, 15_000L)
             return
         }
 
