@@ -86,6 +86,11 @@ pub trait RetroCore: Send {
     }
     fn load(&mut self, rom: &Path) -> Result<(), CoreError>;
     fn run_frame(&mut self, input: ButtonMask);
+    /// A speculative video-only frame. Wrappers must not dispatch gameplay events,
+    /// achievements or save notifications from this provisional timeline.
+    fn run_speculative_frame(&mut self, input: ButtonMask) {
+        self.run_frame(input);
+    }
     fn run_frame_linked(&mut self, p1: ButtonMask, _p2: ButtonMask) {
         self.run_frame(p1);
     }
@@ -97,6 +102,10 @@ pub trait RetroCore: Send {
     fn recycle_audio(&mut self, _audio: Vec<i16>) {}
     fn serialize(&mut self) -> Result<Vec<u8>, CoreError>;
     fn unserialize(&mut self, data: &[u8]) -> Result<(), CoreError>;
+    /// Revert speculative execution without announcing a user timeline jump.
+    fn restore_speculative_state(&mut self, data: &[u8]) -> Result<(), CoreError> {
+        self.unserialize(data)
+    }
     fn save_ram(&self) -> Option<Vec<u8>>;
     fn load_save_ram(&mut self, data: &[u8]) -> Result<(), CoreError>;
     /// Optional libretro RETRO_MEMORY_RTC (Game Boy / Color battery clock).
