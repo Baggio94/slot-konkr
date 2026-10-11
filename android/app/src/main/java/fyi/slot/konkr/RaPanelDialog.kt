@@ -2,6 +2,9 @@ package fyi.slot.konkr
 
 import android.app.Activity
 import android.app.Dialog
+import android.graphics.drawable.ColorDrawable
+import android.widget.FrameLayout
+import android.view.ViewGroup
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -32,7 +35,9 @@ internal class RaPanelDialog(
             .getOrElse { Typeface.create("sans-serif-condensed", Typeface.BOLD) }
     }
     private fun dp(x: Int): Int = (x * activity.resources.displayMetrics.density + .5f).toInt()
-    private val dialog: Dialog = object : Dialog(activity) {
+    private val dialog: Dialog = object : Dialog(
+        activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen
+    ) {
         override fun dispatchKeyEvent(event: KeyEvent): Boolean {
             if (event.keyCode == KeyEvent.KEYCODE_BUTTON_B) {
                 if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) dismiss()
@@ -78,17 +83,41 @@ internal class RaPanelDialog(
         content.addView(line)
     }
 
+    private fun section(title: String) {
+        content.addView(text(title, 14.5f, ink).apply {
+            setPadding(0, dp(13), 0, dp(6))
+        })
+        content.addView(separator(), LinearLayout.LayoutParams(-1, dp(1)))
+    }
+
+    private fun badgeProgress(percent: Int?) {
+        val pct = percent?.coerceIn(0, 100)
+        val rail = FrameLayout(activity).apply {
+            setBackgroundColor(Color.rgb(60, 57, 66))
+            minimumHeight = dp(7)
+        }
+        val fill = View(activity).apply {
+            setBackgroundColor(Color.rgb(215, 207, 190))
+        }
+        rail.addView(fill, FrameLayout.LayoutParams(0, dp(7), Gravity.START))
+        content.addView(rail, LinearLayout.LayoutParams(-1, dp(7)).apply {
+            topMargin = dp(4)
+            bottomMargin = dp(8)
+        })
+        rail.post {
+            fill.layoutParams = (fill.layoutParams as FrameLayout.LayoutParams).apply {
+                width = if (pct == null) 0 else (rail.width * pct / 100)
+            }
+        }
+    }
+
     fun show() {
         val root = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(22), dp(16), dp(22), dp(14))
-            background = GradientDrawable().apply {
-                setColor(Color.rgb(23, 22, 25))
-                setStroke(dp(1), border)
-                cornerRadius = dp(3).toFloat()
-            }
+            setPadding(dp(37), dp(18), dp(37), dp(15))
+            setBackgroundColor(Color.rgb(23, 22, 25))
         }
-        root.addView(text("RETROACHIEVEMENTS", 19f), LinearLayout.LayoutParams(-1, dp(37)))
+        root.addView(text("RETROACHIEVEMENTS", 23f), LinearLayout.LayoutParams(-1, dp(43)))
         root.addView(separator(), LinearLayout.LayoutParams(-1, dp(1)))
         val scroll = ScrollView(activity).apply {
             isFillViewport = false
@@ -125,32 +154,49 @@ internal class RaPanelDialog(
         }
         addAction("REFRESH", onRefresh)
         addAction("SIGN OUT", onSignOut)
-        addAction("CLOSE") { dialog.dismiss() }
+        val hint = text("B   BACK", 12f, muted).apply {
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+        }
+        actions.addView(hint, LinearLayout.LayoutParams(0, dp(39), 1f))
         root.addView(actions)
         dialog.setContentView(root)
-        dialog.window?.apply {
-            setBackgroundDrawableResource(android.R.color.transparent)
-            addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-            setDimAmount(.68f)
-        }
         dialog.show()
-        val display = activity.resources.displayMetrics
-        dialog.window?.setLayout((display.widthPixels * .70f).toInt(),
-            (display.heightPixels * .77f).toInt())
+        dialog.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.rgb(23, 22, 25)))
+            addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            )
+        }
         actions.getChildAt(0)?.requestFocus()
     }
 
     fun update(engine: String, snapshot: RaDiagnostics.Snapshot) {
         if (!dialog.isShowing) return
         content.removeAllViews()
-        row("Account", username)
+        section("ACCOUNT")
+        row("Player", username)
         row("Connection", "Direct to RA")
         row("Engine", engine)
         row("Mode", "Casual")
+        section("GAME CACHE")
         row("GBA ROMs", snapshot.libraryGba?.toString() ?: "Not indexed")
         val cached = snapshot.cachedGba?.toString() ?: "Unknown"
         val indexed = snapshot.indexedGba?.toString() ?: "?"
         row("GBA prepared", "$cached / $indexed indexed")
+        section("ACHIEVEMENT BADGES")
+        val badgesDownloaded = snapshot.badgesDownloaded
+        val badgesTotal = snapshot.badgesTotal
+        val imageValue = if (badgesDownloaded != null && badgesTotal != null)
+            "$badgesDownloaded / $badgesTotal    ${snapshot.badgesPercent}%"
+        else "Not indexed"
+        row("Images downloaded", imageValue)
+        badgeProgress(snapshot.badgesPercent)
+        section("SYNC & AWARDS")
         val budgetUsed = snapshot.prefetchBudgetUsed
         if (budgetUsed != null) {
             row("Cache requests", "$budgetUsed / 100 (30 min)")
@@ -161,7 +207,8 @@ internal class RaPanelDialog(
         row("Awards saved", snapshot.recordedAwards?.toString() ?: "Unknown")
         row("GB / GBC", "Not supported yet")
         val note = snapshot.warning ?:
-            "GBA definitions only. Account awards and cached games stay on this device after sign out."
+            "Image percentage covers unique badges of GBA games already prepared. " +
+                "New games can increase the total. Local awards remain after sign out."
         content.addView(text(note, 11f, muted).apply {
             setPadding(0, dp(15), 0, dp(2))
         })
