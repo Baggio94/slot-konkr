@@ -66,3 +66,23 @@ The original Cart Studio web editor and OS file/Home dialogs need no redesign.
 
 Keep PR #4 **DRAFT** until physical acceptance. CI tests/checks are necessary
 but do not validate focus order and keyboard rendering on the KONKR.
+
+
+## Follow-up review of focus and controller chrome
+
+The shared `SlotUi.hint` renders A/B keycaps in the source Slot cream/charcoal
+font palette; this is reused in the full-screen RA dashboard (B Back) and in
+both sign-in and sign-out modals (A Select / B Back), instead of plain Unicode
+key characters. The Apps footer retains the **pixel-exact** upstream-exported
+keycap images from the prior PR.
+
+The login form starts with focus on Username without automatically summoning
+the Android keyboard. Gamepad A opens the system keyboard on an EditText, B
+dismisses the dialog, and IME Done attempts login. Errors are rendered after
+the password field, not in a separate Android Toast, and remain readable
+within the scroll container. The OS password transformation is configured
+before assigning the original Slot font; no password is written to disk.
+
+A dedicated, app-owned dialog explicitly requests `FEATURE_NO_TITLE` before
+inflating content, so there is no accidental Android/Material title bar
+behind Slot's own heading. Only the actual Android IME remains system-styled.
