@@ -45,8 +45,8 @@ internal object SlotToast {
             // flat charcoal plate, quiet hairline, wide-tracked Open Sans.
             val background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                setColor(Color.rgb(23, 22, 25))
-                setStroke(dp(1), Color.rgb(91, 89, 96))
+                setColor(SlotUi.background)
+                setStroke(dp(1), SlotUi.rule)
                 cornerRadius = dp(4).toFloat()
             }
             val row = LinearLayout(context).apply {
@@ -69,10 +69,9 @@ internal object SlotToast {
             val text = TextView(context).apply {
                 this.text = friendly.uppercase(java.util.Locale.getDefault())
                 textSize = 12.5f
-                typeface = android.graphics.Typeface.create("sans-serif-condensed",
-                    android.graphics.Typeface.BOLD)
-                letterSpacing = .14f
-                setTextColor(Color.rgb(243, 241, 246))
+                typeface = SlotUi.font(context)
+                letterSpacing = .09f
+                setTextColor(SlotUi.ink)
                 maxLines = 3
                 contentDescription = friendly
             }
