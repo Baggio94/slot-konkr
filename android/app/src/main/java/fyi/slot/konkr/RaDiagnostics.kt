@@ -19,6 +19,8 @@ internal object RaDiagnostics {
         val pendingAwards: Int?,
         val recordedAwards: Int?,
         val warning: String?,
+        val prefetchBudgetUsed: Int?,
+        val nextBatchMinutes: Int?,
     )
 
     internal fun accountKey(username: String): String {
@@ -95,6 +97,20 @@ internal object RaDiagnostics {
                 discovered.add(hash)
             }
         }
+        val budget = readJson(File(account, "smart-prefetch-budget.json"))
+        val attempts = budget?.optJSONArray("attempts")
+        val now = System.currentTimeMillis() / 1000
+        var budgetUsed: Int? = null
+        var nextBatchMinutes: Int? = null
+        if (attempts != null) {
+            val valid = (0 until attempts.length()).map { attempts.optLong(it, -1) }
+                .filter { it in (now - 1799)..now }
+            budgetUsed = valid.size
+            if (valid.size >= 100) {
+                val availableAt = (valid.minOrNull() ?: now) + 1800
+                nextBatchMinutes = ((availableAt - now + 59) / 60).toInt().coerceAtLeast(1)
+            }
+        }
         var cached = 0
         for (hash in discovered) {
             val file = File(account, "$hash.json")
@@ -113,6 +129,8 @@ internal object RaDiagnostics {
             pendingAwards = pending,
             recordedAwards = recorded,
             warning = warning,
+            prefetchBudgetUsed = budgetUsed,
+            nextBatchMinutes = nextBatchMinutes,
         )
     }
 }
