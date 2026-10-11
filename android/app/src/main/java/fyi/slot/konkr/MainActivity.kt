@@ -297,7 +297,9 @@ class MainActivity : Activity() {
         val frame = FrameLayout(this)
         frame.addView(view, FrameLayout.LayoutParams(-1, -1))
         status = TextView(this).apply {
-            setTextColor(Color.WHITE)
+            typeface = SlotUi.font(this@MainActivity)
+            letterSpacing = .09f
+            setTextColor(SlotUi.ink)
             setBackgroundColor(Color.TRANSPARENT)
             textSize = 15f
             gravity = Gravity.CENTER
