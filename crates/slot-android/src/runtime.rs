@@ -7,6 +7,7 @@ use crate::game::GameSession;
 use crate::settings::Settings;
 use crate::video_mode::{self, VideoMode};
 use crate::core_selection;
+use crate::cart_render::CartRender;
 use crate::core_picker::{CorePicker, Press};
 use slot_retro::ButtonMask;
 use jni::{JNIEnv, objects::{JObject, JString}, sys::{jint, jboolean, jshortArray, jstring}};
@@ -83,12 +84,19 @@ const CART_EJECT_SFX: i32 = 2;
 // Exact upstream Slot timeline: 450ms mechanical seating + 280ms hold.
 const INSERT_S: f32 = 0.73;
 const SEATED_AT: f32 = 0.45;
-const INSERT_SOUND_PROGRESS: f32 = (SEATED_AT - 0.24) / SEATED_AT;
+// Original Slot starts the 48-kHz insert clip 97ms before the cart seats,
+// so the recorded contact lands at 450ms, not 143ms early.
+const INSERT_SOUND_LEAD_S: f32 = 0.097;
+const INSERT_SOUND_PROGRESS: f32 = (SEATED_AT - INSERT_SOUND_LEAD_S) / SEATED_AT;
 // Upstream Slot screen power transition times (app.rs).
 const SCREEN_POWER_ON_S: f32 = 0.22;
 const SCREEN_POWER_OFF_S: f32 = 0.16;
 const EJECT_S: f32 = 0.45;
 const EJECT_HOLD_S: f32 = 0.35; // Original Slot hold after CRT-off.
+// Slightly later than upstream's first-motion eject click, by request:
+// retain the original 160ms CRT + 350ms hold + 450ms travel unchanged.
+const EJECT_SOUND_DELAY_S: f32 = 0.040;
+const EJECT_SOUND_PROGRESS: f32 = 1.0 - EJECT_SOUND_DELAY_S / EJECT_S;
 const SELECT_CHORD_MS: u128 = 600;
 const SELECT_TAP_FRAMES: u8 = 3;
 const REWIND_STEP_S: f32 = 0.10;  // Original Slot's time-travel HUD + ~10 Hz restoration.
@@ -162,10 +170,10 @@ enum ShelfOverlay {
     States,
 }
 
-const MENU_TEXT: [&str; 48] = [
+const MENU_TEXT: [&str; 49] = [
     "MENU",                             // 0
     "Library",                          // 1
-    "Scraping",                         // 2
+    "Cart Studio",                      // 2
     "RetroAchievements",               // 3
     "A Select     B Back",              // 4
     "LIBRARY",                          // 5
@@ -174,8 +182,8 @@ const MENU_TEXT: [&str; 48] = [
     "Choose Save State Folder",        // 8
     "Refresh Library",                 // 9
     "RetroArch core folders",           // 10
-    "SCRAPING",                         // 11
-    "Artwork scraping coming soon",    // 12
+    "CART STUDIO",                      // 11
+    "A: Open Cart Studio",             // 12
     "RETROACHIEVEMENTS",               // 13
     "A: Check RAOfflineProxy status",    // 14
     "SELECT CORE",                      // 15
@@ -203,14 +211,15 @@ const MENU_TEXT: [&str; 48] = [
     "Rewind",                           // 37
     "Turbo Buttons",                    // 38
     "Auto Save on Eject",               // 39
-    "Personalization",                  // 40
-    "PERSONALIZATION",                  // 41
+    "Customize",                        // 40
+    "CUSTOMIZE",                        // 41
     "Import Theme",                     // 42
     "Import Wallpaper",                 // 43
     "Reset Theme",                      // 44
     "Remove Wallpaper",                 // 45
     "Import Selected Cart Label",       // 46
     "Remove Selected Cart Label",       // 47
+    "Apps",                             // 48
 ];
 
 struct Engine {
@@ -233,6 +242,7 @@ struct Engine {
     last: Instant,
     library_version: u64,
     texture_cache: VecDeque<(usize, usize, slot_gfx::TexId)>,
+    cart_render: CartRender,
     game: Option<GameSession>,
     pending_game: Option<GameSession>,
     buttons: u16,
@@ -253,6 +263,8 @@ struct Engine {
     setting_carets: [(slot_gfx::TexId, u32, u32); 2],
     settings_hints: [(slot_gfx::TexId, u32); 2],
     about_texture: Option<slot_gfx::TexId>,
+    // Rebuilt when opening Customize, not queried from disk each GL frame.
+    customize_items: Vec<usize>,
     menu_seen: u8,
     menu_opened: Instant,
     menu_cursor_y: f32,
@@ -456,6 +468,7 @@ impl Engine {
             last: now,
             library_version,
             texture_cache: VecDeque::new(),
+            cart_render: CartRender::start()?,
             game: None,
             pending_game: None,
             buttons: 0,
@@ -476,6 +489,7 @@ impl Engine {
             setting_carets,
             settings_hints,
             about_texture,
+            customize_items: vec![43],
             menu_seen: 0,
             menu_opened: now,
             menu_cursor_y: 0.0,
@@ -995,15 +1009,27 @@ impl Engine {
                         match self.overlay {
                             ShelfOverlay::Menu { row } => match code {
                                 19 | 20 => {
-                                    self.overlay = ShelfOverlay::Menu { row: move_menu_row(row, code, 5) };
+                                    self.overlay = ShelfOverlay::Menu { row: move_menu_row(row, code, 6) };
                                 }
                                 96 => {
                                     self.overlay = match row {
                                         0 => ShelfOverlay::Library { row: 0 },
-                                        1 => ShelfOverlay::Scraping,
+                                        1 => {
+                                            // Show the entire indexed GB/GBC/GBA library.
+                                            UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
+                                                .push_back(14);
+                                            ShelfOverlay::None
+                                        },
                                         2 => ShelfOverlay::Achievements,
-                                        3 => ShelfOverlay::Settings { row: 0 },
-                                        _ => ShelfOverlay::Personalization { row: 0 },
+                                        3 => {
+                                            UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(15);
+                                            ShelfOverlay::None
+                                        },
+                                        4 => ShelfOverlay::Settings { row: 0 },
+                                        _ => {
+                                            self.prepare_about();
+                                            ShelfOverlay::About
+                                        },
                                     };
                                 }
                                 97 | 108 => self.overlay = ShelfOverlay::None,
@@ -1036,11 +1062,16 @@ impl Engine {
                             },
                             ShelfOverlay::Personalization { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::Personalization {
-                                    row: move_menu_row(row, code, 6),
+                                    row: move_menu_row(row, code, self.customize_items.len()),
                                 },
                                 96 => {
-                                    let action = if row < 4 { 7 + row as i32 }
-                                                 else { 11 + (row - 4) as i32 };
+                                    let action = match self.customize_items.get(row).copied() {
+                                        Some(43) => 8,  // Import Wallpaper
+                                        Some(45) => 10, // Remove Wallpaper
+                                        Some(46) => 11, // Import Cart Label
+                                        Some(47) => 12, // Remove Cart Label
+                                        _ => return,
+                                    };
                                     if action >= 11 {
                                         if let Some(cart) = self.shelves[self.active].carts
                                             .get(self.shelves[self.active].index) {
@@ -1055,7 +1086,7 @@ impl Engine {
                                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
                                         .push_back(action);
                                 }
-                                97 => self.overlay = ShelfOverlay::Menu { row: 4 },
+                                97 => self.overlay = ShelfOverlay::Settings { row: 2 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -1067,11 +1098,11 @@ impl Engine {
                                     0 => self.overlay = ShelfOverlay::ScreenSettings { row: 0 },
                                     1 => self.overlay = ShelfOverlay::GameplaySettings { row: 0 },
                                     _ => {
-                                        self.prepare_about();
-                                        self.overlay = ShelfOverlay::About;
+                                        self.refresh_customize_items();
+                                        self.overlay = ShelfOverlay::Personalization { row: 0 };
                                     }
                                 },
-                                97 => self.overlay = ShelfOverlay::Menu { row: 3 },
+                                97 => self.overlay = ShelfOverlay::Menu { row: 4 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -1094,11 +1125,23 @@ impl Engine {
                                 _ => {}
                             },
                             ShelfOverlay::About => match code {
-                                97 | 96 => self.overlay = ShelfOverlay::Settings { row: 2 },
+                                97 | 96 => self.overlay = ShelfOverlay::Menu { row: 5 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
                             ShelfOverlay::Scraping | ShelfOverlay::Achievements => match code {
+                                96 if matches!(self.overlay, ShelfOverlay::Scraping) => {
+                                    if let Some(cart) = self.shelves[self.active].carts
+                                        .get(self.shelves[self.active].index) {
+                                        *LABEL_PICK_REQUEST.lock()
+                                            .unwrap_or_else(|e| e.into_inner()) =
+                                            Some(cart.rom.to_string_lossy().into_owned());
+                                        UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
+                                            .push_back(13);
+                                    } else {
+                                        set_message("Choose a cartridge first".into());
+                                    }
+                                }
                                 96 if matches!(self.overlay, ShelfOverlay::Achievements) => {
                                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(3);
                                 }
@@ -1150,6 +1193,15 @@ impl Engine {
                 }
                 if pressed {
                     match code {
+                        // X edits the current cartridge directly without insertion.
+                        99 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
+                            let cart = &self.shelves[self.active].carts
+                                [self.shelves[self.active].index];
+                            *LABEL_PICK_REQUEST.lock().unwrap_or_else(|e| e.into_inner()) =
+                                Some(cart.rom.to_string_lossy().into_owned());
+                            UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(13);
+                            return;
+                        }
                         108 if !self.inserted => {
                             self.shelves[self.active].release_hold();
                             self.overlay = ShelfOverlay::Menu { row: 0 };
@@ -1261,16 +1313,14 @@ impl Engine {
         }
     }
 
-    // Only rasterize visible cartridges. Recycling at most 42 GPU slots avoids
-    // allocating one image per ROM when users select a large ROMM library.
+    // Upstream Slot rasterizes its artwork on worker threads. Keep the same
+    // separation on Android: no slow PNG decode/embossing on the GLES thread.
+    // GPU texture uploads stay on their GL owner and are bounded per frame.
     fn prepare_visible(&mut self) {
-        let shelf_id = self.active;
-        let needed = self.shelves[shelf_id].on_screen();
-        for index in needed {
-            if self.shelves[shelf_id].face(index).is_some() {
-                continue;
-            }
-            let face = cart_face_with_material(&self.shelves[shelf_id].carts[index], None);
+        for _ in 0..2 {
+            let Some(((shelf_id, index), face)) = self.cart_render.ready() else { break };
+            let Some(shelf) = self.shelves.get(shelf_id) else { continue };
+            if index >= shelf.carts.len() || shelf.face(index).is_some() { continue }
             let texture = if self.texture_cache.len() >= 42 {
                 let (old_shelf, old_index, tex) = self.texture_cache
                     .pop_front().expect("nonempty texture pool");
@@ -1282,6 +1332,24 @@ impl Engine {
             };
             self.shelves[shelf_id].set_face(index, texture);
             self.texture_cache.push_back((shelf_id, index, texture));
+        }
+        let shelf_id = self.active;
+        let selected = self.shelves[shelf_id].index;
+        let mut needed = self.shelves[shelf_id].on_screen();
+        needed.sort_by_key(|&index| index.abs_diff(selected));
+        for index in needed {
+            if self.shelves[shelf_id].face(index).is_some() {
+                if let Some(pos) = self.texture_cache.iter()
+                    .position(|(s, i, _)| *s == shelf_id && *i == index)
+                {
+                    if let Some(entry) = self.texture_cache.remove(pos) {
+                        self.texture_cache.push_back(entry);
+                    }
+                }
+                continue;
+            }
+            self.cart_render.request((shelf_id, index),
+                &self.shelves[shelf_id].carts[index]);
         }
     }
 
@@ -1375,6 +1443,25 @@ impl Engine {
                 tex, alpha: 1.0 });
             x += w as f32 + 24.0;
         }
+    }
+
+    fn refresh_customize_items(&mut self) {
+        // Do not delete existing imported themes: simply hide their legacy
+        // controls. Import/reset can be reintroduced without data migration.
+        let root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .as_ref().map(|(root, _)| root.clone());
+        let mut items = vec![43]; // Import Wallpaper
+        if root.as_deref().is_some_and(|p| p.join("Wallpapers/user.png").is_file()) {
+            items.push(45); // Remove Wallpaper only when present
+        }
+        if let Some(cart) = self.shelves[self.active].carts
+            .get(self.shelves[self.active].index) {
+            items.push(46); // Import Selected Cart Label
+            if cart.label.as_deref().is_some_and(|p| p.is_file()) {
+                items.push(47); // Remove only when art exists
+            }
+        }
+        self.customize_items = items;
     }
 
     fn prepare_about(&mut self) {
@@ -1552,16 +1639,16 @@ impl Engine {
         match self.overlay {
             ShelfOverlay::None => {}
             ShelfOverlay::Menu { row } => {
-                self.draw_original_style_menu(0, &[1, 2, 3, 25, 40], row, out);
+                self.draw_original_style_menu(0, &[1, 2, 3, 48, 25, 31], row, out);
             }
             ShelfOverlay::Library { row } => {
                 self.draw_original_style_menu(5, &[6, 24, 7, 8, 9], row, out);
             }
             ShelfOverlay::Settings { row } => {
-                self.draw_original_style_menu(26, &[32, 33, 31], row, out);
+                self.draw_original_style_menu(26, &[32, 33, 40], row, out);
             }
             ShelfOverlay::Personalization { row } => {
-                self.draw_original_style_menu(41, &[42, 43, 44, 45, 46, 47], row, out);
+                self.draw_original_style_menu(41, &self.customize_items, row, out);
             }
             ShelfOverlay::ScreenSettings { row } => {
                 self.draw_original_style_menu(32, &[34, 35, 29, 36], row, out);
@@ -1770,13 +1857,13 @@ impl Engine {
         // Update full-screen menus and spring-smooth the selection bar.
         // Keep animation entirely in rendering: never delay controller input.
         let (kind, selected, count) = match self.overlay {
-            ShelfOverlay::Menu { row } => (1u8, row, 5usize),
+            ShelfOverlay::Menu { row } => (1u8, row, 6usize),
             ShelfOverlay::Library { row } => (2u8, row, 5usize),
             ShelfOverlay::GameMenu { row } => (3u8, row, 3usize),
             ShelfOverlay::Settings { row } => (4u8, row, 3usize),
             ShelfOverlay::ScreenSettings { row } => (5u8, row, 4usize),
             ShelfOverlay::GameplaySettings { row } => (6u8, row, 6usize),
-            ShelfOverlay::Personalization { row } => (7u8, row, 6usize),
+            ShelfOverlay::Personalization { row } => (7u8, row, self.customize_items.len()),
             _ => (0, 0, 0),
         };
         if kind != self.menu_seen {
@@ -2002,9 +2089,9 @@ impl Engine {
         self.prepare_visible();
         let shelf = &mut self.shelves[self.active];
 
-        // Original Slot 450ms mechanical insertion + 280ms hold. The click
-        // arrives during the last 240ms of the seating motion. Ejection
-        // continues to overlap CRT shutdown.
+        // Original Slot: 450ms seating + 280ms hold. Start the original
+        // insert clip 97ms before full contact; its embedded lead completes
+        // exactly at the seating point. Ejection follows CRT-off + black hold.
         let previous_progress = self.progress;
         self.progress = advance_cart(self.progress, self.inserted, dt);
         if self.inserted && previous_progress < INSERT_SOUND_PROGRESS
@@ -2013,7 +2100,8 @@ impl Engine {
             CART_SFX.lock().unwrap_or_else(|e| e.into_inner()).push_back(CART_INSERT_SFX);
         }
         if !self.inserted && self.eject_sound_armed
-            && self.progress < previous_progress {
+            && self.progress < previous_progress
+            && self.progress <= EJECT_SOUND_PROGRESS {
             self.eject_sound_armed = false;
             CART_SFX.lock().unwrap_or_else(|e| e.into_inner()).push_back(CART_EJECT_SFX);
         }
@@ -2200,7 +2288,31 @@ mod ui_feedback_tests {
         assert!(advance_cart(1.0, false, EJECT_S) < 0.0001);
         assert_eq!(advance_cart(0.0, true, SEATED_AT), 1.0);
         assert!((INSERT_S - SEATED_AT - 0.28).abs() < 0.001);
-        assert!((SEATED_AT * INSERT_SOUND_PROGRESS + 0.24 - SEATED_AT).abs() < 0.001);
+        // The original Slot lead is 97ms: sample impact should coincide
+        // with the end of 450ms mechanical seating.
+        assert!((SEATED_AT * INSERT_SOUND_PROGRESS + INSERT_SOUND_LEAD_S - SEATED_AT).abs() < 0.001);
+        // The requested slightly later eject click must not alter mechanics.
+        assert!((EJECT_S * (1.0 - EJECT_SOUND_PROGRESS) - 0.040).abs() < 0.001);
+    }
+
+    #[test]
+    fn cartridge_sound_thresholds_follow_motion_without_starting_early() {
+        // Insertion click is silent at 210ms, unlike the old Android port.
+        let mut seat = advance_cart(0.0, true, 0.210);
+        assert!(seat < INSERT_SOUND_PROGRESS);
+        let previous = seat;
+        seat = advance_cart(seat, true, 0.145);
+        assert!(previous < INSERT_SOUND_PROGRESS && seat >= INSERT_SOUND_PROGRESS);
+
+        // Ejection keeps the original black hold and waits a few frames
+        // of actual motion before handing off the original PCM clip.
+        let mut eject = 1.0;
+        for _ in 0..2 {
+            eject = advance_cart(eject, false, 1.0 / 60.0);
+            assert!(eject > EJECT_SOUND_PROGRESS);
+        }
+        eject = advance_cart(eject, false, 1.0 / 60.0);
+        assert!(eject <= EJECT_SOUND_PROGRESS);
     }
 
     #[test]

@@ -3,6 +3,11 @@
 //! Stage M1: display-only preview carts, not executable games.
 mod library;
 mod settings;
+// Directly compile the original Cart Studio No-Intro DAT matching code and tests.
+// Pinned verbatim at third_party/slot-cart-studio, never reinterpret CRCs.
+#[allow(dead_code)]
+#[path = "../../../third_party/slot-cart-studio/src/dat.rs"]
+mod studio_dat;
 // Reuse the exact upstream Slot wallpaper ordering and filtering.
 #[path = "../../slot/src/wallpaper.rs"]
 mod wallpaper;
@@ -19,6 +24,8 @@ mod core_selection;
 mod core_legend;
 #[cfg(target_os = "android")]
 mod game;
+#[cfg(target_os = "android")]
+mod cart_render;
 #[cfg(target_os = "android")]
 mod runtime;
 
