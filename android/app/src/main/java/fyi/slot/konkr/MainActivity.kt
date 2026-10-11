@@ -208,7 +208,10 @@ class MainActivity : Activity() {
                 12 -> removeSelectedCartLabel()
                 13 -> openSelectedCartStudio()
                 14 -> openAllCartStudio()
-                15 -> startActivity(Intent(this@MainActivity, AppsActivity::class.java))
+                15 -> {
+                    startActivity(Intent(this@MainActivity, AppsActivity::class.java))
+                    SlotTransitions.open(this@MainActivity)
+                }
             }
             nativePollMessage()?.let { message ->
                 Log.w(TAG, message)
@@ -1089,6 +1092,7 @@ class MainActivity : Activity() {
         }
         @Suppress("DEPRECATION")
         startActivityForResult(intent, CART_STUDIO_REQUEST)
+        SlotTransitions.open(this)
     }
 
     private fun openAllCartStudio() = openCartStudio(null)
