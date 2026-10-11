@@ -10,6 +10,7 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
@@ -95,6 +96,9 @@ internal class SlotModalDialog(
         })
         root.addView(SlotUi.label(activity, "A  SELECT                                B  BACK",
             10.5f, SlotUi.muted), LinearLayout.LayoutParams(-1, dp(19)))
+        // Request no Android title/decorations BEFORE setContentView; the
+        // custom Slot heading and four-sided plate are the only chrome.
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         dialog.setContentView(root)
         dialog.setCanceledOnTouchOutside(false)
         dialog.setOnDismissListener {
