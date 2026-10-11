@@ -243,3 +243,15 @@ relogin and upload; different-account login without cross-account data;
 no logout while a game is open; corrupted ledger never erased; offline
 logout/online re-login; before/after signature update preserving user data.
 PR remains DRAFT until physical validation.
+
+### Safety refinement: sign-out flush barrier
+
+The confirmation now asynchronously calls `nativeRaFlushReady()` on the actual
+GL thread via `GLSurfaceView.queueEvent`. Rust invokes the existing
+`Service::flush_ready()` control barrier and also verifies
+`!has_unsaved_awards()`, ensuring queued achievement frames have been
+evaluated and the durable ledger was written BEFORE saving a sign-out marker.
+The Android UI retries without blocking for up to ~2.5 s; if storage
+never becomes ready, sign-out is cancelled and no account records are changed.
+Game-active/logout collision is blocked. This covers recent unlocks that
+arrive just before eject. Re-login requires an online RA credential exchange.
