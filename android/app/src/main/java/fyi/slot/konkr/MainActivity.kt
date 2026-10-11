@@ -91,6 +91,7 @@ class MainActivity : Activity() {
     external fun nativeResetInput()
     external fun nativeExternalReturn()
     external fun nativePerformanceStats(): String?
+    external fun nativeShelfIndicatorFlags(): Int
     external fun nativeSetLibrary(json: String): Int
     external fun nativeConfigure(dataDir: String, libraryDir: String)
     external fun nativePollLaunchUri(): String?
@@ -142,6 +143,7 @@ class MainActivity : Activity() {
     @Volatile private var resumed = false
     private var returnFromSlotChild = false
     private lateinit var performanceHud: TextView
+    private lateinit var shelfStatus: SlotStatusIndicators
     private var lastPerfPoll = 0L
     private var displaySyncApplied = false
 
@@ -187,6 +189,10 @@ class MainActivity : Activity() {
     private val pulse = object : Runnable {
         override fun run() {
             pollSystemStatus()
+            if (::shelfStatus.isInitialized) {
+                val flags = nativeShelfIndicatorFlags()
+                shelfStatus.refresh(flags, if (flags and 8 != 0) nativeRaStatus() else null)
+            }
             pollRumble()
             updateDisplaySyncMode()
             if (resumed && nativeIsPlaying()) {
@@ -370,6 +376,7 @@ class MainActivity : Activity() {
         }
         val frame = FrameLayout(this)
         frame.addView(view, FrameLayout.LayoutParams(-1, -1))
+        shelfStatus = SlotStatusIndicators(this, frame)
         status = TextView(this).apply {
             typeface = SlotUi.font(this@MainActivity)
             letterSpacing = .09f
@@ -1487,6 +1494,7 @@ class MainActivity : Activity() {
         gameLoader.shutdownNow()
         uiHandler.removeCallbacks(pulse)
         if (::raAchievementOverlay.isInitialized) raAchievementOverlay.destroy()
+        if (::shelfStatus.isInitialized) shelfStatus.close()
         stopAudio()
         cartSounds.release()
         super.onDestroy()
@@ -1494,6 +1502,7 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         resumed = false
+        if (::shelfStatus.isInitialized) shelfStatus.onPause()
         Choreographer.getInstance().removeFrameCallback(vsyncCallback)
         if (displaySyncApplied) {
             view.renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
@@ -1523,6 +1532,7 @@ class MainActivity : Activity() {
             nativeExternalReturn()
         }
         resumed = true
+        if (::shelfStatus.isInitialized) shelfStatus.onResume()
         // Android's quick settings may return without a fresh onAvailable().
         // Waking a retry is safe even when no network is present.
         nativeRaNetworkAvailable()
