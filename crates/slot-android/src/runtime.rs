@@ -1069,7 +1069,14 @@ impl Engine {
                                                 .push_back(14);
                                             ShelfOverlay::None
                                         },
-                                        2 => ShelfOverlay::Achievements,
+                                        2 => {
+                                            // Open the account dashboard/sign-in directly:
+                                            // the old "A: RA account / sign in" modal was
+                                            // a redundant extra press.
+                                            UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
+                                                .push_back(3);
+                                            ShelfOverlay::None
+                                        },
                                         3 => {
                                             UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(15);
                                             ShelfOverlay::None
