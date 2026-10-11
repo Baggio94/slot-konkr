@@ -14,8 +14,8 @@ android {
         // RC1 consolidates the stacked Cart Studio (#3) and native
         // RetroAchievements (#4) branches. The original applicationId and
         // persistent signing certificate remain unchanged for in-place updates.
-        versionCode = 51
-        versionName = "0.1.0-rc4-beta10-cleanup2"
+        versionCode = 52
+        versionName = "0.1.0-rc4-beta11-status1"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
