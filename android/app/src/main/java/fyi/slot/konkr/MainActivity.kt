@@ -659,6 +659,10 @@ class MainActivity : Activity() {
                         chosenBufferMs = bufferMs
                         requestedSpeed = 0
                         player.play()
+                    } else if (player.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                        // A paused legacy buffer is reused when the next game has
+                        // the same sample rate; it still must be resumed.
+                        player.play()
                     }
                     val speed = nativeAudioSpeedPermille().coerceIn(1000, 6000)
                     if (speed != requestedSpeed) {
