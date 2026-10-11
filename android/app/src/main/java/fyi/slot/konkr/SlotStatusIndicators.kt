@@ -106,6 +106,7 @@ internal class SlotStatusIndicators(
     private var lastBasicRequest = 0L
     private var lastBasicResponse = 0L
     private var installedSleep = false
+    private var observedSleepRunning = false
     private var installedBasic = false
     private var installedSyncthing = false
     private var bluetoothPermissionAsked = false
@@ -190,6 +191,7 @@ internal class SlotStatusIndicators(
 
     private fun refreshInstalled() {
         installedSleep = installed("com.med.sleepmanager")
+        observedSleepRunning = sleepObservedRunning()
         installedBasic = installed("com.chiller3.basicsync")
         installedSyncthing = listOf(
             "com.github.catfriend1.syncthingfork",
@@ -262,8 +264,12 @@ internal class SlotStatusIndicators(
     }
 
     private fun show(view: ImageView, name: String, visible: Boolean) {
-        view.visibility = if (visible) View.VISIBLE else View.GONE
-        if (visible) sprite(name, view)
+        val next = if (visible) View.VISIBLE else View.GONE
+        if (view.visibility != next) view.visibility = next
+        if (visible && view.tag != name) {
+            sprite(name, view)
+            view.tag = name
+        }
     }
 
     /**
@@ -291,7 +297,7 @@ internal class SlotStatusIndicators(
         }
 
         if (integrations) {
-            show(sleep, if (sleepObservedRunning()) "sleepmanager_running"
+            show(sleep, if (observedSleepRunning) "sleepmanager_running"
                 else "sleepmanager_stopped", installedSleep)
             show(basicsync, if (basicRunning && basicStateKnown &&
                     now - lastBasicResponse < 45000L) "basicsync_running"
