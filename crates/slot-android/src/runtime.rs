@@ -343,6 +343,10 @@ struct Engine {
     perf_rendered: u32,
     perf_emulated: u32,
     perf_catchup: u32,
+    // Per-second scheduler diagnostics; debt_loss is deliberately discarded
+    // simulated time expressed as GBA frames, not observed display drops.
+    perf_idle: u32,
+    perf_debt_loss: f64,
     perf_timings: PerfTimings,
     external_pending: bool,
     overlay: ShelfOverlay,
@@ -580,6 +584,8 @@ impl Engine {
             perf_rendered: 0,
             perf_emulated: 0,
             perf_catchup: 0,
+            perf_idle: 0,
+            perf_debt_loss: 0.0,
             perf_timings: PerfTimings::default(),
             external_pending: false,
             overlay: ShelfOverlay::None,
@@ -2127,13 +2133,18 @@ impl Engine {
                 let catchup = 100.0 * self.perf_catchup as f64 /
                     self.perf_rendered.max(1) as f64;
                 let target = self.game.as_ref().map_or(60.0, |g| g.fps);
+                let idle = 100.0 * self.perf_idle as f64 /
+                    self.perf_rendered.max(1) as f64;
                 *PERF_STATUS.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(format!("EMU {emu:.1}/{target:.1} | DISPLAY {render:.1} | CATCHUP {catchup:.0}%\n{}",
-                        self.perf_timings.line()));
+                    Some(format!(
+                        "EMU {emu:.1}/{target:.1} | DISPLAY {render:.1} | CATCHUP {catchup:.0}%\n{}\nPACE: IDLE {idle:.0}% | LOST {:.2}fr/s",
+                        self.perf_timings.line(), self.perf_debt_loss / span));
                 self.perf_last = now;
                 self.perf_rendered = 0;
                 self.perf_emulated = 0;
                 self.perf_catchup = 0;
+                self.perf_idle = 0;
+                self.perf_debt_loss = 0.0;
                 self.perf_timings = PerfTimings::default();
             }
         } else {
@@ -2141,6 +2152,8 @@ impl Engine {
             self.perf_rendered = 0;
             self.perf_emulated = 0;
             self.perf_catchup = 0;
+            self.perf_idle = 0;
+            self.perf_debt_loss = 0.0;
             self.perf_timings = PerfTimings::default();
             if PERF_ACTIVE.swap(false, Ordering::AcqRel) {
                 *PERF_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -2373,9 +2386,18 @@ impl Engine {
                 // and inconsistent input response on the physical KONKR.
                 // STANDARD and fast-forward are not changed.
                 let responsive = profile.responsive_pacing && !fast;
-                self.game_accum = crate::settings::frame_debt(
-                    self.game_accum, f64::from(dt), multiplier, period, fast, responsive
-                );
+                // Preserve a little more fractional game time in the
+                // opt-in DISPLAY SYNC mode ONLY. No extra libretro frames
+                // can run in any single callback; Beta 4 catch-up stays gone.
+                if profile.display_sync_pacing && responsive {
+                    let (debt, discarded) = crate::settings::frame_debt_display_sync(
+                        self.game_accum, f64::from(dt), multiplier, period);
+                    self.game_accum = debt;
+                    if profile.show_fps { self.perf_debt_loss += discarded; }
+                } else {
+                    self.game_accum = crate::settings::frame_debt(
+                        self.game_accum, f64::from(dt), multiplier, period, fast, responsive);
+                }
                 let frame_limit = if fast { usize::from(self.settings.ff_speed) * 4 }
                     else if responsive { 1 } else { 4 };
                 while self.game_accum >= period && stepped < frame_limit {
@@ -2413,6 +2435,9 @@ impl Engine {
             }
             if stepped > 1 {
                 self.perf_catchup = self.perf_catchup.saturating_add(1);
+            }
+            if stepped == 0 && !self.rewind_held && profile.show_fps {
+                self.perf_idle = self.perf_idle.saturating_add(1);
             }
             if stepped > 0 {
                 if self.select_tap_frames > 0 {
