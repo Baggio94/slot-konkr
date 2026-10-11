@@ -1427,12 +1427,13 @@ impl Engine {
             let platform = self.shelves[self.active].carts
                 .get(self.shelves[self.active].index)
                 .map_or(Platform::Gba, |cart|cart.platform);
+            // First game still wakes RA if the asynchronous SAF scan has not run.
+            // Perform this mutable operation BEFORE borrowing rom_stem.
+            // GB/GBC memory/hash layouts are not yet verified.
+            if platform == Platform::Gba { self.ensure_ra_service(); }
             let rom_stem = self.shelves[self.active].carts
                 .get(self.shelves[self.active].index)
                 .map_or("", |cart| cart.stem.as_str());
-            // First game still wakes RA if the asynchronous SAF scan has not run.
-            // GB/GBC memory/hash layouts are not yet verified.
-            if platform == Platform::Gba { self.ensure_ra_service(); }
             let started = Instant::now();
             match GameSession::open(Path::new(local), &core_file, &storage,
                 core, platform, self.settings.eject_save && !self.fresh_launch,
