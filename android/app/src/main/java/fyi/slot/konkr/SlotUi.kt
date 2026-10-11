@@ -81,7 +81,7 @@ internal object SlotUi {
         android.widget.LinearLayout(context).apply {
             orientation = android.widget.LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            val cap = label(context, key, 12f, background).apply {
+            val cap = label(context, key, 12f, SlotUi.background).apply {
                 gravity = Gravity.CENTER
                 minWidth = dp(context, 23)
                 minHeight = dp(context, 21)
