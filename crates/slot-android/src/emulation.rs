@@ -194,7 +194,7 @@ mod tests {
         assert_eq!(EmulationProfile::load(&root, uri, Core::Gpsp), Some(inherited));
         EmulationProfile::clear(&root, uri, Core::Gpsp).unwrap();
         assert_eq!(EmulationProfile::load(&root, uri, Core::Gpsp), None);
-        assert_eq!(fs::read(&legacy).unwrap(), bytes);
+        assert_eq!(fs::read(&legacy).unwrap().as_slice(), bytes);
         let _ = fs::remove_dir_all(root);
     }
 
