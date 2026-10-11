@@ -716,7 +716,15 @@ class MainActivity : Activity() {
 
     private fun refreshRaPanel(panel: RaPanelDialog, username: String) {
         scanner.execute {
-            val snapshot = RaDiagnostics.inspect(filesDir, username)
+            val hasPrevious = RaDiagnostics.lastSnapshot(username) != null
+            val snapshot = RaDiagnostics.inspect(
+                filesDir, username,
+                onRulesReady = if (hasPrevious) null else { partial ->
+                    runOnUiThread {
+                        if (!isDestroyed) panel.update(retroAchievementsStatus(), partial)
+                    }
+                }
+            )
             runOnUiThread {
                 if (!isDestroyed) panel.update(retroAchievementsStatus(), snapshot)
             }
@@ -734,10 +742,9 @@ class MainActivity : Activity() {
             return
         }
         scanner.execute {
-            val summary = RaDiagnostics.inspect(filesDir, username)
+            val pending = RaDiagnostics.pendingForSignOut(filesDir, username)
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
-                val pending = summary.pendingAwards
                 val message = when {
                     pending == null ->
                         "The pending-awards journal couldn't be verified. " +
@@ -821,6 +828,11 @@ class MainActivity : Activity() {
                 onSignOut = { confirmRaSignOut(panel, existing) }
             )
             panel.show()
+            // Show last known values immediately when reopening the dashboard.
+            // They are refreshed safely in the background on every opening.
+            RaDiagnostics.lastSnapshot(existing)?.let {
+                panel.update(retroAchievementsStatus(), it)
+            }
             refreshRaPanel(panel, existing)
             // Badge downloads continue in the native HTTP worker; update this
             // read-only dashboard automatically without requiring a new tap.
