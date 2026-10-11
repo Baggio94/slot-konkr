@@ -1,6 +1,6 @@
 # RetroAchievements for Slot. for KONKR — implementation plan
 
-Status: **phase 1 backend routing only, no working in-game achievements yet**.
+Status: **phase 2 in progress** — native rcheevos GBA evaluation and Android direct account onboarding are implemented, but no live on-device award has been confirmed; GB/GBC and proxy transport remain unfinished.
 This milestone deliberately does not create or change a RetroAchievements
 account, submit awards, modify ROMs/saves, or claim that offline awards have
 reached the server. Mainline Cart Studio and emulation remain unaffected.
@@ -112,3 +112,38 @@ Relevant primary references:
   GB and GBC; RAOfflineProxy explicitly opted-in; SleepManager sleep/wake.
 - Only mark achievements **synced** after confirmed server acknowledgment.
 - Keep this work separate from the active Cart Studio/UI PR #3.
+
+
+## 11 October — direct Android account onboarding (PR #4)
+
+- Root menu **RetroAchievements** now opens an Android account dialog, not just the
+  RAOfflineProxy status check. A separate button can still inspect the optional proxy.
+- First-time sign-in posts a `login2` request **directly over HTTPS** to
+  `https://retroachievements.org/dorequest.php`; no password enters Rust or ROM/SAF
+  storage. Redirect following is disabled, timeouts are bounded, and errors are
+  sanitized rather than logging credentials, tokens or HTTP bodies.
+- A validated successful response produces only `enabled`, `username`, `token`,
+  and a blank `password` in Android `filesDir/Config/retroachievements.toml`.
+  It is atomically written, owner-readable only (0600); the parent Config directory
+  is restricted to 0700, and app backups are disabled. **The session token itself
+  is not encrypted with Android Keystore yet**; it is protected by app-private
+  filesystem permissions. Never expose it in bug reports or logs.
+- Existing Rust `Service::start` discovers this config on the next GBA launch;
+  its own `login2` token verification and cache preparation remain responsible
+  for determining readiness. A successful Android sign-in alone is **not** an
+  achievement unlock or proof that all game memory mappings are correct.
+- Account switching/sign-out are intentionally **not exposed yet**: the active
+  native network worker and pending award journal must be safely stopped,
+  preserved, and re-scoped before credentials can be replaced. The initial
+  account dialog reports a configured username and remains read-only afterward.
+- New `RaConfigCodecTest` JVM coverage validates token-only TOML output,
+  escaping, malformed username and empty-token rejection. The GBA RAM splitter
+  tests in `slot-retro` cover full mGBA and split gpSP maps.
+- Next hands-on acceptance sequence: sign in on a clean test install/update
+  with a test RA account and Wi-Fi, select an exact RA-known uncompressed
+  GBA ROM, launch with **mGBA**, inspect sanitized status / hash / patch load
+  and confirm a **real softcore award in the RA account**; then retry with gpSP.
+  Do not upload the login response or token from Android logcat.
+- The direct channel and cache are implemented independently of RAOfflineProxy.
+  The original Kotlin `RaRouting` proxy policy is not yet connected to the Rust
+  networking worker. Do not advertise proxy selection as working in this build.
