@@ -132,6 +132,15 @@ impl RetroCore for Tracked {
         // achievement evaluator: exactly one tracked frame per real frame.
         self.core.restore_speculative_state(data)
     }
+    fn speculative_audio_supported(&self) -> bool {
+        self.core.speculative_audio_supported()
+    }
+    fn capture_speculative_audio(&mut self) -> Result<(), CoreError> {
+        self.core.capture_speculative_audio()
+    }
+    fn restore_speculative_audio(&mut self) -> Result<(), CoreError> {
+        self.core.restore_speculative_audio()
+    }
     fn save_ram(&self) -> Option<Vec<u8>> {
         self.core.save_ram()
     }
