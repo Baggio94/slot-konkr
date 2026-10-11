@@ -802,6 +802,8 @@ impl Engine {
                 self.buttons = 0;
                 self.mode_down_at = None;
                 self.mode_last_tap = None;
+                self.home_launch_held = false;
+                self.a_down_at = None;
                 self.polaroids = None;
                 // Android calls Reset onPause. Retain the *native menu* behind
                 // Apps/Studio while the new Activity animates in, otherwise
@@ -865,7 +867,6 @@ impl Engine {
                 self.fresh_launch = false;
                 self.mode_down_at = None;
                 self.mode_last_tap = None;
-                self.home_launch_held = false;
                 self.polaroids = None;
                 self.requested_uri = None;
                 self.prepared_rom = None;
@@ -3104,18 +3105,6 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeFastAudioSupported
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeAudioSampleRate(
     _env: *mut c_void, _this: *mut c_void,
 ) -> jint { SAMPLE_RATE.load(Ordering::Acquire) }
-
-/// App-owned PCM samples waiting to be forwarded to AudioTrack.
-/// Informational only: excludes AudioTrack and hardware buffers.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeAudioQueuedMs(
-    _env: *mut c_void, _activity: *mut c_void,
-) -> jint {
-    let sample_rate = SAMPLE_RATE.load(Ordering::Acquire);
-    if sample_rate <= 0 { return 0; }
-    let samples = AUDIO.lock().unwrap_or_else(|e| e.into_inner()).len() as u64;
-    ((samples * 1000) / (2 * sample_rate as u64)).min(i32::MAX as u64) as jint
-}
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeReadAudio(
