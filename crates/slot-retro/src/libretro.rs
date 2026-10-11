@@ -794,6 +794,66 @@ mod tests {
     }
 
     #[test]
+    fn ra_memory_maps_are_copied_and_cleared_without_leaking_emulator_pointers() {
+        let mut host = host_with(HashMap::new(), false);
+        let mut iwram = vec![0x37u8; 0x8000];
+        let desc = MemoryDescriptor {
+            flags: 0,
+            ptr: iwram.as_mut_ptr().cast(),
+            offset: 0,
+            start: 0x03000000,
+            select: 0,
+            disconnect: 0,
+            len: iwram.len(),
+            addrspace: ptr::null(),
+        };
+        let map = MemoryMap {
+            descriptors: &desc,
+            num_descriptors: 1,
+        };
+        {
+            let _active = Active::bind(&mut host);
+            assert!(unsafe { environment(SET_MEMORY_MAPS,
+                (&map as *const MemoryMap).cast_mut().cast()) });
+        }
+        assert_eq!(host.memory.len(), 1);
+        assert_eq!(host.memory[0].start, 0x03000000);
+        assert_eq!(host.memory[0].len, 0x8000);
+        // Core may replace its descriptors at runtime.
+        let empty = MemoryMap {
+            descriptors: ptr::null(),
+            num_descriptors: 0,
+        };
+        {
+            let _active = Active::bind(&mut host);
+            assert!(unsafe { environment(SET_MEMORY_MAPS,
+                (&empty as *const MemoryMap).cast_mut().cast()) });
+        }
+        assert!(host.memory.is_empty());
+    }
+
+    #[test]
+    fn ra_memory_maps_reject_invalid_and_unbounded_descriptor_arrays() {
+        let mut host = host_with(HashMap::new(), false);
+        let malformed = MemoryMap {
+            descriptors: ptr::null(),
+            num_descriptors: 1,
+        };
+        let enormous = MemoryMap {
+            descriptors: ptr::null(),
+            num_descriptors: 1025,
+        };
+        {
+            let _active = Active::bind(&mut host);
+            assert!(!unsafe { environment(SET_MEMORY_MAPS,
+                (&malformed as *const MemoryMap).cast_mut().cast()) });
+            assert!(!unsafe { environment(SET_MEMORY_MAPS,
+                (&enormous as *const MemoryMap).cast_mut().cast()) });
+        }
+        assert!(host.memory.is_empty());
+    }
+
+    #[test]
     fn set_variables_records_what_the_core_declared() {
         let mut host = host_with(HashMap::new(), false);
         let (a, _ak, _av) = declaration("mgba_sgb_borders", "Use Super Game Boy Borders; ON|OFF");
