@@ -551,8 +551,11 @@ pub(crate) fn run(
                             }
                             Err(Failure::Network) => return Err(Failure::Network),
                             Err(error) => {
-                                // Keep the hash queued for a future attempt. A
-                                // rejected ROM must not block other awards.
+                                // Do not burn the entire 100-game quota by
+                                // retrying a single rejected/bad ROM each second.
+                                // The SAF index will offer it again on a later run.
+                                let failed = smart_queue.pop_front().unwrap();
+                                queued_hashes.remove(&failed);
                                 deferred_error = Some(error);
                             }
                         }
