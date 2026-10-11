@@ -41,6 +41,9 @@ class AppsActivity : Activity() {
         // previous list immediately. Every opening refreshes it in the worker
         // so installation/uninstallation changes are still picked up.
         @Volatile private var lastEntries: List<Entry> = emptyList()
+        // Drawable constant states carry no Activity views. Reopening Apps
+        // keeps decoded launcher artwork rather than flashing placeholders.
+        private val lastIconStates = LinkedHashMap<String, Drawable.ConstantState>()
     }
 
     private data class Entry(val label: String, val packageName: String, val launch: Intent)
@@ -178,6 +181,7 @@ class AppsActivity : Activity() {
                     root.tag = tile
                 }
                 val cached = iconCache[entry.packageName]
+                    ?: lastIconStates[entry.packageName]?.newDrawable(resources)
                 tile.icon.setImageDrawable(
                     cached?.constantState?.newDrawable(resources)
                         ?: cached ?: packageManager.defaultActivityIcon
@@ -238,6 +242,14 @@ class AppsActivity : Activity() {
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 iconCache[appPackage] = icon
+                icon.constantState?.let { state ->
+                    lastIconStates[appPackage] = state
+                    // Keep a bounded icon cache, not the entire system icon DB.
+                    if (lastIconStates.size > 200) {
+                        val oldest = lastIconStates.keys.firstOrNull()
+                        if (oldest != null) lastIconStates.remove(oldest)
+                    }
+                }
                 iconRequests.remove(appPackage)
                 val first = grid.firstVisiblePosition
                 for (i in 0 until grid.childCount) {
