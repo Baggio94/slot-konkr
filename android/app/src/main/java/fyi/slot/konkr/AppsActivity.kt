@@ -5,6 +5,7 @@ import android.app.role.RoleManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
@@ -13,117 +14,142 @@ import android.util.Log
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewGroup
 import android.widget.BaseAdapter
-import android.widget.FrameLayout
 import android.widget.GridView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 
 /**
- * Opt-in home launcher and controller-friendly app drawer.
- * Lists only launchable apps exposed by the Android PackageManager; no
- * QUERY_ALL_PACKAGES, accessibility service, overlay or admin permission.
+ * Optional HOME launcher with a manually managed D-pad selection.
+ *
+ * GridView's own focus manager swallowed the KONKR gamepad arrows, and A
+ * could not reach "Set as Home". Consume controller keys in dispatchKeyEvent
+ * before child views and draw a visible selected tile on every interaction.
+ * Touch taps and Android's standard B/Back behavior still work.
  */
 class AppsActivity : Activity() {
-    companion object { private const val TAG = "SlotApps" }
+    companion object {
+        private const val TAG = "SlotApps"
+        private const val COLUMNS = 5
+    }
+
     private data class Entry(val label: String, val packageName: String, val launch: Intent)
     private var entries: List<Entry> = emptyList()
+    private lateinit var grid: GridView
+    private lateinit var homeButton: TextView
+    private lateinit var appsAdapter: BaseAdapter
+    private var selectedIndex = 0
+    private var homeSelected = false
 
-    private fun dp(n: Int) = (resources.displayMetrics.density * n + .5f).toInt()
-    private fun label(s: String, sp: Float, white: Boolean = true) = TextView(this).apply {
-        text = s
-        textSize = sp
-        setTextColor(if (white) Color.WHITE else Color.rgb(170, 169, 180))
+    private fun dp(value: Int) = (value * resources.displayMetrics.density + .5f).toInt()
+
+    private fun text(label: String, size: Float, bright: Boolean = true) = TextView(this).apply {
+        this.text = label
+        textSize = size
+        typeface = Typeface.create("sans-serif", Typeface.BOLD)
+        setTextColor(if (bright) Color.WHITE else Color.rgb(167, 165, 175))
         gravity = Gravity.CENTER_VERTICAL
-        typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
     }
-    private fun background(colour: Int): GradientDrawable = GradientDrawable().apply {
-        setColor(colour)
+
+    private fun plate(color: Int, selected: Boolean = false) = GradientDrawable().apply {
+        setColor(color)
         cornerRadius = dp(8).toFloat()
+        if (selected) setStroke(dp(2), Color.rgb(228, 226, 236))
     }
+
     private fun loadApps() {
-        val query = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val resolve = packageManager.queryIntentActivities(query, 0)
-        entries = resolve.mapNotNull { candidate ->
-            val packageName = candidate.activityInfo?.packageName ?: return@mapNotNull null
-            if (packageName == this.packageName) return@mapNotNull null
-            val launch = Intent(Intent.ACTION_MAIN)
-                .addCategory(Intent.CATEGORY_LAUNCHER)
-                .setClassName(packageName, candidate.activityInfo.name)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-            Entry(candidate.loadLabel(packageManager).toString(), packageName, launch)
-        }.distinctBy { it.launch.component?.flattenToString() }
-         .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
+        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        entries = packageManager.queryIntentActivities(intent, 0)
+            .mapNotNull { info ->
+                val component = info.activityInfo ?: return@mapNotNull null
+                if (component.packageName == packageName) return@mapNotNull null
+                val launch = Intent(Intent.ACTION_MAIN)
+                    .addCategory(Intent.CATEGORY_LAUNCHER)
+                    .setClassName(component.packageName, component.name)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                Entry(info.loadLabel(packageManager).toString(), component.packageName, launch)
+            }
+            .distinctBy { it.launch.component?.flattenToString() }
+            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_FULLSCREEN or
-            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN)
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = (
+            View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        )
         loadApps()
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(19, 19, 23))
-            setPadding(dp(22), dp(10), dp(22), dp(16))
+            setBackgroundColor(Color.rgb(18, 18, 22))
+            setPadding(dp(22), dp(10), dp(22), dp(15))
+            isFocusableInTouchMode = true
         }
         setContentView(root)
-        val titleRow = LinearLayout(this).apply {
+
+        val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val back = label("‹  slot.", 18f).apply {
-            isFocusable = true
-            setPadding(dp(8), dp(8), dp(18), dp(8))
-            setOnClickListener { finish() }
-            contentDescription = "Back to slot. carousel"
-        }
-        titleRow.addView(back)
-        titleRow.addView(label("APPS", 17f), LinearLayout.LayoutParams(0, dp(48), 1f))
-        val home = label("Set as Home", 13f).apply {
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            background = background(Color.rgb(65, 64, 73))
-            isFocusable = true
+        header.addView(text("APPS", 19f), LinearLayout.LayoutParams(0, dp(48), 1f))
+        homeButton = text("Set as Home", 13f).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(15), dp(7), dp(15), dp(7))
+            isClickable = true
+            contentDescription = "Choose the default home launcher"
             setOnClickListener { chooseHome() }
-            contentDescription = "Choose slot. or another default home app"
         }
-        titleRow.addView(home)
-        root.addView(titleRow)
-        val divider = View(this).apply { setBackgroundColor(Color.rgb(68, 67, 75)) }
-        root.addView(divider, LinearLayout.LayoutParams(-1, dp(1)))
-        root.addView(label("A  OPEN      B  BACK      •  HOME IS OPTIONAL", 11f, false).apply {
-            setPadding(0, dp(12), 0, dp(12))
+        header.addView(homeButton, LinearLayout.LayoutParams(-2, dp(38)))
+        root.addView(header)
+        root.addView(View(this).apply {
+            setBackgroundColor(Color.rgb(65, 64, 72))
+        }, LinearLayout.LayoutParams(-1, dp(1)))
+
+        root.addView(text("D-PAD  NAVIGATE      A  OPEN      B  BACK", 11f, false).apply {
+            setPadding(0, dp(10), 0, dp(12))
         })
-        val grid = GridView(this).apply {
-            numColumns = 5
+
+        grid = GridView(this).apply {
+            numColumns = COLUMNS
             horizontalSpacing = dp(12)
             verticalSpacing = dp(12)
             stretchMode = GridView.STRETCH_COLUMN_WIDTH
-            isFocusable = true
-            selector = background(Color.rgb(76, 74, 88))
+            selector = plate(Color.TRANSPARENT)
             clipToPadding = false
             setPadding(0, dp(3), 0, dp(8))
         }
-        grid.adapter = object : BaseAdapter() {
+        appsAdapter = object : BaseAdapter() {
             override fun getCount() = entries.size
             override fun getItem(position: Int) = entries[position]
             override fun getItemId(position: Int) = position.toLong()
-            override fun getView(position: Int, convertView: View?, parent: android.view.ViewGroup): View {
+
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
                 val entry = entries[position]
+                val selected = !homeSelected && position == selectedIndex
                 return LinearLayout(this@AppsActivity).apply {
                     orientation = LinearLayout.VERTICAL
                     gravity = Gravity.CENTER
-                    background = background(Color.rgb(38, 37, 45))
+                    background = plate(
+                        if (selected) Color.rgb(68, 66, 77) else Color.rgb(37, 36, 43),
+                        selected
+                    )
                     minimumHeight = dp(110)
-                    setPadding(dp(6), dp(9), dp(6), dp(7))
+                    setPadding(dp(5), dp(9), dp(5), dp(7))
                     addView(ImageView(this@AppsActivity).apply {
-                        setImageDrawable(try {
+                        setImageDrawable(runCatching {
                             packageManager.getApplicationIcon(entry.packageName)
-                        } catch (_: Exception) { null })
+                        }.getOrNull())
                         scaleType = ImageView.ScaleType.FIT_CENTER
                     }, LinearLayout.LayoutParams(dp(46), dp(46)))
-                    addView(label(entry.label, 12f).apply {
+                    addView(text(entry.label, 12f).apply {
                         gravity = Gravity.CENTER
                         maxLines = 2
                         ellipsize = android.text.TextUtils.TruncateAt.END
@@ -132,48 +158,113 @@ class AppsActivity : Activity() {
                 }
             }
         }
-        grid.setOnItemClickListener { _, _, index, _ ->
-            try { startActivity(entries[index].launch) }
-            catch (e: Exception) {
-                Log.w(TAG, "Can't open " + entries[index].packageName, e)
-                SlotToast.makeText(this, "Couldn't open that app.", android.widget.Toast.LENGTH_SHORT).show()
-            }
+        grid.adapter = appsAdapter
+        grid.setOnItemClickListener { _, _, position, _ ->
+            selectedIndex = position
+            homeSelected = false
+            updateSelection()
+            launchSelected()
         }
         root.addView(grid, LinearLayout.LayoutParams(-1, 0, 1f))
-        grid.requestFocus()
+        updateSelection()
+        root.requestFocus()
+    }
+
+    private fun updateSelection() {
+        homeButton.background = plate(
+            if (homeSelected) Color.rgb(89, 87, 102) else Color.rgb(56, 55, 64),
+            homeSelected
+        )
+        appsAdapter.notifyDataSetChanged()
+        if (!homeSelected && entries.isNotEmpty()) grid.setSelection(selectedIndex)
+    }
+
+    private fun navigate(key: Int) {
+        if (homeSelected) {
+            if (key == KeyEvent.KEYCODE_DPAD_DOWN && entries.isNotEmpty()) {
+                homeSelected = false
+                selectedIndex = selectedIndex.coerceIn(0, entries.lastIndex)
+            }
+        } else if (entries.isNotEmpty()) {
+            selectedIndex = when (key) {
+                KeyEvent.KEYCODE_DPAD_LEFT -> (selectedIndex - 1).coerceAtLeast(0)
+                KeyEvent.KEYCODE_DPAD_RIGHT -> (selectedIndex + 1).coerceAtMost(entries.lastIndex)
+                KeyEvent.KEYCODE_DPAD_DOWN ->
+                    (selectedIndex + COLUMNS).coerceAtMost(entries.lastIndex)
+                KeyEvent.KEYCODE_DPAD_UP -> {
+                    if (selectedIndex < COLUMNS) {
+                        homeSelected = true
+                        selectedIndex
+                    } else selectedIndex - COLUMNS
+                }
+                else -> selectedIndex
+            }
+        }
+        updateSelection()
+    }
+
+    private fun launchSelected() {
+        if (selectedIndex !in entries.indices) return
+        try {
+            startActivity(entries[selectedIndex].launch)
+        } catch (error: Exception) {
+            Log.w(TAG, "Unable to open " + entries[selectedIndex].packageName, error)
+            SlotToast.makeText(this, "Couldn't open that app.", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun chooseHome() {
+        // Prefer Android's actual Home selection settings on the KONKR.
+        // The RoleManager dialog is the fallback, not a silent replacement.
+        try {
+            startActivity(Intent(Settings.ACTION_HOME_SETTINGS))
+            Log.i(TAG, "Opened Android Home app settings")
+            return
+        } catch (error: Exception) {
+            Log.w(TAG, "Android Home settings unavailable; trying role chooser", error)
+        }
         try {
             if (Build.VERSION.SDK_INT >= 29) {
                 val manager = getSystemService(RoleManager::class.java)
                 if (manager?.isRoleAvailable(RoleManager.ROLE_HOME) == true) {
-                    startActivity(manager.createRequestRoleIntent(RoleManager.ROLE_HOME))
+                    if (manager.isRoleHeld(RoleManager.ROLE_HOME)) {
+                        SlotToast.makeText(this, "slot. is already your Home app.",
+                            Toast.LENGTH_SHORT).show()
+                    } else {
+                        startActivity(manager.createRequestRoleIntent(RoleManager.ROLE_HOME))
+                    }
                     return
                 }
             }
-            startActivity(Intent(Settings.ACTION_HOME_SETTINGS))
-        } catch (e: ActivityNotFoundException) {
-            SlotToast.makeText(this, "Open Android Settings to choose your home app.",
-                android.widget.Toast.LENGTH_LONG).show()
+        } catch (error: Exception) {
+            Log.w(TAG, "Android Home role chooser unavailable", error)
         }
+        SlotToast.makeText(this,
+            "This device doesn't provide a Home app chooser.",
+            Toast.LENGTH_LONG).show()
     }
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_BUTTON_B || keyCode == KeyEvent.KEYCODE_BACK) {
-            finish()
-            return true
-        }
-        if (keyCode == KeyEvent.KEYCODE_BUTTON_A || keyCode == KeyEvent.KEYCODE_DPAD_CENTER) {
-            val focused = currentFocus
-            if (focused is GridView && focused.selectedItemPosition >= 0) {
-                val selected = focused.selectedItemPosition
-                focused.performItemClick(focused.getChildAt(selected - focused.firstVisiblePosition),
-                    selected, selected.toLong())
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // Intercept *before* GridView gets first refusal. This applies to the
+        // KONKR controls and standard keyboard D-pad events.
+        when (event.keyCode) {
+            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                if (event.action == KeyEvent.ACTION_DOWN) navigate(event.keyCode)
                 return true
             }
-            if (focused?.isClickable == true) return focused.performClick()
+            KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER -> {
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    if (homeSelected) chooseHome() else launchSelected()
+                }
+                return true
+            }
+            KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK -> {
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) finish()
+                return true
+            }
         }
-        return super.onKeyDown(keyCode, event)
+        return super.dispatchKeyEvent(event)
     }
 }
