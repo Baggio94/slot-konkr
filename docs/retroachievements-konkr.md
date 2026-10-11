@@ -1,6 +1,6 @@
 # RetroAchievements for Slot. for KONKR — implementation plan
 
-Status: **phase 2 in progress** — native rcheevos GBA evaluation and Android direct account onboarding are implemented, but no live on-device award has been confirmed; GB/GBC and proxy transport remain unfinished.
+Status: **phase 2 — first GBA online award verified on real KONKR hardware (11 October 2026)**. Direct RA sign-in, award upload and UI pending/synced notices confirmed via tester and official RA profile. Offline resync, GB/GBC and optional RAOfflineProxy transport still need real-device validation/implementation.
 This milestone deliberately does not create or change a RetroAchievements
 account, submit awards, modify ROMs/saves, or claim that offline awards have
 reached the server. Mainline Cart Studio and emulation remain unaffected.
@@ -147,3 +147,41 @@ Relevant primary references:
 - The direct channel and cache are implemented independently of RAOfflineProxy.
   The original Kotlin `RaRouting` proxy policy is not yet connected to the Rust
   networking worker. Do not advertise proxy selection as working in this build.
+
+## 11 October — online hardware success and offline test plan
+
+- The user confirmed that **slot. on the KONKR** showed a local pending
+  achievement notification followed by **Achievements synced**.
+  RetroAchievements officially shows the GBA game
+  `Kirby: Nightmare in Dream Land` with **Kirbyendo (Beam Kirby, 1 Casual point)**
+  unlocked and recorded on the user's RA profile. This is our first
+  end-to-end **online** achievement acceptance test.
+- PR #4 now has a dedicated **compact, upper-left RA notification** variant,
+  preserving the existing Slot. condensed bold typeface, tracking, uppercase,
+  colors and regular toasts in other parts of the UI. This was requested
+  after seeing that default Android feedback appears at bottom-center.
+- Previously Android had **no network reavailability signal** to the
+  Rust worker, meaning the offline retry backoff could take up to 300 seconds.
+  `MainActivity` now registers Android's default `ConnectivityManager`
+  callback, invokes a tiny JNI queue on network availability/resume, and
+  `Engine` wakes the existing `Service::network_available` retry timer.
+  The callback is only a *retry hint*: an available Wi-Fi network is NOT
+  proof that the RetroAchievements HTTPS endpoint is reachable.
+  Without callback permissions the existing exponential retry remains.
+- **Offline test #1 on the already-installed build**: Start the already
+  cached/recognized Kirby ROM using mGBA **while online**; do not close
+  the game. Disable Wi-Fi while it keeps running. Earn an as-yet-unlocked
+  achievement (`Burning Sensation`, Fire Kirby, 1 point), verify the
+  local pending notification and no server change. Re-enable Wi-Fi
+  **without closing the game**; await `Achievements synced`, then
+  confirm on the official RA account. The previously installed build may
+  take up to five minutes to retry.
+- RetroAchievements' official FAQ **does not support fully offline session
+  starts**. The team's native preloaded-cache/offline-start approach
+  remains experimental and should be a separate test **only after** the
+  interrupted-online-session test is confirmed. Successful locally
+  persisted pending unlocks are not guaranteed to be accepted by the
+  server; the device must not falsely present them as server-synced.
+- The previous installed APK does **not** contain the new top-left notice
+  or immediate reconnect callback. Finish the ongoing test before any
+  installation upgrade, to avoid terminating the active RA session.
