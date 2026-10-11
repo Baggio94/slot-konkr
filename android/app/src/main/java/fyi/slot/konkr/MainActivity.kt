@@ -249,8 +249,10 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // A staged sign-out must finish before any native HTTP worker is started.
+        val cleanSignOut = RaAccount.finishPendingSignOut(filesDir)
         nativeConfigure(filesDir.absolutePath, applicationInfo.nativeLibraryDir)
-        if (RaAccount.configuredUser(filesDir) != null) nativeRaAccountConfigured()
+        if (cleanSignOut && RaAccount.configuredUser(filesDir) != null) nativeRaAccountConfigured()
         cartSounds = CartSounds(this)
         view = object : GLSurfaceView(this) {
             init {
@@ -308,6 +310,13 @@ class MainActivity : Activity() {
         setContentView(frame)
         immersive()
         uiHandler.post(pulse)
+        if (!cleanSignOut) {
+            uiHandler.postDelayed({
+                SlotToast.makeText(this,
+                    "Previous RA sign out needs attention. Local awards were kept.",
+                    Toast.LENGTH_LONG).show()
+            }, 800L)
+        }
         startRaNetworkWatch()
         startRaSmartCache()
         // Stage BIOS files before the first queued ROM launch, using the same
@@ -684,43 +693,91 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Pulls a sanitized, nonblocking engine status copied by the GL thread. */
+    /** Snapshot provided by the native renderer, never a network operation. */
     private fun retroAchievementsStatus(): String {
-        val raw = nativeRaStatus() ?: return "Engine starts when you launch a GBA game."
+        val raw = nativeRaStatus() ?: return "Preparing"
         return try {
-            val data = JSONObject(raw)
-            val state = when (data.optString("state", "Disabled")) {
+            when (JSONObject(raw).optString("state", "Disabled")) {
                 "Ready" -> "Online"
-                "Syncing" -> "Connecting / preparing cache"
-                "Offline" -> "Offline (cached achievements only)"
-                "Attention" -> "Needs attention - check network or account"
+                "Syncing" -> "Preparing"
+                "Offline" -> "Offline"
+                "Attention" -> "Needs attention"
                 else -> "Inactive"
             }
-            val work = if (data.optBoolean("pending", false)) "Pending work: yes" else "Pending work: no"
-            val progress = if (data.has("progress") && !data.isNull("progress")) {
-                "\nCache progress: " + data.optInt("progress", 0) + "%"
-            } else ""
-            "Engine: $state\n$work$progress"
-        } catch (_: Exception) {
-            "Engine status unavailable."
+        } catch (_: Exception) { "Unknown" }
+    }
+
+    private fun refreshRaPanel(panel: RaPanelDialog, username: String) {
+        scanner.execute {
+            val snapshot = RaDiagnostics.inspect(filesDir, username)
+            runOnUiThread {
+                if (!isDestroyed) panel.update(retroAchievementsStatus(), snapshot)
+            }
         }
     }
 
-    /** First native RetroAchievements account onboarding; keeps passwords out of disk/logs. */
+    /**
+     * Outstanding awards remain on disk when signing out. Closing the process
+     * is mandatory to stop the old account's detached native HTTP worker.
+     */
+    private fun confirmRaSignOut(panel: RaPanelDialog, username: String) {
+        if (nativeIsPlaying()) {
+            SlotToast.makeText(this, "Eject your game before switching RA accounts.",
+                Toast.LENGTH_LONG).show()
+            return
+        }
+        scanner.execute {
+            val summary = RaDiagnostics.inspect(filesDir, username)
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                val pending = summary.pendingAwards
+                val message = when {
+                    pending == null ->
+                        "The pending-awards journal couldn't be verified. " +
+                            "It will NOT be deleted. Only the account token will be removed. " +
+                            "Reconnect as $username to attempt recovery and syncing."
+                    pending > 0 ->
+                        "$pending achievements await upload for $username. " +
+                            "They will stay on this device, owned by this account. " +
+                            "Sign in to $username again to sync them later. " +
+                            "Delayed RA uploads may have server time limits."
+                    else ->
+                        "Sign out of $username? Cached games and local achievements " +
+                            "will remain on the device."
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("SIGN OUT — KEEP LOCAL ACHIEVEMENTS")
+                    .setMessage("$message\n\nslot. must close to safely stop the old account's RA engine.")
+                    .setNegativeButton("Stay signed in", null)
+                    .setPositiveButton("Sign out & close slot.") { _, _ ->
+                        if (!RaAccount.beginSignOut(filesDir, username)) {
+                            SlotToast.makeText(this,
+                                "Can't sign out safely. No awards were changed.",
+                                Toast.LENGTH_LONG).show()
+                        } else {
+                            panel.dismiss()
+                            uiHandler.postDelayed({
+                                finishAffinity()
+                                android.os.Process.killProcess(android.os.Process.myPid())
+                            }, 200L)
+                        }
+                    }.show()
+            }
+        }
+    }
+
+    /** The account panel uses the exact Slot label font instead of Android's AlertDialog. */
     private fun openRetroAchievementsAccount() {
         val existing = RaAccount.configuredUser(filesDir)
         if (existing != null) {
-            AlertDialog.Builder(this)
-                .setTitle("RetroAchievements")
-                .setMessage(
-                    "Account configured: $existing\n\n" +
-                        retroAchievementsStatus() + "\n\n" +
-                        "GBA softcore is experimental. Online awards still require a " +
-                        "real-game hardware test; offline awards remain pending until synced."
-                )
-                .setPositiveButton("Close", null)
-                .setNeutralButton("Proxy status") { _, _ -> checkRaOfflineProxy() }
-                .show()
+            lateinit var panel: RaPanelDialog
+            panel = RaPanelDialog(
+                activity = this, username = existing,
+                onRefresh = { refreshRaPanel(panel, existing) },
+                onSignOut = { confirmRaSignOut(panel, existing) }
+            )
+            panel.show()
+            refreshRaPanel(panel, existing)
             return
         }
 
@@ -750,7 +807,6 @@ class MainActivity : Activity() {
             .setView(fields)
             .setPositiveButton("Sign in", null)
             .setNegativeButton("Cancel", null)
-            .setNeutralButton("Proxy status") { _, _ -> checkRaOfflineProxy() }
             .create()
         dialog.setOnShowListener {
             val signIn = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
@@ -789,31 +845,6 @@ class MainActivity : Activity() {
             }
         }
         dialog.show()
-    }
-
-    private fun checkRaOfflineProxy() {
-        scanner.execute {
-            val proxy = RaEndpoint.discover(applicationContext)
-            val message = when {
-                proxy == null -> "RAOfflineProxy not found. Direct RetroAchievements doesn't require it."
-                !proxy.running -> "RAOfflineProxy is stopped. Open it to reconnect."
-                proxy.base() == null -> "RAOfflineProxy connection settings need checking."
-                else -> {
-                    val state = when (proxy.online) {
-                        true -> "Online"
-                        false -> "Offline"
-                        null -> "Connection unknown"
-                    }
-                    val pending = proxy.pendingAwards?.toString() ?: "unknown"
-                    "Achievements: $state\nAwards waiting to sync: $pending"
-                }
-            }
-            runOnUiThread {
-                if (!isDestroyed) {
-                    SlotToast.makeText(this, message, Toast.LENGTH_LONG).show()
-                }
-            }
-        }
     }
 
     private fun pollSystemStatus() {
