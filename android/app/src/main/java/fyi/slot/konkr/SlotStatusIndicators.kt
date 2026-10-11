@@ -321,9 +321,9 @@ internal class SlotStatusIndicators(
                 val network = connections.activeNetwork
                 val caps = network?.let(connections::getNetworkCapabilities)
                 val info = caps?.transportInfo as? WifiInfo
-                val rssi = info?.rssi ?: WifiInfo.INVALID_RSSI
+                val rssi = info?.rssi ?: -127
                 wifi.level = if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) != true
-                    || rssi == WifiInfo.INVALID_RSSI) 0
+                    || rssi == -127) 0
                     else when {
                         rssi >= -60 -> 4
                         rssi >= -70 -> 3
