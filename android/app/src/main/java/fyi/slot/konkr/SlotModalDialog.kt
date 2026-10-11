@@ -94,8 +94,14 @@ internal class SlotModalDialog(
         root.addView(actions, LinearLayout.LayoutParams(-1, dp(56)).apply {
             topMargin = dp(9)
         })
-        root.addView(SlotUi.label(activity, "A  SELECT                                B  BACK",
-            10.5f, SlotUi.muted), LinearLayout.LayoutParams(-1, dp(19)))
+        val legend = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        legend.addView(SlotUi.hint(activity, "A", "SELECT"))
+        legend.addView(SlotUi.hint(activity, "B", "BACK"),
+            LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(35) })
+        root.addView(legend, LinearLayout.LayoutParams(-1, dp(27)))
         // Request no Android title/decorations BEFORE setContentView; the
         // custom Slot heading and four-sided plate are the only chrome.
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
@@ -112,6 +118,7 @@ internal class SlotModalDialog(
                 topMargin = dp(6)
             })
         val field = SlotUi.field(activity, hint, password)
+        field.contentDescription = label
         body.addView(field, LinearLayout.LayoutParams(-1, dp(49)).apply {
             bottomMargin = dp(10)
         })
