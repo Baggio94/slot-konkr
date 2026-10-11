@@ -326,8 +326,14 @@ pub(crate) fn run(
     let mut badges = crate::badges::Queue::new(&dir);
     let mut smart_queue: VecDeque<String> = VecDeque::new();
     let mut queued_hashes: BTreeSet<String> = BTreeSet::new();
-    let mut budget: PrefetchBudget = storage::read(&dir.join("smart-prefetch-budget.json"))
-        .unwrap_or_default();
+    let quota_file = dir.join("smart-prefetch-budget.json");
+    let mut budget: PrefetchBudget = if quota_file.exists() {
+        // Fail closed if the quota journal is corrupted: repeated restarts
+        // must not bypass the server's request budget.
+        storage::read(&quota_file).unwrap_or_else(|_| PrefetchBudget {
+            attempts: vec![now(); PrefetchBudget::LIMIT],
+        })
+    } else { PrefetchBudget::default() };
     loop {
         // Android SAF fingerprints arrive independently of opening a game.
         // Keep the HTTP queue small and deduplicated, with no ROM bytes retained.
@@ -336,13 +342,14 @@ pub(crate) fn run(
                 continue;
             }
             let hash = hash.to_ascii_lowercase();
-            if !already_prepared(&dir, &hash) && queued_hashes.insert(hash.clone())
-                && smart_queue.len() < 5000
+            if already_prepared(&dir, &hash)
+                || queued_hashes.contains(&hash)
+                || smart_queue.len() >= 5000
             {
-                smart_queue.push_back(hash);
-            } else {
-                queued_hashes.remove(&hash);
+                continue;
             }
+            queued_hashes.insert(hash.clone());
+            smart_queue.push_back(hash);
         }
         match loads.recv_timeout(Duration::from_millis(200)) {
             Ok(mut load) => {
