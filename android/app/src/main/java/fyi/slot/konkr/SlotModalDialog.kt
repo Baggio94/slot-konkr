@@ -117,6 +117,10 @@ internal class SlotModalDialog(
         })
         fields.add(field)
         if (password) secretFields.add(field)
+        // Validation / HTTPS errors belong AFTER the last field, near actions,
+        // not hidden above the username when the keyboard scrolls the dialog.
+        body.removeView(errorText)
+        body.addView(errorText)
         return field
     }
 
