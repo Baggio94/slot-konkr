@@ -1349,6 +1349,13 @@ impl Engine {
                                                 } else {
                                                     match core_selection::set(&storage, &uri, core) {
                                                         Ok(()) => {
+                                                            // A core swap must invalidate the
+                                                            // previous core's cached profile
+                                                            // immediately, even when Y was
+                                                            // opened before selecting this chip.
+                                                            self.game_emulation =
+                                                                EmulationProfile::load(
+                                                                    &storage, &uri, core);
                                                             picker.press(Press::Keep, now);
                                                         }
                                                         Err(err) => set_message(format!(
