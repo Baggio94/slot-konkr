@@ -668,6 +668,39 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn smart_cache_quota_persists_and_refuses_101st_new_game() {
+        let root = tempfile::tempdir().unwrap();
+        let mut budget = PrefetchBudget::default();
+        for i in 0..PrefetchBudget::LIMIT {
+            assert!(budget.reserve(root.path(), 42_000 + i as u64).unwrap());
+        }
+        let mut reloaded: PrefetchBudget =
+            storage::read(&root.path().join("smart-prefetch-budget.json")).unwrap();
+        assert!(!reloaded.reserve(root.path(), 42_100).unwrap());
+        assert_eq!(reloaded.attempts.len(), 100);
+        assert!(reloaded.reserve(root.path(), 43_900).unwrap());
+        assert_eq!(reloaded.attempts.len(), 100);
+    }
+
+    #[test]
+    fn smart_cache_only_skips_valid_prepared_gba_patches() {
+        let root = tempfile::tempdir().unwrap();
+        let hash = "0123456789abcdef0123456789abcdef";
+        assert!(!already_prepared(root.path(), hash));
+        storage::write(&root.path().join(format!("{hash}.json")),
+            &(Game {
+                presence: String::new(),
+                id: 1,
+                console: 5,
+                title: "fixture".into(),
+                achievements: Vec::new(),
+            }, BTreeSet::<u32>::new())).unwrap();
+        assert!(already_prepared(root.path(), hash));
+        std::fs::write(root.path().join(format!("{hash}.json")), b"broken").unwrap();
+        assert!(!already_prepared(root.path(), hash));
+    }
+
+    #[test]
     fn empty_session_unlock_lists_may_be_omitted() {
         assert!(unlocked(&json!({"Success":true})).unwrap().is_empty());
         assert_eq!(
