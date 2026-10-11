@@ -1355,6 +1355,7 @@ class MainActivity : Activity() {
         raSmartWorker.shutdownNow()
         gameLoader.shutdownNow()
         uiHandler.removeCallbacks(pulse)
+        if (::raAchievementOverlay.isInitialized) raAchievementOverlay.destroy()
         stopAudio()
         cartSounds.release()
         super.onDestroy()
