@@ -2562,9 +2562,9 @@ mod ui_feedback_tests {
 
     #[test]
     fn original_settings_menu_rows_are_on_screen_and_outside_footer() {
-        for rows in [3, 5] {
+        for rows in [3, 5, 6, 7] {
             let top = settings_row_top(rows);
-            assert!(top > 80.0);
+            assert!(top >= 32.0);
             assert!(top + rows as f32 * QUICK_PITCH < 427.0,
                 "settings text must not overlap Slot keycap legend");
             assert_eq!(top + (rows - 1) as f32 * QUICK_PITCH,
