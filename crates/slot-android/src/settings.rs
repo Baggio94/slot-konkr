@@ -134,7 +134,7 @@ mod tests {
         s.change(4, false); assert_eq!(s.ff_speed, 6);
         s.change(4, true); assert_eq!(s.ff_speed, 2);
         for i in [2, 3, 5, 6, 7, 8, 9] { assert!(s.change(i, true)); }
-        assert!(!s.change(10, true));
+        assert!(!s.change(12, true));
         assert!(!s.rewind && !s.turbo && !s.eject_save);
         assert!(s.change(10, true) && s.show_fps);
         assert!(s.change(11, true) && s.responsive_pacing);
