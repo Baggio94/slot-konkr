@@ -47,13 +47,10 @@ internal class RaAchievementOverlay(
     private var showing = false
     private var destroyed = false
     private var serial = 0
-    private val ink = Color.rgb(246, 244, 239)
-    private val secondary = Color.rgb(184, 180, 180)
-    private val accent = Color.rgb(210, 188, 134)
-    private val face: Typeface by lazy {
-        runCatching { Typeface.createFromAsset(activity.assets, "label.ttf") }
-            .getOrElse { Typeface.create("sans-serif-condensed", Typeface.BOLD) }
-    }
+    private val ink = SlotUi.ink
+    private val secondary = SlotUi.muted
+    private val accent = SlotUi.accent
+    private val face: Typeface by lazy { SlotUi.font(activity) }
     private fun dp(x: Int) = (activity.resources.displayMetrics.density * x + 0.5f).toInt()
 
     // Android 12 clips a one-pixel GradientDrawable stroke at some display
@@ -80,7 +77,7 @@ internal class RaAchievementOverlay(
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(12), dp(9), dp(14), dp(9))
         background = GradientDrawable().apply {
-            setColor(Color.rgb(23, 22, 25))
+            setColor(SlotUi.background)
             cornerRadius = dp(4).toFloat()
         }
         elevation = dp(3).toFloat()
