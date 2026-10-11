@@ -1908,9 +1908,11 @@ impl Engine {
             let status = format!("{:?}", service.sync_status());
             let progress = service.sync_progress();
             let pending = service.sync_pending();
+            let unsaved = service.has_unsaved_awards();
             let snapshot = serde_json::json!({
                 "state": status,
                 "pending": pending,
+                "unsaved": unsaved,
                 "progress": progress,
             }).to_string();
             *RA_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = Some(snapshot);
