@@ -11,6 +11,7 @@ on:
       - 'crates/slot-ui/**'
       - 'crates/slot-store/**'
       - 'crates/slot-retro/**'
+      - 'crates/slot-achievements/**'
       - 'third_party/slot-cart-studio/**'
       - 'Cargo.*'
       - 'rust-toolchain.toml'
@@ -27,7 +28,9 @@ jobs:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       ANDROID_HOME: /usr/local/lib/android/sdk
     permissions:
-      contents: read
+      # Temporary: create a reproducible Cargo.lock for imported rcheevos
+      # dependencies. Remove this write grant once the lockfile is committed.
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -48,6 +51,22 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
+      - name: Resolve native RetroAchievements dependencies and persist Cargo.lock
+        if: github.ref == 'refs/heads/feat/konkr-retroachievements-native'
+        run: |
+          set -euo pipefail
+          # Do not regenerate everything and drift existing lock versions.
+          # Cargo only adds dependencies needed by the new crate.
+          cargo check -p slot-achievements
+          if ! git diff --quiet -- Cargo.lock; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add Cargo.lock
+            git commit -m "chore(ra): lock dependencies for native rcheevos engine"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+      - name: Test native RetroAchievements evaluator and offline queue
+        run: cargo test -p slot-achievements -p slot-retro
       - name: Test KONKR 3:2 scaling
         run: cargo test -p slot-gfx --no-default-features --test konkr
       - name: Test original Slot cartridge fidelity
