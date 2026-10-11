@@ -313,34 +313,44 @@ fn sticker_face_custom(f: &StickerFields, credits: &[&str; 10],
     let mut ry = panel_y as f32 + panel_h as f32 + 10.0;
     let right_edge = (panel_x + panel_w) as f32;
     if model == "MODEL NO. KONKR ADV" {
-        // Keep Slot's barcode, proportions and label typography unchanged.
-        // Render the actual user-supplied graphics as crisp native vectors:
-        // KONKR emblem above its matching POCKET ADVANCE wordmark.
-        if let Some((logo, (w, h))) = vector_mark(KONKR_SVG, 217) {
-            c.blit((right_edge - w as f32 - 10.0) as u32,
+        // The original 217 px KONKR mark used 56 px of the 92 px lower
+        // zone, leaving the edition and version printed beyond the sticker.
+        // Reserve explicit space for all four rows. Keep the source artwork
+        // vector-based, and give the very wide POCKET ADVANCE wordmark more
+        // horizontal pixels so its thin strokes remain clean.
+        ry -= 3.0;
+        if let Some((logo, (w, h))) = vector_mark(KONKR_SVG, 165) {
+            c.blit((right_edge - w as f32 - 14.0) as u32,
                    ry as u32, &logo, w, h);
-            ry += h as f32 + 4.0;
+            ry += h as f32 + 3.0;
         }
-        if let Some((edition, (w, h))) = vector_mark(POCKET_ADVANCE_SVG, 217) {
-            c.blit((right_edge - w as f32 - 10.0) as u32,
+        if let Some((edition, (w, h))) = vector_mark(POCKET_ADVANCE_SVG, 305) {
+            c.blit((right_edge - w as f32 - 14.0) as u32,
                    ry as u32, &edition, w, h);
             ry += h as f32 + 3.0;
         }
-    } else if let Some(mark) = wordmark(WORDMARK_W) {
-        // Preserve the actual ANBERNIC original artwork for upstream Slot.
-        let (mw, mh) = mark.1;
-        c.blit(
-            (right_edge - mw as f32 - 10.0) as u32,
-            ry as u32,
-            &mark.0,
-            mw,
-            mh,
-        );
-        ry += mh as f32 + 4.0;
-    }
-    for line in [copyright, home] {
-        let lw = c.print_measure(line, SMALL_PX);
-        ry = c.print(right_edge - lw - 10.0, ry, line, SMALL_PX, WHITE);
+        for line in [copyright, home] {
+            let px = SMALL_PX * 0.88;
+            let lw = c.print_measure(line, px);
+            ry = c.print(right_edge - lw - 14.0, ry, line, px, WHITE);
+        }
+    } else {
+        // Upstream ANBERNIC original is unaffected by KONKR layout fixes.
+        if let Some(mark) = wordmark(WORDMARK_W) {
+            let (mw, mh) = mark.1;
+            c.blit(
+                (right_edge - mw as f32 - 10.0) as u32,
+                ry as u32,
+                &mark.0,
+                mw,
+                mh,
+            );
+            ry += mh as f32 + 4.0;
+        }
+        for line in [copyright, home] {
+            let lw = c.print_measure(line, SMALL_PX);
+            ry = c.print(right_edge - lw - 10.0, ry, line, SMALL_PX, WHITE);
+        }
     }
 
     UndoFace {
