@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.role.RoleManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -189,42 +190,67 @@ class AppsActivity : Activity() {
         root.requestFocus()
     }
 
-    // Match the original Slot core-selector legend, including the two
-    // triangular arrow keycaps used for SWAP rather than a generic D-pad icon.
-    private fun keycap(label: String) = text(label, 12f).apply {
-        setTextColor(Color.rgb(18, 18, 22))
-        setBackgroundColor(Color.rgb(247, 247, 248))
-        gravity = Gravity.CENTER
-        letterSpacing = 0f
-        typeface = Typeface.create("monospace", Typeface.BOLD)
-    }
-
+    /**
+     * Pixel-for-pixel genuine Slot controller hints, rendered during the build
+     * by slot_ui::plate::{arrows_hint_face,hint_face} from the same fonts and
+     * actual Nerd Font arrow glyphs as the native core-selection screen.
+     *
+     * Slot's logical canvas is 720×480; scale each 24px face by the same
+     * factor as that renderer on the KONKR display. Do not recreate keycaps
+     * with Android TextView / Unicode substitutes.
+     */
     private fun controllerLegend(): View {
-        fun control(caps: List<String>, title: String): LinearLayout =
-            LinearLayout(this).apply {
-                gravity = Gravity.CENTER_VERTICAL
-                orientation = LinearLayout.HORIZONTAL
-                for (cap in caps) {
-                    addView(keycap(cap), LinearLayout.LayoutParams(dp(19), dp(19)).apply {
-                        rightMargin = dp(if (caps.size > 1) 3 else 5)
-                    })
+        val scale = resources.displayMetrics.widthPixels.toFloat() / 720f
+        fun hint(asset: String): ImageView {
+            val bitmap = assets.open("apps_controls/$asset.png").use { stream ->
+                requireNotNull(BitmapFactory.decodeStream(stream)) {
+                    "Missing original Slot legend asset: $asset"
                 }
-                addView(text(title, 12f).apply {
-                    letterSpacing = .18f
-                    gravity = Gravity.CENTER_VERTICAL
-                })
             }
+            return ImageView(this).apply {
+                setImageBitmap(bitmap)
+                scaleType = ImageView.ScaleType.FIT_XY
+                contentDescription = when (asset) {
+                    "move" -> "Left and right arrows: Move"
+                    "open" -> "A: Open"
+                    else -> "B: Back"
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    (bitmap.width * scale).toInt().coerceAtLeast(1),
+                    (bitmap.height * scale).toInt().coerceAtLeast(1)
+                )
+            }
+        }
+        val spacing = (36f * scale).toInt().coerceAtLeast(dp(16))
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(0, dp(9), 0, dp(7))
-            addView(control(listOf("◀", "▶"), "MOVE"))
-            addView(control(listOf("A"), "OPEN"),
-                LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(36) })
-            addView(control(listOf("B"), "BACK"),
-                LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(36) })
+            setPadding(0, dp(8), 0, dp(7))
+            addView(hint("move"))
+            addView(hint("open"), LinearLayout.LayoutParams(
+                (slotHintWidth("open") * scale).toInt(),
+                (24 * scale).toInt()
+            ).apply { leftMargin = spacing })
+            addView(hint("back"), LinearLayout.LayoutParams(
+                (slotHintWidth("back") * scale).toInt(),
+                (24 * scale).toInt()
+            ).apply { leftMargin = spacing })
         }
     }
+
+    // Exact native faces are generated as PNGs, whose dimensions are read
+    // dynamically. Cache measurements independently of image loading.
+    private val hintWidths = mutableMapOf<String, Int>()
+    private fun slotHintWidth(name: String): Int =
+        hintWidths.getOrPut(name) {
+            assets.open("apps_controls/$name.png").use {
+                BitmapFactory.Options().let { opts ->
+                    opts.inJustDecodeBounds = true
+                    BitmapFactory.decodeStream(it, null, opts)
+                    opts.outWidth
+                }
+            }
+        }
 
     private fun redrawTile(position: Int) {
         if (position !in entries.indices) return
@@ -247,10 +273,34 @@ class AppsActivity : Activity() {
         // or re-fetch launcher icons on controller navigation.
         oldIndex?.let(::redrawTile)
         redrawTile(selectedIndex)
-        if (!homeSelected && entries.isNotEmpty() &&
-            (selectedIndex < grid.firstVisiblePosition ||
-             selectedIndex > grid.lastVisiblePosition)) {
-            grid.setSelection(selectedIndex)
+        if (!homeSelected && entries.isNotEmpty()) {
+            keepSelectedRowVisible()
+        }
+    }
+
+    /**
+     * A selected tile can be partially onscreen at the end of a GridView
+     * page. Android treats that as visible so setSelection() alone doesn't
+     * scroll; the highlighted third row ended up behind the footer.
+     * Scroll only the minimum missing distance, not a whole page.
+     */
+    private fun keepSelectedRowVisible() {
+        val requested = selectedIndex
+        grid.post {
+            if (homeSelected || requested != selectedIndex || requested !in entries.indices)
+                return@post
+            val item = grid.getChildAt(requested - grid.firstVisiblePosition)
+            if (item == null) {
+                val firstOfRow = requested / COLUMNS * COLUMNS
+                grid.smoothScrollToPositionFromTop(firstOfRow, dp(9), 165)
+                return@post
+            }
+            val top = grid.paddingTop + dp(8)
+            val bottom = grid.height - grid.paddingBottom - dp(8)
+            when {
+                item.bottom > bottom -> grid.smoothScrollBy(item.bottom - bottom, 165)
+                item.top < top -> grid.smoothScrollBy(item.top - top, 165)
+            }
         }
     }
 
