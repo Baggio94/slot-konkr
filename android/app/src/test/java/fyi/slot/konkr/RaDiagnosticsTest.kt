@@ -6,7 +6,7 @@ import org.junit.Test
 
 class RaDiagnosticsTest {
     @Test fun accountIdentityMatchesNativeCaseFoldedMd5() {
-        assertEquals("eb4c88f776c3f9b33d2285b891cf06c2",
+        assertEquals("912af0dff974604f1321254ca8ff38b6",
             RaDiagnostics.accountKey("Player"))
         assertEquals(RaDiagnostics.accountKey("Baggio94"),
             RaDiagnostics.accountKey("baggio94"))
