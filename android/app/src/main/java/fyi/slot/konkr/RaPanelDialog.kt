@@ -151,9 +151,7 @@ internal class RaPanelDialog(
         }
         addAction("REFRESH", onRefresh)
         addAction("SIGN OUT", onSignOut)
-        val hint = text("B   BACK", 12f, muted).apply {
-            gravity = Gravity.END or Gravity.CENTER_VERTICAL
-        }
+        val hint = SlotUi.hint(activity, "B", "BACK")
         actions.addView(hint, LinearLayout.LayoutParams(0, dp(39), 1f))
         root.addView(actions)
         dialog.setContentView(root)
