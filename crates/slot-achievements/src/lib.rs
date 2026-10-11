@@ -180,6 +180,12 @@ impl Service {
         self.status.pending.load(Ordering::Acquire) || self.status.unsaved.load(Ordering::Acquire)
     }
 
+    /// Critical distinction for account sign-out: an award still waiting for
+    /// a successful atomic write is NOT safe to discard with the process.
+    pub fn has_unsaved_awards(&self) -> bool {
+        self.status.unsaved.load(Ordering::Acquire)
+    }
+
     pub fn sync_status(&self) -> SyncStatus {
         self.status.get()
     }
