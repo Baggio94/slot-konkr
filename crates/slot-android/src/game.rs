@@ -50,6 +50,9 @@ pub struct GameSession {
     rewind: RewindThread,
     rewind_frames: u8,
     frame_count: u32,
+    // Presentation-only pixels from speculative frames; save/RA keep the real state.
+    runahead_video: Vec<u8>,
+    runahead_unavailable: bool,
     palette_live: bool,
     core_kind: Core,
     pending_undo: Option<(Instant, PendingUndo)>,
@@ -203,6 +206,7 @@ impl GameSession {
             core, save, rtc, manual_export_prefix, state, retroarch_export, retroarch_import, ring,
             rewind: RewindThread::spawn(REWIND_BYTES), rewind_frames: 0,
             frame_count: 0, palette_live, core_kind: which,
+            runahead_video: Vec::new(), runahead_unavailable: false,
             pending_undo: None, last_sram: Instant::now(),
             sample_rate: sample_rate.clamp(8_000, 96_000),
             fps,
@@ -210,6 +214,7 @@ impl GameSession {
     }
 
     pub fn advance(&mut self, buttons: u16, turbo: bool, record_rewind: bool) {
+        self.runahead_video.clear();
         // Reuse Slot's actual 3-on/3-off X/Y to A/B turbo algorithm.
         let pressed = ButtonMask(buttons);
         let mapped = if turbo { pressed.turbo(self.frame_count) }
@@ -231,7 +236,39 @@ impl GameSession {
         }
     }
 
+    /// Render 1-2 predicted frames, while the core's true timeline stays on
+    /// the last normally executed frame. Caller must first consume real audio.
+    /// RetroAchievements wrappers skip RAM snapshots on speculative frames.
+    pub fn prepare_runahead(&mut self, buttons: u16, turbo: bool, frames: u8) {
+        self.runahead_video.clear();
+        if frames == 0 || frames > 2 || self.runahead_unavailable { return; }
+        let snapshot = match self.core.serialize() {
+            Ok(state) => state,
+            Err(error) => {
+                self.runahead_unavailable = true;
+                log_launch_timing(&format!("Run-Ahead disabled: serialize failed: {error}"));
+                return;
+            }
+        };
+        let pressed = ButtonMask(buttons);
+        let mapped = if turbo { pressed.turbo(self.frame_count) }
+            else { pressed.without_turbo() };
+        for _ in 0..frames {
+            self.core.run_speculative_frame(mapped);
+            // The audio and rumble of speculative frames must never reach Android.
+            let _ = self.core.take_audio();
+        }
+        self.runahead_video.extend_from_slice(self.core.video_xrgb8888());
+        if let Err(error) = self.core.restore_speculative_state(&snapshot) {
+            // Never display a frame if the core could not restore its real state.
+            self.runahead_video.clear();
+            self.runahead_unavailable = true;
+            log_launch_timing(&format!("Run-Ahead disabled: restore failed: {error}"));
+        }
+    }
+
     pub fn rewind_step(&mut self) -> bool {
+        self.runahead_video.clear();
         let Some(previous) = self.rewind.pop() else { return false; };
         if self.core.unserialize(&previous).is_err() { return false; }
         // Most libretro cores only refresh video after retro_run. Run a single
@@ -272,7 +309,8 @@ impl GameSession {
     }
 
     pub fn frame(&self) -> &[u8] {
-        self.core.video_xrgb8888()
+        if !self.runahead_video.is_empty() { &self.runahead_video }
+        else { self.core.video_xrgb8888() }
     }
 
     pub fn take_audio(&mut self) -> Vec<i16> {
