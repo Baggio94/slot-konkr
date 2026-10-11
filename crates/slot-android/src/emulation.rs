@@ -2,6 +2,7 @@
 use std::{fs, io, path::{Path, PathBuf}};
 use serde::{Deserialize, Serialize};
 use crate::{core_selection, settings::{self, Settings}};
+use slot_store::Core;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -49,27 +50,56 @@ impl EmulationProfile {
         }
         *self != before
     }
-    fn path(root: &Path, uri: &str) -> PathBuf {
+    fn legacy_path(root: &Path, uri: &str) -> PathBuf {
         root.join("GameEmulation").join(format!("{}.json", core_selection::key(uri)))
     }
-    /// Missing or invalid profile means inherit the current global defaults.
-    pub fn load(root: &Path, uri: &str) -> Option<Self> {
-        let bytes = fs::read(Self::path(root, uri)).ok()?;
-        serde_json::from_slice::<Self>(&bytes).ok().map(Self::sanitize)
+    fn path(root: &Path, uri: &str, core: Core) -> PathBuf {
+        root.join("GameEmulation").join(
+            format!("{}.{}.json", core_selection::key(uri), core.as_str()))
     }
-    pub fn save(self, root: &Path, uri: &str) -> io::Result<()> {
-        let path = Self::path(root, uri);
+    /// Core-specific profiles supersede old ROM-only JSON files. Reading an
+    /// old profile never migrates or deletes it: the other core can still
+    /// inherit it until the user customizes or resets that core explicitly.
+    pub fn load(root: &Path, uri: &str, core: Core) -> Option<Self> {
+        match fs::read(Self::path(root, uri, core)) {
+            Ok(bytes) => {
+                let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+                // A reset must mask legacy ROM-only overrides for this core.
+                if value.get("inherit_global").and_then(|v| v.as_bool()) == Some(true) {
+                    return None;
+                }
+                serde_json::from_value::<Self>(value).ok().map(Self::sanitize)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let bytes = fs::read(Self::legacy_path(root, uri)).ok()?;
+                serde_json::from_slice::<Self>(&bytes).ok().map(Self::sanitize)
+            }
+            Err(_) => None,
+        }
+    }
+    fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
         fs::create_dir_all(path.parent().expect("app-owned profile path"))?;
         let tmp = path.with_extension("json.partial");
-        let data = serde_json::to_vec_pretty(&self.sanitize()).map_err(io::Error::other)?;
         let result = fs::write(&tmp, data).and_then(|_| fs::rename(&tmp, path));
         if result.is_err() { let _ = fs::remove_file(&tmp); }
         result
     }
-    pub fn clear(root: &Path, uri: &str) -> io::Result<()> {
-        match fs::remove_file(Self::path(root, uri)) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            result => result,
+    pub fn save(self, root: &Path, uri: &str, core: Core) -> io::Result<()> {
+        let data = serde_json::to_vec_pretty(&self.sanitize()).map_err(io::Error::other)?;
+        Self::atomic_write(&Self::path(root, uri, core), &data)
+    }
+    /// Reset only the selected core. A tiny marker masks an earlier per-ROM
+    /// profile without rewriting or deleting that legacy file (or the other
+    /// core's profile). With no legacy profile, removal restores inheritance.
+    pub fn clear(root: &Path, uri: &str, core: Core) -> io::Result<()> {
+        let path = Self::path(root, uri, core);
+        if Self::legacy_path(root, uri).exists() {
+            Self::atomic_write(&path, br#"{"inherit_global":true}"#)
+        } else {
+            match fs::remove_file(path) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                result => result,
+            }
         }
     }
 }
@@ -132,11 +162,61 @@ mod tests {
         profile.run_ahead_frames = 1;
         profile.show_fps = true;
         profile.show_fps_override = Some(true);
-        profile.save(&root, a).unwrap();
-        assert_eq!(EmulationProfile::load(&root, a), Some(profile));
-        assert_eq!(EmulationProfile::load(&root, b), None);
-        EmulationProfile::clear(&root, a).unwrap();
-        assert_eq!(EmulationProfile::load(&root, a), None);
+        profile.save(&root, a, Core::Mgba).unwrap();
+        assert_eq!(EmulationProfile::load(&root, a, Core::Mgba), Some(profile));
+        assert_eq!(EmulationProfile::load(&root, b, Core::Mgba), None);
+        EmulationProfile::clear(&root, a, Core::Mgba).unwrap();
+        assert_eq!(EmulationProfile::load(&root, a, Core::Mgba), None);
         let _ = fs::remove_dir_all(root);
     }
+    #[test]
+    fn legacy_json_survives_core_isolation_and_explicit_resets() {
+        let root = std::env::temp_dir().join(format!(
+            "slot-konkr-emulation-legacy-{}", std::process::id()));
+        let uri = "content://roms/advance-wars-2";
+        let legacy = EmulationProfile::legacy_path(&root, uri);
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        let bytes = br#"{"responsive_pacing":true,"display_sync_pacing":true,"run_ahead_frames":1}"#;
+        fs::write(&legacy, bytes).unwrap();
+        let inherited = EmulationProfile::load(&root, uri, Core::Mgba).unwrap();
+        assert_eq!(EmulationProfile::load(&root, uri, Core::Gpsp), Some(inherited));
+        assert_eq!(inherited.show_fps_override, None);
+
+        let mut mgba = inherited;
+        mgba.run_ahead_frames = 2;
+        mgba.show_fps_override = Some(false);
+        mgba.save(&root, uri, Core::Mgba).unwrap();
+        assert_eq!(EmulationProfile::load(&root, uri, Core::Mgba), Some(mgba));
+        assert_eq!(EmulationProfile::load(&root, uri, Core::Gpsp), Some(inherited));
+
+        EmulationProfile::clear(&root, uri, Core::Mgba).unwrap();
+        assert_eq!(EmulationProfile::load(&root, uri, Core::Mgba), None);
+        assert_eq!(EmulationProfile::load(&root, uri, Core::Gpsp), Some(inherited));
+        EmulationProfile::clear(&root, uri, Core::Gpsp).unwrap();
+        assert_eq!(EmulationProfile::load(&root, uri, Core::Gpsp), None);
+        assert_eq!(fs::read(&legacy).unwrap(), bytes);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn profiles_for_each_core_and_each_rom_do_not_collide() {
+        let root = std::env::temp_dir().join(format!(
+            "slot-konkr-emulation-scope-{}", std::process::id()));
+        let uri = "content://roms/virtua-tennis";
+        let other = "content://roms/advance-wars-2";
+        let mut one = EmulationProfile::default();
+        one.run_ahead_frames = 1;
+        let mut two = one;
+        two.run_ahead_frames = 2;
+        one.save(&root, uri, Core::Mgba).unwrap();
+        two.save(&root, uri, Core::Gpsp).unwrap();
+        assert_eq!(EmulationProfile::load(&root, uri, Core::Mgba), Some(one));
+        assert_eq!(EmulationProfile::load(&root, uri, Core::Gpsp), Some(two));
+        assert_eq!(EmulationProfile::load(&root, other, Core::Mgba), None);
+        EmulationProfile::clear(&root, uri, Core::Gpsp).unwrap();
+        assert_eq!(EmulationProfile::load(&root, uri, Core::Mgba), Some(one));
+        assert_eq!(EmulationProfile::load(&root, uri, Core::Gpsp), None);
+        let _ = fs::remove_dir_all(root);
+    }
+
 }
