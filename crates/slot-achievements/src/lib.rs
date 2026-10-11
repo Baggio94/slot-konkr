@@ -98,6 +98,8 @@ enum Control {
     Load(network::Load),
     Unload(u64),
     Flush(Arc<AtomicBool>),
+    // Android's SAF scanner sends only full-ROM MD5s; no ROM bytes go over HTTP.
+    PrefetchHash(String),
 }
 
 struct Frame {
@@ -187,6 +189,15 @@ impl Service {
         self.status.reconnect.store(true, Ordering::Release);
     }
 
+    /// Enqueue one uncompressed GBA ROM hash without touching the network or the UI.
+    /// The HTTP worker deduplicates hashes and throttles all requests.
+    pub fn prefetch_rom_hash(&self, hash: &str) -> bool {
+        if hash.len() != 32 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return false;
+        }
+        self.controls.send(Control::PrefetchHash(hash.to_ascii_lowercase())).is_ok()
+    }
+
     /// Poll during power-off. The UI keeps rendering while the evaluator drains final
     /// frames and fsyncs their awards; an HTTP request is never part of this barrier.
     pub fn flush_ready(&self) -> bool {
@@ -266,6 +277,7 @@ fn run(
         }
     };
     let (loads, load_rx) = mpsc::channel();
+    let (prefetch_tx, prefetch_rx) = mpsc::channel();
     let (prepared_tx, prepared_rx) = mpsc::channel();
     let network_store = store.clone();
     let network_notices = notices.clone();
@@ -280,6 +292,7 @@ fn run(
                 config,
                 network_store,
                 load_rx,
+                prefetch_rx,
                 prepared_tx,
                 network_notices,
                 network_status,
@@ -312,6 +325,9 @@ fn run(
                 evaluate(frame, &mut playing, &store, &notices, &mut unsaved);
             }
             match controls.try_recv() {
+                Ok(Control::PrefetchHash(hash)) => {
+                    let _ = prefetch_tx.send(hash);
+                }
                 Ok(Control::Flush(done)) => {
                     retry_unsaved(&mut unsaved, &store, &notices);
                     done.store(true, Ordering::Release);
