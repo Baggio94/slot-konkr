@@ -97,9 +97,27 @@ impl Settings {
             .unwrap_or(GbPalette::DEFAULT).core_name()
     }
 }
+/// Model of the frame-debt clamp. STANDARD retains RC3 behavior,
+/// RESPONSIVE never builds more than 1.5 emulated frames of debt.
+pub fn frame_debt(prev: f64, elapsed: f64, speed: f64, period: f64,
+                  fast: bool, responsive: bool) -> f64 {
+    let max = if fast { 0.40 }
+        else if responsive { period * 1.5 }
+        else { 0.10 };
+    (prev + elapsed * speed).min(max)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn responsive_pacing_rejects_backlog_without_touching_standard() {
+        let frame = 1.0 / 59.7275;
+        assert!((frame_debt(0.0, 0.05, 1.0, frame, false, false) - 0.05).abs() < 1e-9);
+        assert!((frame_debt(0.0, 0.05, 1.0, frame, false, true) - frame * 1.5).abs() < 1e-9);
+        assert!((frame_debt(0.0, 0.35, 2.0, frame, true, true) - 0.40).abs() < 1e-9);
+    }
+
     #[test]
     fn defaults_preserve_dev13() {
         let s = Settings::default();
