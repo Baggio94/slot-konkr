@@ -658,7 +658,7 @@ class MainActivity : Activity() {
                     if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) != true)
                         return@execute
                     RaSmartCache.indexAndPrefetch(applicationContext, filesDir,
-                        isPlaying = { nativeIsPlaying() },
+                        isPlaying = { nativeIsPlaying() || !resumed },
                         submit = { hash -> nativeRaPrefetchHash(hash) })
                 } catch (_: Exception) {
                     Log.w(TAG, "RA Smart Cache indexing postponed")
