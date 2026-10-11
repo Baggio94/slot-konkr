@@ -108,6 +108,9 @@ impl RetroCore for Tracked {
     fn take_audio(&mut self) -> Vec<i16> {
         self.core.take_audio()
     }
+    fn discard_audio(&mut self) {
+        self.core.discard_audio();
+    }
     fn recycle_audio(&mut self, buf: Vec<i16>) {
         self.core.recycle_audio(buf);
     }
