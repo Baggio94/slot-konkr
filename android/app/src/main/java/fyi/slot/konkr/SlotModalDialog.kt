@@ -86,7 +86,7 @@ internal class SlotModalDialog(
             setPadding(0, dp(16), 0, dp(10))
         })
         body.addView(errorText)
-        scroll.addView(body, ScrollView.LayoutParams(-1, -2))
+        scroll.addView(body, android.widget.FrameLayout.LayoutParams(-1, -2))
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(View(activity).apply { setBackgroundColor(SlotUi.rule) },
             LinearLayout.LayoutParams(-1, dp(1)))
