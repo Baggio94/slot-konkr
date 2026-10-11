@@ -120,8 +120,16 @@ internal class RaAchievementOverlay(
         if (destroyed) return
         // Keep real unlocked rewards over ordinary status updates if busy.
         if (queue.size >= 12) {
-            val oldestStatus = queue.indexOfFirst { !it.earned }
-            if (oldestStatus >= 0) queue.removeAt(oldestStatus) else queue.removeFirst()
+            val iterator = queue.iterator()
+            var removedStatus = false
+            while (iterator.hasNext()) {
+                if (!iterator.next().earned) {
+                    iterator.remove()
+                    removedStatus = true
+                    break
+                }
+            }
+            if (!removedStatus) queue.removeFirst()
         }
         queue.addLast(notice)
         if (!showing) showNext()
