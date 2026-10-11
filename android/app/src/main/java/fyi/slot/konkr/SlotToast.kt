@@ -48,7 +48,7 @@ internal object SlotToast {
                 contentDescription = "slot."
                 scaleType = ImageView.ScaleType.FIT_CENTER
             }
-            row.addView(logo, LinearLayout.LayoutParams(dp(22), dp(22)).apply {
+            row.addView(logo, LinearLayout.LayoutParams(dp(32), dp(32)).apply {
                 rightMargin = dp(12)
             })
             val text = TextView(context).apply {
