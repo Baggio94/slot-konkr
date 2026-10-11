@@ -74,6 +74,8 @@ enum Input {
     // Android announces network return; only wake the HTTP retry timer.
     // Never infer RA API authentication/reachability from Wi-Fi alone.
     RaNetworkAvailable,
+    RaAccountConfigured,
+    RaPrefetchHash(String),
 }
 
 static INPUT: Mutex<VecDeque<Input>> = Mutex::new(VecDeque::new());
@@ -706,6 +708,15 @@ impl Engine {
 
     fn handle(&mut self, input: Input) {
         match input {
+            Input::RaAccountConfigured => {
+                self.ensure_ra_service();
+            }
+            Input::RaPrefetchHash(hash) => {
+                self.ensure_ra_service();
+                if let Some(service) = self.ra_service.as_ref() {
+                    service.prefetch_rom_hash(&hash);
+                }
+            }
             Input::RaNetworkAvailable => {
                 if let Some(service) = self.ra_service.as_ref() {
                     service.network_available();
@@ -1387,6 +1398,19 @@ impl Engine {
         }
     }
 
+    fn ensure_ra_service(&mut self) {
+        if self.ra_service.is_some() { return; }
+        let root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .as_ref().map(|(root, _)| root.clone());
+        if let Some(root) = root {
+            // Explicit opt-in from the Android account login. Never start RA
+            // until an actual private config exists.
+            if root.join("Config/retroachievements.toml").is_file() {
+                self.ra_service = Some(slot_achievements::Service::start(root));
+            }
+        }
+    }
+
     fn prepare_game_core(&mut self, local: &str) {
         let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some((storage, library)) = paths {
@@ -1406,14 +1430,9 @@ impl Engine {
             let rom_stem = self.shelves[self.active].carts
                 .get(self.shelves[self.active].index)
                 .map_or("", |cart| cart.stem.as_str());
-            // No login UI in this milestone: never start the RA worker unless
-            // an explicit user-enabled private config file already exists.
+            // First game still wakes RA if the asynchronous SAF scan has not run.
             // GB/GBC memory/hash layouts are not yet verified.
-            if platform == Platform::Gba && self.ra_service.is_none()
-                && storage.join("Config/retroachievements.toml").is_file()
-            {
-                self.ra_service = Some(slot_achievements::Service::start(storage.clone()));
-            }
+            if platform == Platform::Gba { self.ensure_ra_service(); }
             let started = Instant::now();
             match GameSession::open(Path::new(local), &core_file, &storage,
                 core, platform, self.settings.eject_save && !self.fresh_launch,
@@ -2585,6 +2604,32 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeKey(
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
         .push_back(Input::Key(key, pressed != 0));
+}
+
+/// Account login or app startup: begin RA cache preparation and pending-award
+/// retries even when no GBA cartridge has been inserted.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaAccountConfigured(
+    _env: *mut c_void, _activity: *mut c_void,
+) {
+    INPUT.lock().unwrap_or_else(|e| e.into_inner())
+        .push_back(Input::RaAccountConfigured);
+}
+
+/// Full uncompressed GBA ROM MD5 comes from an Android SAF background reader.
+/// No ROM bytes or credentials are passed via this JNI boundary.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaPrefetchHash(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, hash: JString<'_>,
+) {
+    let Ok(hash) = env.get_string(&hash) else { return };
+    let hash = hash.to_string_lossy().into_owned();
+    if hash.len() != 32 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return;
+    }
+    let mut input = INPUT.lock().unwrap_or_else(|e| e.into_inner());
+    // Bound the GL input queue if Android is indexing thousands of files.
+    if input.len() < 128 { input.push_back(Input::RaPrefetchHash(hash)); }
 }
 
 /// Wake the RA HTTP worker on Android network reconnection. Do not perform
