@@ -3161,6 +3161,18 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeAudioSampleRate(
     _env: *mut c_void, _this: *mut c_void,
 ) -> jint { SAMPLE_RATE.load(Ordering::Acquire) }
 
+/// App-owned PCM samples waiting to be forwarded to AudioTrack.
+/// Informational only: excludes AudioTrack and hardware buffers.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeAudioQueuedMs(
+    _env: *mut c_void, _activity: *mut c_void,
+) -> jint {
+    let sample_rate = SAMPLE_RATE.load(Ordering::Acquire);
+    if sample_rate <= 0 { return 0; }
+    let samples = AUDIO.lock().unwrap_or_else(|e| e.into_inner()).len() as u64;
+    ((samples * 1000) / (2 * sample_rate as u64)).min(i32::MAX as u64) as jint
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeReadAudio(
     mut env: JNIEnv<'_>, _this: JObject<'_>,
