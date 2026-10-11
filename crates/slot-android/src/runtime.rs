@@ -71,6 +71,9 @@ enum Input {
     Suspend,
     ReloadVisuals,
     ReloadCartLabel { uri: String },
+    // Android announces network return; only wake the HTTP retry timer.
+    // Never infer RA API authentication/reachability from Wi-Fi alone.
+    RaNetworkAvailable,
 }
 
 static INPUT: Mutex<VecDeque<Input>> = Mutex::new(VecDeque::new());
@@ -703,6 +706,11 @@ impl Engine {
 
     fn handle(&mut self, input: Input) {
         match input {
+            Input::RaNetworkAvailable => {
+                if let Some(service) = self.ra_service.as_ref() {
+                    service.network_available();
+                }
+            }
             Input::ReloadVisuals => {
                 // Triggered from Android SAF, applied on the GL thread only.
                 let root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
@@ -2577,6 +2585,16 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeKey(
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
         .push_back(Input::Key(key, pressed != 0));
+}
+
+/// Wake the RA HTTP worker on Android network reconnection. Do not perform
+/// any HTTP, hashing or blocking operation on this callback thread.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaNetworkAvailable(
+    _env: *mut c_void, _activity: *mut c_void,
+) {
+    INPUT.lock().unwrap_or_else(|e| e.into_inner())
+        .push_back(Input::RaNetworkAvailable);
 }
 
 #[unsafe(no_mangle)]
