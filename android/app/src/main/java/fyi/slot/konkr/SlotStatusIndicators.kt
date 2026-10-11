@@ -77,6 +77,14 @@ internal class SlotStatusIndicators(
     private val wifi = WifiSignal(host)
     private val bluetooth = sprite()
     private val sprites = HashMap<String, android.graphics.Bitmap>()
+    private var statusAtlas: android.graphics.Bitmap? = null
+    private val spriteNames = listOf(
+        "sleepmanager_running", "sleepmanager_stopped",
+        "basicsync_running", "basicsync_stopped",
+        "syncthing_running", "syncthing_stopped",
+        "raofflineproxy_running", "raofflineproxy_stopped",
+        "bluetooth_on"
+    )
     private val worker = Executors.newSingleThreadExecutor { task ->
         Thread(task, "slot-status-health").apply {
             priority = Thread.MIN_PRIORITY
@@ -241,9 +249,14 @@ internal class SlotStatusIndicators(
 
     private fun sprite(name: String, view: ImageView) {
         val bitmap = sprites.getOrPut(name) {
-            host.assets.open("status/$name.png").use { stream ->
-                requireNotNull(BitmapFactory.decodeStream(stream))
-            }
+            // A single sprite atlas avoids nine asset opens and retains the
+            // pixel geometry of the provided v6 status icons.
+            val atlas = statusAtlas ?: host.assets.open("status/status_sprites.png")
+                .use { requireNotNull(BitmapFactory.decodeStream(it)) }
+                .also { statusAtlas = it }
+            val index = spriteNames.indexOf(name)
+            require(index >= 0) { "Unknown status sprite: $name" }
+            android.graphics.Bitmap.createBitmap(atlas, index * 24, 0, 24, 24)
         }
         view.setImageBitmap(bitmap)
     }
