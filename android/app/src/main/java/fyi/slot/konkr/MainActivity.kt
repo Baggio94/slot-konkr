@@ -59,6 +59,7 @@ class MainActivity : Activity() {
         private const val THEME_REQUEST = 4705
         private const val WALLPAPER_REQUEST = 4706
         private const val LABEL_REQUEST = 4707
+        private const val CART_STUDIO_REQUEST = 4708
         private const val PREFS = "slot_konkr_library"
         private const val ROM_ROOT = "rom_root_uri"
         private const val BIOS_ROOT = "bios_root_uri"
@@ -108,6 +109,7 @@ class MainActivity : Activity() {
     external fun nativePollSaveFlush(): String?
 
     private var pendingCartLabelUri: String? = null
+    private var pendingCartStudioUri: String? = null
     private lateinit var cartSounds: CartSounds
     private val scanner = Executors.newSingleThreadExecutor()
     private val gameLoader = Executors.newSingleThreadExecutor()
@@ -149,8 +151,8 @@ class MainActivity : Activity() {
                             }
                             if (failures.isNotEmpty()) {
                                 runOnUiThread {
-                                    if (!isDestroyed) Toast.makeText(this@MainActivity,
-                                        failures.joinToString("; "), Toast.LENGTH_LONG).show()
+                                    if (!isDestroyed) SlotToast.makeText(this@MainActivity,
+                                        "Some saves couldn't be copied. Check your Save and Save State folders.", Toast.LENGTH_LONG).show()
                                 }
                             }
                         }
@@ -175,10 +177,13 @@ class MainActivity : Activity() {
                 10 -> resetVisualFile(WALLPAPER_REQUEST)
                 11 -> openCartLabelPicker()
                 12 -> removeSelectedCartLabel()
+                13 -> openSelectedCartStudio()
+                14 -> openAllCartStudio()
+                15 -> startActivity(Intent(this@MainActivity, AppsActivity::class.java))
             }
             nativePollMessage()?.let { message ->
                 Log.w(TAG, message)
-                Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
+                SlotToast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
             }
             if (!isDestroyed) uiHandler.postDelayed(this, 100L)
         }
@@ -271,7 +276,7 @@ class MainActivity : Activity() {
                 }) {
                 if (!restoreCachedLibrary(uri)) scanFolder(uri)
             } else {
-                status.text = "ROM folder permission expired — START to choose again"
+                status.text = "Games folder access expired. Choose it again. — START to choose again"
             }
         } else {
             status.text = "Press START to open the menu and add your ROMs."
@@ -465,8 +470,8 @@ class MainActivity : Activity() {
                 } catch (error: Exception) {
                     Log.w(TAG, "RetroArch SAF import skipped, keeping private saves", error)
                     runOnUiThread {
-                        if (!isDestroyed) Toast.makeText(this@MainActivity,
-                            "RetroArch import unavailable — check Save/State folders",
+                        if (!isDestroyed) SlotToast.makeText(this@MainActivity,
+                            "Couldn't load existing saves. Check your Saves and Save States folders.",
                             Toast.LENGTH_LONG).show()
                     }
                 }
@@ -587,22 +592,22 @@ class MainActivity : Activity() {
         scanner.execute {
             val proxy = RaEndpoint.discover(applicationContext)
             val message = when {
-                proxy == null -> "RAOfflineProxy unavailable"
-                !proxy.running -> "RAOfflineProxy stopped"
-                proxy.base() == null -> "RAOfflineProxy address invalid"
+                proxy == null -> "RAOfflineProxy wasn't found. Open it to enable achievements."
+                !proxy.running -> "RAOfflineProxy is stopped. Open it to reconnect."
+                proxy.base() == null -> "RAOfflineProxy connection settings need checking."
                 else -> {
                     val state = when (proxy.online) {
                         true -> "Online"
                         false -> "Offline"
-                        null -> "Connectivity unknown"
+                        null -> "Connection unknown"
                     }
-                    val pending = proxy.pendingAwards?.toString() ?: "not reported"
-                    "RAOfflineProxy: $state (port ${proxy.port})\nPending awards: $pending"
+                    val pending = proxy.pendingAwards?.toString() ?: "unknown"
+                    "Achievements: $state\nAwards waiting to sync: $pending"
                 }
             }
             runOnUiThread {
                 if (!isDestroyed) {
-                    Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+                    SlotToast.makeText(this, message, Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -623,18 +628,19 @@ class MainActivity : Activity() {
         val charging = state == BatteryManager.BATTERY_STATUS_CHARGING ||
             state == BatteryManager.BATTERY_STATUS_FULL
         nativeSystemStatus(clock, percent, charging)
+
     }
 
     private fun refreshLibrary() {
         val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)
         if (saved == null) {
-            Toast.makeText(this, "Choose a ROM folder first", Toast.LENGTH_SHORT).show()
+            SlotToast.makeText(this, "Choose your games folder first.", Toast.LENGTH_SHORT).show()
             openRomFolderPicker()
             return
         }
         val uri = Uri.parse(saved)
         if (contentResolver.persistedUriPermissions.none { it.uri == uri && it.isReadPermission }) {
-            Toast.makeText(this, "ROM folder permission expired", Toast.LENGTH_SHORT).show()
+            SlotToast.makeText(this, "Games folder access expired. Choose it again.", Toast.LENGTH_SHORT).show()
             openRomFolderPicker()
             return
         }
@@ -652,7 +658,7 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             startActivityForResult(intent, requestCode)
         } catch (error: ActivityNotFoundException) {
-            Toast.makeText(this, "Android folder picker unavailable", Toast.LENGTH_LONG).show()
+            SlotToast.makeText(this, "Android folder picker unavailable", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -667,7 +673,7 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             startActivityForResult(intent, BIOS_REQUEST)
         } catch (error: ActivityNotFoundException) {
-            Toast.makeText(this, "Android BIOS folder picker unavailable", Toast.LENGTH_LONG).show()
+            SlotToast.makeText(this, "Can't open the BIOS folder picker.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -686,10 +692,10 @@ class MainActivity : Activity() {
                 }
                 if (firstExplicitImport) runOnUiThread {
                     if (!isDestroyed) {
-                        Toast.makeText(
+                        SlotToast.makeText(
                             this,
-                            "BIOS ready: " + imported.joinToString(", ") +
-                                " (next game launch)",
+                            "BIOS imported: " + imported.joinToString(", ") +
+                                " (available next time you start a game)",
                             Toast.LENGTH_LONG
                         ).show()
                     }
@@ -698,7 +704,7 @@ class MainActivity : Activity() {
                 Log.e(TAG, "BIOS folder import failed", error)
                 runOnUiThread {
                     if (!isDestroyed) {
-                        Toast.makeText(this, "BIOS import failed: " +
+                        SlotToast.makeText(this, "Couldn't import BIOS files: " +
                             (error.message ?: "check folder files"), Toast.LENGTH_LONG).show()
                     }
                 }
@@ -717,7 +723,7 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             startActivityForResult(intent, FOLDER_REQUEST)
         } catch (error: ActivityNotFoundException) {
-            status.text = "Android folder picker unavailable: " + error.message
+            status.text = "Can't open the folder picker: " + error.message
         }
     }
 
@@ -731,7 +737,7 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             startActivityForResult(intent, kind)
         } catch (error: ActivityNotFoundException) {
-            Toast.makeText(this, "Android file picker unavailable", Toast.LENGTH_LONG).show()
+            SlotToast.makeText(this, "Can't open the file picker on this device.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -743,7 +749,7 @@ class MainActivity : Activity() {
     private fun resetVisualFile(kind: Int) {
         val file = visualFile(kind)
         if (file.exists() && !file.delete()) {
-            Toast.makeText(this, "Could not remove visual setting", Toast.LENGTH_LONG).show()
+            SlotToast.makeText(this, "Couldn't remove the wallpaper. Please try again.", Toast.LENGTH_LONG).show()
             return
         }
         nativeReloadVisualAssets()
@@ -788,10 +794,10 @@ class MainActivity : Activity() {
                 throw error
             }
             nativeReloadVisualAssets()
-            Toast.makeText(this, "Slot. personalization updated", Toast.LENGTH_SHORT).show()
+            SlotToast.makeText(this, "Wallpaper updated.", Toast.LENGTH_SHORT).show()
         } catch (error: Exception) {
             Log.e(TAG, "Cannot import Slot visual file", error)
-            Toast.makeText(this, "Import failed: " + error.message, Toast.LENGTH_LONG).show()
+            SlotToast.makeText(this, "Couldn't import this file: " + error.message, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -806,10 +812,33 @@ class MainActivity : Activity() {
         return File(File(filesDir, "Labels"), "$name.png")
     }
 
+    private fun openCartStudio(selected: String?) {
+        pendingCartStudioUri = selected
+        val intent = Intent(this, CartStudioActivity::class.java).apply {
+            if (selected != null) putExtra(CartStudioActivity.EXTRA_ROM, selected)
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, CART_STUDIO_REQUEST)
+    }
+
+    private fun openAllCartStudio() = openCartStudio(null)
+
+    private fun openSelectedCartStudio() {
+        val selected = nativePollCartLabelUri()
+        if (selected.isNullOrBlank()) {
+            SlotToast.makeText(this, "Select a game first.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        openCartStudio(selected)
+    }
+
+    private fun setStudioOverrides(json: String): Int =
+        nativeSetLibrary(CartStudioCatalog.withOverrides(this, json))
+
     private fun openCartLabelPicker() {
         val selected = nativePollCartLabelUri()
         if (selected.isNullOrBlank()) {
-            Toast.makeText(this, "Select a cartridge first", Toast.LENGTH_SHORT).show()
+            SlotToast.makeText(this, "Select a game first.", Toast.LENGTH_SHORT).show()
             return
         }
         pendingCartLabelUri = selected
@@ -820,11 +849,11 @@ class MainActivity : Activity() {
         val selected = nativePollCartLabelUri() ?: return
         val file = cartLabelFile(selected)
         if (file.exists() && !file.delete()) {
-            Toast.makeText(this, "Could not remove label", Toast.LENGTH_LONG).show()
+            SlotToast.makeText(this, "Couldn't remove the selected artwork.", Toast.LENGTH_LONG).show()
             return
         }
         nativeReloadCartLabel(selected)
-        Toast.makeText(this, "Original Slot. label restored", Toast.LENGTH_SHORT).show()
+        SlotToast.makeText(this, "Custom artwork removed. Original cart label restored.", Toast.LENGTH_SHORT).show()
     }
 
     private fun importCartLabel(source: Uri, romUri: String) {
@@ -865,16 +894,38 @@ class MainActivity : Activity() {
                 throw error
             }
             nativeReloadCartLabel(romUri)
-            Toast.makeText(this, "Cartridge label applied", Toast.LENGTH_SHORT).show()
+            SlotToast.makeText(this, "Cart artwork updated.", Toast.LENGTH_SHORT).show()
         } catch (error: Exception) {
             Log.e(TAG, "Could not import cartridge label", error)
-            Toast.makeText(this, "Label import failed: " + error.message, Toast.LENGTH_LONG).show()
+            SlotToast.makeText(this, "Couldn't import cart artwork: " + error.message, Toast.LENGTH_LONG).show()
         }
     }
 
     @Deprecated("Android 12 SAF activity result")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == CART_STUDIO_REQUEST) {
+            val selected = pendingCartStudioUri
+            pendingCartStudioUri = null
+            if (resultCode == RESULT_OK) {
+                // Rebuild every edited cart in the in-memory shelf from cached
+                // library metadata. No ROM rescan, game saves or state edits.
+                try {
+                    val cache = File(filesDir, ROM_CACHE_NAME)
+                    val json = JSONObject(cache.readText(Charsets.UTF_8))
+                        .getJSONArray("games").toString()
+                    if (setStudioOverrides(json) < 0) error("Studio library reload failed")
+                    // nativeSetLibrary refreshes *all* GBA/GB/GBC label and shell
+                    // material textures; keep the selected-cart path for focus.
+                    if (selected != null) nativeReloadCartLabel(selected)
+                } catch (error: Exception) {
+                    Log.e(TAG, "Studio changes could not refresh shelf", error)
+                    SlotToast.makeText(this, "Cart Studio changes saved. Reopen slot. to refresh artwork.",
+                        Toast.LENGTH_LONG).show()
+                }
+            }
+            return
+        }
         if (requestCode == LABEL_REQUEST) {
             val selected = pendingCartLabelUri
             pendingCartLabelUri = null
@@ -910,7 +961,7 @@ class MainActivity : Activity() {
                     getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                         .putString(key, uri.toString()).apply()
                     val kind = if (requestCode == SAVE_REQUEST) "Save" else "Save State"
-                    Toast.makeText(this,
+                    SlotToast.makeText(this,
                         "$kind folder selected. RetroArch core subfolders will be used.",
                         Toast.LENGTH_LONG).show()
                 }
@@ -919,7 +970,7 @@ class MainActivity : Activity() {
             if (requestCode == FOLDER_REQUEST) {
                 status.text = "Cannot keep ROM folder permission — choose another folder"
             } else {
-                Toast.makeText(this, "Folder requires Android read/write access", Toast.LENGTH_LONG).show()
+                SlotToast.makeText(this, "This folder needs storage access. Please select it again.", Toast.LENGTH_LONG).show()
             }
             Log.e(TAG, "Android folder permission error", error)
         }
@@ -937,7 +988,7 @@ class MainActivity : Activity() {
             if (metadata.optInt("schema") != ROM_CACHE_SCHEMA ||
                 metadata.optString("root") != root.toString()) return false
             val games = metadata.optJSONArray("games") ?: return false
-            val count = nativeSetLibrary(games.toString())
+            val count = setStudioOverrides(games.toString())
             if (count < 0) return false
             if (count == 0) {
                 status.visibility = View.VISIBLE
@@ -985,7 +1036,7 @@ class MainActivity : Activity() {
             try {
                 val result = RomLibrary.scan(this, uri)
                 if (scanSerial.get() != serial) return@execute
-                val count = nativeSetLibrary(result.json)
+                val count = setStudioOverrides(result.json)
                 if (count >= 0) {
                     try {
                         storeCachedLibrary(uri, result.json)
@@ -1002,7 +1053,7 @@ class MainActivity : Activity() {
                     } else {
                         status.visibility = View.GONE
                         val note = if (result.truncated) " (limited to 5000)" else ""
-                        Toast.makeText(this, "Slot loaded " + count + " carts" + note, Toast.LENGTH_LONG).show()
+                        SlotToast.makeText(this, "Library ready: " + count + " carts" + note, Toast.LENGTH_LONG).show()
                     }
                 }
             } catch (error: Exception) {
@@ -1047,6 +1098,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         resumed = true
+        lastStatusPoll = -15000L
         cartSounds.resume()
         view.onResume()
         immersive()

@@ -6,8 +6,13 @@ use crate::plate::UndoFace;
 use crate::text;
 
 const STICKER_SVG: &str = include_str!("../assets/sticker.svg");
+const STICKER_KONKR_SVG: &str = include_str!("../assets/sticker-konkr.svg");
 
 const WORDMARK_SVG: &str = include_str!("../assets/wordmark.svg");
+// Scalable artwork traced from the KONKR and Pocket Advance branding
+// supplied specifically for this Android device, not substitute type.
+const KONKR_SVG: &str = include_str!("../assets/konkr-logo.svg");
+const POCKET_ADVANCE_SVG: &str = include_str!("../assets/pocket-advance-logo.svg");
 
 const WORDMARK_W: u32 = 250;
 
@@ -83,8 +88,8 @@ struct Canvas {
 }
 
 impl Canvas {
-    fn shape(w: u32, h: u32) -> Canvas {
-        let px = render_svg(STICKER_SVG, w, h).unwrap_or_else(|| vec![0; (w * h * 4) as usize]);
+    fn shape(source: &str, w: u32, h: u32) -> Canvas {
+        let px = render_svg(source, w, h).unwrap_or_else(|| vec![0; (w * h * 4) as usize]);
         Canvas { px, w, h }
     }
 
@@ -231,7 +236,10 @@ pub fn sticker_face_konkr(f: &StickerFields) -> UndoFace {
 fn sticker_face_custom(f: &StickerFields, credits: &[&str; 10],
                        origin: &[&str; 2], copyright: &str,
                        home: &str, model: &str) -> UndoFace {
-    let mut c = Canvas::shape(STICKER_W, STICKER_H);
+    let mut c = Canvas::shape(
+        if model == "MODEL NO. KONKR ADV" { STICKER_KONKR_SVG } else { STICKER_SVG },
+        STICKER_W, STICKER_H
+    );
     let panel_x = (PANEL_FX * STICKER_W as f32).round() as u32;
     let panel_y = (PANEL_FY * STICKER_H as f32).round() as u32;
     let panel_w = (PANEL_FW * STICKER_W as f32).round() as u32;
@@ -308,20 +316,45 @@ fn sticker_face_custom(f: &StickerFields, credits: &[&str; 10],
 
     let mut ry = panel_y as f32 + panel_h as f32 + 10.0;
     let right_edge = (panel_x + panel_w) as f32;
-    if let Some(mark) = wordmark(WORDMARK_W) {
-        let (mw, mh) = mark.1;
-        c.blit(
-            (right_edge - mw as f32 - 10.0) as u32,
-            ry as u32,
-            &mark.0,
-            mw,
-            mh,
-        );
-        ry += mh as f32 + 4.0;
-    }
-    for line in [copyright, home] {
-        let lw = c.print_measure(line, SMALL_PX);
-        ry = c.print(right_edge - lw - 10.0, ry, line, SMALL_PX, WHITE);
+    if model == "MODEL NO. KONKR ADV" {
+        // The original 217 px KONKR mark used 56 px of the 92 px lower
+        // zone, leaving the edition and version printed beyond the sticker.
+        // Reserve explicit space for all four rows. Keep the source artwork
+        // vector-based, and give the very wide POCKET ADVANCE wordmark more
+        // horizontal pixels so its thin strokes remain clean.
+        ry = panel_y as f32 + panel_h as f32 + 3.0;
+        if let Some((logo, (w, h))) = vector_mark(KONKR_SVG, 155) {
+            c.blit((right_edge - w as f32 - 14.0) as u32,
+                   ry as u32, &logo, w, h);
+            ry += h as f32 + 2.0;
+        }
+        if let Some((edition, (w, h))) = vector_mark(POCKET_ADVANCE_SVG, 305) {
+            c.blit((right_edge - w as f32 - 14.0) as u32,
+                   ry as u32, &edition, w, h);
+            ry += h as f32 + 2.0;
+        }
+        for line in [copyright, home] {
+            let px = SMALL_PX * 0.88;
+            let lw = c.print_measure(line, px);
+            ry = c.print(right_edge - lw - 14.0, ry, line, px, WHITE);
+        }
+    } else {
+        // Upstream ANBERNIC original is unaffected by KONKR layout fixes.
+        if let Some(mark) = wordmark(WORDMARK_W) {
+            let (mw, mh) = mark.1;
+            c.blit(
+                (right_edge - mw as f32 - 10.0) as u32,
+                ry as u32,
+                &mark.0,
+                mw,
+                mh,
+            );
+            ry += mh as f32 + 4.0;
+        }
+        for line in [copyright, home] {
+            let lw = c.print_measure(line, SMALL_PX);
+            ry = c.print(right_edge - lw - 10.0, ry, line, SMALL_PX, WHITE);
+        }
     }
 
     UndoFace {
@@ -332,10 +365,14 @@ fn sticker_face_custom(f: &StickerFields, credits: &[&str; 10],
 }
 
 fn wordmark(w: u32) -> Option<(Vec<u8>, (u32, u32))> {
-    let tree = usvg::Tree::from_str(WORDMARK_SVG, &usvg::Options::default()).ok()?;
+    vector_mark(WORDMARK_SVG, w)
+}
+
+fn vector_mark(source: &str, w: u32) -> Option<(Vec<u8>, (u32, u32))> {
+    let tree = usvg::Tree::from_str(source, &usvg::Options::default()).ok()?;
     let size = tree.size();
     let h = (w as f32 * size.height() / size.width()).round() as u32;
-    Some((render_svg(WORDMARK_SVG, w, h)?, (w, h)))
+    Some((render_svg(source, w, h)?, (w, h)))
 }
 
 pub fn draw_sticker(face: Option<TexId>, out: &mut Vec<Draw>) {

@@ -17,6 +17,10 @@ fi
 if [ ! -f android/app/src/main/jniLibs/arm64-v8a/libgpsp_libretro.so ]; then
   bash scripts/build-gpsp-android.sh
 fi
+# Even local builds must use the exact upstream Slot keycaps, not the
+# generic Android font. The same exporter is verified by CI.
+cargo run --locked -p slot-ui --example export_apps_legend -- \
+  android/app/src/main/assets/apps_controls
 cargo ndk -t arm64-v8a -o android/app/src/main/jniLibs build --release -p slot-android
 (cd android && gradle --no-daemon assembleDebug)
 echo "APK: android/app/build/outputs/apk/debug/app-debug.apk"

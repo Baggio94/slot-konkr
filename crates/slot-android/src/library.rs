@@ -16,6 +16,8 @@ pub struct RomEntry {
     pub code: String,
     #[serde(default)]
     pub color_only: bool,
+    #[serde(default)]
+    pub shell_override: Option<String>,
 }
 
 pub struct LibraryState {
@@ -69,6 +71,9 @@ pub fn carts_by_platform(entries: &[RomEntry]) -> [Vec<Cart>; 3] {
                 })
             }
         };
+        let shell = entry.shell_override.as_deref()
+            .and_then(ShellChoice::parse)
+            .or(shell);
         groups[group].push(Cart {
             platform,
             stem: entry.title.trim().to_owned(),
@@ -127,7 +132,7 @@ mod tests {
     fn sorts_and_rejects_non_saf_entries() {
         let example = |platform: &str, title: &str, uri: &str| RomEntry {
             platform: platform.into(), title: title.into(), uri: uri.into(),
-            code: String::new(), color_only: false
+            code: String::new(), color_only: false, shell_override: None
         };
         let grouped = carts_by_platform(&[
             example("GBA", "Zelda", "content://roms/z"),
