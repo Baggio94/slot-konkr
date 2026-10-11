@@ -4,6 +4,9 @@ import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
@@ -53,13 +56,31 @@ internal class RaAchievementOverlay(
     }
     private fun dp(x: Int) = (activity.resources.displayMetrics.density * x + 0.5f).toInt()
 
-    private val card = LinearLayout(activity).apply {
+    // Android 12 clips a one-pixel GradientDrawable stroke at some display
+    // densities. Draw this inset outline in the foreground AFTER text/images:
+    // all four edges remain visible, including the right-hand side.
+    private val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(126, 122, 132)
+        style = Paint.Style.STROKE
+        strokeWidth = dp(2).toFloat()
+    }
+    private val card = object : LinearLayout(activity) {
+        override fun onDrawForeground(canvas: Canvas) {
+            super.onDrawForeground(canvas)
+            val inset = outline.strokeWidth / 2 + dp(1)
+            if (width > dp(4) && height > dp(4)) {
+                canvas.drawRoundRect(
+                    RectF(inset, inset, width - inset, height - inset),
+                    dp(4).toFloat(), dp(4).toFloat(), outline
+                )
+            }
+        }
+    }.apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(12), dp(9), dp(14), dp(9))
         background = GradientDrawable().apply {
             setColor(Color.rgb(23, 22, 25))
-            setStroke(dp(1), Color.rgb(91, 89, 96))
             cornerRadius = dp(4).toFloat()
         }
         elevation = dp(3).toFloat()
