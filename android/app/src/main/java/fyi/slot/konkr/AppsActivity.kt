@@ -207,7 +207,7 @@ class AppsActivity : Activity() {
             launchSelected()
         }
         root.addView(grid, LinearLayout.LayoutParams(-1, 0, 1f))
-        root.addView(controllerLegend())
+        root.addView(controllerLegend(), LinearLayout.LayoutParams(-1, dp(35)))
         updateSelection(null, false)
         root.requestFocus()
         refreshAppsAsync()
@@ -278,13 +278,23 @@ class AppsActivity : Activity() {
      * with Android TextView / Unicode substitutes.
      */
     private fun controllerLegend(): View {
-        val scale = resources.displayMetrics.widthPixels.toFloat() / 720f
-        fun hint(asset: String): ImageView {
-            val bitmap = assets.open("apps_controls/$asset.png").use { stream ->
+        // Decode each original Slot face once. 35dp is a fixed footer height,
+        // so constrain only oversized glyphs instead of allowing the row to grow.
+        val faces = listOf("move", "open", "back").associateWith { asset ->
+            assets.open("apps_controls/$asset.png").use { stream ->
                 requireNotNull(BitmapFactory.decodeStream(stream)) {
                     "Missing original Slot legend asset: $asset"
                 }
             }
+        }
+        val maxFaceHeight = faces.values.maxOf { it.height }.coerceAtLeast(1)
+        val availableHeight = (dp(35) - dp(4)).coerceAtLeast(1)
+        val scale = minOf(
+            resources.displayMetrics.widthPixels.toFloat() / 720f,
+            availableHeight.toFloat() / maxFaceHeight.toFloat()
+        )
+        fun hint(asset: String): ImageView {
+            val bitmap = faces.getValue(asset)
             return ImageView(this).apply {
                 setImageBitmap(bitmap)
                 scaleType = ImageView.ScaleType.FIT_XY
@@ -303,9 +313,9 @@ class AppsActivity : Activity() {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            // Compact 40dp band. Original controller glyphs retain exact sizes/spacing;
-            // Gravity.CENTER keeps them centred both horizontally and vertically.
-            minimumHeight = dp(40)
+            // Fixed 35dp footer. Original Slot art is scaled only if necessary;
+            // Gravity.CENTER centres every control in both directions.
+            minimumHeight = dp(35)
             setPadding(0, 0, 0, 0)
             addView(hint("move"))
             val open = hint("open")
