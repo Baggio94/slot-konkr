@@ -549,43 +549,70 @@ impl Drop for LibretroCore {
     }
 }
 
+// rcheevos' GBA address space is IWRAM, EWRAM, SRAM in that order.
+// libretro does not require a single descriptor per region: gpSP can expose
+// EWRAM as eight 32-KiB windows, with nonzero backing-buffer offsets.
+// Assemble only the *contiguous prefix* of each region. The C evaluator's
+// valid[] bounds then reject any absent pages instead of reading stale RAM.
+fn copy_gba_achievement_map(descriptors: &[MemoryDescriptor], ram: &mut [u8]) -> [usize; 3] {
+    if ram.len() < 0x58000 {
+        return [0; 3];
+    }
+    let mut valid = [0; 3];
+    for (region, (start, destination, size)) in [
+        (0x03000000usize, 0usize, 0x8000usize),
+        (0x02000000, 0x8000, 0x40000),
+        (0x0e000000, 0x48000, 0x10000),
+    ].into_iter().enumerate() {
+        let mut copied = 0usize;
+        while copied < size {
+            let address = start + copied;
+            let Some(desc) = descriptors.iter().find(|desc| {
+                !desc.ptr.is_null()
+                    && desc.disconnect == 0
+                    && desc.start <= address
+                    && desc.start.checked_add(desc.len).is_some_and(|end| address < end)
+            }) else { break };
+            let delta = address - desc.start;
+            let bytes = (desc.len - delta).min(size - copied);
+            let Some(source) = desc.offset.checked_add(delta) else { break };
+            // Pointer arithmetic must not wrap; descriptor pointers themselves
+            // remain borrowed from the trusted libretro core until unload.
+            if source.checked_add(bytes).is_none_or(|end| end > isize::MAX as usize) {
+                break;
+            }
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    (desc.ptr as *const u8).add(source),
+                    ram[destination + copied..].as_mut_ptr(),
+                    bytes,
+                );
+            }
+            copied += bytes;
+        }
+        valid[region] = copied;
+    }
+    valid
+}
+
 impl RetroCore for LibretroCore {
     fn achievement_memory(&self, ram: &mut [u8]) -> [usize; 3] {
         if ram.len() < 0x58000 || !self.loaded {
             return [0; 3];
         }
-        let mut valid = [0; 3];
-        // GBA RetroAchievements virtual address order from rcheevos:
-        // IWRAM 0x03000000 -> [0,0x8000)
-        // EWRAM 0x02000000 -> [0x8000,0x48000)
-        // SRAM  0x0e000000 -> [0x48000,0x58000)
-        // Only exact descriptors are accepted: a partially mapped region
-        // must never be misinterpreted as a zero-valued RAM word.
-        for (i, (physical, offset, size)) in [
-            (0x03000000, 0usize, 0x8000usize),
-            (0x02000000, 0x8000, 0x40000),
-            (0x0e000000, 0x48000, 0x10000),
-        ].into_iter().enumerate() {
-            if let Some(d) = self.host.memory.iter()
-                .find(|d| d.start == physical && d.disconnect == 0 &&
-                    !d.ptr.is_null() && d.len > 0)
-            {
-                let n = d.len.min(size);
+        let mut valid = copy_gba_achievement_map(&self.host.memory, ram);
+        // Some cores expose save memory only through RETRO_MEMORY_SAVE_RAM.
+        // Prefer this complete region when the descriptor map is incomplete.
+        if valid[2] < 0x10000 {
+            let source = unsafe { (self.api.get_memory_data)(MEMORY_SAVE_RAM) };
+            let bytes = unsafe { (self.api.get_memory_size)(MEMORY_SAVE_RAM) }.min(0x10000);
+            if !source.is_null() && bytes > valid[2] {
                 unsafe {
                     std::ptr::copy_nonoverlapping(
-                        (d.ptr as *const u8).add(d.offset),
-                        ram[offset..].as_mut_ptr(), n);
+                        source as *const u8, ram[0x48000..].as_mut_ptr(), bytes,
+                    );
                 }
-                valid[i] = n;
-            } else if i == 2 {
-                // Several cores expose SRAM only via RETRO_MEMORY_SAVE_RAM.
-                let ptr = unsafe { (self.api.get_memory_data)(MEMORY_SAVE_RAM) };
-                let n = unsafe { (self.api.get_memory_size)(MEMORY_SAVE_RAM) }.min(size);
-                if !ptr.is_null() && n > 0 {
-                    unsafe { std::ptr::copy_nonoverlapping(
-                        ptr as *const u8, ram[offset..].as_mut_ptr(), n) };
-                    valid[i] = n;
-                }
+                valid[2] = bytes;
             }
         }
         valid
@@ -795,6 +822,76 @@ mod tests {
             key: ptr::null(),
             value: ptr::null(),
         }
+    }
+
+    fn test_ra_descriptor(memory: &mut [u8], start: usize, offset: usize, len: usize) -> MemoryDescriptor {
+        MemoryDescriptor {
+            flags: 0,
+            ptr: memory.as_mut_ptr().cast(),
+            offset,
+            start,
+            select: 0,
+            disconnect: 0,
+            len,
+            addrspace: ptr::null(),
+        }
+    }
+
+    #[test]
+    fn ra_gba_mgba_full_memory_regions_are_copied_in_ra_order() {
+        let mut iwram = vec![0x11u8; 0x8000];
+        let mut ewram = vec![0x22u8; 0x40000];
+        let mut sram = vec![0x33u8; 0x10000];
+        let mut map = vec![
+            test_ra_descriptor(&mut iwram, 0x03000000, 0, 0x8000),
+            test_ra_descriptor(&mut ewram, 0x02000000, 0, 0x40000),
+            test_ra_descriptor(&mut sram, 0x0e000000, 0, 0x10000),
+        ];
+        map[0].select = 0xFF000000; // Real mGBA uses a region selection mask.
+        map[1].select = 0xFF000000;
+        let mut ram = vec![0xEE; 0x58000];
+        assert_eq!(copy_gba_achievement_map(&map, &mut ram), [0x8000, 0x40000, 0x10000]);
+        assert!(ram[..0x8000].iter().all(|b| *b == 0x11));
+        assert!(ram[0x8000..0x48000].iter().all(|b| *b == 0x22));
+        assert!(ram[0x48000..].iter().all(|b| *b == 0x33));
+    }
+
+    #[test]
+    fn ra_gba_gpsp_split_ewram_uses_every_descriptor_and_its_offset() {
+        let mut iwram = vec![0u8; 0x10000];
+        iwram[0x8000..].fill(0x99);
+        let mut ewram = vec![0u8; 0x80000];
+        let mut map = vec![test_ra_descriptor(&mut iwram, 0x03000000, 0x8000, 0x8000)];
+        // gpSP-style EWRAM: 8 descriptors, each 0x8000 bytes, with
+        // backing offsets 0x8000, 0x18000, ..., 0x78000.
+        for index in 0..8 {
+            let offset = 0x8000 + index * 0x10000;
+            ewram[offset..offset + 0x8000].fill(0x40 + index as u8);
+            map.push(test_ra_descriptor(
+                &mut ewram, 0x02000000 + index * 0x8000, offset, 0x8000,
+            ));
+        }
+        let mut ram = vec![0xEE; 0x58000];
+        let valid = copy_gba_achievement_map(&map, &mut ram);
+        assert_eq!(valid, [0x8000, 0x40000, 0]);
+        assert_eq!(ram[0], 0x99);
+        for index in 0..8 {
+            let begin = 0x8000 + index * 0x8000;
+            assert!(ram[begin..begin + 0x8000].iter().all(|b| *b == 0x40 + index as u8));
+        }
+    }
+
+    #[test]
+    fn ra_gba_missing_page_stops_at_contiguous_prefix_and_rejects_bad_offsets() {
+        let mut ewram = vec![0x37u8; 0x10000];
+        let first = test_ra_descriptor(&mut ewram, 0x02000000, 0, 0x8000);
+        let third = test_ra_descriptor(&mut ewram, 0x02010000, 0x8000, 0x8000);
+        let mut ram = vec![0xEE; 0x58000];
+        let valid = copy_gba_achievement_map(&[first, third], &mut ram);
+        assert_eq!(valid, [0, 0x8000, 0]);
+        assert_eq!(ram[0x8000 + 0x8000], 0xEE);
+        let malformed = test_ra_descriptor(&mut ewram, 0x03000000, usize::MAX - 2, 0x8000);
+        assert_eq!(copy_gba_achievement_map(&[malformed], &mut ram), [0, 0, 0]);
     }
 
     #[test]
