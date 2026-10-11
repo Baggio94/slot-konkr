@@ -2,7 +2,6 @@ package fyi.slot.konkr
 
 import android.app.Activity
 import android.app.Dialog
-import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -33,7 +32,22 @@ internal class RaPanelDialog(
             .getOrElse { Typeface.create("sans-serif-condensed", Typeface.BOLD) }
     }
     private fun dp(x: Int): Int = (x * activity.resources.displayMetrics.density + .5f).toInt()
-    private val dialog: Dialog = Dialog(activity)
+    private val dialog: Dialog = object : Dialog(activity) {
+        override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+            if (event.keyCode == KeyEvent.KEYCODE_BUTTON_B) {
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) dismiss()
+                return true
+            }
+            if (event.keyCode == KeyEvent.KEYCODE_BUTTON_A) {
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    val focus = currentFocus
+                    if (focus != null && focus.isClickable) focus.performClick()
+                }
+                return true
+            }
+            return super.dispatchKeyEvent(event)
+        }
+    }
     private lateinit var content: LinearLayout
     private lateinit var loading: TextView
     private lateinit var actions: LinearLayout
@@ -103,7 +117,6 @@ internal class RaPanelDialog(
                 minimumHeight = dp(36)
                 setPadding(dp(7), dp(5), dp(7), dp(5))
                 setOnClickListener { callback() }
-                backgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
                 setOnFocusChangeListener { view, focused ->
                     view.setBackgroundColor(if (focused) Color.rgb(70, 68, 77) else Color.TRANSPARENT)
                 }
