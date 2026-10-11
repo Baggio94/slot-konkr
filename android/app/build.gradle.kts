@@ -11,8 +11,11 @@ android {
         applicationId = "fyi.slot.konkr"
         minSdk = 31
         targetSdk = 32
-        versionCode = 36
-        versionName = "0.0.7-dev26-studio-preview"
+        // RC1 consolidates the stacked Cart Studio (#3) and native
+        // RetroAchievements (#4) branches. The original applicationId and
+        // persistent signing certificate remain unchanged for in-place updates.
+        versionCode = 37
+        versionName = "0.1.0-rc1"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
