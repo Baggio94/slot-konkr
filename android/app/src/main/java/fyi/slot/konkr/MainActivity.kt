@@ -32,6 +32,9 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
 import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import org.json.JSONObject
 import org.json.JSONArray
 import java.util.concurrent.ConcurrentHashMap
@@ -98,6 +101,12 @@ class MainActivity : Activity() {
     external fun nativeFastAudioSupported(supported: Boolean)
     external fun nativeReadAudio(): ShortArray
     external fun nativePollMessage(): String?
+    external fun nativePollRaNotice(): String?
+    external fun nativeRaStatus(): String?
+    external fun nativeRaNetworkAvailable()
+    external fun nativeRaAccountConfigured()
+    external fun nativeRaPrefetchHash(hash: String)
+    external fun nativeRaFlushReady(): Boolean
     external fun nativeSystemStatus(clock: String, batteryPercent: Int, charging: Boolean)
     external fun nativePollUiAction(): Int
     external fun nativeReloadVisualAssets()
@@ -112,6 +121,11 @@ class MainActivity : Activity() {
     private var pendingCartStudioUri: String? = null
     private lateinit var cartSounds: CartSounds
     private val scanner = Executors.newSingleThreadExecutor()
+    private val raLoginWorker = Executors.newSingleThreadExecutor()
+    private val raSmartWorker = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "slot-ra-smart-cache").apply { priority = Thread.MIN_PRIORITY }
+    }
+    private val raSmartRunning = AtomicBoolean(false)
     private val gameLoader = Executors.newSingleThreadExecutor()
     private val activeTargets = ConcurrentHashMap<String, RetroArchStorage.Target>()
     private val uiHandler = Handler(Looper.getMainLooper())
@@ -120,6 +134,21 @@ class MainActivity : Activity() {
     private var lastRumbleAt = 0L
     @Volatile private var resumed = false
     private var audioThread: Thread? = null
+    private var raConnectivity: ConnectivityManager? = null
+    private val raConnectivityCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            // Signals only that a network appeared. Rust still verifies RA HTTPS.
+            if (!isDestroyed) {
+                nativeRaNetworkAvailable()
+                startRaSmartCache()
+            }
+        }
+        override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+            if (!isDestroyed && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                startRaSmartCache()
+            }
+        }
+    }
     private val pulse = object : Runnable {
         override fun run() {
             pollSystemStatus()
@@ -167,7 +196,7 @@ class MainActivity : Activity() {
             when (nativePollUiAction()) {
                 1 -> openRomFolderPicker()
                 2 -> refreshLibrary()
-                3 -> checkRaOfflineProxy()
+                3 -> openRetroAchievementsAccount()
                 4 -> openBiosFolderPicker()
                 5 -> openSharedFolderPicker(SAVE_REQUEST)
                 6 -> openSharedFolderPicker(STATE_REQUEST)
@@ -185,6 +214,29 @@ class MainActivity : Activity() {
                 Log.w(TAG, message)
                 SlotToast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
             }
+            // RetroArch-like achievement widget: cached official badge and
+            // original Slot label font. Foreground-only, in our Activity frame,
+            // never a system Toast that Android may place at screen bottom.
+            if (resumed) {
+                repeat(4) {
+                    val raw = nativePollRaNotice() ?: return@repeat
+                    try {
+                        val notice = JSONObject(raw)
+                        val title = notice.optString("title", "").take(100)
+                        val detail = notice.optString("detail", "").take(160)
+                        if (title.isNotBlank()) {
+                            raAchievementOverlay.push(RaAchievementOverlay.Notice(
+                                title = title,
+                                detail = detail,
+                                earned = notice.optBoolean("earned", false),
+                                badge = notice.optString("badge", "").takeIf { it.isNotBlank() }
+                            ))
+                        }
+                    } catch (_: Exception) {
+                        Log.w(TAG, "Ignoring malformed RetroAchievements notice")
+                    }
+                }
+            }
             if (!isDestroyed) uiHandler.postDelayed(this, 100L)
         }
     }
@@ -194,10 +246,14 @@ class MainActivity : Activity() {
 
     private lateinit var view: GLSurfaceView
     private var startupSplash: View? = null
+    private lateinit var raAchievementOverlay: RaAchievementOverlay
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // A staged sign-out must finish before any native HTTP worker is started.
+        val cleanSignOut = RaAccount.finishPendingSignOut(filesDir)
         nativeConfigure(filesDir.absolutePath, applicationInfo.nativeLibraryDir)
+        if (cleanSignOut && RaAccount.configuredUser(filesDir) != null) nativeRaAccountConfigured()
         cartSounds = CartSounds(this)
         view = object : GLSurfaceView(this) {
             init {
@@ -241,7 +297,9 @@ class MainActivity : Activity() {
         val frame = FrameLayout(this)
         frame.addView(view, FrameLayout.LayoutParams(-1, -1))
         status = TextView(this).apply {
-            setTextColor(Color.WHITE)
+            typeface = SlotUi.font(this@MainActivity)
+            letterSpacing = .09f
+            setTextColor(SlotUi.ink)
             setBackgroundColor(Color.TRANSPARENT)
             textSize = 15f
             gravity = Gravity.CENTER
@@ -251,10 +309,20 @@ class MainActivity : Activity() {
             status,
             FrameLayout.LayoutParams(-1, -2, Gravity.TOP)
         )
+        raAchievementOverlay = RaAchievementOverlay(this, frame)
         showSlotStartupSplash(frame)
         setContentView(frame)
         immersive()
         uiHandler.post(pulse)
+        if (!cleanSignOut) {
+            uiHandler.postDelayed({
+                SlotToast.makeText(this,
+                    "Previous RA sign out needs attention. Local awards were kept.",
+                    Toast.LENGTH_LONG).show()
+            }, 800L)
+        }
+        startRaNetworkWatch()
+        startRaSmartCache()
         // Stage BIOS files before the first queued ROM launch, using the same
         // worker that loads ROMs; no race between BIOS import and core startup.
         getSharedPreferences(PREFS, MODE_PRIVATE).getString(BIOS_ROOT, null)
@@ -588,29 +656,231 @@ class MainActivity : Activity() {
         audioThread = null
     }
 
-    private fun checkRaOfflineProxy() {
-        scanner.execute {
-            val proxy = RaEndpoint.discover(applicationContext)
-            val message = when {
-                proxy == null -> "RAOfflineProxy wasn't found. Open it to enable achievements."
-                !proxy.running -> "RAOfflineProxy is stopped. Open it to reconnect."
-                proxy.base() == null -> "RAOfflineProxy connection settings need checking."
-                else -> {
-                    val state = when (proxy.online) {
-                        true -> "Online"
-                        false -> "Offline"
-                        null -> "Connection unknown"
-                    }
-                    val pending = proxy.pendingAwards?.toString() ?: "unknown"
-                    "Achievements: $state\nAwards waiting to sync: $pending"
+    /**
+     * Read SAF ROM fingerprints exclusively off UI/audio/GL threads. Only
+     * the complete ROM MD5 is forwarded to the native RA preparation queue.
+     */
+    private fun startRaSmartCache() {
+        if (isDestroyed || RaAccount.configuredUser(filesDir) == null) return
+        if (!raSmartRunning.compareAndSet(false, true)) return
+        try {
+            raSmartWorker.execute {
+                try {
+                    val manager = getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager
+                    val caps = manager?.getNetworkCapabilities(manager.activeNetwork)
+                    if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) != true)
+                        return@execute
+                    RaSmartCache.indexAndPrefetch(applicationContext, filesDir,
+                        isPlaying = { nativeIsPlaying() || !resumed },
+                        submit = { hash -> nativeRaPrefetchHash(hash) })
+                } catch (_: Exception) {
+                    Log.w(TAG, "RA Smart Cache indexing postponed")
+                } finally {
+                    raSmartRunning.set(false)
                 }
             }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            raSmartRunning.set(false)
+        }
+    }
+
+    private fun startRaNetworkWatch() {
+        try {
+            val manager = getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return
+            manager.registerDefaultNetworkCallback(raConnectivityCallback)
+            raConnectivity = manager
+        } catch (error: Exception) {
+            // No background polling fallback: the HTTP engine already retries
+            // with bounded exponential backoff when notifications are unavailable.
+            Log.w(TAG, "RA network reconnect callback unavailable")
+        }
+    }
+
+    /** Snapshot provided by the native renderer, never a network operation. */
+    private fun retroAchievementsStatus(): String {
+        val raw = nativeRaStatus() ?: return "Preparing"
+        return try {
+            when (JSONObject(raw).optString("state", "Disabled")) {
+                "Ready" -> "Online"
+                "Syncing" -> "Preparing"
+                "Offline" -> "Offline"
+                "Attention" -> "Needs attention"
+                else -> "Inactive"
+            }
+        } catch (_: Exception) { "Unknown" }
+    }
+
+    private fun refreshRaPanel(panel: RaPanelDialog, username: String) {
+        scanner.execute {
+            val snapshot = RaDiagnostics.inspect(filesDir, username)
             runOnUiThread {
-                if (!isDestroyed) {
-                    SlotToast.makeText(this, message, Toast.LENGTH_LONG).show()
+                if (!isDestroyed) panel.update(retroAchievementsStatus(), snapshot)
+            }
+        }
+    }
+
+    /**
+     * Outstanding awards remain on disk when signing out. Closing the process
+     * is mandatory to stop the old account's detached native HTTP worker.
+     */
+    private fun confirmRaSignOut(panel: RaPanelDialog, username: String) {
+        if (nativeIsPlaying()) {
+            SlotToast.makeText(this, "Eject your game before switching RA accounts.",
+                Toast.LENGTH_LONG).show()
+            return
+        }
+        scanner.execute {
+            val summary = RaDiagnostics.inspect(filesDir, username)
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                val pending = summary.pendingAwards
+                val message = when {
+                    pending == null ->
+                        "The pending-awards journal couldn't be verified. " +
+                            "It will NOT be deleted. Only the account token will be removed. " +
+                            "Reconnect as $username to attempt recovery and syncing."
+                    pending > 0 ->
+                        "$pending achievements await upload for $username. " +
+                            "They will stay on this device, owned by this account. " +
+                            "Sign in to $username again to sync them later. " +
+                            "Delayed RA uploads may have server time limits."
+                    else ->
+                        "Sign out of $username? Cached games and local achievements " +
+                            "will remain on the device."
+                }
+                val confirm = SlotModalDialog(
+                    this,
+                    "SIGN OUT — KEEP LOCAL ACHIEVEMENTS",
+                    "$message\n\nReconnecting requires Internet. Slot. closes to stop " +
+                        "the previous account's achievement worker safely."
+                )
+                confirm.addButton("STAY SIGNED IN") { confirm.dismiss() }
+                confirm.addButton("SIGN OUT & CLOSE") {
+                    val unsaved = runCatching {
+                        JSONObject(nativeRaStatus() ?: "{}").optBoolean("unsaved", false)
+                    }.getOrDefault(false)
+                    if (unsaved) {
+                        confirm.setError("Awards still need to be written locally. " +
+                            "Sign out is blocked to protect your progress.")
+                    } else {
+                        confirm.dismiss()
+                        flushRaBeforeSignOut(panel, username, 0)
+                    }
+                }
+                confirm.show()
+            }
+        }
+    }
+
+    /** Try up to ~2.5s without blocking the UI or the game/emulator threads. */
+    private fun flushRaBeforeSignOut(panel: RaPanelDialog, username: String, attempt: Int) {
+        if (isDestroyed || nativeIsPlaying()) return
+        if (attempt >= 25) {
+            SlotToast.makeText(this,
+                "Achievement writes haven't finished. Sign out cancelled to keep your awards.",
+                Toast.LENGTH_LONG).show()
+            return
+        }
+        view.queueEvent {
+            val ready = nativeRaFlushReady()
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                if (ready) {
+                    if (!RaAccount.beginSignOut(filesDir, username)) {
+                        SlotToast.makeText(this,
+                            "Can't sign out safely. No awards were changed.",
+                            Toast.LENGTH_LONG).show()
+                    } else {
+                        panel.dismiss()
+                        uiHandler.postDelayed({
+                            finishAffinity()
+                            android.os.Process.killProcess(android.os.Process.myPid())
+                        }, 200L)
+                    }
+                } else {
+                    uiHandler.postDelayed({
+                        flushRaBeforeSignOut(panel, username, attempt + 1)
+                    }, 100L)
                 }
             }
         }
+    }
+
+    /** The account panel uses the exact Slot label font instead of Android's AlertDialog. */
+    private fun openRetroAchievementsAccount() {
+        val existing = RaAccount.configuredUser(filesDir)
+        if (existing != null) {
+            lateinit var panel: RaPanelDialog
+            panel = RaPanelDialog(
+                activity = this, username = existing,
+                onRefresh = { refreshRaPanel(panel, existing) },
+                onSignOut = { confirmRaSignOut(panel, existing) }
+            )
+            panel.show()
+            refreshRaPanel(panel, existing)
+            // Badge downloads continue in the native HTTP worker; update this
+            // read-only dashboard automatically without requiring a new tap.
+            val liveUpdates = object : Runnable {
+                override fun run() {
+                    if (isDestroyed || !panel.isShowing()) return
+                    refreshRaPanel(panel, existing)
+                    uiHandler.postDelayed(this, 15_000L)
+                }
+            }
+            uiHandler.postDelayed(liveUpdates, 15_000L)
+            return
+        }
+
+        val login = SlotModalDialog(
+            this,
+            "RETROACHIEVEMENTS",
+            "Connect directly to RetroAchievements using HTTPS. " +
+                "Your password is never stored; only the returned account token " +
+                "is kept in app-private storage. GBA uses Casual (softcore)."
+        )
+        val username = login.addInput("USERNAME", "RetroAchievements username")
+        val password = login.addInput("PASSWORD", "Password (not saved)", password = true)
+        login.addButton("CANCEL") { login.dismiss() }
+        val signIn = login.addButton("SIGN IN") {
+            val name = username.text.toString().trim()
+            val secret = password.text.toString()
+            if (name.isEmpty() || secret.isEmpty()) {
+                login.setError("Enter both your RetroAchievements username and password.")
+            } else {
+                password.text.clear() // Don't leave credentials in the visible form.
+                login.setError("Connecting securely…")
+                login.setBusy(true)
+                raLoginWorker.execute {
+                    val result = RaAccount.authenticateAndSave(filesDir, name, secret)
+                    runOnUiThread {
+                        if (isDestroyed) return@runOnUiThread
+                        when (result) {
+                            is RaAccount.Result.Connected -> {
+                                login.dismiss()
+                                nativeRaAccountConfigured()
+                                startRaSmartCache()
+                                SlotToast.makeText(this,
+                                    "RA connected as " + result.username +
+                                        ". Preparing GBA achievements in background.",
+                                    Toast.LENGTH_LONG).show()
+                            }
+                            is RaAccount.Result.Failed -> {
+                                login.setBusy(false)
+                                login.setError(result.message)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        password.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                signIn.performClick()
+                true
+            } else false
+        }
+        login.show()
     }
 
     private fun pollSystemStatus() {
@@ -1040,6 +1310,7 @@ class MainActivity : Activity() {
                 if (count >= 0) {
                     try {
                         storeCachedLibrary(uri, result.json)
+                        startRaSmartCache()
                     } catch (error: Exception) {
                         Log.w(TAG, "Cannot cache ROM library; games remain available", error)
                     }
@@ -1069,10 +1340,18 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        raConnectivity?.let { manager ->
+            try { manager.unregisterNetworkCallback(raConnectivityCallback) }
+            catch (_: Exception) { /* Callback may have already been removed. */ }
+        }
+        raConnectivity = null
         scanSerial.incrementAndGet()
         scanner.shutdownNow()
+        raLoginWorker.shutdownNow()
+        raSmartWorker.shutdownNow()
         gameLoader.shutdownNow()
         uiHandler.removeCallbacks(pulse)
+        if (::raAchievementOverlay.isInitialized) raAchievementOverlay.destroy()
         stopAudio()
         cartSounds.release()
         super.onDestroy()
@@ -1098,6 +1377,13 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         resumed = true
+        // Android's quick settings may return without a fresh onAvailable().
+        // Waking a retry is safe even when no network is present.
+        nativeRaNetworkAvailable()
+        if (RaAccount.configuredUser(filesDir) != null) {
+            nativeRaAccountConfigured()
+            startRaSmartCache()
+        }
         lastStatusPoll = -15000L
         cartSounds.resume()
         view.onResume()

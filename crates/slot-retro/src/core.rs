@@ -76,6 +76,14 @@ impl From<std::io::Error> for CoreError {
 }
 
 pub trait RetroCore: Send {
+    /// Copies the physical GBA IWRAM (0x8000), EWRAM (0x40000), and
+    /// cartridge SRAM (0x10000) into a bounded 0x58000-byte snapshot.
+    /// Returns the valid byte counts; never treat missing RAM as a zero.
+    /// GBA only: GB/GBC need distinct RA console memory maps.
+    /// Called exclusively on the libretro/GL thread between frames.
+    fn achievement_memory(&self, _ram: &mut [u8]) -> [usize; 3] {
+        [0; 3]
+    }
     fn load(&mut self, rom: &Path) -> Result<(), CoreError>;
     fn run_frame(&mut self, input: ButtonMask);
     fn run_frame_linked(&mut self, p1: ButtonMask, _p2: ButtonMask) {
@@ -85,6 +93,8 @@ pub trait RetroCore: Send {
     fn set_frame_skip(&mut self, _skip: bool) {}
     fn video_xrgb8888(&self) -> &[u8];
     fn take_audio(&mut self) -> Vec<i16>;
+    /// Optional reusable audio storage for worker-wrapped libretro cores.
+    fn recycle_audio(&mut self, _audio: Vec<i16>) {}
     fn serialize(&mut self) -> Result<Vec<u8>, CoreError>;
     fn unserialize(&mut self, data: &[u8]) -> Result<(), CoreError>;
     fn save_ram(&self) -> Option<Vec<u8>>;

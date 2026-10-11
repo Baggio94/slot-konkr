@@ -71,6 +71,11 @@ enum Input {
     Suspend,
     ReloadVisuals,
     ReloadCartLabel { uri: String },
+    // Android announces network return; only wake the HTTP retry timer.
+    // Never infer RA API authentication/reachability from Wi-Fi alone.
+    RaNetworkAvailable,
+    RaAccountConfigured,
+    RaPrefetchHash(String),
 }
 
 static INPUT: Mutex<VecDeque<Input>> = Mutex::new(VecDeque::new());
@@ -103,6 +108,32 @@ const REWIND_STEP_S: f32 = 0.10;  // Original Slot's time-travel HUD + ~10 Hz re
 
 const FF_DOUBLE_TAP_MS: u128 = 320;
 static MESSAGE: Mutex<Option<String>> = Mutex::new(None);
+// RA worker runs off the GL thread. The engine samples its nonblocking status
+// and forwards bounded, sanitized user-facing notices to Android's main thread.
+static RA_NOTICES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+static RA_STATUS: Mutex<Option<String>> = Mutex::new(None);
+const RA_NOTICE_LIMIT: usize = 8;
+
+fn ra_notice_payload(title: &str, detail: &str, earned: bool, badge: Option<&Path>) -> String {
+    let clean = |value: &str, limit: usize| -> String {
+        value.chars().filter(|ch| !ch.is_control()).take(limit).collect()
+    };
+    // BadgeName is validated by slot_achievements::badges::path before being
+    // attached to Notice. Android must still verify canonical app-private path
+    // before reading the image. Empty means fall back to a Slot glyph.
+    serde_json::json!({
+        "title": clean(title, 100),
+        "detail": clean(detail, 160),
+        "earned": earned,
+        "badge": badge.and_then(|path| path.to_str()).unwrap_or(""),
+    }).to_string()
+}
+
+fn queue_ra_notice(queue: &mut VecDeque<String>, payload: String) {
+    if queue.len() >= RA_NOTICE_LIMIT { queue.pop_front(); }
+    queue.push_back(payload);
+}
+
 static PATHS: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
 static AUDIO: Mutex<VecDeque<i16>> = Mutex::new(VecDeque::new());
 static PLAYING: AtomicBool = AtomicBool::new(false);
@@ -185,7 +216,7 @@ const MENU_TEXT: [&str; 49] = [
     "CART STUDIO",                      // 11
     "A: Open Cart Studio",             // 12
     "RETROACHIEVEMENTS",               // 13
-    "A: Check RAOfflineProxy status",    // 14
+    "A: RA account / sign in",         // 14
     "SELECT CORE",                      // 15
     "mGBA",                             // 16
     "gpSP",                            // 17
@@ -245,6 +276,9 @@ struct Engine {
     cart_render: CartRender,
     game: Option<GameSession>,
     pending_game: Option<GameSession>,
+    // A single account-scoped engine outlives individual games, allowing
+    // queued offline awards to sync even after the cartridge is ejected.
+    ra_service: Option<slot_achievements::Service>,
     buttons: u16,
     ff_held: bool,
     ff_latched: bool,
@@ -471,6 +505,7 @@ impl Engine {
             cart_render: CartRender::start()?,
             game: None,
             pending_game: None,
+            ra_service: None,
             buttons: 0,
             ff_held: false,
             ff_latched: false,
@@ -677,6 +712,20 @@ impl Engine {
 
     fn handle(&mut self, input: Input) {
         match input {
+            Input::RaAccountConfigured => {
+                self.ensure_ra_service();
+            }
+            Input::RaPrefetchHash(hash) => {
+                self.ensure_ra_service();
+                if let Some(service) = self.ra_service.as_ref() {
+                    service.prefetch_rom_hash(&hash);
+                }
+            }
+            Input::RaNetworkAvailable => {
+                if let Some(service) = self.ra_service.as_ref() {
+                    service.network_available();
+                }
+            }
             Input::ReloadVisuals => {
                 // Triggered from Android SAF, applied on the GL thread only.
                 let root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
@@ -1020,7 +1069,14 @@ impl Engine {
                                                 .push_back(14);
                                             ShelfOverlay::None
                                         },
-                                        2 => ShelfOverlay::Achievements,
+                                        2 => {
+                                            // Open the account dashboard/sign-in directly:
+                                            // the old "A: RA account / sign in" modal was
+                                            // a redundant extra press.
+                                            UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
+                                                .push_back(3);
+                                            ShelfOverlay::None
+                                        },
                                         3 => {
                                             UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(15);
                                             ShelfOverlay::None
@@ -1353,6 +1409,19 @@ impl Engine {
         }
     }
 
+    fn ensure_ra_service(&mut self) {
+        if self.ra_service.is_some() { return; }
+        let root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .as_ref().map(|(root, _)| root.clone());
+        if let Some(root) = root {
+            // Explicit opt-in from the Android account login. Never start RA
+            // until an actual private config exists.
+            if root.join("Config/retroachievements.toml").is_file() {
+                self.ra_service = Some(slot_achievements::Service::start(root));
+            }
+        }
+    }
+
     fn prepare_game_core(&mut self, local: &str) {
         let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some((storage, library)) = paths {
@@ -1369,6 +1438,10 @@ impl Engine {
             let platform = self.shelves[self.active].carts
                 .get(self.shelves[self.active].index)
                 .map_or(Platform::Gba, |cart|cart.platform);
+            // First game still wakes RA if the asynchronous SAF scan has not run.
+            // Perform this mutable operation BEFORE borrowing rom_stem.
+            // GB/GBC memory/hash layouts are not yet verified.
+            if platform == Platform::Gba { self.ensure_ra_service(); }
             let rom_stem = self.shelves[self.active].carts
                 .get(self.shelves[self.active].index)
                 .map_or("", |cart| cart.stem.as_str());
@@ -1376,7 +1449,8 @@ impl Engine {
             match GameSession::open(Path::new(local), &core_file, &storage,
                 core, platform, self.settings.eject_save && !self.fresh_launch,
                 rom_stem, self.settings.gb_palettes.then(|| self.settings.palette_name()),
-                self.settings.colour_correction) {
+                self.settings.colour_correction,
+                if platform == Platform::Gba { self.ra_service.as_ref() } else { None }) {
                 Ok(session) => {
                     // Create libretro on the same GL thread, but defer audio
                     // and CRT presentation until Slot's seated hold completes.
@@ -1838,6 +1912,33 @@ impl Engine {
 
     fn draw(&mut self) {
         self.refresh_system_status();
+        // Poll the already-running achievement evaluator without blocking GL.
+        // Only Android's foreground UI displays notices; the worker never
+        // touches JNI, an Activity, the renderer or the filesystem here.
+        if let Some(service) = self.ra_service.as_ref() {
+            let status = format!("{:?}", service.sync_status());
+            let progress = service.sync_progress();
+            let pending = service.sync_pending();
+            let unsaved = service.has_unsaved_awards();
+            let snapshot = serde_json::json!({
+                "state": status,
+                "pending": pending,
+                "unsaved": unsaved,
+                "progress": progress,
+            }).to_string();
+            *RA_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = Some(snapshot);
+            // Bound per-frame overhead and pending Android UI messages.
+            for _ in 0..4 {
+                let Some(notice) = service.take_notice() else { break };
+                let payload = ra_notice_payload(
+                    &notice.title, &notice.detail,
+                    notice.kind == slot_achievements::NoticeKind::Earned,
+                    notice.badge.as_deref(),
+                );
+                let mut queue = RA_NOTICES.lock().unwrap_or_else(|e| e.into_inner());
+                queue_ra_notice(&mut queue, payload);
+            }
+        }
         let now = Instant::now();
         let dt = (now - self.last).as_secs_f32().min(0.05);
         self.last = now;
@@ -2316,6 +2417,26 @@ mod ui_feedback_tests {
     }
 
     #[test]
+    fn ra_notice_bridge_removes_control_characters_and_bounds_payload() {
+        let text = ra_notice_payload(&("X".repeat(200) + "\nsecret"), "Line\rTwo", true, None);
+        let data: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(data["title"].as_str().unwrap().chars().count(), 100);
+        assert!(!data["title"].as_str().unwrap().contains("secret"));
+        assert_eq!(data["detail"], "LineTwo");
+        assert_eq!(data["earned"], true);
+        assert_eq!(data["badge"], "");
+    }
+
+    #[test]
+    fn ra_notice_bridge_never_builds_an_unbounded_queue() {
+        let mut notices = VecDeque::new();
+        for index in 0..32 { queue_ra_notice(&mut notices, index.to_string()); }
+        assert_eq!(notices.len(), RA_NOTICE_LIMIT);
+        assert_eq!(notices.front().map(String::as_str), Some("24"));
+        assert_eq!(notices.back().map(String::as_str), Some("31"));
+    }
+
+    #[test]
     fn select_chords_have_distinct_consumed_release_bits() {
         let mut combined = 0u16;
         for code in [96, 97, 100, 102, 103, 104, 105] {
@@ -2383,6 +2504,8 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
     ENGINE.with(|holder| {
         let started = Instant::now();
         *holder.borrow_mut() = None;
+        *RA_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        RA_NOTICES.lock().unwrap_or_else(|e| e.into_inner()).clear();
         PLAYING.store(false, Ordering::Release);
         SAMPLE_RATE.store(0, Ordering::Release);
         let (version, snapshot) = {
@@ -2499,6 +2622,61 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeKey(
         .push_back(Input::Key(key, pressed != 0));
 }
 
+/// Called on the GL thread through GLSurfaceView.queueEvent before changing
+/// account. The evaluator must drain its final queued frames, atomically store
+/// all earned awards and confirm none remain only in RAM.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaFlushReady(
+    _env: *mut c_void, _activity: *mut c_void,
+) -> jboolean {
+    ENGINE.with(|holder| {
+        let engine = holder.borrow();
+        let Some(engine) = engine.as_ref() else { return 1 };
+        if engine.game.is_some() || engine.pending_game.is_some() { return 0; }
+        match engine.ra_service.as_ref() {
+            Some(service) if service.flush_ready() && !service.has_unsaved_awards() => 1,
+            Some(_) => 0,
+            None => 1,
+        }
+    })
+}
+
+/// Account login or app startup: begin RA cache preparation and pending-award
+/// retries even when no GBA cartridge has been inserted.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaAccountConfigured(
+    _env: *mut c_void, _activity: *mut c_void,
+) {
+    INPUT.lock().unwrap_or_else(|e| e.into_inner())
+        .push_back(Input::RaAccountConfigured);
+}
+
+/// Full uncompressed GBA ROM MD5 comes from an Android SAF background reader.
+/// No ROM bytes or credentials are passed via this JNI boundary.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaPrefetchHash(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, hash: JString<'_>,
+) {
+    let Ok(hash) = env.get_string(&hash) else { return };
+    let hash = hash.to_string_lossy().into_owned();
+    if hash.len() != 32 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return;
+    }
+    let mut input = INPUT.lock().unwrap_or_else(|e| e.into_inner());
+    // Bound the GL input queue if Android is indexing thousands of files.
+    if input.len() < 128 { input.push_back(Input::RaPrefetchHash(hash)); }
+}
+
+/// Wake the RA HTTP worker on Android network reconnection. Do not perform
+/// any HTTP, hashing or blocking operation on this callback thread.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaNetworkAvailable(
+    _env: *mut c_void, _activity: *mut c_void,
+) {
+    INPUT.lock().unwrap_or_else(|e| e.into_inner())
+        .push_back(Input::RaNetworkAvailable);
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeResetInput(
     _env: *mut c_void,
@@ -2532,6 +2710,26 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollSaveFlush(
         Some(s)=>s.into_raw(),
         None=>std::ptr::null_mut(),
     }
+}
+
+// The Activity reads RA messages on its own main thread; it must not
+// access the GL-thread-only ENGINE RefCell from Kotlin.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollRaNotice(
+    env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jstring {
+    let notice = RA_NOTICES.lock().unwrap_or_else(|e| e.into_inner()).pop_front();
+    notice.and_then(|s| env.new_string(s).ok())
+        .map_or(std::ptr::null_mut(), |s| s.into_raw())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaStatus(
+    env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jstring {
+    let state = RA_STATUS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    state.and_then(|s| env.new_string(s).ok())
+        .map_or(std::ptr::null_mut(), |s| s.into_raw())
 }
 
 #[unsafe(no_mangle)]

@@ -22,7 +22,20 @@ import android.widget.Toast
  * existing app feedback follows the same rendering and wording policy.
  */
 internal object SlotToast {
-    fun makeText(context: Context, message: CharSequence, duration: Int): Toast {
+    fun makeText(context: Context, message: CharSequence, duration: Int): Toast =
+        makeBrandedToast(context, message, duration, raCompact = false)
+
+    /**
+     * RetroAchievements gameplay notices: original Slot palette + typography,
+     * but compact and pinned to the upper left instead of the normal footer.
+     * All other app toasts retain their existing position and sizing.
+     */
+    fun makeRaText(context: Context, message: CharSequence, duration: Int): Toast =
+        makeBrandedToast(context, message, duration, raCompact = true)
+
+    private fun makeBrandedToast(
+        context: Context, message: CharSequence, duration: Int, raCompact: Boolean
+    ): Toast {
         val friendly = userMessage(message.toString())
         val density = context.resources.displayMetrics.density
         fun dp(value: Int) = (value * density + 0.5f).toInt()
@@ -32,14 +45,15 @@ internal object SlotToast {
             // flat charcoal plate, quiet hairline, wide-tracked Open Sans.
             val background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                setColor(Color.rgb(23, 22, 25))
-                setStroke(dp(1), Color.rgb(91, 89, 96))
+                setColor(SlotUi.background)
+                setStroke(dp(1), SlotUi.rule)
                 cornerRadius = dp(4).toFloat()
             }
             val row = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(17), dp(9), dp(19), dp(9))
+                if (raCompact) setPadding(dp(11), dp(6), dp(13), dp(6))
+                else setPadding(dp(17), dp(9), dp(19), dp(9))
                 this.background = background
                 elevation = dp(3).toFloat()
             }
@@ -48,16 +62,16 @@ internal object SlotToast {
                 contentDescription = "slot."
                 scaleType = ImageView.ScaleType.FIT_CENTER
             }
-            row.addView(logo, LinearLayout.LayoutParams(dp(32), dp(32)).apply {
-                rightMargin = dp(12)
+            val logoSize = if (raCompact) 23 else 32
+            row.addView(logo, LinearLayout.LayoutParams(dp(logoSize), dp(logoSize)).apply {
+                rightMargin = dp(if (raCompact) 9 else 12)
             })
             val text = TextView(context).apply {
                 this.text = friendly.uppercase(java.util.Locale.getDefault())
                 textSize = 12.5f
-                typeface = android.graphics.Typeface.create("sans-serif-condensed",
-                    android.graphics.Typeface.BOLD)
-                letterSpacing = .14f
-                setTextColor(Color.rgb(243, 241, 246))
+                typeface = SlotUi.font(context)
+                letterSpacing = .09f
+                setTextColor(SlotUi.ink)
                 maxLines = 3
                 contentDescription = friendly
             }
@@ -68,7 +82,11 @@ internal object SlotToast {
             @Suppress("DEPRECATION")
             Toast(context.applicationContext).apply {
                 this.duration = duration
-                setGravity(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, 0, dp(60))
+                if (raCompact) {
+                    setGravity(Gravity.TOP or Gravity.START, dp(16), dp(16))
+                } else {
+                    setGravity(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, 0, dp(60))
+                }
                 view = row
             }
         } catch (_: Exception) {

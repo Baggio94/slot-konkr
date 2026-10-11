@@ -16,6 +16,7 @@ slot-store = { path = "../slot-store" }
 slot-power = { path = "../slot-power" }
 slot-ui = { path = "../slot-ui" }
 slot-retro = { path = "../slot-retro" }
+slot-achievements = { path = "../slot-achievements" }
 png = { workspace = true }
 lz4_flex = { workspace = true }
 

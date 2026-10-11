@@ -55,15 +55,15 @@ class AppsActivity : Activity() {
     private fun text(label: String, size: Float, bright: Boolean = true) = TextView(this).apply {
         this.text = label
         textSize = size
-        typeface = Typeface.create("sans-serif", Typeface.BOLD)
-        setTextColor(if (bright) Color.WHITE else Color.rgb(167, 165, 175))
+        typeface = SlotUi.font(this@AppsActivity)
+        setTextColor(if (bright) SlotUi.ink else SlotUi.muted)
         gravity = Gravity.CENTER_VERTICAL
     }
 
     private fun plate(color: Int, selected: Boolean = false) = GradientDrawable().apply {
         setColor(color)
-        cornerRadius = dp(8).toFloat()
-        if (selected) setStroke(dp(2), Color.rgb(228, 226, 236))
+        cornerRadius = dp(4).toFloat()
+        if (selected) setStroke(dp(2), SlotUi.ink)
     }
 
     private fun loadApps() {
@@ -95,7 +95,7 @@ class AppsActivity : Activity() {
         loadApps()
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(18, 18, 22))
+            setBackgroundColor(SlotUi.background)
             setPadding(dp(22), dp(10), dp(22), dp(15))
             isFocusableInTouchMode = true
         }
@@ -116,7 +116,7 @@ class AppsActivity : Activity() {
         header.addView(homeButton, LinearLayout.LayoutParams(-2, dp(38)))
         root.addView(header)
         root.addView(View(this).apply {
-            setBackgroundColor(Color.rgb(65, 64, 72))
+            setBackgroundColor(SlotUi.rule)
         }, LinearLayout.LayoutParams(-1, dp(1)))
 
         grid = GridView(this).apply {
