@@ -1,6 +1,10 @@
 package fyi.slot.konkr
 
 import android.app.Activity
+import android.app.AlertDialog
+import android.text.InputType
+import android.widget.EditText
+import android.widget.LinearLayout
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
@@ -112,6 +116,7 @@ class MainActivity : Activity() {
     private var pendingCartStudioUri: String? = null
     private lateinit var cartSounds: CartSounds
     private val scanner = Executors.newSingleThreadExecutor()
+    private val raLoginWorker = Executors.newSingleThreadExecutor()
     private val gameLoader = Executors.newSingleThreadExecutor()
     private val activeTargets = ConcurrentHashMap<String, RetroArchStorage.Target>()
     private val uiHandler = Handler(Looper.getMainLooper())
@@ -167,7 +172,7 @@ class MainActivity : Activity() {
             when (nativePollUiAction()) {
                 1 -> openRomFolderPicker()
                 2 -> refreshLibrary()
-                3 -> checkRaOfflineProxy()
+                3 -> openRetroAchievementsAccount()
                 4 -> openBiosFolderPicker()
                 5 -> openSharedFolderPicker(SAVE_REQUEST)
                 6 -> openSharedFolderPicker(STATE_REQUEST)
@@ -588,11 +593,94 @@ class MainActivity : Activity() {
         audioThread = null
     }
 
+    /** First native RetroAchievements account onboarding; keeps passwords out of disk/logs. */
+    private fun openRetroAchievementsAccount() {
+        val existing = RaAccount.configuredUser(filesDir)
+        if (existing != null) {
+            AlertDialog.Builder(this)
+                .setTitle("RetroAchievements")
+                .setMessage(
+                    "Account configured: $existing\n\n" +
+                        "GBA softcore is experimental. Play a supported GBA game while " +
+                        "online to let slot. prepare its achievement definitions. " +
+                        "No awards have been verified on this KONKR yet."
+                )
+                .setPositiveButton("Close", null)
+                .setNeutralButton("Proxy status") { _, _ -> checkRaOfflineProxy() }
+                .show()
+            return
+        }
+
+        val inset = (24 * resources.displayMetrics.density).toInt()
+        val fields = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(inset, 0, inset, 0)
+        }
+        val username = EditText(this).apply {
+            hint = "RetroAchievements username"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            isSingleLine = true
+        }
+        val password = EditText(this).apply {
+            hint = "Password (not saved)"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            isSingleLine = true
+        }
+        fields.addView(username)
+        fields.addView(password)
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("RetroAchievements")
+            .setMessage("Sign in directly to RetroAchievements over HTTPS. " +
+                "Only the returned session token is saved privately. " +
+                "GBA softcore is still experimental.")
+            .setView(fields)
+            .setPositiveButton("Sign in", null)
+            .setNegativeButton("Cancel", null)
+            .setNeutralButton("Proxy status") { _, _ -> checkRaOfflineProxy() }
+            .create()
+        dialog.setOnShowListener {
+            val signIn = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            signIn.setOnClickListener {
+                val name = username.text.toString().trim()
+                val secret = password.text.toString()
+                if (name.isEmpty() || secret.isEmpty()) {
+                    SlotToast.makeText(this, "Enter your RA username and password.",
+                        Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                // Do not retain the password in the visible input while awaiting HTTPS.
+                password.text.clear()
+                signIn.isEnabled = false
+                raLoginWorker.execute {
+                    val result = RaAccount.authenticateAndSave(filesDir, name, secret)
+                    runOnUiThread {
+                        if (isDestroyed) return@runOnUiThread
+                        when (result) {
+                            is RaAccount.Result.Connected -> {
+                                dialog.dismiss()
+                                SlotToast.makeText(this,
+                                    "RA connected as " + result.username + ". Start a GBA game online.",
+                                    Toast.LENGTH_LONG).show()
+                            }
+                            is RaAccount.Result.Failed -> {
+                                signIn.isEnabled = true
+                                SlotToast.makeText(this, result.message,
+                                    Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        dialog.show()
+    }
+
     private fun checkRaOfflineProxy() {
         scanner.execute {
             val proxy = RaEndpoint.discover(applicationContext)
             val message = when {
-                proxy == null -> "RAOfflineProxy wasn't found. Open it to enable achievements."
+                proxy == null -> "RAOfflineProxy not found. Direct RetroAchievements doesn't require it."
                 !proxy.running -> "RAOfflineProxy is stopped. Open it to reconnect."
                 proxy.base() == null -> "RAOfflineProxy connection settings need checking."
                 else -> {
@@ -1071,6 +1159,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         scanSerial.incrementAndGet()
         scanner.shutdownNow()
+        raLoginWorker.shutdownNow()
         gameLoader.shutdownNow()
         uiHandler.removeCallbacks(pulse)
         stopAudio()
