@@ -218,24 +218,27 @@ class MainActivity : Activity() {
                 Log.w(TAG, message)
                 SlotToast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
             }
-            // Only present the next RA notice while Slot is foregrounded.
-            // Never expose account credentials or raw server payloads in toasts.
-            if (resumed) nativePollRaNotice()?.let { raw ->
-                try {
-                    val notice = JSONObject(raw)
-                    val title = notice.optString("title", "").take(100)
-                    val detail = notice.optString("detail", "").take(160)
-                    val message = if (notice.optBoolean("earned", false)) {
-                        "Achievement earned (sync pending)\n" + title +
-                            if (detail.isNotBlank()) "\n" + detail else ""
-                    } else {
-                        title + if (detail.isNotBlank()) "\n" + detail else ""
+            // RetroArch-like achievement widget: cached official badge and
+            // original Slot label font. Foreground-only, in our Activity frame,
+            // never a system Toast that Android may place at screen bottom.
+            if (resumed) {
+                repeat(4) {
+                    val raw = nativePollRaNotice() ?: return@repeat
+                    try {
+                        val notice = JSONObject(raw)
+                        val title = notice.optString("title", "").take(100)
+                        val detail = notice.optString("detail", "").take(160)
+                        if (title.isNotBlank()) {
+                            raAchievementOverlay.push(RaAchievementOverlay.Notice(
+                                title = title,
+                                detail = detail,
+                                earned = notice.optBoolean("earned", false),
+                                badge = notice.optString("badge", "").takeIf { it.isNotBlank() }
+                            ))
+                        }
+                    } catch (_: Exception) {
+                        Log.w(TAG, "Ignoring malformed RetroAchievements notice")
                     }
-                    if (message.isNotBlank()) {
-                        SlotToast.makeRaText(this@MainActivity, message, Toast.LENGTH_LONG).show()
-                    }
-                } catch (_: Exception) {
-                    Log.w(TAG, "Ignoring malformed RetroAchievements notice")
                 }
             }
             if (!isDestroyed) uiHandler.postDelayed(this, 100L)
@@ -247,6 +250,7 @@ class MainActivity : Activity() {
 
     private lateinit var view: GLSurfaceView
     private var startupSplash: View? = null
+    private lateinit var raAchievementOverlay: RaAchievementOverlay
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -307,6 +311,7 @@ class MainActivity : Activity() {
             status,
             FrameLayout.LayoutParams(-1, -2, Gravity.TOP)
         )
+        raAchievementOverlay = RaAchievementOverlay(this, frame)
         showSlotStartupSplash(frame)
         setContentView(frame)
         immersive()
