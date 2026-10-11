@@ -26,6 +26,10 @@ internal object RaDiagnostics {
         val badgesPercent: Int?,
     )
 
+    /** Unknown denominator must not be misrepresented as 0% or 100%. */
+    internal fun badgePercentage(downloaded: Int, total: Int): Int? =
+        if (total <= 0) null else downloaded.coerceIn(0, total) * 100 / total
+
     internal fun accountKey(username: String): String {
         val bytes = username.lowercase(Locale.ROOT).toByteArray(Charsets.UTF_8)
         return MessageDigest.getInstance("MD5").digest(bytes)
@@ -170,7 +174,7 @@ internal object RaDiagnostics {
             nextBatchMinutes = nextBatchMinutes,
             badgesDownloaded = if (badgeTotal != null) validBadgeCount else null,
             badgesTotal = badgeTotal,
-            badgesPercent = badgeTotal?.let { validBadgeCount * 100 / it },
+            badgesPercent = badgePercentage(validBadgeCount, badgeIds.size),
         )
     }
 }
