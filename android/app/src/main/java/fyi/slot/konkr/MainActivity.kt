@@ -142,25 +142,30 @@ class MainActivity : Activity() {
     private var returnFromSlotChild = false
     private lateinit var performanceHud: TextView
     private var lastPerfPoll = 0L
-    private var syncCallbackRunning = false
     private var displaySyncApplied = false
     @Volatile private var cadenceText = ""
     @Volatile private var audioUnderruns = 0
 
-    // UI Choreographer owns only scheduling render requests. The original
-    // GL thread continues to own libretro, shaders, and all GPU state.
+    // Only attach the Choreographer callback while DISPLAY SYNC is selected.
+    // Normal RESPONSIVE and STANDARD add no extra work to every UI vsync.
     private val vsyncCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
-            if (!syncCallbackRunning || !resumed || isDestroyed) return
-            val useDisplaySync = nativeIsPlaying() && nativeDisplaySyncEnabled()
-            if (useDisplaySync != displaySyncApplied) {
-                view.renderMode = if (useDisplaySync)
-                    GLSurfaceView.RENDERMODE_WHEN_DIRTY
-                else GLSurfaceView.RENDERMODE_CONTINUOUSLY
-                displaySyncApplied = useDisplaySync
-            }
-            if (useDisplaySync) view.requestRender()
+            if (!displaySyncApplied || !resumed || isDestroyed) return
+            view.requestRender()
             Choreographer.getInstance().postFrameCallback(this)
+        }
+    }
+    private fun updateDisplaySyncMode() {
+        if (!::view.isInitialized) return
+        val enabled = resumed && nativeIsPlaying() && nativeDisplaySyncEnabled()
+        if (enabled == displaySyncApplied) return
+        displaySyncApplied = enabled
+        if (enabled) {
+            view.renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
+            Choreographer.getInstance().postFrameCallback(vsyncCallback)
+        } else {
+            Choreographer.getInstance().removeFrameCallback(vsyncCallback)
+            view.renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
         }
     }
 
@@ -208,6 +213,7 @@ class MainActivity : Activity() {
         override fun run() {
             pollSystemStatus()
             pollRumble()
+            updateDisplaySyncMode()
             if (resumed && nativeIsPlaying()) {
                 if (!audioRunning.get()) startAudio()
             } else if (audioRunning.get()) {
@@ -1498,7 +1504,6 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        syncCallbackRunning = false
         Choreographer.getInstance().removeFrameCallback(vsyncCallback)
         raConnectivity?.let { manager ->
             try { manager.unregisterNetworkCallback(raConnectivityCallback) }
@@ -1519,7 +1524,6 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         resumed = false
-        syncCallbackRunning = false
         Choreographer.getInstance().removeFrameCallback(vsyncCallback)
         if (displaySyncApplied) {
             view.renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
@@ -1559,10 +1563,7 @@ class MainActivity : Activity() {
         lastStatusPoll = -15000L
         cartSounds.resume()
         view.onResume()
-        if (!syncCallbackRunning) {
-            syncCallbackRunning = true
-            Choreographer.getInstance().postFrameCallback(vsyncCallback)
-        }
+        updateDisplaySyncMode()
         immersive()
     }
 
