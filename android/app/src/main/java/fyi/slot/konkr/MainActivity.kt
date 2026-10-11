@@ -100,9 +100,6 @@ class MainActivity : Activity() {
     external fun nativeSuspend()
     external fun nativeIsPlaying(): Boolean
     external fun nativeAudioSampleRate(): Int
-    external fun nativeAudioQueuedMs(): Int
-    external fun nativeAudioBufferMs(): Int
-    external fun nativeGpuSyncEnabled(): Boolean
     external fun nativeDisplaySyncEnabled(): Boolean
     external fun nativeAudioSpeedPermille(): Int
     external fun nativeFastAudioSupported(supported: Boolean)
@@ -146,11 +143,7 @@ class MainActivity : Activity() {
     private var returnFromSlotChild = false
     private lateinit var performanceHud: TextView
     private var lastPerfPoll = 0L
-    private var lastPerfDiagnosticMs = 0L
     private var displaySyncApplied = false
-    @Volatile private var cadenceText = ""
-    @Volatile private var audioUnderruns = 0
-    @Volatile private var audioQueuedMs = 0
 
     // Only attach the Choreographer callback while DISPLAY SYNC is selected.
     // Normal RESPONSIVE and STANDARD add no extra work to every UI vsync.
@@ -175,30 +168,6 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Observed GL callback cadence, not EGL swap/GPU/display latency. */
-    private class CadenceMeter(refreshHz: Float) {
-        private val intervals = LongArray(60)
-        private val nominalNs = (1_000_000_000.0 / refreshHz.coerceAtLeast(30f)).toLong()
-        private var previous = 0L
-        private var count = 0
-        fun reset() { previous = 0L; count = 0 }
-        fun sample(now: Long): String? {
-            if (previous != 0L) {
-                val delta = now - previous
-                if (delta in 1L..250_000_000L) intervals[count++] = delta
-            }
-            previous = now
-            if (count != intervals.size) return null
-            intervals.sort()
-            val mean = intervals.average() / 1_000_000.0
-            val p95 = intervals[(intervals.size * 95 / 100).coerceAtMost(intervals.lastIndex)] /
-                1_000_000.0
-            val late = intervals.count { it > nominalNs * 3 / 2 }
-            count = 0
-            return String.format(java.util.Locale.US,
-                "FRAME %.1fms | P95 %.1f | LATE %d/60", mean, p95, late)
-        }
-    }
     private var audioThread: Thread? = null
     private var raConnectivity: ConnectivityManager? = null
     private val raConnectivityCallback = object : ConnectivityManager.NetworkCallback() {
@@ -306,22 +275,8 @@ class MainActivity : Activity() {
                 lastPerfPoll = nowPerf
                 val value = nativePerformanceStats()
                 performanceHud.visibility = if (value.isNullOrBlank()) View.GONE else View.VISIBLE
-                if (!value.isNullOrBlank()) {
-                    val detail = cadenceText
-                    val stats = if (detail.isNotBlank())
-                        "$value\n$detail | A-UND $audioUnderruns | A-Q $audioQueuedMs ms" else value
-                    if (performanceHud.text.toString() != stats) performanceHud.text = stats
-                    // Opt-in diagnostic stream for ADB capture. The GL thread
-                    // computes all counters; UI logging is capped at 1 Hz.
-                    // Only numeric performance statistics are emitted: never
-                    // ROM names, account identifiers, or RA credentials.
-                    if (nowPerf - lastPerfDiagnosticMs >= 1000L) {
-                        lastPerfDiagnosticMs = nowPerf
-                        Log.i("SlotPerf", "sync=${nativeDisplaySyncEnabled()} | " +
-                            stats.replace("\n", " | "))
-                    }
-                } else {
-                    lastPerfDiagnosticMs = 0L
+                if (!value.isNullOrBlank() && performanceHud.text.toString() != value) {
+                    performanceHud.text = value
                 }
             }
             nativePollMessage()?.let { message ->
@@ -375,7 +330,6 @@ class MainActivity : Activity() {
                 preserveEGLContextOnPause = true
                 setRenderer(object : Renderer {
                     var ready = false
-                    val cadence = CadenceMeter(display?.refreshRate ?: 60f)
                     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
                         ready = nativeSurfaceCreated()
                         if (!ready) Log.e(TAG, "Slot GLES initialization failed")
@@ -389,20 +343,12 @@ class MainActivity : Activity() {
                     }
                     override fun onDrawFrame(gl: GL10?) {
                         if (ready) {
-                            if (nativeIsPlaying()) {
-                                cadence.sample(System.nanoTime())?.let { cadenceText = it }
-                            } else {
-                                cadence.reset()
-                                cadenceText = ""
-                            }
                             nativeDrawFrame()
                             // Notify the existing AudioTrack worker that libretro
                             // may have produced samples. Never block GL on audio.
                             if (audioRunning.get() && nativeIsPlaying() &&
                                 audioFrameSignal.availablePermits() == 0
                             ) audioFrameSignal.release()
-                            // Opt-in GPU fence bounds work queued to GLES; may cost FPS.
-                            if (nativeGpuSyncEnabled()) GLES20.glFinish()
                             // Drain on the render thread for frame-accurate insert/eject clicks.
                             var kind = nativePollCartSfx()
                             while (kind != 0) {
@@ -723,9 +669,7 @@ class MainActivity : Activity() {
         audioThread = Thread({
             var player: AudioTrack? = null
             var rate = 0
-            var chosenBufferMs = -1
             var requestedSpeed = 0
-            var lastUnderrunPoll = 0L
             try {
                 while (audioRunning.get()) {
                     val wanted = nativeAudioSampleRate()
@@ -734,8 +678,7 @@ class MainActivity : Activity() {
                         SystemClock.sleep(35)
                         continue
                     }
-                    val bufferMs = nativeAudioBufferMs().takeIf { it in listOf(32, 48, 64, 96) } ?: 0
-                    if (player == null || rate != wanted || chosenBufferMs != bufferMs) {
+                    if (player == null || rate != wanted) {
                         player?.release()
                         val minBytes = AudioTrack.getMinBufferSize(
                             wanted, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT
@@ -744,8 +687,8 @@ class MainActivity : Activity() {
                             SystemClock.sleep(100)
                             continue
                         }
-                        val bufferBytes = if (bufferMs == 0) maxOf(16384, minBytes * 2)
-                            else maxOf(minBytes, wanted * 4 * bufferMs / 1000)
+                        // Preserve the validated low-latency legacy AudioTrack buffer.
+                        val bufferBytes = maxOf(16384, minBytes * 2)
                         player = AudioTrack.Builder()
                             .setAudioAttributes(AudioAttributes.Builder()
                                 .setUsage(AudioAttributes.USAGE_GAME)
@@ -758,10 +701,8 @@ class MainActivity : Activity() {
                             .setTransferMode(AudioTrack.MODE_STREAM)
                             .build()
                         rate = wanted
-                        chosenBufferMs = bufferMs
                         requestedSpeed = 0
                         player.play()
-                        audioUnderruns = 0
                     } else if (player.playState != AudioTrack.PLAYSTATE_PLAYING) {
                         // A paused legacy buffer is reused when the next game has
                         // the same sample rate; it still must be resumed.
@@ -790,15 +731,6 @@ class MainActivity : Activity() {
                                     .setSpeed(1.0f).setPitch(1.0f)
                             } catch (_: Exception) { }
                         }
-                    }
-                    val nowAudio = SystemClock.uptimeMillis()
-                    if (nowAudio - lastUnderrunPoll >= 1000L) {
-                        lastUnderrunPoll = nowAudio
-                        // AudioTrack's cumulative underruns since creation.
-                        audioUnderruns = player.underrunCount
-                        // App-owned PCM queue only, not AudioTrack/HAL occupancy.
-                        // This 1Hz reading is diagnostic and never changes pacing.
-                        audioQueuedMs = nativeAudioQueuedMs()
                     }
                     val samples = nativeReadAudio()
                     if (samples.isEmpty()) {
