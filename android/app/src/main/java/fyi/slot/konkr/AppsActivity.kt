@@ -227,30 +227,14 @@ class AppsActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(0, dp(8), 0, dp(7))
             addView(hint("move"))
-            addView(hint("open"), LinearLayout.LayoutParams(
-                (slotHintWidth("open") * scale).toInt(),
-                (24 * scale).toInt()
-            ).apply { leftMargin = spacing })
-            addView(hint("back"), LinearLayout.LayoutParams(
-                (slotHintWidth("back") * scale).toInt(),
-                (24 * scale).toInt()
-            ).apply { leftMargin = spacing })
+            val open = hint("open")
+            (open.layoutParams as LinearLayout.LayoutParams).leftMargin = spacing
+            addView(open)
+            val back = hint("back")
+            (back.layoutParams as LinearLayout.LayoutParams).leftMargin = spacing
+            addView(back)
         }
     }
-
-    // Exact native faces are generated as PNGs, whose dimensions are read
-    // dynamically. Cache measurements independently of image loading.
-    private val hintWidths = mutableMapOf<String, Int>()
-    private fun slotHintWidth(name: String): Int =
-        hintWidths.getOrPut(name) {
-            assets.open("apps_controls/$name.png").use {
-                BitmapFactory.Options().let { opts ->
-                    opts.inJustDecodeBounds = true
-                    BitmapFactory.decodeStream(it, null, opts)
-                    opts.outWidth
-                }
-            }
-        }
 
     private fun redrawTile(position: Int) {
         if (position !in entries.indices) return
