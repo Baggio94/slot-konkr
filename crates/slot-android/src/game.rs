@@ -63,6 +63,17 @@ pub struct GameSession {
     pub fps: f64,
 }
 
+/// Preserve original Slot turbo in TURBO mode; in A/B mode Y acts as A
+/// and X as B, *in addition to* both original buttons. Applied equally to
+/// real and speculative Run-Ahead frames so input prediction never diverges.
+fn xy_buttons(buttons: ButtonMask, turbo: bool, frame: u32) -> ButtonMask {
+    if turbo { return buttons.turbo(frame); }
+    let mut mapped = buttons.without_turbo().0;
+    if buttons.0 & ButtonMask::Y != 0 { mapped |= ButtonMask::A; }
+    if buttons.0 & ButtonMask::X != 0 { mapped |= ButtonMask::B; }
+    ButtonMask(mapped)
+}
+
 impl GameSession {
     pub fn open(rom: &Path, core_file: &Path, storage: &Path,
                 which: Core, platform: Platform, resume_state: bool,
@@ -220,8 +231,7 @@ impl GameSession {
         self.runahead_video.clear();
         // Reuse Slot's actual 3-on/3-off X/Y to A/B turbo algorithm.
         let pressed = ButtonMask(buttons);
-        let mapped = if turbo { pressed.turbo(self.frame_count) }
-            else { pressed.without_turbo() };
+        let mapped = xy_buttons(pressed, turbo, self.frame_count);
         self.core.run_frame(mapped);
         self.frame_count = self.frame_count.wrapping_add(1);
         if record_rewind {
@@ -251,8 +261,7 @@ impl GameSession {
             return;
         }
         let pressed = ButtonMask(buttons);
-        let mapped = if turbo { pressed.turbo(self.frame_count) }
-            else { pressed.without_turbo() };
+        let mapped = xy_buttons(pressed, turbo, self.frame_count);
         for _ in 0..frames {
             self.core.run_speculative_frame(mapped);
             // Discard predicted audio without reallocating libretro's buffer.
@@ -438,4 +447,26 @@ impl GameSession {
         self.pending_undo.as_ref().is_some_and(|(at,_)|at.elapsed()<=UNDO_WINDOW)
     }
 
+}
+
+#[cfg(test)]
+mod xy_mapping_tests {
+    use super::*;
+    #[test]
+    fn classic_turbo_keeps_the_original_slot_x_y_behavior() {
+        for frame in 0..12 {
+            let buttons = ButtonMask(ButtonMask::X | ButtonMask::Y);
+            assert_eq!(xy_buttons(buttons, true, frame), buttons.turbo(frame));
+        }
+    }
+    #[test]
+    fn ab_mode_maps_y_to_a_and_x_to_b_without_losing_original_buttons() {
+        let y = xy_buttons(ButtonMask(ButtonMask::Y), false, 0);
+        let x = xy_buttons(ButtonMask(ButtonMask::X), false, 3);
+        assert_eq!(y.0, ButtonMask::A);
+        assert_eq!(x.0, ButtonMask::B);
+        let both = xy_buttons(ButtonMask(ButtonMask::A | ButtonMask::B |
+            ButtonMask::X | ButtonMask::Y | ButtonMask::RIGHT), false, 5);
+        assert_eq!(both.0, ButtonMask::A | ButtonMask::B | ButtonMask::RIGHT);
+    }
 }
