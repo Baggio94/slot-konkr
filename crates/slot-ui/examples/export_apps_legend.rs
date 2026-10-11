@@ -1,7 +1,7 @@
 //! Build-time-only export of EXACT Slot core-picker keycap faces for the
 //! Android Apps drawer. Reuse the upstream drawing/font code, not an Android
 //! imitation with different fonts or Unicode arrow glyphs.
-use slot_ui::{arrows_hint_face, hint_face, plate::UndoFace};
+use slot_ui::{arrows_hint_face, hint_face, UndoFace};
 use std::{fs::{self, File}, io::BufWriter, path::PathBuf};
 
 fn write_png(out: &PathBuf, face: &UndoFace) -> Result<(), Box<dyn std::error::Error>> {
