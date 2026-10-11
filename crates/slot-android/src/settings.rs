@@ -39,6 +39,9 @@ pub struct Settings {
     // frame maximum per callback and fractional frame time carryover.
     pub display_sync_pacing: bool,
     pub run_ahead_frames: u8,
+    // Carousel-only status indicators: default ON for both groups.
+    pub show_wifi: bool, pub show_bluetooth: bool,
+    pub show_integrations: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -49,7 +52,8 @@ impl Default for Settings {
             turbo: true, eject_save: true,
             show_fps: false, responsive_pacing: false,
             display_sync_pacing: false,
-            run_ahead_frames: 0 }
+            run_ahead_frames: 0,
+            show_wifi: true, show_bluetooth: true, show_integrations: true }
     }
 }
 impl Settings {
@@ -99,6 +103,9 @@ impl Settings {
             10 => self.show_fps = !self.show_fps,
             11 => cycle_pacing(&mut self.responsive_pacing, &mut self.display_sync_pacing, right),
             12 => self.run_ahead_frames = cycle_u8(self.run_ahead_frames, 2, right),
+            13 => self.show_wifi = !self.show_wifi,
+            14 => self.show_bluetooth = !self.show_bluetooth,
+            15 => self.show_integrations = !self.show_integrations,
             _ => return false,
         }
         *self != before
@@ -247,7 +254,7 @@ mod tests {
         s.change(4, false); assert_eq!(s.ff_speed, 6);
         s.change(4, true); assert_eq!(s.ff_speed, 2);
         for i in [2, 3, 5, 6, 7, 8, 9] { assert!(s.change(i, true)); }
-        assert!(!s.change(13, true));
+        assert!(!s.change(16, true));
         assert!(!s.rewind && !s.turbo && !s.eject_save);
         assert!(s.change(10, true) && s.show_fps);
         assert!(s.change(11, true) && s.responsive_pacing);
@@ -282,6 +289,18 @@ mod tests {
             assert!(!serialized.contains(removed),
                 "obsolete Beta 8 field must not survive next save: {removed}");
         }
+    }
+    #[test]
+    fn interface_indicators_default_on_and_survive_legacy_json() {
+        let legacy: Settings = serde_json::from_str(r#"{"ff_speed":3}"#).unwrap();
+        assert!(legacy.show_wifi && legacy.show_bluetooth && legacy.show_integrations);
+        let mut s = legacy;
+        assert!(s.change(13, true) && !s.show_wifi);
+        assert!(s.change(14, true) && !s.show_bluetooth);
+        assert!(s.change(15, true) && !s.show_integrations);
+        let json = serde_json::to_string(&s).unwrap();
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, s);
     }
     #[test]
     fn roundtrip_and_invalid_values() {
