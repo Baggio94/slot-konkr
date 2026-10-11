@@ -3,10 +3,12 @@ name: KONKR Android preview
 on:
   workflow_dispatch:
   push:
-    branches: [feat/android-bootstrap, feat/konkr-ui-feedback, feat/konkr-retroachievements, feat/konkr-integration, feat/konkr-slot-parity, feat/konkr-save-parity, feat/konkr-dev4-performance-material, feat/konkr-dev5-launch-parity, feat/konkr-dev6-saf-launch, fix/konkr-dev7-saf-root-uri, fix/konkr-dev8-missing-optional-retroarch-files, feat/konkr-dev9-original-menus, feat/konkr-dev10-in-game-ui, feat/konkr-dev11-fastforward-rewind, feat/konkr-dev12-audio-startup-performance, feat/konkr-dev13-settings-about, feat/konkr-dev14-screen-gameplay, feat/konkr-dev15-gb-display, feat/konkr-dev16-personalization, feat/konkr-dev17-cart-labels, feat/konkr-dev18-original-color, feat/konkr-dev19-original-gestures-crt-boot, feat/konkr-dev20-official-icons-platform-labels, fix/konkr-dev21-platform-name-retrigger, feat/konkr-dev22-official-v3-icons, feat/konkr-dev23-original-v1-icons, feat/konkr-dev24-platform-labels-receiver-cleanup, feat/konkr-dev25-v1-hd-icons, fix/konkr-dev25-v1-hd-splash-recents, feat/konkr-dev26-cart-studio-foundation, feat/konkr-retroachievements-native, release/konkr-0.1.0-rc1, develop/konkr, fix/konkr-rc1-ui-polish, feat/konkr-emulation-latency-diagnostics]
+    # Follow the current development families instead of maintaining dozens of stale branch names.
+    branches: [develop/konkr, 'feat/konkr-*', 'fix/konkr-*', 'release/konkr-*']
     paths:
       - 'android/**'
       - 'crates/slot-android/**'
+      - 'crates/slot/src/**'  # Android imports pinned upstream rewind, wallpaper, thumb and core picker
       - 'crates/slot-gfx/**'
       - 'crates/slot-ui/**'
       - 'crates/slot-store/**'
@@ -17,6 +19,7 @@ on:
       - 'rust-toolchain.toml'
       - 'scripts/build-konkr-android.sh'
       - 'scripts/build-mgba-android.sh'
+      - 'scripts/build-gpsp-android.sh'
       - 'scripts/package-konkr-cart-studio.py'
       - '.github/workflows/konkr-android.yml'
 
@@ -135,6 +138,35 @@ jobs:
             echo "::warning::No persistent signing key configured. Android updates between CI builds require reinstall."
           fi
           bash scripts/build-konkr-android.sh
+      - name: Verify native dynamic exports survived metadata stripping
+        run: |
+          set -euo pipefail
+          NM="$(find "$ANDROID_SDK_ROOT/ndk/27.2.12479018/toolchains/llvm/prebuilt" -type f -name llvm-nm -print -quit)"
+          test -x "$NM"
+          DIR="android/app/src/main/jniLibs/arm64-v8a"
+          # Only static/debug symbols are removed. These must remain exported
+          # or games and the Android Kotlin/JNI bridge would fail at runtime.
+          "$NM" -D --defined-only "$DIR/libslot_android.so" | grep -F 'Java_fyi_slot_konkr_MainActivity_nativeDrawFrame'
+          "$NM" -D --defined-only "$DIR/libmgba_libretro.so" | grep -E ' retro_run        run: |
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs \
+            android/app/build/outputs/apk/debug/app-debug.apk
+          shasum -a 256 android/app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slot-konkr-preview-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+          "$NM" -D --defined-only "$DIR/libgpsp_libretro.so" | grep -E ' retro_run        run: |
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs \
+            android/app/build/outputs/apk/debug/app-debug.apk
+          shasum -a 256 android/app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slot-konkr-preview-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
       - name: Verify APK signature and print certificate fingerprint
         run: |
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs \
