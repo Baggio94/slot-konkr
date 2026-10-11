@@ -1,8 +1,9 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::storage::{self, Auth, Config, Game, Store, Unlock};
@@ -267,12 +268,44 @@ fn prefetch(
     Ok(game)
 }
 
+/// Durable window prevents repeated launches from bypassing the server's
+/// bulk-preparation budget. A reservation is persisted before making HTTP calls.
+#[derive(Default, Serialize, Deserialize)]
+struct PrefetchBudget {
+    attempts: Vec<u64>,
+}
+impl PrefetchBudget {
+    const WINDOW: u64 = 30 * 60;
+    const LIMIT: usize = 100;
+
+    fn reserve(&mut self, dir: &std::path::Path, at: u64) -> Result<bool, Failure> {
+        self.attempts.retain(|t| *t <= at && at.saturating_sub(*t) < Self::WINDOW);
+        if self.attempts.len() >= Self::LIMIT { return Ok(false); }
+        self.attempts.push(at);
+        if storage::write(&dir.join("smart-prefetch-budget.json"), self).is_err() {
+            self.attempts.pop();
+            return Err(Failure::Invalid);
+        }
+        Ok(true)
+    }
+
+    fn delay_seconds(&self, at: u64) -> u64 {
+        self.attempts.first().map_or(30, |t| t.saturating_add(Self::WINDOW).saturating_sub(at).max(1))
+    }
+}
+
+fn already_prepared(dir: &std::path::Path, hash: &str) -> bool {
+    storage::read::<(Game, BTreeSet<u32>)>(&dir.join(format!("{hash}.json")))
+        .is_ok_and(|(game, _)| game.console == 5)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
     root: PathBuf,
     config: Config,
     store: Arc<Mutex<Store>>,
     loads: mpsc::Receiver<Option<Load>>,
+    smart_hashes: mpsc::Receiver<String>,
     prepared: mpsc::Sender<Prepared>,
     notices: mpsc::Sender<Notice>,
     status: Arc<Status>,
@@ -291,7 +324,26 @@ pub(crate) fn run(
     let mut library_failed = false;
     let mut rescanned = Instant::now();
     let mut badges = crate::badges::Queue::new(&dir);
+    let mut smart_queue: VecDeque<String> = VecDeque::new();
+    let mut queued_hashes: BTreeSet<String> = BTreeSet::new();
+    let mut budget: PrefetchBudget = storage::read(&dir.join("smart-prefetch-budget.json"))
+        .unwrap_or_default();
     loop {
+        // Android SAF fingerprints arrive independently of opening a game.
+        // Keep the HTTP queue small and deduplicated, with no ROM bytes retained.
+        for hash in smart_hashes.try_iter().take(32) {
+            if hash.len() != 32 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+                continue;
+            }
+            let hash = hash.to_ascii_lowercase();
+            if !already_prepared(&dir, &hash) && queued_hashes.insert(hash.clone())
+                && smart_queue.len() < 5000
+            {
+                smart_queue.push_back(hash);
+            } else {
+                queued_hashes.remove(&hash);
+            }
+        }
         match loads.recv_timeout(Duration::from_millis(200)) {
             Ok(mut load) => {
                 while let Ok(newer) = loads.try_recv() {
@@ -336,6 +388,7 @@ pub(crate) fn run(
         status.pending.store(
             !library.is_empty()
                 || library_failed
+                || !smart_queue.is_empty()
                 || badges.pending()
                 || store.lock().unwrap().unlocks.values().any(|u| !u.synced)
                 || active.as_ref().is_some_and(|game| !game.ready),
@@ -369,6 +422,7 @@ pub(crate) fn run(
         }
         if !verified
             || !library.is_empty()
+            || !smart_queue.is_empty()
             || (badges.pending() && !badges.waiting)
             || store.lock().unwrap().unlocks.values().any(|u| !u.synced)
             || active.as_ref().is_some_and(|game| {
@@ -474,6 +528,30 @@ pub(crate) fn run(
                     game.last_ping = Instant::now();
                 }
             }
+            // Prefer gameplay and pending unlocks over Smart Cache background work.
+            // Preparing a hash uses gameid/patch/unlocks, never starts a session.
+            if active.is_none() {
+                if let Some(hash) = smart_queue.front() {
+                    if already_prepared(&dir, hash) {
+                        let done = smart_queue.pop_front().unwrap();
+                        queued_hashes.remove(&done);
+                    } else if budget.reserve(&dir, now())? {
+                        match prefetch(&mut http, auth, &dir, hash) {
+                            Ok(game) => {
+                                badges.enqueue(&game);
+                                let done = smart_queue.pop_front().unwrap();
+                                queued_hashes.remove(&done);
+                            }
+                            Err(Failure::Network) => return Err(Failure::Network),
+                            Err(error) => {
+                                // Keep the hash queued for a future attempt. A
+                                // rejected ROM must not block other awards.
+                                deferred_error = Some(error);
+                            }
+                        }
+                    }
+                }
+            }
             // One ROM per pass, with a one-second gap. Prefetch uses `unlocks`, not
             // `startsession`, so preparing a library doesn't claim the user played it.
             if let Some(path) = library.front() {
@@ -504,6 +582,7 @@ pub(crate) fn run(
         status.pending.store(
             !library.is_empty()
                 || library_failed
+                || !smart_queue.is_empty()
                 || badges.pending()
                 || store.lock().unwrap().unlocks.values().any(|u| !u.synced)
                 || active.as_ref().is_some_and(|game| !game.ready),
@@ -524,6 +603,7 @@ pub(crate) fn run(
                 status.set(if library_failed || badges.waiting {
                     SyncStatus::Attention
                 } else if !library.is_empty()
+                    || !smart_queue.is_empty()
                     || badges.pending()
                     || store.lock().unwrap().unlocks.values().any(|u| !u.synced)
                 {
@@ -533,7 +613,15 @@ pub(crate) fn run(
                 });
                 delay = 30;
                 warned = false;
-                next_attempt = Instant::now() + Duration::from_secs(1);
+                // Respect the persisted rolling 100-game/30-minute budget.
+                let limit_reached = !smart_queue.is_empty()
+                    && budget.attempts.iter()
+                        .filter(|at| now().saturating_sub(**at) < PrefetchBudget::WINDOW)
+                        .count() >= PrefetchBudget::LIMIT;
+                next_attempt = Instant::now()
+                    + Duration::from_secs(if limit_reached {
+                        budget.delay_seconds(now())
+                    } else { 1 });
             }
             Err(error) => {
                 status.set(if error == Failure::Network {
