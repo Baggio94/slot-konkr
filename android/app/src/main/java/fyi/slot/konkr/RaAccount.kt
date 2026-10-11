@@ -46,11 +46,11 @@ internal object RaAccount {
         try {
             output.write(bytes)
             atomic.finishWrite(output)
-            Os.chmod(target.absolutePath, 0x180) // 0600
         } catch (error: Exception) {
             atomic.failWrite(output)
             throw error
         }
+        Os.chmod(target.absolutePath, 0x180) // 0600
     }
 
     fun authenticateAndSave(root: File, username: String, password: String): Result {
