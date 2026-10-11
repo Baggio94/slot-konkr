@@ -76,6 +76,7 @@ enum Input {
     RaNetworkAvailable,
     RaAccountConfigured,
     RaPrefetchHash(String),
+    ExternalReturn,
 }
 
 static INPUT: Mutex<VecDeque<Input>> = Mutex::new(VecDeque::new());
@@ -144,6 +145,8 @@ static AUDIO_SPEED_PERMILLE: AtomicI32 = AtomicI32::new(1000);
 static FF_AUDIO_SUPPORTED: AtomicBool = AtomicBool::new(true);
 static FF_AUDIO_ENABLED: AtomicBool = AtomicBool::new(true);
 static RUMBLE_STRENGTH: AtomicI32 = AtomicI32::new(0);
+// Updated once per second by the GL thread; read-only and optional on Android.
+static PERF_STATUS: Mutex<Option<String>> = Mutex::new(None);
 
 #[derive(Clone)]
 struct SystemStatus {
@@ -192,6 +195,7 @@ enum ShelfOverlay {
     Settings { row: usize },
     ScreenSettings { row: usize },
     GameplaySettings { row: usize },
+    EmulationSettings { row: usize },
     Personalization { row: usize },
     About,
     Scraping,
@@ -201,7 +205,7 @@ enum ShelfOverlay {
     States,
 }
 
-const MENU_TEXT: [&str; 49] = [
+const MENU_TEXT: [&str; 55] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -251,6 +255,12 @@ const MENU_TEXT: [&str; 49] = [
     "Import Selected Cart Label",       // 46
     "Remove Selected Cart Label",       // 47
     "Apps",                             // 48
+    "Emulation",                        // 49
+    "EMULATION",                        // 50
+    "Show FPS",                         // 51
+    "Frame pacing",                     // 52
+    "STANDARD",                         // 53
+    "RESPONSIVE",                       // 54
 ];
 
 struct Engine {
@@ -289,6 +299,11 @@ struct Engine {
     requested_uri: Option<String>,
     prepared_rom: Option<String>,
     game_accum: f64,
+    perf_last: Instant,
+    perf_rendered: u32,
+    perf_emulated: u32,
+    perf_catchup: u32,
+    external_pending: bool,
     overlay: ShelfOverlay,
     settings: Settings,
     video_mode: VideoMode,
@@ -415,7 +430,8 @@ impl Engine {
             (tex, face.w)
         });
         let setting_values = ["2×", "3×", "4×", "6×", "ON", "OFF",
-                              "LCD3x", "Grid", "Dot", "Simpletex"]
+                              "LCD3x", "Grid", "Dot", "Simpletex",
+                              "STANDARD", "RESPONSIVE"]
             .into_iter().map(|value| {
                 let face = quick_value_face(value, true);
                 let tex = gpu.create_texture(face.w, face.h, &face.rgba);
@@ -516,6 +532,11 @@ impl Engine {
             requested_uri: None,
             prepared_rom: None,
             game_accum: 0.0,
+            perf_last: now,
+            perf_rendered: 0,
+            perf_emulated: 0,
+            perf_catchup: 0,
+            external_pending: false,
             overlay: ShelfOverlay::None,
             settings,
             video_mode: VideoMode::Actual,
@@ -756,13 +777,23 @@ impl Engine {
                     }
                 }
             }
+            Input::ExternalReturn => {
+                if self.external_pending {
+                    self.external_pending = false;
+                    self.overlay = ShelfOverlay::None;
+                    self.menu_seen = 0;
+                }
+            }
             Input::Reset => {
                 self.reset_time_controls();
                 self.buttons = 0;
                 self.mode_down_at = None;
                 self.mode_last_tap = None;
                 self.polaroids = None;
-                self.overlay = ShelfOverlay::None;
+                // Android calls Reset onPause. Retain the *native menu* behind
+                // Apps/Studio while the new Activity animates in, otherwise
+                // the user briefly sees the cartridge carousel again.
+                if !self.external_pending { self.overlay = ShelfOverlay::None; }
                 self.picker = None;
                 for shelf in &mut self.shelves {
                     shelf.release_hold();
@@ -1067,7 +1098,8 @@ impl Engine {
                                             // Show the entire indexed GB/GBC/GBA library.
                                             UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
                                                 .push_back(14);
-                                            ShelfOverlay::None
+                                            self.external_pending = true;
+                                            ShelfOverlay::Menu { row }
                                         },
                                         2 => {
                                             // Open the account dashboard/sign-in directly:
@@ -1079,7 +1111,8 @@ impl Engine {
                                         },
                                         3 => {
                                             UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(15);
-                                            ShelfOverlay::None
+                                            self.external_pending = true;
+                                            ShelfOverlay::Menu { row }
                                         },
                                         4 => ShelfOverlay::Settings { row: 0 },
                                         _ => {
@@ -1148,11 +1181,12 @@ impl Engine {
                             },
                             ShelfOverlay::Settings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::Settings {
-                                    row: move_menu_row(row, code, 3),
+                                    row: move_menu_row(row, code, 4),
                                 },
                                 96 => match row {
                                     0 => self.overlay = ShelfOverlay::ScreenSettings { row: 0 },
                                     1 => self.overlay = ShelfOverlay::GameplaySettings { row: 0 },
+                                    2 => self.overlay = ShelfOverlay::EmulationSettings { row: 0 },
                                     _ => {
                                         self.refresh_customize_items();
                                         self.overlay = ShelfOverlay::Personalization { row: 0 };
@@ -1168,6 +1202,15 @@ impl Engine {
                                 },
                                 21 | 22 => self.change_setting(row, code == 22),
                                 97 => self.overlay = ShelfOverlay::Settings { row: 0 },
+                                108 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
+                            ShelfOverlay::EmulationSettings { row } => match code {
+                                19 | 20 => self.overlay = ShelfOverlay::EmulationSettings {
+                                    row: move_menu_row(row, code, 2),
+                                },
+                                21 | 22 => self.change_setting(row + 10, code == 22),
+                                97 => self.overlay = ShelfOverlay::Settings { row: 2 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -1620,7 +1663,10 @@ impl Engine {
             6 => if self.settings.rewind { 4 } else { 5 },
             7 => if self.settings.turbo { 4 } else { 5 },
             8 => if self.settings.rumble { 4 } else { 5 },
-            _ => if self.settings.eject_save { 4 } else { 5 },
+            9 => if self.settings.eject_save { 4 } else { 5 },
+            10 => if self.settings.show_fps { 4 } else { 5 },
+            11 => if self.settings.responsive_pacing { 11 } else { 10 },
+            _ => 5,
         }
     }
 
@@ -1719,7 +1765,11 @@ impl Engine {
                 self.draw_original_style_menu(5, &[6, 24, 7, 8, 9], row, out);
             }
             ShelfOverlay::Settings { row } => {
-                self.draw_original_style_menu(26, &[32, 33, 40], row, out);
+                self.draw_original_style_menu(26, &[32, 33, 49, 40], row, out);
+            }
+            ShelfOverlay::EmulationSettings { row } => {
+                self.draw_original_style_menu(50, &[51, 52], row, out);
+                self.draw_setting_values(row, &[10, 11], out);
             }
             ShelfOverlay::Personalization { row } => {
                 self.draw_original_style_menu(41, &self.customize_items, row, out);
@@ -1943,6 +1993,32 @@ impl Engine {
         let dt = (now - self.last).as_secs_f32().min(0.05);
         self.last = now;
 
+        // FPS is a *real* libretro simulation measurement, not the display
+        // refresh rate; the separate draw rate reveals missed vsyncs.
+        if self.game.is_some() && self.settings.show_fps {
+            self.perf_rendered += 1;
+            let span = self.perf_last.elapsed().as_secs_f64();
+            if span >= 1.0 {
+                let emu = self.perf_emulated as f64 / span;
+                let render = self.perf_rendered as f64 / span;
+                let catchup = 100.0 * self.perf_catchup as f64 /
+                    self.perf_rendered.max(1) as f64;
+                let target = self.game.as_ref().map_or(60.0, |g| g.fps);
+                *PERF_STATUS.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(format!("EMU {emu:.1}/{target:.1} | DISPLAY {render:.1} | CATCHUP {catchup:.0}%"));
+                self.perf_last = now;
+                self.perf_rendered = 0;
+                self.perf_emulated = 0;
+                self.perf_catchup = 0;
+            }
+        } else {
+            self.perf_last = now;
+            self.perf_rendered = 0;
+            self.perf_emulated = 0;
+            self.perf_catchup = 0;
+            *PERF_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+
         let events: Vec<Input> = INPUT
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
@@ -1961,7 +2037,8 @@ impl Engine {
             ShelfOverlay::Menu { row } => (1u8, row, 6usize),
             ShelfOverlay::Library { row } => (2u8, row, 5usize),
             ShelfOverlay::GameMenu { row } => (3u8, row, 3usize),
-            ShelfOverlay::Settings { row } => (4u8, row, 3usize),
+            ShelfOverlay::Settings { row } => (4u8, row, 4usize),
+            ShelfOverlay::EmulationSettings { row } => (8u8, row, 2usize),
             ShelfOverlay::ScreenSettings { row } => (5u8, row, 4usize),
             ShelfOverlay::GameplaySettings { row } => (6u8, row, 6usize),
             ShelfOverlay::Personalization { row } => (7u8, row, self.customize_items.len()),
@@ -2142,13 +2219,19 @@ impl Engine {
                 // Original Slot offers 2/3/4/6x, independent of display Hz.
                 let fast = self.ff_held || self.ff_latched;
                 let multiplier = if fast { f64::from(self.settings.ff_speed) } else { 1.0 };
-                self.game_accum = (self.game_accum + f64::from(dt) * multiplier)
-                    .min(if fast { 0.40 } else { 0.10 });
                 let period = 1.0 / session.fps;
+                // Optional opt-in: don't build a backlog of old simulation
+                // frames after a missed vsync. It can reduce delayed input,
+                // at the cost of slower game time on an overloaded device.
+                // STANDARD preserves the proven RC3 scheduler unchanged.
+                let responsive = self.settings.responsive_pacing && !fast;
+                self.game_accum = (self.game_accum + f64::from(dt) * multiplier)
+                    .min(if fast { 0.40 } else if responsive { period * 1.5 } else { 0.10 });
                 let frame_limit = if fast { usize::from(self.settings.ff_speed) * 4 }
-                    else { 4 };
+                    else if responsive { 1 } else { 4 };
                 while self.game_accum >= period && stepped < frame_limit {
                     session.advance(self.buttons, self.settings.turbo, self.settings.rewind);
+                    self.perf_emulated = self.perf_emulated.saturating_add(1);
                     self.game_accum -= period;
                     stepped += 1;
                     let samples = session.take_audio();
@@ -2161,6 +2244,9 @@ impl Engine {
                         audio.extend(samples);
                     }
                 }
+            }
+            if stepped > 1 {
+                self.perf_catchup = self.perf_catchup.saturating_add(1);
             }
             if stepped > 0 {
                 if self.select_tap_frames > 0 {
@@ -2675,6 +2761,24 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaNetworkAvailable
 ) {
     INPUT.lock().unwrap_or_else(|e| e.into_inner())
         .push_back(Input::RaNetworkAvailable);
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeExternalReturn(
+    _env: *mut c_void, _activity: *mut c_void,
+) {
+    push(Input::ExternalReturn);
+}
+
+/// Null when show-FPS is OFF, the game is not running or measurement isn't ready.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePerformanceStats(
+    env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jstring {
+    PERF_STATUS.lock().unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|text| env.new_string(text).ok())
+        .map_or(std::ptr::null_mut(), |text| text.into_raw())
 }
 
 #[unsafe(no_mangle)]
