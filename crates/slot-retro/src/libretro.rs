@@ -396,12 +396,12 @@ unsafe extern "C" fn input_state(port: c_uint, device: c_uint, _index: c_uint, i
     .unwrap_or(0)
 }
 
-// Frontend-private gpSP ABI. The 256 KiB audio ring and fractional
-// accumulator live here only during frame speculation, not in .state files.
-type GpspAudioSidecarFn = unsafe extern "C" fn(*mut c_void, usize, bool) -> bool;
-type GpspAudioSidecarSizeFn = unsafe extern "C" fn() -> usize;
-struct GpspAudioSidecar {
-    transfer: GpspAudioSidecarFn,
+// Frontend-private per-core audio sidecar ABI. Ordinary .state files remain
+// unchanged: this memory exists only between speculative save and restore.
+type AudioSidecarFn = unsafe extern "C" fn(*mut c_void, usize, bool) -> bool;
+type AudioSidecarSizeFn = unsafe extern "C" fn() -> usize;
+struct AudioSidecar {
+    transfer: AudioSidecarFn,
     snapshot: Vec<u8>,
     captured: bool,
 }
@@ -409,7 +409,10 @@ struct GpspAudioSidecar {
 pub struct LibretroCore {
     api: Api,
     is_gpsp: bool,
-    gpsp_audio: Option<GpspAudioSidecar>,
+    gpsp_audio: Option<AudioSidecar>,
+    is_mgba: bool,
+    mgba_audio_exports: Option<(AudioSidecarSizeFn, AudioSidecarFn)>,
+    mgba_audio: Option<AudioSidecar>,
     host: Box<Host>,
     rom: Vec<u8>,
     rom_path: Option<CString>,
@@ -489,22 +492,33 @@ impl LibretroCore {
     fn open_inner(dylib: &Path, system_dir: &Path, save_dir: &Path) -> Result<Self, CoreError> {
         let lib = unsafe { Library::new(dylib) }.map_err(|e| CoreError::Load(e.to_string()))?;
         let api = unsafe { Api::load(&lib) }?;
-        let is_gpsp = dylib.file_name().and_then(|name| name.to_str())
-            == Some("libgpsp_libretro.so");
+        let name = dylib.file_name().and_then(|name| name.to_str());
+        let is_gpsp = name == Some("libgpsp_libretro.so");
+        let is_mgba = name == Some("libmgba_libretro.so");
+        // mGBA sizes its audio ring after a ROM is loaded. Resolve its
+        // private exports now, but allocate only after core.load_game().
+        let mgba_audio_exports = if is_mgba {
+            let size = unsafe { lib.get::<AudioSidecarSizeFn>(b"slot_mgba_audio_sidecar_size\0") };
+            let transfer = unsafe { lib.get::<AudioSidecarFn>(b"slot_mgba_audio_sidecar\0") };
+            match (size, transfer) {
+                (Ok(size), Ok(transfer)) => Some((*size, *transfer)),
+                _ => None,
+            }
+        } else { None };
         // An unpatched/foreign gpSP must not run speculative frames: core
         // savestates intentionally omit its audio mixer ring.
         let gpsp_audio = if is_gpsp {
             let size_fn = unsafe {
-                lib.get::<GpspAudioSidecarSizeFn>(b"slot_gpsp_audio_sidecar_size\0")
+                lib.get::<AudioSidecarSizeFn>(b"slot_gpsp_audio_sidecar_size\0")
             };
             let transfer = unsafe {
-                lib.get::<GpspAudioSidecarFn>(b"slot_gpsp_audio_sidecar\0")
+                lib.get::<AudioSidecarFn>(b"slot_gpsp_audio_sidecar\0")
             };
             match (size_fn, transfer) {
                 (Ok(size_fn), Ok(transfer)) => {
                     let size = unsafe { (*size_fn)() };
                     if (4..=512 * 1024).contains(&size) {
-                        Some(GpspAudioSidecar {
+                        Some(AudioSidecar {
                             transfer: *transfer,
                             snapshot: vec![0; size],
                             captured: false,
@@ -550,6 +564,9 @@ impl LibretroCore {
             api,
             is_gpsp,
             gpsp_audio,
+            is_mgba,
+            mgba_audio_exports,
+            mgba_audio: None,
             host,
             rom: Vec::new(),
             rom_path: None,
@@ -683,6 +700,16 @@ impl RetroCore for LibretroCore {
             return Err(CoreError::Load(format!("core refused {}", rom.display())));
         }
         self.loaded = true;
+        self.mgba_audio = self.mgba_audio_exports.and_then(|(size_fn, transfer)| {
+            let size = unsafe { size_fn() };
+            if (4..=1024 * 1024).contains(&size) {
+                Some(AudioSidecar {
+                    transfer,
+                    snapshot: vec![0; size],
+                    captured: false,
+                })
+            } else { None }
+        });
         let mut av = SystemAvInfo::default();
         unsafe { (self.api.get_system_av_info)(&mut av) };
         self.av = AvInfo {
@@ -759,38 +786,49 @@ impl RetroCore for LibretroCore {
     }
 
     fn speculative_audio_supported(&self) -> bool {
-        !self.is_gpsp || self.gpsp_audio.is_some()
+        (!self.is_gpsp || self.gpsp_audio.is_some())
+            && (!self.is_mgba || self.mgba_audio.is_some())
     }
 
     fn capture_speculative_audio(&mut self) -> Result<(), CoreError> {
-        if !self.is_gpsp { return Ok(()); }
-        let state = self.gpsp_audio.as_mut().ok_or_else(|| {
-            CoreError::Unsupported("gpSP Run-Ahead needs the audio sidecar".into())
+        let state = if self.is_gpsp {
+            self.gpsp_audio.as_mut()
+        } else if self.is_mgba {
+            self.mgba_audio.as_mut()
+        } else {
+            return Ok(());
+        }.ok_or_else(|| {
+            CoreError::Unsupported("core has no safe speculative audio snapshot".into())
         })?;
         state.captured = false;
         let ok = unsafe {
             (state.transfer)(state.snapshot.as_mut_ptr().cast(),
                 state.snapshot.len(), false)
         };
-        if !ok { return Err(CoreError::State("gpSP audio capture failed".into())); }
+        if !ok { return Err(CoreError::State("core audio capture failed".into())); }
         state.captured = true;
         Ok(())
     }
 
     fn restore_speculative_audio(&mut self) -> Result<(), CoreError> {
-        if !self.is_gpsp { return Ok(()); }
-        let state = self.gpsp_audio.as_mut().ok_or_else(|| {
-            CoreError::Unsupported("gpSP Run-Ahead needs the audio sidecar".into())
+        let state = if self.is_gpsp {
+            self.gpsp_audio.as_mut()
+        } else if self.is_mgba {
+            self.mgba_audio.as_mut()
+        } else {
+            return Ok(());
+        }.ok_or_else(|| {
+            CoreError::Unsupported("core has no safe speculative audio snapshot".into())
         })?;
         if !state.captured {
-            return Err(CoreError::State("missing gpSP speculative audio snapshot".into()));
+            return Err(CoreError::State("missing speculative audio snapshot".into()));
         }
         state.captured = false;
         let ok = unsafe {
             (state.transfer)(state.snapshot.as_mut_ptr().cast(),
                 state.snapshot.len(), true)
         };
-        if ok { Ok(()) } else { Err(CoreError::State("gpSP audio restore failed".into())) }
+        if ok { Ok(()) } else { Err(CoreError::State("core audio restore failed".into())) }
     }
 
     fn save_ram(&self) -> Option<Vec<u8>> {
