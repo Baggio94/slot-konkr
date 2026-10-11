@@ -71,10 +71,12 @@ class CartStudioActivity : Activity() {
         super.onCreate(savedInstanceState)
         immersive()
         val frame = FrameLayout(this)
-        frame.setBackgroundColor(Color.rgb(27, 27, 33))
+        frame.setBackgroundColor(SlotUi.background)
         setContentView(frame)
         val notice = TextView(this).apply {
             text = "Cart Studio\nLoading Slot library…"
+            typeface = SlotUi.font(this@CartStudioActivity)
+            letterSpacing = .09f
             textSize = 18f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
@@ -214,6 +216,8 @@ class CartStudioActivity : Activity() {
         frame.addView(toolbar, FrameLayout.LayoutParams(-1, barHeight, Gravity.TOP))
         val title = TextView(this).apply {
             text = "Cart Studio"
+            typeface = SlotUi.font(this@CartStudioActivity)
+            letterSpacing = .09f
             textSize = 17f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
@@ -221,6 +225,8 @@ class CartStudioActivity : Activity() {
         toolbar.addView(title, FrameLayout.LayoutParams(-1, -1))
         val close = TextView(this).apply {
             text = "‹  slot."
+            typeface = SlotUi.font(this@CartStudioActivity)
+            letterSpacing = .09f
             textSize = 15f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
@@ -241,13 +247,15 @@ class CartStudioActivity : Activity() {
         fun action(label: String, pale: Boolean): TextView {
             return TextView(this).apply {
                 text = label
+                typeface = SlotUi.font(this@CartStudioActivity)
+                letterSpacing = .09f
                 textSize = 12f
                 isAllCaps = false
                 gravity = Gravity.CENTER
-                setTextColor(if (pale) Color.rgb(24, 24, 29) else Color.WHITE)
+                setTextColor(if (pale) SlotUi.background else SlotUi.ink)
                 setPadding((12 * density).toInt(), 0, (12 * density).toInt(), 0)
                 background = GradientDrawable().apply {
-                    setColor(if (pale) Color.rgb(244, 244, 250) else Color.rgb(59, 59, 70))
+                    setColor(if (pale) SlotUi.ink else SlotUi.surface)
                     cornerRadius = 7 * density
                 }
                 visibility = View.GONE
@@ -293,7 +301,7 @@ class CartStudioActivity : Activity() {
                 }
             }
         }, "AndroidToolbar")
-        val rule = View(this).apply { setBackgroundColor(Color.rgb(58, 58, 70)) }
+        val rule = View(this).apply { setBackgroundColor(SlotUi.rule) }
         toolbar.addView(rule, FrameLayout.LayoutParams(-1,
             (resources.displayMetrics.density + 0.5f).toInt().coerceAtLeast(1),
             Gravity.BOTTOM))
