@@ -2229,8 +2229,9 @@ impl Engine {
                 // at the cost of slower game time on an overloaded device.
                 // STANDARD preserves the proven RC3 scheduler unchanged.
                 let responsive = self.settings.responsive_pacing && !fast;
-                self.game_accum = (self.game_accum + f64::from(dt) * multiplier)
-                    .min(if fast { 0.40 } else if responsive { period * 1.5 } else { 0.10 });
+                self.game_accum = crate::settings::frame_debt(
+                    self.game_accum, f64::from(dt), multiplier, period, fast, responsive
+                );
                 let frame_limit = if fast { usize::from(self.settings.ff_speed) * 4 }
                     else if responsive { 1 } else { 4 };
                 while self.game_accum >= period && stepped < frame_limit {
