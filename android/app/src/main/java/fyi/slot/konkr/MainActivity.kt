@@ -123,7 +123,6 @@ class MainActivity : Activity() {
     private val pulse = object : Runnable {
         override fun run() {
             pollSystemStatus()
-            statusHud.setVisible(resumed && !nativeIsPlaying())
             pollRumble()
             if (resumed && nativeIsPlaying()) {
                 if (!audioRunning.get()) startAudio()
@@ -194,22 +193,6 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
 
     private lateinit var view: GLSurfaceView
-    private lateinit var statusHud: SlotStatusHud
-    private var basicReceiverRegistered = false
-    private val basicSyncPackage = "com.chiller3.basicsync"
-    private val basicSyncReceiver = object : android.content.BroadcastReceiver() {
-        override fun onReceive(context: android.content.Context?, intent: Intent?) {
-            if (intent?.action != "$basicSyncPackage.STATE_CHANGED") return
-            // BasicSync 3.12+ returns RUNNING, NOT_RUNNING, PAUSED, etc.
-            // An absent/unsupported API is "unknown", never "stopped".
-            val state = when (intent.getStringExtra("run_state")) {
-                "RUNNING" -> true
-                "PAUSED", "NOT_RUNNING", "STOPPING" -> false
-                else -> null
-            }
-            statusHud.basicSyncState(state)
-        }
-    }
     private var startupSplash: View? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -268,7 +251,6 @@ class MainActivity : Activity() {
             status,
             FrameLayout.LayoutParams(-1, -2, Gravity.TOP)
         )
-        statusHud = SlotStatusHud(this, frame)
         showSlotStartupSplash(frame)
         setContentView(frame)
         immersive()
@@ -646,36 +628,7 @@ class MainActivity : Activity() {
         val charging = state == BatteryManager.BATTERY_STATUS_CHARGING ||
             state == BatteryManager.BATTERY_STATUS_FULL
         nativeSystemStatus(clock, percent, charging)
-        if (resumed) {
-            statusHud.refresh()
-            // Fetch read-only external status off the main/UI thread.
-            scanner.execute {
-                val status = RaEndpoint.discover(applicationContext)
-                // Syncthing-Fork's documented read-only localhost health check.
-                // HTTP 200 proves it is active; no response is UNKNOWN, not OFF.
-                val syncthingRunning = try {
-                    val connection = java.net.URL("http://127.0.0.1:8384/rest/noauth/health")
-                        .openConnection() as java.net.HttpURLConnection
-                    connection.connectTimeout = 350
-                    connection.readTimeout = 350
-                    connection.instanceFollowRedirects = false
-                    try { connection.responseCode == 200 }
-                    finally { connection.disconnect() }
-                } catch (_: Exception) { false }
-                runOnUiThread {
-                    if (!isDestroyed) {
-                        statusHud.raRunning(status?.running)
-                        statusHud.syncthingRunning(if (syncthingRunning) true else null)
-                    }
-                }
-            }
-            try {
-                sendBroadcast(Intent("$basicSyncPackage.REQUEST_STATE")
-                    .setPackage(basicSyncPackage))
-            } catch (error: Exception) {
-                Log.d(TAG, "BasicSync status broadcast unavailable", error)
-            }
-        }
+
     }
 
     private fun refreshLibrary() {
@@ -1116,10 +1069,6 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        if (basicReceiverRegistered) {
-            try { unregisterReceiver(basicSyncReceiver) } catch (_: Exception) { }
-            basicReceiverRegistered = false
-        }
         scanSerial.incrementAndGet()
         scanner.shutdownNow()
         gameLoader.shutdownNow()
@@ -1143,31 +1092,13 @@ class MainActivity : Activity() {
         }
         view.onPause()
         nativeResetInput()
-        if (basicReceiverRegistered) {
-            try { unregisterReceiver(basicSyncReceiver) } catch (_: Exception) { }
-            basicReceiverRegistered = false
-        }
         super.onPause()
     }
 
     override fun onResume() {
         super.onResume()
         resumed = true
-        lastStatusPoll = -15000L // update status immediately after returning from apps
-        if (!basicReceiverRegistered) {
-            try {
-                val filter = IntentFilter("$basicSyncPackage.STATE_CHANGED")
-                if (android.os.Build.VERSION.SDK_INT >= 33) {
-                    registerReceiver(basicSyncReceiver, filter, android.content.Context.RECEIVER_EXPORTED)
-                } else {
-                    @Suppress("DEPRECATION")
-                    registerReceiver(basicSyncReceiver, filter)
-                }
-                basicReceiverRegistered = true
-            } catch (error: Exception) {
-                Log.d(TAG, "BasicSync broadcast receiver unavailable", error)
-            }
-        }
+        lastStatusPoll = -15000L
         cartSounds.resume()
         view.onResume()
         immersive()
