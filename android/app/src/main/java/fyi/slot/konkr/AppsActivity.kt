@@ -7,6 +7,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -43,6 +44,10 @@ class AppsActivity : Activity() {
     private lateinit var appsAdapter: BaseAdapter
     private var selectedIndex = 0
     private var homeSelected = false
+    // Cache icon decodes and reuse tile views rather than rebuilding the grid
+    // on every D-pad event (which caused sluggish movement on the KONKR).
+    private val iconCache = HashMap<String, Drawable>()
+    private data class Tile(val icon: ImageView, val title: TextView)
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density + .5f).toInt()
 
@@ -113,10 +118,6 @@ class AppsActivity : Activity() {
             setBackgroundColor(Color.rgb(65, 64, 72))
         }, LinearLayout.LayoutParams(-1, dp(1)))
 
-        root.addView(text("D-PAD  NAVIGATE      A  OPEN      B  BACK", 11f, false).apply {
-            setPadding(0, dp(10), 0, dp(12))
-        })
-
         grid = GridView(this).apply {
             numColumns = COLUMNS
             horizontalSpacing = dp(12)
@@ -133,53 +134,129 @@ class AppsActivity : Activity() {
 
             override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
                 val entry = entries[position]
-                val selected = !homeSelected && position == selectedIndex
-                return LinearLayout(this@AppsActivity).apply {
-                    orientation = LinearLayout.VERTICAL
-                    gravity = Gravity.CENTER
-                    background = plate(
-                        if (selected) Color.rgb(68, 66, 77) else Color.rgb(37, 36, 43),
-                        selected
-                    )
-                    minimumHeight = dp(110)
-                    setPadding(dp(5), dp(9), dp(5), dp(7))
-                    addView(ImageView(this@AppsActivity).apply {
-                        setImageDrawable(runCatching {
-                            packageManager.getApplicationIcon(entry.packageName)
-                        }.getOrNull())
+                val root: LinearLayout
+                val tile: Tile
+                if (convertView is LinearLayout && convertView.tag is Tile) {
+                    root = convertView
+                    tile = root.tag as Tile
+                } else {
+                    root = LinearLayout(this@AppsActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        gravity = Gravity.CENTER
+                        minimumHeight = dp(110)
+                        setPadding(dp(5), dp(9), dp(5), dp(7))
+                    }
+                    val icon = ImageView(this@AppsActivity).apply {
                         scaleType = ImageView.ScaleType.FIT_CENTER
-                    }, LinearLayout.LayoutParams(dp(46), dp(46)))
-                    addView(text(entry.label, 12f).apply {
+                    }
+                    root.addView(icon, LinearLayout.LayoutParams(dp(46), dp(46)))
+                    val title = text("", 12f).apply {
                         gravity = Gravity.CENTER
                         maxLines = 2
                         ellipsize = android.text.TextUtils.TruncateAt.END
-                    }, LinearLayout.LayoutParams(-1, dp(42)))
-                    contentDescription = entry.label
+                    }
+                    root.addView(title, LinearLayout.LayoutParams(-1, dp(42)))
+                    tile = Tile(icon, title)
+                    root.tag = tile
                 }
+                val cached = iconCache.getOrPut(entry.packageName) {
+                    runCatching { packageManager.getApplicationIcon(entry.packageName) }
+                        .getOrElse { packageManager.defaultActivityIcon }
+                }
+                tile.icon.setImageDrawable(cached.constantState?.newDrawable(resources) ?: cached)
+                tile.title.text = entry.label
+                root.contentDescription = entry.label
+                val selected = !homeSelected && position == selectedIndex
+                root.background = plate(
+                    if (selected) Color.rgb(68, 66, 77) else Color.rgb(37, 36, 43),
+                    selected
+                )
+                return root
             }
         }
         grid.adapter = appsAdapter
         grid.setOnItemClickListener { _, _, position, _ ->
+            val oldIndex = selectedIndex
+            val wasHome = homeSelected
             selectedIndex = position
             homeSelected = false
-            updateSelection()
+            updateSelection(oldIndex, wasHome)
             launchSelected()
         }
         root.addView(grid, LinearLayout.LayoutParams(-1, 0, 1f))
-        updateSelection()
+        root.addView(controllerLegend())
+        updateSelection(null, false)
         root.requestFocus()
     }
 
-    private fun updateSelection() {
-        homeButton.background = plate(
-            if (homeSelected) Color.rgb(89, 87, 102) else Color.rgb(56, 55, 64),
-            homeSelected
+    // Match the original Slot core-selector legend, including the two
+    // triangular arrow keycaps used for SWAP rather than a generic D-pad icon.
+    private fun keycap(label: String) = text(label, 12f).apply {
+        setTextColor(Color.rgb(18, 18, 22))
+        setBackgroundColor(Color.rgb(247, 247, 248))
+        gravity = Gravity.CENTER
+        letterSpacing = 0f
+        typeface = Typeface.create("monospace", Typeface.BOLD)
+    }
+
+    private fun controllerLegend(): View {
+        fun control(caps: List<String>, title: String): LinearLayout =
+            LinearLayout(this).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                orientation = LinearLayout.HORIZONTAL
+                for (cap in caps) {
+                    addView(keycap(cap), LinearLayout.LayoutParams(dp(19), dp(19)).apply {
+                        rightMargin = dp(if (caps.size > 1) 3 else 5)
+                    })
+                }
+                addView(text(title, 12f).apply {
+                    letterSpacing = .18f
+                    gravity = Gravity.CENTER_VERTICAL
+                })
+            }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(0, dp(9), 0, dp(7))
+            addView(control(listOf("◀", "▶"), "MOVE"))
+            addView(control(listOf("A"), "OPEN"),
+                LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(36) })
+            addView(control(listOf("B"), "BACK"),
+                LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(36) })
+        }
+    }
+
+    private fun redrawTile(position: Int) {
+        if (position !in entries.indices) return
+        val tile = grid.getChildAt(position - grid.firstVisiblePosition) ?: return
+        val selected = !homeSelected && position == selectedIndex
+        tile.background = plate(
+            if (selected) Color.rgb(68, 66, 77) else Color.rgb(37, 36, 43),
+            selected
         )
-        appsAdapter.notifyDataSetChanged()
-        if (!homeSelected && entries.isNotEmpty()) grid.setSelection(selectedIndex)
+    }
+
+    private fun updateSelection(oldIndex: Int?, oldHome: Boolean) {
+        if (homeSelected != oldHome || oldIndex == null) {
+            homeButton.background = plate(
+                if (homeSelected) Color.rgb(89, 87, 102) else Color.rgb(56, 55, 64),
+                homeSelected
+            )
+        }
+        // Two lightweight drawables only; never notifyDataSetChanged()
+        // or re-fetch launcher icons on controller navigation.
+        oldIndex?.let(::redrawTile)
+        redrawTile(selectedIndex)
+        if (!homeSelected && entries.isNotEmpty() &&
+            (selectedIndex < grid.firstVisiblePosition ||
+             selectedIndex > grid.lastVisiblePosition)) {
+            grid.setSelection(selectedIndex)
+        }
     }
 
     private fun navigate(key: Int) {
+        val oldIndex = selectedIndex
+        val wasHome = homeSelected
         if (homeSelected) {
             if (key == KeyEvent.KEYCODE_DPAD_DOWN && entries.isNotEmpty()) {
                 homeSelected = false
@@ -200,7 +277,9 @@ class AppsActivity : Activity() {
                 else -> selectedIndex
             }
         }
-        updateSelection()
+        if (oldIndex != selectedIndex || wasHome != homeSelected) {
+            updateSelection(oldIndex, wasHome)
+        }
     }
 
     private fun launchSelected() {
