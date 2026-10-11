@@ -100,6 +100,7 @@ class MainActivity : Activity() {
     external fun nativeSuspend()
     external fun nativeIsPlaying(): Boolean
     external fun nativeAudioSampleRate(): Int
+    external fun nativeAudioQueuedMs(): Int
     external fun nativeAudioBufferMs(): Int
     external fun nativeGpuSyncEnabled(): Boolean
     external fun nativeDisplaySyncEnabled(): Boolean
@@ -136,6 +137,9 @@ class MainActivity : Activity() {
     private val activeTargets = ConcurrentHashMap<String, RetroArchStorage.Target>()
     private val uiHandler = Handler(Looper.getMainLooper())
     private val audioRunning = AtomicBoolean(false)
+    // A single pending wakeup is enough. GLSurfaceView never waits for audio.
+    // Prevent an empty-read 8ms sleep from missing a freshly produced frame.
+    private val audioFrameSignal = java.util.concurrent.Semaphore(0)
     private val vibrator by lazy { getSystemService(VIBRATOR_SERVICE) as? Vibrator }
     private var lastRumbleAt = 0L
     @Volatile private var resumed = false
@@ -146,6 +150,7 @@ class MainActivity : Activity() {
     private var displaySyncApplied = false
     @Volatile private var cadenceText = ""
     @Volatile private var audioUnderruns = 0
+    @Volatile private var audioQueuedMs = 0
 
     // Only attach the Choreographer callback while DISPLAY SYNC is selected.
     // Normal RESPONSIVE and STANDARD add no extra work to every UI vsync.
@@ -304,7 +309,7 @@ class MainActivity : Activity() {
                 if (!value.isNullOrBlank()) {
                     val detail = cadenceText
                     val stats = if (detail.isNotBlank())
-                        "$value\n$detail | A-UND $audioUnderruns" else value
+                        "$value\n$detail | A-UND $audioUnderruns | A-Q $audioQueuedMs ms" else value
                     if (performanceHud.text.toString() != stats) performanceHud.text = stats
                     // Opt-in diagnostic stream for ADB capture. The GL thread
                     // computes all counters; UI logging is capped at 1 Hz.
@@ -391,6 +396,11 @@ class MainActivity : Activity() {
                                 cadenceText = ""
                             }
                             nativeDrawFrame()
+                            // Notify the existing AudioTrack worker that libretro
+                            // may have produced samples. Never block GL on audio.
+                            if (audioRunning.get() && nativeIsPlaying() &&
+                                audioFrameSignal.availablePermits() == 0
+                            ) audioFrameSignal.release()
                             // Opt-in GPU fence bounds work queued to GLES; may cost FPS.
                             if (nativeGpuSyncEnabled()) GLES20.glFinish()
                             // Drain on the render thread for frame-accurate insert/eject clicks.
@@ -709,6 +719,7 @@ class MainActivity : Activity() {
 
     private fun startAudio() {
         if (!audioRunning.compareAndSet(false, true)) return
+        audioFrameSignal.drainPermits()
         audioThread = Thread({
             var player: AudioTrack? = null
             var rate = 0
@@ -785,12 +796,25 @@ class MainActivity : Activity() {
                         lastUnderrunPoll = nowAudio
                         // AudioTrack's cumulative underruns since creation.
                         audioUnderruns = player.underrunCount
+                        // App-owned PCM queue only, not AudioTrack/HAL occupancy.
+                        // This 1Hz reading is diagnostic and never changes pacing.
+                        audioQueuedMs = nativeAudioQueuedMs()
                     }
                     val samples = nativeReadAudio()
                     if (samples.isEmpty()) {
-                        SystemClock.sleep(8)
+                        // Event-driven wakeup instead of sleeping blindly for 8ms:
+                        // GLSurfaceView signals after each libretro callback.
+                        // The 30ms timeout is a safety fallback for paused frames.
+                        try {
+                            audioFrameSignal.tryAcquire(30, TimeUnit.MILLISECONDS)
+                        } catch (_: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                            break
+                        }
+                        audioFrameSignal.drainPermits()
                         continue
                     }
+                    audioFrameSignal.drainPermits()
                     player.write(samples, 0, samples.size, AudioTrack.WRITE_BLOCKING)
                 }
             } catch (error: Exception) {
@@ -804,6 +828,8 @@ class MainActivity : Activity() {
 
     private fun stopAudio() {
         audioRunning.set(false)
+        // Unblock the audio worker if it is waiting on a video frame.
+        audioFrameSignal.release()
         audioThread?.interrupt()
         audioThread = null
     }
