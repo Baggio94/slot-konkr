@@ -366,6 +366,7 @@ class CartStudioActivity : Activity() {
     override fun finish() {
         if (changed.get()) setResult(RESULT_CHANGED)
         super.finish()
+        SlotTransitions.close(this)
     }
 
     override fun onDestroy() {
