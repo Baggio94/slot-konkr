@@ -750,6 +750,16 @@ class MainActivity : Activity() {
                     .setMessage("$message\n\nslot. must close to safely stop the old account's RA engine.")
                     .setNegativeButton("Stay signed in", null)
                     .setPositiveButton("Sign out & close slot.") { _, _ ->
+                        val unsavedInMemory = runCatching {
+                            JSONObject(nativeRaStatus() ?: "{}").optBoolean("unsaved", false)
+                        }.getOrDefault(false)
+                        if (unsavedInMemory) {
+                            SlotToast.makeText(this,
+                                "Some achievement records aren't saved yet. " +
+                                    "Sign out is blocked until storage recovers.",
+                                Toast.LENGTH_LONG).show()
+                            return@setPositiveButton
+                        }
                         if (!RaAccount.beginSignOut(filesDir, username)) {
                             SlotToast.makeText(this,
                                 "Can't sign out safely. No awards were changed.",
