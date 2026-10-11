@@ -342,17 +342,18 @@ class MainActivity : Activity() {
             typeface = SlotUi.font(this@MainActivity)
             textSize = 10.5f
             letterSpacing = .05f
-            setTextColor(SlotUi.ink)
-            setBackgroundColor(android.graphics.Color.rgb(23, 22, 25))
+            setTextColor(Color.argb(230, 242, 242, 245))
+            // Subtle translucent HUD; keep the game visible behind it.
+            setBackgroundColor(Color.argb(166, 23, 22, 25))
             setPadding(10, 5, 10, 5)
             isClickable = false
             isFocusable = false
             visibility = View.GONE
         }
         frame.addView(performanceHud,
-            FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply {
-                leftMargin = (12 * resources.displayMetrics.density).toInt()
-                topMargin = (10 * resources.displayMetrics.density).toInt()
+            FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END).apply {
+                rightMargin = (12 * resources.displayMetrics.density).toInt()
+                bottomMargin = (12 * resources.displayMetrics.density).toInt()
             })
         raAchievementOverlay = RaAchievementOverlay(this, frame)
         showSlotStartupSplash(frame)
