@@ -13,6 +13,10 @@ pub const WHOLE_TEXTURE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 pub struct GamePass {
     prog: gl::types::GLuint,
     game: gl::types::GLuint,
+    // Reuse the Android GLES2-compatible RGBA staging pixels each frame.
+    // The old per-frame flat_map().collect() allocated ~150 KiB at 60 Hz.
+    #[cfg(target_os = "android")]
+    rgba_upload: Vec<u8>,
     u_rect: gl::types::GLint,
     u_bright: gl::types::GLint,
     u_uv: gl::types::GLint,
@@ -68,6 +72,8 @@ impl GamePass {
         Ok(GamePass {
             prog,
             game,
+            #[cfg(target_os = "android")]
+            rgba_upload: vec![0; (SRC_W * SRC_H * 4) as usize],
             u_rect,
             u_bright,
             u_uv,
@@ -123,9 +129,18 @@ impl GamePass {
             return;
         }
         #[cfg(target_os = "android")]
-        let rgba: Vec<u8> = xrgb8888.chunks_exact(4).flat_map(|px| [px[2], px[1], px[0], 255]).collect();
+        {
+            // ES2 requires RGBA; the libretro frame arrives as XRGB8888
+            // in little-endian B,G,R,X order. Conversion is still required,
+            // but happens in a persistent buffer without heap churn.
+            for (src, dst) in xrgb8888.chunks_exact(4)
+                .zip(self.rgba_upload.chunks_exact_mut(4))
+            {
+                dst.copy_from_slice(&[src[2], src[1], src[0], 255]);
+            }
+        }
         #[cfg(target_os = "android")]
-        let pixels = rgba.as_ptr();
+        let pixels = self.rgba_upload.as_ptr();
         #[cfg(not(target_os = "android"))]
         let pixels = xrgb8888.as_ptr();
         #[cfg(target_os = "android")]
