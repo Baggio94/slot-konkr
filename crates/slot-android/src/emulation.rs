@@ -24,7 +24,7 @@ impl Default for EmulationProfile {
 impl EmulationProfile {
     pub fn from_settings(settings: &Settings) -> Self {
         Self { show_fps: settings.show_fps,
-            show_fps_override: Some(settings.show_fps),
+            show_fps_override: None,
             responsive_pacing: settings.responsive_pacing,
             display_sync_pacing: settings.display_sync_pacing,
             run_ahead_frames: settings.run_ahead_frames }
@@ -115,7 +115,7 @@ mod tests {
         assert_eq!(old.show_fps_override, None);
         assert!(!old.show_fps);
         let mut profile = EmulationProfile::from_settings(&Settings::default());
-        assert_eq!(profile.show_fps_override, Some(false));
+        assert_eq!(profile.show_fps_override, None);
         assert!(profile.change(10, true));
         assert_eq!(profile.show_fps_override, Some(true));
         assert!(profile.change(10, true));
