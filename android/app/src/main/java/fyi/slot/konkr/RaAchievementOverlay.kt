@@ -181,13 +181,28 @@ internal class RaAchievementOverlay(
     private fun loadBadge(path: String?, seq: Int) {
         if (path.isNullOrBlank()) return
         loader.execute {
-            val bitmap = loadValidatedBadge(path)
-            handler.post {
-                if (seq == serial && !destroyed && bitmap != null) {
-                    badge.setImageBitmap(bitmap)
-                    badge.visibility = View.VISIBLE
-                    badgeFallback.visibility = View.GONE
-                } else bitmap?.recycle()
+            // The native HTTP worker may still be downloading this exact badge.
+            // Retry for a short bounded window, never downloading on UI/GL.
+            for (attempt in 0 until 7) {
+                if (Thread.currentThread().isInterrupted || destroyed || serial != seq) break
+                val bitmap = loadValidatedBadge(path)
+                if (bitmap != null) {
+                    handler.post {
+                        if (seq == serial && !destroyed) {
+                            badge.setImageBitmap(bitmap)
+                            badge.visibility = View.VISIBLE
+                            badgeFallback.visibility = View.GONE
+                        } else bitmap.recycle()
+                    }
+                    break
+                }
+                if (attempt < 6) {
+                    try { Thread.sleep(350L) }
+                    catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        break
+                    }
+                }
             }
         }
     }
