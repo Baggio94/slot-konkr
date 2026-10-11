@@ -680,6 +680,12 @@ impl RetroCore for LibretroCore {
         std::mem::take(&mut self.host.audio)
     }
 
+    fn discard_audio(&mut self) {
+        // Speculative run-ahead audio is intentionally inaudible. Clearing
+        // preserves capacity for the next speculative libretro frame.
+        self.host.audio.clear();
+    }
+
     fn serialize(&mut self) -> Result<Vec<u8>, CoreError> {
         let mut buf = Vec::new();
         self.serialize_into(&mut buf)?;
