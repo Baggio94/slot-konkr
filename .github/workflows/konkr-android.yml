@@ -52,6 +52,22 @@ jobs:
         run: cargo test -p slot-gfx --no-default-features --test konkr
       - name: Test original Slot cartridge fidelity
         run: cargo test -p slot-ui --test cart_material
+      - name: Export authentic Slot keycap graphics for Android Apps
+        run: |
+          cargo run --locked -p slot-ui --example export_apps_legend -- android/app/src/main/assets/apps_controls
+          test -s android/app/src/main/assets/apps_controls/move.png
+          test -s android/app/src/main/assets/apps_controls/open.png
+          test -s android/app/src/main/assets/apps_controls/back.png
+          python3 - <<'PY'
+          from pathlib import Path
+          import struct
+          for name in ('move', 'open', 'back'):
+              data = (Path('android/app/src/main/assets/apps_controls') / f'{name}.png').read_bytes()
+              assert data[:8] == bytes((137, 80, 78, 71, 13, 10, 26, 10))
+              width, height = struct.unpack('>II', data[16:24])
+              assert width > 20 and height == 24, (name, width, height)
+              print(f'Verified authentic Slot legend {name}: {width}x{height}')
+          PY
       - name: Test Android library and shelf selection
         run: cargo test -p slot-android --lib
       - name: Install cargo-ndk
