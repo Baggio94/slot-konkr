@@ -303,10 +303,9 @@ class AppsActivity : Activity() {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            // Midpoint between RC2's tightly fitted band and RC3's 52dp:
-            // keep the actual upstream controller hint PNGs unchanged and
-            // centered on both axes with NO extra internal padding.
-            minimumHeight = dp(46)
+            // Compact 40dp band. Original controller glyphs retain exact sizes/spacing;
+            // Gravity.CENTER keeps them centred both horizontally and vertically.
+            minimumHeight = dp(40)
             setPadding(0, 0, 0, 0)
             addView(hint("move"))
             val open = hint("open")
