@@ -92,7 +92,7 @@ internal class RaPanelDialog(
         root.addView(separator(), LinearLayout.LayoutParams(-1, dp(1)))
         val scroll = ScrollView(activity).apply {
             isFillViewport = false
-            verticalScrollBarEnabled = false
+            isVerticalScrollBarEnabled = false
             clipToPadding = false
         }
         content = LinearLayout(activity).apply {
