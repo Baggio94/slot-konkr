@@ -222,12 +222,19 @@ class CartStudioActivity : Activity() {
             setTextColor(SlotUi.ink)
             gravity = Gravity.CENTER
         }
-        // Separate the back, title and actions into non-overlapping regions.
-        val headerRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        toolbar.addView(headerRow, FrameLayout.LayoutParams(-1, -1))
+        // Absolute center of the complete 960px screen, unaffected by the
+        // independent widths of the back button and right-side action.
+        // A bounded title area prevents a long translated label overlapping
+        // the surrounding controls.
+        val titleWidth = minOf(
+            (resources.displayMetrics.widthPixels * .28f).toInt(),
+            (240 * resources.displayMetrics.density + .5f).toInt()
+        )
+        title.isSingleLine = true
+        title.ellipsize = android.text.TextUtils.TruncateAt.END
+        toolbar.addView(title, FrameLayout.LayoutParams(
+            titleWidth, -1, Gravity.CENTER
+        ))
         val close = TextView(this).apply {
             text = "‹  slot."
             typeface = SlotUi.font(this@CartStudioActivity)
@@ -240,19 +247,14 @@ class CartStudioActivity : Activity() {
             contentDescription = "Close Cart Studio and return to Slot"
         }
         val backWidth = (116 * resources.displayMetrics.density + 0.5f).toInt()
-        headerRow.addView(close, LinearLayout.LayoutParams(backWidth, -1))
-        title.apply {
-            isSingleLine = true
-            ellipsize = android.text.TextUtils.TruncateAt.END
-            gravity = Gravity.CENTER
-        }
-        headerRow.addView(title, LinearLayout.LayoutParams(0, -1, 1f))
+        toolbar.addView(close, FrameLayout.LayoutParams(backWidth, -1, Gravity.START))
         // Native header actions stay visible as the shelf scrolls. The
         // original Studio owns their enabled state and action semantics.
         val density = resources.displayMetrics.density
-        val toolbarButtons = LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            orientation = LinearLayout.HORIZONTAL
+        // Only ONE action is visible: Save (dirty) takes priority, otherwise
+        // Fill (unlabelled available). Both share the exact same right-aligned
+        // slot, so appearance/disappearance never moves the centered title.
+        val toolbarButtons = FrameLayout(this).apply {
             setPadding(0, 0, (10 * density).toInt(), 0)
         }
         fun action(label: String, pale: Boolean): TextView {
@@ -276,11 +278,16 @@ class CartStudioActivity : Activity() {
         }
         val fill = action("Fill unlabelled", false)
         val save = action("Save to slot.", true)
-        toolbarButtons.addView(fill, LinearLayout.LayoutParams(-2, (34 * density).toInt()).apply {
-            rightMargin = (8 * density).toInt()
-        })
-        toolbarButtons.addView(save, LinearLayout.LayoutParams(-2, (34 * density).toInt()))
-        headerRow.addView(toolbarButtons, LinearLayout.LayoutParams(-2, -1))
+        val actionLayout = FrameLayout.LayoutParams(
+            -2, (34 * density).toInt(), Gravity.END or Gravity.CENTER_VERTICAL
+        )
+        toolbarButtons.addView(fill, actionLayout)
+        toolbarButtons.addView(save, FrameLayout.LayoutParams(
+            -2, (34 * density).toInt(), Gravity.END or Gravity.CENTER_VERTICAL
+        ))
+        toolbar.addView(toolbarButtons, FrameLayout.LayoutParams(
+            -2, -1, Gravity.END or Gravity.CENTER_VERTICAL
+        ))
         fill.setOnClickListener {
             w.evaluateJavascript("document.getElementById('fill-open')?.click()", null)
         }
@@ -307,7 +314,7 @@ class CartStudioActivity : Activity() {
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) {
                         save.visibility = if (canSave) View.VISIBLE else View.INVISIBLE
-                        fill.visibility = if (canFill) View.VISIBLE else View.INVISIBLE
+                        fill.visibility = if (!canSave && canFill) View.VISIBLE else View.INVISIBLE
                     }
                 }
             }
