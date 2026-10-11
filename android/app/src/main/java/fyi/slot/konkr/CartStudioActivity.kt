@@ -222,7 +222,12 @@ class CartStudioActivity : Activity() {
             setTextColor(SlotUi.ink)
             gravity = Gravity.CENTER
         }
-        toolbar.addView(title, FrameLayout.LayoutParams(-1, -1))
+        // Separate the back, title and actions into non-overlapping regions.
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        toolbar.addView(headerRow, FrameLayout.LayoutParams(-1, -1))
         val close = TextView(this).apply {
             text = "‹  slot."
             typeface = SlotUi.font(this@CartStudioActivity)
@@ -235,7 +240,13 @@ class CartStudioActivity : Activity() {
             contentDescription = "Close Cart Studio and return to Slot"
         }
         val backWidth = (116 * resources.displayMetrics.density + 0.5f).toInt()
-        toolbar.addView(close, FrameLayout.LayoutParams(backWidth, -1, Gravity.START))
+        headerRow.addView(close, LinearLayout.LayoutParams(backWidth, -1))
+        title.apply {
+            isSingleLine = true
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER
+        }
+        headerRow.addView(title, LinearLayout.LayoutParams(0, -1, 1f))
         // Native header actions stay visible as the shelf scrolls. The
         // original Studio owns their enabled state and action semantics.
         val density = resources.displayMetrics.density
@@ -258,7 +269,8 @@ class CartStudioActivity : Activity() {
                     setColor(if (pale) SlotUi.ink else SlotUi.surface)
                     cornerRadius = 4 * density
                 }
-                visibility = View.GONE
+                // Keep measured widths even when hidden; prevent action jumps.
+                visibility = View.INVISIBLE
                 isFocusable = true
             }
         }
@@ -268,8 +280,7 @@ class CartStudioActivity : Activity() {
             rightMargin = (8 * density).toInt()
         })
         toolbarButtons.addView(save, LinearLayout.LayoutParams(-2, (34 * density).toInt()))
-        toolbar.addView(toolbarButtons,
-            FrameLayout.LayoutParams(-2, -1, Gravity.END or Gravity.CENTER_VERTICAL))
+        headerRow.addView(toolbarButtons, LinearLayout.LayoutParams(-2, -1))
         fill.setOnClickListener {
             w.evaluateJavascript("document.getElementById('fill-open')?.click()", null)
         }
@@ -295,8 +306,8 @@ class CartStudioActivity : Activity() {
             fun actions(canSave: Boolean, canFill: Boolean) {
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) {
-                        save.visibility = if (canSave) View.VISIBLE else View.GONE
-                        fill.visibility = if (canFill) View.VISIBLE else View.GONE
+                        save.visibility = if (canSave) View.VISIBLE else View.INVISIBLE
+                        fill.visibility = if (canFill) View.VISIBLE else View.INVISIBLE
                     }
                 }
             }
