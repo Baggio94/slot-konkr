@@ -62,8 +62,8 @@ class AppsActivity : Activity() {
 
     private fun plate(color: Int, selected: Boolean = false) = GradientDrawable().apply {
         setColor(color)
-        cornerRadius = dp(8).toFloat()
-        if (selected) setStroke(dp(2), Color.rgb(228, 226, 236))
+        cornerRadius = dp(4).toFloat()
+        if (selected) setStroke(dp(2), SlotUi.ink)
     }
 
     private fun loadApps() {
