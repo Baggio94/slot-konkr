@@ -147,6 +147,7 @@ static FF_AUDIO_ENABLED: AtomicBool = AtomicBool::new(true);
 static RUMBLE_STRENGTH: AtomicI32 = AtomicI32::new(0);
 // Updated once per second by the GL thread; read-only and optional on Android.
 static PERF_STATUS: Mutex<Option<String>> = Mutex::new(None);
+static PERF_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone)]
 struct SystemStatus {
@@ -1996,6 +1997,7 @@ impl Engine {
         // FPS is a *real* libretro simulation measurement, not the display
         // refresh rate; the separate draw rate reveals missed vsyncs.
         if self.game.is_some() && self.settings.show_fps {
+            PERF_ACTIVE.store(true, Ordering::Release);
             self.perf_rendered += 1;
             let span = self.perf_last.elapsed().as_secs_f64();
             if span >= 1.0 {
@@ -2016,7 +2018,9 @@ impl Engine {
             self.perf_rendered = 0;
             self.perf_emulated = 0;
             self.perf_catchup = 0;
-            *PERF_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            if PERF_ACTIVE.swap(false, Ordering::AcqRel) {
+                *PERF_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            }
         }
 
         let events: Vec<Input> = INPUT
