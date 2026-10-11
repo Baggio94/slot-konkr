@@ -302,8 +302,13 @@ internal class SlotStatusIndicators(
             show(basicsync, if (basicRunning && basicStateKnown &&
                     now - lastBasicResponse < 45000L) "basicsync_running"
                 else "basicsync_stopped", installedBasic)
-            show(syncthing, if (syncthingRunning) "syncthing_running"
-                else "syncthing_stopped", installedSyncthing)
+            // BasicSync and Syncthing-Fork may expose a local Syncthing
+            // daemon on the same default port. A healthy port owned by
+            // BasicSync is NOT proof the Fork itself is running.
+            val basicOwnsDefaultPort = installedBasic && basicStateKnown &&
+                basicRunning && now - lastBasicResponse < 45000L
+            show(syncthing, if (syncthingRunning && !basicOwnsDefaultPort)
+                "syncthing_running" else "syncthing_stopped", installedSyncthing)
             val state = runCatching {
                 JSONObject(raRaw ?: "{}").optString("state", "Disabled")
             }.getOrDefault("Disabled")
