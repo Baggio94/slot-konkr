@@ -305,9 +305,13 @@ internal class SlotStatusIndicators(
             // BasicSync and Syncthing-Fork may expose a local Syncthing
             // daemon on the same default port. A healthy port owned by
             // BasicSync is NOT proof the Fork itself is running.
-            val basicOwnsDefaultPort = installedBasic && basicStateKnown &&
-                basicRunning && now - lastBasicResponse < 45000L
-            show(syncthing, if (syncthingRunning && !basicOwnsDefaultPort)
+            // When BasicSync is also installed, its own daemon may own
+            // port 8384. Attribute that health check to Syncthing-Fork
+            // only after BasicSync has explicitly reported NOT RUNNING.
+            val forkHealthAttributable = !installedBasic ||
+                (basicStateKnown && !basicRunning &&
+                    now - lastBasicResponse < 45000L)
+            show(syncthing, if (syncthingRunning && forkHealthAttributable)
                 "syncthing_running" else "syncthing_stopped", installedSyncthing)
             val state = runCatching {
                 JSONObject(raRaw ?: "{}").optString("state", "Disabled")
