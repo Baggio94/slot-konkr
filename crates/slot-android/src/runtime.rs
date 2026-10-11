@@ -151,6 +151,9 @@ static RUMBLE_STRENGTH: AtomicI32 = AtomicI32::new(0);
 // Updated once per second by the GL thread; read-only and optional on Android.
 static PERF_STATUS: Mutex<Option<String>> = Mutex::new(None);
 static PERF_ACTIVE: AtomicBool = AtomicBool::new(false);
+// Read-only status bar snapshot for Android's upper shelf overlays.
+// Updated on the GL thread alongside the *existing* Slot footer gate.
+static SHELF_INDICATOR_FLAGS: AtomicI32 = AtomicI32::new(0);
 
 #[derive(Clone)]
 struct SystemStatus {
@@ -200,6 +203,7 @@ enum ShelfOverlay {
     ScreenSettings { row: usize },
     GameplaySettings { row: usize },
     EmulationSettings { row: usize },
+    InterfaceSettings { row: usize },
     GameEmulationSettings { row: usize },
     Personalization { row: usize },
     About,
@@ -210,7 +214,7 @@ enum ShelfOverlay {
     States,
 }
 
-const MENU_TEXT: [&str; 58] = [
+const MENU_TEXT: [&str; 63] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -269,6 +273,11 @@ const MENU_TEXT: [&str; 58] = [
     "Run-Ahead",                        // 55
     "GAME EMULATION",                   // 56
     "Reset to global",                  // 57
+    "Interface",                        // 58
+    "INTERFACE",                        // 59
+    "Wi-Fi",                            // 60
+    "Bluetooth",                        // 61
+    "App Integrations",                 // 62
 ];
 
 struct Engine {
@@ -1223,18 +1232,28 @@ impl Engine {
                             },
                             ShelfOverlay::Settings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::Settings {
-                                    row: move_menu_row(row, code, 4),
+                                    row: move_menu_row(row, code, 5),
                                 },
                                 96 => match row {
                                     0 => self.overlay = ShelfOverlay::ScreenSettings { row: 0 },
                                     1 => self.overlay = ShelfOverlay::GameplaySettings { row: 0 },
                                     2 => self.overlay = ShelfOverlay::EmulationSettings { row: 0 },
+                                    3 => self.overlay = ShelfOverlay::InterfaceSettings { row: 0 },
                                     _ => {
                                         self.refresh_customize_items();
                                         self.overlay = ShelfOverlay::Personalization { row: 0 };
                                     }
                                 },
                                 97 => self.overlay = ShelfOverlay::Menu { row: 4 },
+                                108 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
+                            ShelfOverlay::InterfaceSettings { row } => match code {
+                                19 | 20 => self.overlay = ShelfOverlay::InterfaceSettings {
+                                    row: move_menu_row(row, code, 3),
+                                },
+                                21 | 22 => self.change_setting(row + 13, code == 22),
+                                97 => self.overlay = ShelfOverlay::Settings { row: 3 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -1772,6 +1791,9 @@ impl Engine {
             11 => if profile.display_sync_pacing { 14 }
                 else if profile.responsive_pacing { 11 } else { 10 },
             12 => match profile.run_ahead_frames { 1 => 12, 2 => 13, _ => 5 },
+            13 => if self.settings.show_wifi { 4 } else { 5 },
+            14 => if self.settings.show_bluetooth { 4 } else { 5 },
+            15 => if self.settings.show_integrations { 4 } else { 5 },
             _ => 5,
         }
     }
@@ -1872,7 +1894,11 @@ impl Engine {
                 self.draw_original_style_menu(5, &[6, 24, 7, 8, 9], row, out);
             }
             ShelfOverlay::Settings { row } => {
-                self.draw_original_style_menu(26, &[32, 33, 49, 40], row, out);
+                self.draw_original_style_menu(26, &[32, 33, 49, 58, 40], row, out);
+            }
+            ShelfOverlay::InterfaceSettings { row } => {
+                self.draw_original_style_menu(59, &[60, 61, 62], row, out);
+                self.draw_setting_values(row, &[13, 14, 15], out);
             }
             ShelfOverlay::EmulationSettings { row } => {
                 self.draw_original_style_menu(50, &[51, 52, 55], row, out);
@@ -2151,7 +2177,8 @@ impl Engine {
             ShelfOverlay::Menu { row } => (1u8, row, 6usize),
             ShelfOverlay::Library { row } => (2u8, row, 5usize),
             ShelfOverlay::GameMenu { row } => (3u8, row, 3usize),
-            ShelfOverlay::Settings { row } => (4u8, row, 4usize),
+            ShelfOverlay::Settings { row } => (4u8, row, 5usize),
+            ShelfOverlay::InterfaceSettings { row } => (10u8, row, 3usize),
             ShelfOverlay::EmulationSettings { row } => (8u8, row, 3usize),
             ShelfOverlay::GameEmulationSettings { row } => (9u8, row, 4usize),
             ShelfOverlay::ScreenSettings { row } => (5u8, row, 4usize),
@@ -2492,10 +2519,19 @@ impl Engine {
             .draw(&mut commands);
         }
         self.draw_overlay(&mut commands);
-        if self.progress == 0.0 && matches!(self.overlay, ShelfOverlay::None) {
+        // Keep the upper indicators on the identical visibility lifecycle
+        // as Slot's footer: only on an idle, menu-free cartridge carousel.
+        let chrome = self.progress == 0.0 && matches!(self.overlay, ShelfOverlay::None);
+        let mut indicator_flags = 0;
+        if chrome {
+            indicator_flags |= 1; // show upper indicators
+            if self.settings.show_wifi { indicator_flags |= 2; }
+            if self.settings.show_bluetooth { indicator_flags |= 4; }
+            if self.settings.show_integrations { indicator_flags |= 8; }
             draw_footer(self.battery, self.battery_face,
                 Some(self.bolt_texture), self.clock_face, &mut commands);
         }
+        SHELF_INDICATOR_FLAGS.store(indicator_flags, Ordering::Release);
         self.gpu.fit(self.size);
         self.gpu.begin_frame();
         self.gpu.draw_list(&commands);
@@ -2915,6 +2951,13 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDisplaySyncEnabled
 ) -> jboolean {
     if DISPLAY_SYNC.load(Ordering::Acquire) { 1 } else { 0 }
 }
+
+/// Bitmask: bit0 carousel idle, bit1 Wi-Fi, bit2 Bluetooth,
+/// bit3 integrations. Never query the GL-only Engine from the UI thread.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeShelfIndicatorFlags(
+    _env: *mut c_void, _this: *mut c_void,
+) -> jint { SHELF_INDICATOR_FLAGS.load(Ordering::Acquire) }
 
 /// Null when show-FPS is OFF, the game is not running or measurement isn't ready.
 #[unsafe(no_mangle)]
