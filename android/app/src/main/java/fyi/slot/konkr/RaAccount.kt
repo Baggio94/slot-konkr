@@ -4,6 +4,7 @@ import android.system.Os
 import android.util.AtomicFile
 import java.io.File
 import java.io.IOException
+import java.io.ByteArrayOutputStream
 import java.net.URLEncoder
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
@@ -84,8 +85,22 @@ internal object RaAccount {
             if (connection.responseCode != 200) {
                 return Result.Failed("RetroAchievements is unavailable. Try again online.")
             }
-            val payload = connection.inputStream.use { it.readNBytes(LIMIT + 1) }
-            if (payload.isEmpty() || payload.size > LIMIT) {
+            // API 31 does not guarantee Java 9 InputStream.readNBytes().
+            // Read with a hard cap without depending on newer Android APIs.
+            val payload = connection.inputStream.use { stream ->
+                val bytes = ByteArrayOutputStream()
+                val chunk = ByteArray(4096)
+                while (true) {
+                    val count = stream.read(chunk)
+                    if (count < 0) break
+                    if (bytes.size() + count > LIMIT) {
+                        return Result.Failed("Unexpected RetroAchievements response.")
+                    }
+                    bytes.write(chunk, 0, count)
+                }
+                bytes.toByteArray()
+            }
+            if (payload.isEmpty()) {
                 return Result.Failed("Unexpected RetroAchievements response.")
             }
             val reply = JSONObject(String(payload, Charsets.UTF_8))
