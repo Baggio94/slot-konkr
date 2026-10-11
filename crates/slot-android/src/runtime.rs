@@ -114,14 +114,18 @@ static RA_NOTICES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static RA_STATUS: Mutex<Option<String>> = Mutex::new(None);
 const RA_NOTICE_LIMIT: usize = 8;
 
-fn ra_notice_payload(title: &str, detail: &str, earned: bool) -> String {
+fn ra_notice_payload(title: &str, detail: &str, earned: bool, badge: Option<&Path>) -> String {
     let clean = |value: &str, limit: usize| -> String {
         value.chars().filter(|ch| !ch.is_control()).take(limit).collect()
     };
+    // BadgeName is validated by slot_achievements::badges::path before being
+    // attached to Notice. Android must still verify canonical app-private path
+    // before reading the image. Empty means fall back to a Slot glyph.
     serde_json::json!({
         "title": clean(title, 100),
         "detail": clean(detail, 160),
         "earned": earned,
+        "badge": badge.and_then(|path| path.to_str()).unwrap_or(""),
     }).to_string()
 }
 
@@ -1922,6 +1926,7 @@ impl Engine {
                 let payload = ra_notice_payload(
                     &notice.title, &notice.detail,
                     notice.kind == slot_achievements::NoticeKind::Earned,
+                    notice.badge.as_deref(),
                 );
                 let mut queue = RA_NOTICES.lock().unwrap_or_else(|e| e.into_inner());
                 queue_ra_notice(&mut queue, payload);
@@ -2406,12 +2411,13 @@ mod ui_feedback_tests {
 
     #[test]
     fn ra_notice_bridge_removes_control_characters_and_bounds_payload() {
-        let text = ra_notice_payload(&("X".repeat(200) + "\nsecret"), "Line\rTwo", true);
+        let text = ra_notice_payload(&("X".repeat(200) + "\nsecret"), "Line\rTwo", true, None);
         let data: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(data["title"].as_str().unwrap().chars().count(), 100);
         assert!(!data["title"].as_str().unwrap().contains("secret"));
         assert_eq!(data["detail"], "LineTwo");
         assert_eq!(data["earned"], true);
+        assert_eq!(data["badge"], "");
     }
 
     #[test]
