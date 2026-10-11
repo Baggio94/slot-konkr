@@ -20,12 +20,23 @@ if [ "$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)" != "$PIN" ]; then
   git -C "$SRC" fetch --depth=1 origin "$PIN"
   git -C "$SRC" checkout --detach -q FETCH_HEAD
 fi
+# Preserve only transient mixer data for speculative rollbacks; persistent
+# libretro/RetroArch save-state format stays exactly as pinned upstream.
+python3 "$ROOT/scripts/patch-gpsp-speculative-audio.py" "$SRC"
 make -C "$SRC" -j4 platform=arm64 \
   CC="$LLVM/aarch64-linux-android31-clang" \
   CXX="$LLVM/aarch64-linux-android31-clang++" \
   AR="$LLVM/llvm-ar"
 CORE="$SRC/gpsp_libretro.so"
 [ -s "$CORE" ] || { echo "Missing gpSP libretro library" >&2; exit 1; }
+# The sidecar must actually be exported through gpSP's version script.
+SYMBOLS="$("$LLVM/llvm-nm" -D --defined-only "$CORE")"
+for symbol in slot_gpsp_audio_sidecar slot_gpsp_audio_sidecar_size; do
+  grep -q " $symbol$" <<< "$SYMBOLS" || {
+    echo "Missing required gpSP speculative-audio symbol: $symbol" >&2
+    exit 1
+  }
+done
 DEST="$ROOT/android/app/src/main/jniLibs/arm64-v8a"
 mkdir -p "$DEST"
 cp "$CORE" "$DEST/libgpsp_libretro.so"
