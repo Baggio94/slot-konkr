@@ -157,6 +157,7 @@ internal class RaPanelDialog(
         dialog.setContentView(root)
         dialog.show()
         dialog.window?.apply {
+            setWindowAnimations(R.style.SlotWindowAnimation)
             setBackgroundDrawable(ColorDrawable(Color.rgb(23, 22, 25)))
             addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
             setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
