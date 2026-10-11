@@ -527,8 +527,12 @@ impl LibretroCore {
         if !self.loaded {
             return;
         }
-        let _a = Active::bind(&mut self.host);
-        unsafe { (self.api.unload_game)() };
+        {
+            let _a = Active::bind(&mut self.host);
+            unsafe { (self.api.unload_game)() };
+        }
+        // Release the borrowed descriptor pointers only after libretro
+        // returns and Active drops its exclusive Host borrow.
         self.host.memory.clear();
         self.loaded = false;
     }
