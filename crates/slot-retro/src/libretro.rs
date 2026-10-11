@@ -396,8 +396,20 @@ unsafe extern "C" fn input_state(port: c_uint, device: c_uint, _index: c_uint, i
     .unwrap_or(0)
 }
 
+// Frontend-private gpSP ABI. The 256 KiB audio ring and fractional
+// accumulator live here only during frame speculation, not in .state files.
+type GpspAudioSidecarFn = unsafe extern "C" fn(*mut c_void, usize, bool) -> bool;
+type GpspAudioSidecarSizeFn = unsafe extern "C" fn() -> usize;
+struct GpspAudioSidecar {
+    transfer: GpspAudioSidecarFn,
+    snapshot: Vec<u8>,
+    captured: bool,
+}
+
 pub struct LibretroCore {
     api: Api,
+    is_gpsp: bool,
+    gpsp_audio: Option<GpspAudioSidecar>,
     host: Box<Host>,
     rom: Vec<u8>,
     rom_path: Option<CString>,
@@ -477,6 +489,31 @@ impl LibretroCore {
     fn open_inner(dylib: &Path, system_dir: &Path, save_dir: &Path) -> Result<Self, CoreError> {
         let lib = unsafe { Library::new(dylib) }.map_err(|e| CoreError::Load(e.to_string()))?;
         let api = unsafe { Api::load(&lib) }?;
+        let is_gpsp = dylib.file_name().and_then(|name| name.to_str())
+            == Some("libgpsp_libretro.so");
+        // An unpatched/foreign gpSP must not run speculative frames: core
+        // savestates intentionally omit its audio mixer ring.
+        let gpsp_audio = if is_gpsp {
+            let size_fn = unsafe {
+                lib.get::<GpspAudioSidecarSizeFn>(b"slot_gpsp_audio_sidecar_size\0")
+            };
+            let transfer = unsafe {
+                lib.get::<GpspAudioSidecarFn>(b"slot_gpsp_audio_sidecar\0")
+            };
+            match (size_fn, transfer) {
+                (Ok(size_fn), Ok(transfer)) => {
+                    let size = unsafe { (*size_fn)() };
+                    if (4..=512 * 1024).contains(&size) {
+                        Some(GpspAudioSidecar {
+                            transfer: *transfer,
+                            snapshot: vec![0; size],
+                            captured: false,
+                        })
+                    } else { None }
+                }
+                _ => None,
+            }
+        } else { None };
         let version = unsafe { (api.api_version)() };
         if version != API_VERSION {
             return Err(CoreError::Unsupported(format!("libretro api {version}")));
@@ -511,6 +548,8 @@ impl LibretroCore {
         }
         Ok(LibretroCore {
             api,
+            is_gpsp,
+            gpsp_audio,
             host,
             rom: Vec::new(),
             rom_path: None,
@@ -717,6 +756,41 @@ impl RetroCore for LibretroCore {
         } else {
             Err(CoreError::State("unserialize refused".into()))
         }
+    }
+
+    fn speculative_audio_supported(&self) -> bool {
+        !self.is_gpsp || self.gpsp_audio.is_some()
+    }
+
+    fn capture_speculative_audio(&mut self) -> Result<(), CoreError> {
+        if !self.is_gpsp { return Ok(()); }
+        let state = self.gpsp_audio.as_mut().ok_or_else(|| {
+            CoreError::Unsupported("gpSP Run-Ahead needs the audio sidecar".into())
+        })?;
+        state.captured = false;
+        let ok = unsafe {
+            (state.transfer)(state.snapshot.as_mut_ptr().cast(),
+                state.snapshot.len(), false)
+        };
+        if !ok { return Err(CoreError::State("gpSP audio capture failed".into())); }
+        state.captured = true;
+        Ok(())
+    }
+
+    fn restore_speculative_audio(&mut self) -> Result<(), CoreError> {
+        if !self.is_gpsp { return Ok(()); }
+        let state = self.gpsp_audio.as_mut().ok_or_else(|| {
+            CoreError::Unsupported("gpSP Run-Ahead needs the audio sidecar".into())
+        })?;
+        if !state.captured {
+            return Err(CoreError::State("missing gpSP speculative audio snapshot".into()));
+        }
+        state.captured = false;
+        let ok = unsafe {
+            (state.transfer)(state.snapshot.as_mut_ptr().cast(),
+                state.snapshot.len(), true)
+        };
+        if ok { Ok(()) } else { Err(CoreError::State("gpSP audio restore failed".into())) }
     }
 
     fn save_ram(&self) -> Option<Vec<u8>> {
