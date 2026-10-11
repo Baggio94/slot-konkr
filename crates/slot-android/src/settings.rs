@@ -146,6 +146,19 @@ pub fn frame_debt(prev: f64, elapsed: f64, speed: f64, period: f64,
     (prev + elapsed * speed).min(max)
 }
 
+/// Experimental DISPLAY SYNC pacing: keep up to 0.95 frame of carry-over
+/// after one simulation step. A 60Hz display can jitter around 59.7275Hz
+/// and dropping this fractional debt can cause permanent slow emulation.
+/// This is deliberately *not* the Beta 4 two-step catch-up mode:
+/// the engine still executes at most ONE real frame per GL callback.
+/// Return (bounded debt, intentionally discarded debt in frame units).
+pub fn frame_debt_display_sync(prev: f64, elapsed: f64, speed: f64,
+                               period: f64) -> (f64, f64) {
+    let limit = period * 1.95;
+    let proposed = prev + elapsed * speed;
+    ((proposed).min(limit), (proposed - limit).max(0.0) / period)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,6 +186,56 @@ mod tests {
             }
             assert!(frames <= 1);
         }
+    }
+
+    #[test]
+    fn display_sync_preserves_more_fractional_time_without_multi_frame_catchup() {
+        let period = 1.0 / 59.7275;
+        let mut beta7_debt = 0.0;
+        let mut beta8_debt = 0.0;
+        let mut beta7_frames = 0u32;
+        let mut beta8_frames = 0u32;
+        let mut beta8_lost = 0.0;
+        // A reproducible 60Hz callback sequence with small scheduler jitter
+        // and an occasional missed vsync, not a GPU throughput benchmark.
+        for i in 0..6000 {
+            let mut elapsed = 1.0 / 60.0;
+            if i % 8 == 0 { elapsed += 0.0018; }
+            if i % 8 == 1 || i % 8 == 2 { elapsed -= 0.001; }
+            if i % 240 == 27 { elapsed += 1.0 / 60.0; }
+            beta7_debt = frame_debt(beta7_debt, elapsed, 1.0, period, false, true);
+            let (debt, lost) =
+                frame_debt_display_sync(beta8_debt, elapsed, 1.0, period);
+            beta8_debt = debt;
+            beta8_lost += lost;
+            // Both profiles have the same *single-frame* work limit.
+            if beta7_debt >= period {
+                beta7_debt -= period;
+                beta7_frames += 1;
+            }
+            if beta8_debt >= period {
+                beta8_debt -= period;
+                beta8_frames += 1;
+            }
+            assert!(beta8_debt < period);
+            assert!(beta8_debt >= 0.0);
+        }
+        assert!(beta8_frames > beta7_frames,
+            "do not discard extra fractions of emulation time");
+        assert!(beta8_frames - beta7_frames < 100,
+            "this must never simulate large catch-up bursts");
+        assert!(beta8_lost > 0.0,
+            "diagnostic must measure debt lost even at bounded catch-up");
+    }
+
+    #[test]
+    fn display_sync_drops_large_hitches_without_overrunning_input() {
+        let period = 1.0 / 59.7275;
+        let (debt, dropped) = frame_debt_display_sync(
+            period * 0.2, period * 10.0, 1.0, period);
+        assert!((debt - period * 1.95).abs() < 1e-9);
+        assert!(dropped > 8.0);
+        assert_eq!(frame_debt_display_sync(0.0, 0.0, 1.0, period), (0.0, 0.0));
     }
 
     #[test]
