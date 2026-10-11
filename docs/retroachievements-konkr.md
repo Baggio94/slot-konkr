@@ -255,3 +255,44 @@ The Android UI retries without blocking for up to ~2.5 s; if storage
 never becomes ready, sign-out is cancelled and no account records are changed.
 Game-active/logout collision is blocked. This covers recent unlocks that
 arrive just before eject. Re-login requires an online RA credential exchange.
+
+## 11 October — RetroArch-inspired on-screen achievement widget
+
+After the user's GBA index showed 115 ROMs and 115 cached patch JSON files, the
+first-party target is a genuinely RetroArch-inspired popup, not Android's stock
+Toast. Upstream RetroArch's `rcheevos_show_achievement_popup` composes a
+localized unlock title, achievement name/points and badge art (recent builds
+optionally add rarity %). See the original implementation:
+https://github.com/libretro/RetroArch/blob/master/cheevos/cheevos.c
+
+**Native + Android implementation (PR #4, hardware acceptance pending):**
+
+- The existing Rust `slot_achievements::Notice` already provides `badge: Option<PathBuf>`
+  from a strict `BadgeName` validator; JNI now includes this as a separate
+  optional field in its bounded JSON notice. Achievement title/description
+  and original sync-pending meaning remain unchanged.
+- `RaAchievementOverlay.kt` replaces the short Android system Toast with a
+  non-focusable, non-clickable **top-left card inside the Activity's own
+  FrameLayout**. It shows the cached achievement badge (if present), original
+  Slot OFL `label.ttf`, soft Slot charcoal card, an animated arrival/exit,
+  achievement title (+points), description, and explicit **SYNC PENDING**.
+  Non-earned status notices use a smaller header and no unrelated image.
+- Badge decoder works on a dedicated low-priority I/O executor (never UI/GL or
+  emulation worker), validates canonical path under app-private
+  `Saves/RetroAchievements`, only allows direct badge PNGs and enforces
+  128 KiB/256px limits; when the badge isn't cached the card gracefully uses
+  a placeholder, not a network fetch on the renderer. Offline achievement
+  generation and pending-award persistence are untouched.
+- UI queue is bounded, gives priority to earned rewards if multiple status
+  messages arrive, drains at most four notices per 100ms pulse, and disposes
+  bitmap loader/callbacks on Activity destroy. No notification channel,
+  overlay/special permission or background service.
+- No rarity percentage is shown: the current native schema does not include
+  rarity. **Never fabricate one**. Future feature after RA API verification.
+
+**Tests on real KONKR required:** award in mGBA/gpSP online and offline,
+confirm art when badge cache has actual PNG and graceful placeholder when not;
+correct top-left placement and legibility at 960x640; no controller input loss;
+multiple queued wins/rapid sync; app background/foreground and destroy;
+verify the same earned award is still written to the account ledger and uploads
+once on connectivity restore. Keep PR DRAFT until accepted.
