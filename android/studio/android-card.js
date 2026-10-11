@@ -75,13 +75,19 @@ export function fromAndroid(bridge) {
       });
     }
   }
-  // X path: prioritize its CRC/header before the background catalog sweep.
-  // START path keeps upstream library order and platform tabs.
+  // Alphabetical order only affects presentation, never the ROM identity,
+  // No-Intro CRC, private label key or save target. Keep a predictable
+  // case/accent-insensitive order within each original Studio platform tab.
   const selectedKey = data.selectedKey || '';
-  if (selectedKey) {
-    carts.sort((a, b) => Number(b.slotId === selectedKey) -
-                         Number(a.slotId === selectedKey));
-  }
+  const compareTitles = new Intl.Collator(undefined, {
+    usage: 'sort', sensitivity: 'base', numeric: true,
+  });
+  carts.sort((a, b) =>
+    compareTitles.compare(a.stem, b.stem) ||
+    a.stem.localeCompare(b.stem) ||
+    a.slotId.localeCompare(b.slotId));
+  // X still opens directly on the selected game by opaque key; sorting does
+  // not change this selection (the full catalog path has no selected key).
   return {
     carts,
     labels,
