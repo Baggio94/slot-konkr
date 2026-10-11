@@ -120,22 +120,15 @@ pub fn cycle_audio(value: u16, right: bool) -> u16 {
 }
 
 /// Model of the frame-debt clamp. STANDARD retains RC3 behavior.
-/// RESPONSIVE keeps no more than 2.5 frames of debt so a skipped vsync
-/// can be recovered with at most one additional libretro frame. A strict
-/// one-frame cap permanently under-ran on displays a little below 60 Hz.
+/// RC4 Beta 5 restores the RC4 Beta 3 RESPONSIVE behavior requested after
+/// on-device testing: never allow more than 1.5 frame periods of debt and
+/// never execute more than one real emulation frame per display callback.
 pub fn frame_debt(prev: f64, elapsed: f64, speed: f64, period: f64,
                   fast: bool, responsive: bool) -> f64 {
     let max = if fast { 0.40 }
-        else if responsive { period * 2.5 }
+        else if responsive { period * 1.5 }
         else { 0.10 };
     (prev + elapsed * speed).min(max)
-}
-
-/// Normally render one simulation frame per display frame in RESPONSIVE.
-/// Permit one *occasional* catch-up only when a whole second frame is due.
-/// Unlike STANDARD this can never issue 3-4 delayed simulation frames.
-pub fn responsive_frame_budget(debt: f64, period: f64) -> usize {
-    if debt >= period * 2.0 { 2 } else { 1 }
 }
 
 #[cfg(test)]
@@ -145,29 +138,26 @@ mod tests {
     fn responsive_pacing_rejects_backlog_without_touching_standard() {
         let frame = 1.0 / 59.7275;
         assert!((frame_debt(0.0, 0.05, 1.0, frame, false, false) - 0.05).abs() < 1e-9);
-        assert!((frame_debt(0.0, 0.05, 1.0, frame, false, true) - frame * 2.5).abs() < 1e-9);
+        assert!((frame_debt(0.0, 0.05, 1.0, frame, false, true) - frame * 1.5).abs() < 1e-9);
         assert!((frame_debt(0.0, 0.35, 2.0, frame, true, true) - 0.40).abs() < 1e-9);
     }
 
     #[test]
-    fn responsive_recovers_single_missed_vsync_but_never_floods_core() {
+    fn responsive_discards_frame_debt_instead_of_catchup_bursts() {
         let period = 1.0 / 59.7275;
-        assert_eq!(responsive_frame_budget(period * 1.99, period), 1);
-        assert_eq!(responsive_frame_budget(period * 2.01, period), 2);
-        assert_eq!(responsive_frame_budget(period * 9.0, period), 2);
         let mut debt = 0.0;
-        let mut emulated = 0;
-        // 59.1Hz panel pacing must not slow a ~59.73Hz GBA forever.
-        for _ in 0..5910 {
-            debt = frame_debt(debt, 1.0 / 59.1, 1.0, period, false, true);
-            let frames = responsive_frame_budget(debt, period);
-            for _ in 0..frames {
-                if debt < period { break; }
+        // Simulate an uneven 60Hz swap and verify each display callback
+        // can emulate zero or one frames only, never two (Beta 4 regression).
+        for elapsed in [period, 0.04, 0.011, 0.028, 0.008, period] {
+            debt = frame_debt(debt, elapsed, 1.0, period, false, true);
+            assert!(debt <= period * 1.5 + 1e-9);
+            let mut frames = 0;
+            if debt >= period {
                 debt -= period;
-                emulated += 1;
+                frames += 1;
             }
+            assert!(frames <= 1);
         }
-        assert!((emulated as i32 - 5973).abs() <= 2);
     }
 
     #[test]
