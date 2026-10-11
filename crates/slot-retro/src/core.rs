@@ -114,6 +114,12 @@ pub trait RetroCore: Send {
     fn restore_speculative_state(&mut self, data: &[u8]) -> Result<(), CoreError> {
         self.unserialize(data)
     }
+    /// Sidecars capture mutable state deliberately omitted from ordinary
+    /// save states (notably gpSP's internal audio mixer ring). They are
+    /// never written into a RetroArch-compatible state file.
+    fn speculative_audio_supported(&self) -> bool { true }
+    fn capture_speculative_audio(&mut self) -> Result<(), CoreError> { Ok(()) }
+    fn restore_speculative_audio(&mut self) -> Result<(), CoreError> { Ok(()) }
     fn save_ram(&self) -> Option<Vec<u8>>;
     fn load_save_ram(&mut self, data: &[u8]) -> Result<(), CoreError>;
     /// Optional libretro RETRO_MEMORY_RTC (Game Boy / Color battery clock).
