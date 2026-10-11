@@ -52,6 +52,8 @@ pub struct GameSession {
     frame_count: u32,
     // Presentation-only pixels from speculative frames; save/RA keep the real state.
     runahead_video: Vec<u8>,
+    // Preserve the libretro state allocation across speculative frames.
+    runahead_state: Vec<u8>,
     runahead_unavailable: bool,
     palette_live: bool,
     core_kind: Core,
@@ -206,7 +208,8 @@ impl GameSession {
             core, save, rtc, manual_export_prefix, state, retroarch_export, retroarch_import, ring,
             rewind: RewindThread::spawn(REWIND_BYTES), rewind_frames: 0,
             frame_count: 0, palette_live, core_kind: which,
-            runahead_video: Vec::new(), runahead_unavailable: false,
+            runahead_video: Vec::new(), runahead_state: Vec::new(),
+            runahead_unavailable: false,
             pending_undo: None, last_sram: Instant::now(),
             sample_rate: sample_rate.clamp(8_000, 96_000),
             fps,
@@ -242,14 +245,11 @@ impl GameSession {
     pub fn prepare_runahead(&mut self, buttons: u16, turbo: bool, frames: u8) {
         self.runahead_video.clear();
         if frames == 0 || frames > 2 || self.runahead_unavailable { return; }
-        let snapshot = match self.core.serialize() {
-            Ok(state) => state,
-            Err(error) => {
-                self.runahead_unavailable = true;
-                log_launch_timing(&format!("Run-Ahead disabled: serialize failed: {error}"));
-                return;
-            }
-        };
+        if let Err(error) = self.core.serialize_into(&mut self.runahead_state) {
+            self.runahead_unavailable = true;
+            log_launch_timing(&format!("Run-Ahead disabled: serialize failed: {error}"));
+            return;
+        }
         let pressed = ButtonMask(buttons);
         let mapped = if turbo { pressed.turbo(self.frame_count) }
             else { pressed.without_turbo() };
@@ -259,7 +259,7 @@ impl GameSession {
             let _ = self.core.take_audio();
         }
         self.runahead_video.extend_from_slice(self.core.video_xrgb8888());
-        if let Err(error) = self.core.restore_speculative_state(&snapshot) {
+        if let Err(error) = self.core.restore_speculative_state(&self.runahead_state) {
             // Never display a frame if the core could not restore its real state.
             self.runahead_video.clear();
             self.runahead_unavailable = true;
