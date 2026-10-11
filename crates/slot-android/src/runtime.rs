@@ -2395,6 +2395,13 @@ impl Engine {
                     self.game_accum = debt;
                     if profile.show_fps { self.perf_debt_loss += discarded; }
                 } else {
+                    if responsive && profile.show_fps {
+                        // Diagnostic only: old RESPONSIVE still uses the
+                        // exact Beta 7 1.5-frame cap and one-step scheduler.
+                        self.perf_debt_loss +=
+                            (self.game_accum + f64::from(dt) * multiplier
+                                - period * 1.5).max(0.0) / period;
+                    }
                     self.game_accum = crate::settings::frame_debt(
                         self.game_accum, f64::from(dt), multiplier, period, fast, responsive);
                 }
