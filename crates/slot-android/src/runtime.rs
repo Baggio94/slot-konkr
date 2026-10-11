@@ -185,7 +185,7 @@ const MENU_TEXT: [&str; 49] = [
     "CART STUDIO",                      // 11
     "A: Open Cart Studio",             // 12
     "RETROACHIEVEMENTS",               // 13
-    "A: Check RAOfflineProxy status",    // 14
+    "A: RA account / sign in",         // 14
     "SELECT CORE",                      // 15
     "mGBA",                             // 16
     "gpSP",                            // 17
