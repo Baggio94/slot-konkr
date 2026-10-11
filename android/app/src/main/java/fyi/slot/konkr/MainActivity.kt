@@ -43,6 +43,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
+import android.view.Choreographer
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
@@ -101,6 +102,7 @@ class MainActivity : Activity() {
     external fun nativeAudioSampleRate(): Int
     external fun nativeAudioBufferMs(): Int
     external fun nativeGpuSyncEnabled(): Boolean
+    external fun nativeDisplaySyncEnabled(): Boolean
     external fun nativeAudioSpeedPermille(): Int
     external fun nativeFastAudioSupported(supported: Boolean)
     external fun nativeReadAudio(): ShortArray
@@ -140,6 +142,52 @@ class MainActivity : Activity() {
     private var returnFromSlotChild = false
     private lateinit var performanceHud: TextView
     private var lastPerfPoll = 0L
+    private var syncCallbackRunning = false
+    private var displaySyncApplied = false
+    @Volatile private var cadenceText = ""
+    @Volatile private var audioUnderruns = 0
+
+    // UI Choreographer owns only scheduling render requests. The original
+    // GL thread continues to own libretro, shaders, and all GPU state.
+    private val vsyncCallback = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            if (!syncCallbackRunning || !resumed || isDestroyed) return
+            val useDisplaySync = nativeIsPlaying() && nativeDisplaySyncEnabled()
+            if (useDisplaySync != displaySyncApplied) {
+                view.renderMode = if (useDisplaySync)
+                    GLSurfaceView.RENDERMODE_WHEN_DIRTY
+                else GLSurfaceView.RENDERMODE_CONTINUOUSLY
+                displaySyncApplied = useDisplaySync
+            }
+            if (useDisplaySync) view.requestRender()
+            Choreographer.getInstance().postFrameCallback(this)
+        }
+    }
+
+    /** Observed GL callback cadence, not EGL swap/GPU/display latency. */
+    private class CadenceMeter(refreshHz: Float) {
+        private val intervals = LongArray(60)
+        private val nominalNs = (1_000_000_000.0 / refreshHz.coerceAtLeast(30f)).toLong()
+        private var previous = 0L
+        private var count = 0
+        fun reset() { previous = 0L; count = 0 }
+        fun sample(now: Long): String? {
+            if (previous != 0L) {
+                val delta = now - previous
+                if (delta in 1L..250_000_000L) intervals[count++] = delta
+            }
+            previous = now
+            if (count != intervals.size) return null
+            intervals.sort()
+            val mean = intervals.average() / 1_000_000.0
+            val p95 = intervals[(intervals.size * 95 / 100).coerceAtMost(intervals.lastIndex)] /
+                1_000_000.0
+            val late = intervals.count { it > nominalNs * 3 / 2 }
+            count = 0
+            return String.format(java.util.Locale.US,
+                "FRAME %.1fms | P95 %.1f | LATE %d/60", mean, p95, late)
+        }
+    }
     private var audioThread: Thread? = null
     private var raConnectivity: ConnectivityManager? = null
     private val raConnectivityCallback = object : ConnectivityManager.NetworkCallback() {
@@ -246,8 +294,12 @@ class MainActivity : Activity() {
                 lastPerfPoll = nowPerf
                 val value = nativePerformanceStats()
                 performanceHud.visibility = if (value.isNullOrBlank()) View.GONE else View.VISIBLE
-                if (value != null && performanceHud.text.toString() != value)
-                    performanceHud.text = value
+                if (!value.isNullOrBlank()) {
+                    val detail = cadenceText
+                    val stats = if (detail.isNotBlank())
+                        "$value\n$detail | A-UND $audioUnderruns" else value
+                    if (performanceHud.text.toString() != stats) performanceHud.text = stats
+                }
             }
             nativePollMessage()?.let { message ->
                 Log.w(TAG, message)
@@ -300,6 +352,7 @@ class MainActivity : Activity() {
                 preserveEGLContextOnPause = true
                 setRenderer(object : Renderer {
                     var ready = false
+                    val cadence = CadenceMeter(display?.refreshRate ?: 60f)
                     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
                         ready = nativeSurfaceCreated()
                         if (!ready) Log.e(TAG, "Slot GLES initialization failed")
@@ -313,6 +366,12 @@ class MainActivity : Activity() {
                     }
                     override fun onDrawFrame(gl: GL10?) {
                         if (ready) {
+                            if (nativeIsPlaying()) {
+                                cadence.sample(System.nanoTime())?.let { cadenceText = it }
+                            } else {
+                                cadence.reset()
+                                cadenceText = ""
+                            }
                             nativeDrawFrame()
                             // Opt-in GPU fence bounds work queued to GLES; may cost FPS.
                             if (nativeGpuSyncEnabled()) GLES20.glFinish()
@@ -637,6 +696,7 @@ class MainActivity : Activity() {
             var rate = 0
             var chosenBufferMs = -1
             var requestedSpeed = 0
+            var lastUnderrunPoll = 0L
             try {
                 while (audioRunning.get()) {
                     val wanted = nativeAudioSampleRate()
@@ -672,6 +732,7 @@ class MainActivity : Activity() {
                         chosenBufferMs = bufferMs
                         requestedSpeed = 0
                         player.play()
+                        audioUnderruns = 0
                     } else if (player.playState != AudioTrack.PLAYSTATE_PLAYING) {
                         // A paused legacy buffer is reused when the next game has
                         // the same sample rate; it still must be resumed.
@@ -700,6 +761,12 @@ class MainActivity : Activity() {
                                     .setSpeed(1.0f).setPitch(1.0f)
                             } catch (_: Exception) { }
                         }
+                    }
+                    val nowAudio = SystemClock.uptimeMillis()
+                    if (nowAudio - lastUnderrunPoll >= 1000L) {
+                        lastUnderrunPoll = nowAudio
+                        // AudioTrack's cumulative underruns since creation.
+                        audioUnderruns = player.underrunCount
                     }
                     val samples = nativeReadAudio()
                     if (samples.isEmpty()) {
@@ -1431,6 +1498,8 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        syncCallbackRunning = false
+        Choreographer.getInstance().removeFrameCallback(vsyncCallback)
         raConnectivity?.let { manager ->
             try { manager.unregisterNetworkCallback(raConnectivityCallback) }
             catch (_: Exception) { /* Callback may have already been removed. */ }
@@ -1450,6 +1519,12 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         resumed = false
+        syncCallbackRunning = false
+        Choreographer.getInstance().removeFrameCallback(vsyncCallback)
+        if (displaySyncApplied) {
+            view.renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+            displaySyncApplied = false
+        }
         stopAudio()
         cartSounds.pause()
         // Preserve SRAM and automatic resume state while the GL context is still current.
@@ -1484,6 +1559,10 @@ class MainActivity : Activity() {
         lastStatusPoll = -15000L
         cartSounds.resume()
         view.onResume()
+        if (!syncCallbackRunning) {
+            syncCallbackRunning = true
+            Choreographer.getInstance().postFrameCallback(vsyncCallback)
+        }
         immersive()
     }
 

@@ -143,6 +143,7 @@ static PLAYING: AtomicBool = AtomicBool::new(false);
 static SAMPLE_RATE: AtomicI32 = AtomicI32::new(0);
 static AUDIO_BUFFER_MS: AtomicI32 = AtomicI32::new(0);
 static GPU_SYNC: AtomicBool = AtomicBool::new(false);
+static DISPLAY_SYNC: AtomicBool = AtomicBool::new(false);
 // Android AudioTrack time-stretches 2x game audio while preserving pitch.
 // Expose the current transport speed separately from libretro's sample rate.
 static AUDIO_SPEED_PERMILLE: AtomicI32 = AtomicI32::new(1000);
@@ -474,7 +475,7 @@ impl Engine {
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE",
                               "1 FRAME", "2 FRAMES", "1 ms", "2 ms",
-                              "LEGACY", "32 ms", "48 ms", "64 ms", "96 ms"]
+                              "LEGACY", "32 ms", "48 ms", "64 ms", "96 ms", "DISPLAY SYNC"]
             .into_iter().map(|value| {
                 let face = quick_value_face(value, true);
                 let tex = gpu.create_texture(face.w, face.h, &face.rgba);
@@ -1776,7 +1777,8 @@ impl Engine {
             8 => if self.settings.rumble { 4 } else { 5 },
             9 => if self.settings.eject_save { 4 } else { 5 },
             10 => if profile.show_fps { 4 } else { 5 },
-            11 => if profile.responsive_pacing { 11 } else { 10 },
+            11 => if profile.display_sync_pacing { 21 }
+                else if profile.responsive_pacing { 11 } else { 10 },
             12 => match profile.run_ahead_frames { 1 => 12, 2 => 13, _ => 5 },
             13 => match profile.frame_delay_ms { 1 => 14, 2 => 15, _ => 5 },
             14 => if profile.gpu_sync { 4 } else { 5 },
@@ -2325,6 +2327,11 @@ impl Engine {
         }
         let profile = self.current_emulation();
         GPU_SYNC.store(self.game.is_some() && profile.gpu_sync, Ordering::Release);
+        // Android's frame callback changes GLSurfaceView renderMode only when
+        // an active game explicitly selected DISPLAY SYNC. No engine work or
+        // GL resource ownership ever moves away from the GL render thread.
+        DISPLAY_SYNC.store(self.game.is_some() && profile.display_sync_pacing,
+            Ordering::Release);
         AUDIO_BUFFER_MS.store(if self.game.is_some() {
             i32::from(profile.audio_latency_ms)
         } else { 0 }, Ordering::Release);
@@ -2946,6 +2953,15 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeAudioBufferMs(
     _env: JNIEnv<'_>, _this: JObject<'_>,
 ) -> jint {
     AUDIO_BUFFER_MS.load(Ordering::Acquire)
+}
+
+/// Choreographer pacing experiment: this is only a render-request policy.
+/// The underlying libretro emulation budget remains RESPONSIVE (one frame).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDisplaySyncEnabled(
+    _env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jboolean {
+    if DISPLAY_SYNC.load(Ordering::Acquire) { 1 } else { 0 }
 }
 
 /// Optional GLES fence; only call glFinish when a game opted into GPU Sync.

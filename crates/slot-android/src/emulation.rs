@@ -8,6 +8,7 @@ use crate::{core_selection, settings::{self, Settings}};
 pub struct EmulationProfile {
     pub show_fps: bool,
     pub responsive_pacing: bool,
+    pub display_sync_pacing: bool,
     pub run_ahead_frames: u8,
     pub frame_delay_ms: u8,
     pub gpu_sync: bool,
@@ -16,6 +17,7 @@ pub struct EmulationProfile {
 impl Default for EmulationProfile {
     fn default() -> Self {
         Self { show_fps: false, responsive_pacing: false,
+            display_sync_pacing: false,
             run_ahead_frames: 0, frame_delay_ms: 0,
             gpu_sync: false, audio_latency_ms: 0 }
     }
@@ -24,12 +26,14 @@ impl EmulationProfile {
     pub fn from_settings(settings: &Settings) -> Self {
         Self { show_fps: settings.show_fps,
             responsive_pacing: settings.responsive_pacing,
+            display_sync_pacing: settings.display_sync_pacing,
             run_ahead_frames: settings.run_ahead_frames,
             frame_delay_ms: settings.frame_delay_ms,
             gpu_sync: settings.gpu_sync,
             audio_latency_ms: settings.audio_latency_ms }
     }
     pub fn sanitize(mut self) -> Self {
+        if !self.responsive_pacing { self.display_sync_pacing = false; }
         if self.run_ahead_frames > 2 { self.run_ahead_frames = 0; }
         if self.frame_delay_ms > 2 { self.frame_delay_ms = 0; }
         if ![0, 32, 48, 64, 96].contains(&self.audio_latency_ms) {
@@ -41,7 +45,8 @@ impl EmulationProfile {
         let before = *self;
         match key {
             10 => self.show_fps = !self.show_fps,
-            11 => self.responsive_pacing = !self.responsive_pacing,
+            11 => settings::cycle_pacing(&mut self.responsive_pacing,
+                &mut self.display_sync_pacing, right),
             12 => self.run_ahead_frames =
                 settings::cycle_u8(self.run_ahead_frames, 2, right),
             13 => self.frame_delay_ms =
@@ -95,6 +100,20 @@ mod tests {
         assert!(profile.change(12, true));
         assert_eq!(profile.run_ahead_frames, 0);
         assert_eq!(EmulationProfile::default().audio_latency_ms, 0);
+    }
+
+    #[test]
+    fn pre_beta6_profile_inherits_original_responsive_mode() {
+        let old: EmulationProfile =
+            serde_json::from_str(r#"{"responsive_pacing":true,"run_ahead_frames":1}"#).unwrap();
+        assert!(old.responsive_pacing);
+        assert!(!old.display_sync_pacing);
+        assert_eq!(old.run_ahead_frames, 1);
+        let mut changed = old;
+        assert!(changed.change(11, true));
+        assert!(changed.display_sync_pacing);
+        assert!(changed.change(11, true));
+        assert!(!changed.responsive_pacing && !changed.display_sync_pacing);
     }
 
     #[test]

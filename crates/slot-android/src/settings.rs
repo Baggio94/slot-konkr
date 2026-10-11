@@ -33,6 +33,9 @@ pub struct Settings {
     pub turbo: bool, pub eject_save: bool,
     // Android-only opt-in diagnostics; preserving original Slot defaults.
     pub show_fps: bool, pub responsive_pacing: bool,
+    // Beta 6 opt-in: Choreographer-driven display callbacks, still using
+    // the one-real-frame RESPONSIVE emulation budget.
+    pub display_sync_pacing: bool,
     pub run_ahead_frames: u8, pub frame_delay_ms: u8,
     pub gpu_sync: bool, pub audio_latency_ms: u16,
 }
@@ -44,6 +47,7 @@ impl Default for Settings {
             gb_palettes: false, gb_palette: 1, rewind: true,
             turbo: true, eject_save: true,
             show_fps: false, responsive_pacing: false,
+            display_sync_pacing: false,
             run_ahead_frames: 0, frame_delay_ms: 0,
             gpu_sync: false, audio_latency_ms: 0 }
     }
@@ -57,6 +61,7 @@ impl Settings {
                 if !Shader::GBA.contains(&s.shader_gba) { s.shader_gba = Shader::Off; }
                 if !Shader::GB.contains(&s.shader_gb) { s.shader_gb = Shader::Off; }
                 if s.gb_palette >= 48 { s.gb_palette = 1; }
+                if !s.responsive_pacing { s.display_sync_pacing = false; }
                 if s.run_ahead_frames > 2 { s.run_ahead_frames = 0; }
                 if s.frame_delay_ms > 2 { s.frame_delay_ms = 0; }
                 if ![0, 32, 48, 64, 96].contains(&s.audio_latency_ms) { s.audio_latency_ms = 0; }
@@ -94,7 +99,7 @@ impl Settings {
             8 => self.rumble = !self.rumble,
             9 => self.eject_save = !self.eject_save,
             10 => self.show_fps = !self.show_fps,
-            11 => self.responsive_pacing = !self.responsive_pacing,
+            11 => cycle_pacing(&mut self.responsive_pacing, &mut self.display_sync_pacing, right),
             12 => self.run_ahead_frames = cycle_u8(self.run_ahead_frames, 2, right),
             13 => self.frame_delay_ms = cycle_u8(self.frame_delay_ms, 2, right),
             14 => self.gpu_sync = !self.gpu_sync,
@@ -107,6 +112,16 @@ impl Settings {
         GbPalette::all().nth(self.gb_palette as usize)
             .unwrap_or(GbPalette::DEFAULT).core_name()
     }
+}
+/// Three explicit states; persisted Beta 5 profiles with responsive=true
+/// remain RESPONSIVE, not DISPLAY SYNC, after upgrade.
+pub fn cycle_pacing(responsive: &mut bool, display_sync: &mut bool, right: bool) {
+    let modes = [(false, false), (true, false), (true, true)];
+    let current = modes.iter().position(|&(r, d)| r == *responsive && d == *display_sync)
+        .unwrap_or(0);
+    let next = if right { (current + 1) % modes.len() }
+        else { (current + modes.len() - 1) % modes.len() };
+    (*responsive, *display_sync) = modes[next];
 }
 pub fn cycle_u8(value: u8, max: u8, right: bool) -> u8 {
     if right { if value >= max { 0 } else { value + 1 } }
@@ -158,6 +173,22 @@ mod tests {
             }
             assert!(frames <= 1);
         }
+    }
+
+    #[test]
+    fn frame_pacing_cycles_three_modes_without_changing_legacy_defaults() {
+        let mut s = Settings::default();
+        assert!(!s.responsive_pacing && !s.display_sync_pacing);
+        assert!(s.change(11, true));
+        assert!(s.responsive_pacing && !s.display_sync_pacing);
+        assert!(s.change(11, true));
+        assert!(s.responsive_pacing && s.display_sync_pacing);
+        assert!(s.change(11, true));
+        assert!(!s.responsive_pacing && !s.display_sync_pacing);
+        assert!(s.change(11, false));
+        assert!(s.responsive_pacing && s.display_sync_pacing);
+        let old: Settings = serde_json::from_str(r#"{"responsive_pacing":true}"#).unwrap();
+        assert!(old.responsive_pacing && !old.display_sync_pacing);
     }
 
     #[test]
