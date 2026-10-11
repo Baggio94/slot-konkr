@@ -324,6 +324,7 @@ struct Engine {
     overlay: ShelfOverlay,
     settings: Settings,
     game_emulation: Option<EmulationProfile>,
+    emulation_core_labels: [(slot_gfx::TexId, u32, u32); 2],
     video_mode: VideoMode,
     wallpaper_texture: Option<slot_gfx::TexId>,
     setting_values: Vec<(slot_gfx::TexId, u32, u32)>,
@@ -457,6 +458,10 @@ impl Engine {
                 let tex = gpu.create_texture(face.w, face.h, &face.rgba);
                 (tex, face.w, face.h)
             }).collect();
+        let emulation_core_labels = Core::ALL.map(|core| {
+            let face = quick_value_face(core.text(), true);
+            (gpu.create_texture(face.w, face.h, &face.rgba), face.w, face.h)
+        });
         let setting_carets = [false, true].map(|right| {
             let face = quick_caret_face(right);
             let tex = gpu.create_texture(face.w, face.h, &face.rgba);
@@ -560,6 +565,7 @@ impl Engine {
             overlay: ShelfOverlay::None,
             settings,
             game_emulation: None,
+            emulation_core_labels,
             video_mode: VideoMode::Actual,
             wallpaper_texture,
             setting_values,
@@ -1711,6 +1717,14 @@ impl Engine {
         profile.show_fps = profile.show_fps_override.unwrap_or(self.settings.show_fps);
         profile
     }
+    fn selected_emulation_core(&self) -> Core {
+        // GB/GBC never invoke gpSP, even if a stale core preference exists.
+        if self.current_cart_platform() != Platform::Gba { return Core::Mgba; }
+        let Some(uri) = self.selected_rom_uri() else { return Core::Mgba; };
+        PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+            .map(|(root, _)| core_selection::selected(root, &uri))
+            .unwrap_or(Core::Mgba)
+    }
     fn selected_rom_uri(&self) -> Option<String> {
         self.shelves.get(self.active)?.carts
             .get(self.shelves[self.active].index)
@@ -1718,17 +1732,19 @@ impl Engine {
     }
     fn load_selected_emulation(&mut self) {
         let uri = self.selected_rom_uri();
+        let core = self.selected_emulation_core();
         self.game_emulation = uri.as_deref().and_then(|uri| {
             PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
-                .and_then(|(root, _)| EmulationProfile::load(root, uri))
+                .and_then(|(root, _)| EmulationProfile::load(root, uri, core))
         });
     }
     fn change_game_emulation(&mut self, key: usize, right: bool) {
         let Some(uri) = self.selected_rom_uri() else { return; };
+        let core = self.selected_emulation_core();
         let mut profile = self.current_emulation();
         if !profile.change(key, right) { return; }
         if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            if let Err(error) = profile.save(root, &uri) {
+            if let Err(error) = profile.save(root, &uri, core) {
                 set_message(format!("Cannot save game emulation settings: {error}"));
                 return;
             }
@@ -1737,8 +1753,9 @@ impl Engine {
     }
     fn reset_game_emulation(&mut self) {
         let Some(uri) = self.selected_rom_uri() else { return; };
+        let core = self.selected_emulation_core();
         if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            if let Err(error) = EmulationProfile::clear(root, &uri) {
+            if let Err(error) = EmulationProfile::clear(root, &uri, core) {
                 set_message(format!("Cannot reset game emulation settings: {error}"));
                 return;
             }
@@ -1906,6 +1923,14 @@ impl Engine {
             }
             ShelfOverlay::GameEmulationSettings { row } => {
                 self.draw_original_style_menu(56, &[51, 52, 55, 57], row, out);
+                // Identify the selected core without changing Slot's menu
+                // layout or existing keycap typography.
+                let index = if self.selected_emulation_core() == Core::Gpsp { 1 } else { 0 };
+                let (tex, w, h) = self.emulation_core_labels[index];
+                out.push(Draw::Tex {
+                    x: OUT_W as f32 - w as f32 - 32.0, y: 33.0,
+                    w: w as f32, h: h as f32, tex, alpha: 0.75,
+                });
                 self.draw_setting_values(row, &[10, 11, 12, usize::MAX], out);
             }
             ShelfOverlay::Personalization { row } => {
