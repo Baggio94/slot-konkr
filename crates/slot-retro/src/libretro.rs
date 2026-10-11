@@ -27,6 +27,8 @@ struct Host {
     format: PixelFormat,
     audio: Vec<i16>,
     inputs: [u16; 2],
+    // Borrowed memory descriptors, valid only while game/core are loaded.
+    memory: Vec<MemoryDescriptor>,
     system_dir: CString,
     save_dir: CString,
     rumble: Rumble,
@@ -75,6 +77,17 @@ unsafe extern "C" fn set_rumble_state(port: c_uint, effect: c_uint, strength: u1
 
 unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
     match cmd {
+        SET_MEMORY_MAPS => {
+            if data.is_null() { return false; }
+            let map = &*(data as *const MemoryMap);
+            if map.num_descriptors > 1024 ||
+               (map.num_descriptors != 0 && map.descriptors.is_null()) { return false; }
+            with_host(|h| {
+                h.memory = if map.num_descriptors == 0 { Vec::new() }
+                    else { std::slice::from_raw_parts(map.descriptors,
+                        map.num_descriptors as usize).to_vec() };
+            }).is_some()
+        }
         GET_CAN_DUPE => {
             if data.is_null() {
                 return false;
@@ -473,6 +486,7 @@ impl LibretroCore {
             format: PixelFormat::Xrgb8888,
             audio: Vec::new(),
             inputs: [0; 2],
+            memory: Vec::new(),
             system_dir: cdir(system_dir)?,
             save_dir: cdir(save_dir)?,
             rumble: Rumble::default(),
@@ -515,6 +529,7 @@ impl LibretroCore {
         }
         let _a = Active::bind(&mut self.host);
         unsafe { (self.api.unload_game)() };
+        self.host.memory.clear();
         self.loaded = false;
     }
 }
@@ -531,6 +546,46 @@ impl Drop for LibretroCore {
 }
 
 impl RetroCore for LibretroCore {
+    fn achievement_memory(&self, ram: &mut [u8]) -> [usize; 3] {
+        if ram.len() < 0x58000 || !self.loaded {
+            return [0; 3];
+        }
+        let mut valid = [0; 3];
+        // GBA RetroAchievements virtual address order from rcheevos:
+        // IWRAM 0x03000000 -> [0,0x8000)
+        // EWRAM 0x02000000 -> [0x8000,0x48000)
+        // SRAM  0x0e000000 -> [0x48000,0x58000)
+        // Only exact descriptors are accepted: a partially mapped region
+        // must never be misinterpreted as a zero-valued RAM word.
+        for (i, (physical, offset, size)) in [
+            (0x03000000, 0usize, 0x8000usize),
+            (0x02000000, 0x8000, 0x40000),
+            (0x0e000000, 0x48000, 0x10000),
+        ].into_iter().enumerate() {
+            if let Some(d) = self.host.memory.iter()
+                .find(|d| d.start == physical && d.disconnect == 0 &&
+                    !d.ptr.is_null() && d.len > 0)
+            {
+                let n = d.len.min(size);
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        (d.ptr as *const u8).add(d.offset),
+                        ram[offset..].as_mut_ptr(), n);
+                }
+                valid[i] = n;
+            } else if i == 2 {
+                // Several cores expose SRAM only via RETRO_MEMORY_SAVE_RAM.
+                let ptr = unsafe { (self.api.get_memory_data)(MEMORY_SAVE_RAM) };
+                let n = unsafe { (self.api.get_memory_size)(MEMORY_SAVE_RAM) }.min(size);
+                if !ptr.is_null() && n > 0 {
+                    unsafe { std::ptr::copy_nonoverlapping(
+                        ptr as *const u8, ram[offset..].as_mut_ptr(), n) };
+                    valid[i] = n;
+                }
+            }
+        }
+        valid
+    }
     fn set_option(&mut self, key: &str, value: &str) {
         LibretroCore::set_option(self, key, value);
     }
@@ -706,6 +761,7 @@ mod tests {
             format: PixelFormat::Xrgb8888,
             audio: Vec::new(),
             inputs: [0; 2],
+            memory: Vec::new(),
             system_dir: CString::new(".").unwrap(),
             save_dir: CString::new(".").unwrap(),
             rumble: Rumble::default(),
