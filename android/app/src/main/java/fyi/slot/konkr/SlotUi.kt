@@ -76,6 +76,25 @@ internal object SlotUi {
             setOnClickListener { onClick() }
         }
 
+    /** Controller-key legend with a real Slot-font cream keycap, not Unicode. */
+    fun hint(context: Context, key: String, action: String): android.widget.LinearLayout =
+        android.widget.LinearLayout(context).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            val cap = label(context, key, 12f, background).apply {
+                gravity = Gravity.CENTER
+                minWidth = dp(context, 23)
+                minHeight = dp(context, 21)
+                setPadding(dp(context, 5), 0, dp(context, 5), 0)
+                setBackgroundColor(ink)
+            }
+            addView(cap)
+            val name = label(context, action, 12f, muted).apply {
+                setPadding(dp(context, 7), 0, 0, 0)
+            }
+            addView(name)
+        }
+
     fun field(context: Context, hint: String, password: Boolean = false): EditText =
         EditText(context).apply {
             this.hint = hint
