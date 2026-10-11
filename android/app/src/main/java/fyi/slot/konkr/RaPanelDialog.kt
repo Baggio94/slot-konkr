@@ -27,13 +27,10 @@ internal class RaPanelDialog(
     private val onRefresh: () -> Unit,
     private val onSignOut: () -> Unit,
 ) {
-    private val ink = Color.rgb(246, 244, 239)
-    private val muted = Color.rgb(164, 162, 170)
-    private val border = Color.rgb(91, 89, 96)
-    private val font: Typeface by lazy {
-        runCatching { Typeface.createFromAsset(activity.assets, "label.ttf") }
-            .getOrElse { Typeface.create("sans-serif-condensed", Typeface.BOLD) }
-    }
+    private val ink = SlotUi.ink
+    private val muted = SlotUi.muted
+    private val border = SlotUi.rule
+    private val font: Typeface by lazy { SlotUi.font(activity) }
     private fun dp(x: Int): Int = (x * activity.resources.displayMetrics.density + .5f).toInt()
     private val dialog: Dialog = object : Dialog(
         activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen
@@ -97,7 +94,7 @@ internal class RaPanelDialog(
             minimumHeight = dp(7)
         }
         val fill = View(activity).apply {
-            setBackgroundColor(Color.rgb(215, 207, 190))
+            setBackgroundColor(SlotUi.ink)
         }
         rail.addView(fill, FrameLayout.LayoutParams(0, dp(7), Gravity.START))
         content.addView(rail, LinearLayout.LayoutParams(-1, dp(7)).apply {
@@ -115,7 +112,7 @@ internal class RaPanelDialog(
         val root = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(37), dp(18), dp(37), dp(15))
-            setBackgroundColor(Color.rgb(23, 22, 25))
+            setBackgroundColor(SlotUi.background)
         }
         root.addView(text("RETROACHIEVEMENTS", 23f), LinearLayout.LayoutParams(-1, dp(43)))
         root.addView(separator(), LinearLayout.LayoutParams(-1, dp(1)))
@@ -147,7 +144,7 @@ internal class RaPanelDialog(
                 setPadding(dp(7), dp(5), dp(7), dp(5))
                 setOnClickListener { callback() }
                 setOnFocusChangeListener { view, focused ->
-                    view.setBackgroundColor(if (focused) Color.rgb(70, 68, 77) else Color.TRANSPARENT)
+                    view.setBackgroundColor(if (focused) SlotUi.selected else Color.TRANSPARENT)
                 }
             }
             actions.addView(button, LinearLayout.LayoutParams(0, dp(39), 1f))
