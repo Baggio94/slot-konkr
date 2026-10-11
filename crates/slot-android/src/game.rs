@@ -38,7 +38,8 @@ enum PendingUndo {
 
 
 pub struct GameSession {
-    core: LibretroCore,
+    // Wrapped with the native softcore evaluator for opted-in GBA sessions.
+    core: Box<dyn RetroCore>,
     save: PathBuf,
     rtc: PathBuf,
     manual_export_prefix: PathBuf,
@@ -61,7 +62,8 @@ impl GameSession {
     pub fn open(rom: &Path, core_file: &Path, storage: &Path,
                 which: Core, platform: Platform, resume_state: bool,
                 rom_stem: &str, gb_palette: Option<&str>,
-                colour_correction: bool) -> Result<Self, String> {
+                colour_correction: bool,
+                achievements: Option<&slot_achievements::Service>) -> Result<Self, String> {
         let opening_at = Instant::now();
         if !rom.exists() || !core_file.exists() {
             return Err(format!("ROM cache or {} core missing", which.text()));
@@ -134,6 +136,14 @@ impl GameSession {
                     if colour_correction { "enabled" } else { "disabled" });
             }
         }
+        // Apply libretro core options BEFORE wrapping. The native rcheevos
+        // worker observes Load/Frame/Unload but never holds emulator pointers.
+        // GB/GBC need their own verified RA hash and RAM maps, so they are
+        // explicitly excluded from this initial GBA-only milestone.
+        let mut core: Box<dyn RetroCore> = match (platform, achievements) {
+            (Platform::Gba, Some(service)) => service.wrap(Box::new(core)),
+            _ => Box::new(core),
+        };
         core.load(rom).map_err(|e| e.to_string())?;
         let load_ms = opening_at.elapsed().as_millis();
         let restore_started = Instant::now();
