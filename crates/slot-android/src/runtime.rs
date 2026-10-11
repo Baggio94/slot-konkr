@@ -1715,6 +1715,12 @@ impl Engine {
         // Legacy per-cart profiles inherit global Show Stats. Newly
         // customized profiles can override it explicitly per cartridge.
         profile.show_fps = profile.show_fps_override.unwrap_or(self.settings.show_fps);
+        // Only gpSP needs the private mixer snapshot ABI. If an unexpected
+        // unpatched core is loaded, do not run speculative frames with audio
+        // corruption; preserve the user's requested profile on disk.
+        if self.game.as_ref().is_some_and(|game| !game.runahead_supported()) {
+            profile.run_ahead_frames = 0;
+        }
         profile
     }
     fn selected_emulation_core(&self) -> Core {
