@@ -200,7 +200,7 @@ class MainActivity : Activity() {
                     val title = notice.optString("title", "").take(100)
                     val detail = notice.optString("detail", "").take(160)
                     val message = if (notice.optBoolean("earned", false)) {
-                        "Achievement unlocked!\n" + title +
+                        "Achievement earned (sync pending)\n" + title +
                             if (detail.isNotBlank()) "\n" + detail else ""
                     } else {
                         title + if (detail.isNotBlank()) "\n" + detail else ""
