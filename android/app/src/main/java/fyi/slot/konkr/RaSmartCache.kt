@@ -49,7 +49,7 @@ internal object RaSmartCache {
 
     private fun loadIndex(root: File, tree: String): Map<String, Fingerprint> {
         val file = File(root, INDEX_FILE)
-        if (!file.isFile || file.length() !in 1..MAX_LIBRARY_BYTES) return emptyMap()
+        if (!file.isFile || file.length() !in 1L..MAX_LIBRARY_BYTES) return emptyMap()
         return try {
             val json = JSONObject(file.readText(Charsets.UTF_8))
             if (json.optInt("schema") != SCHEMA || json.optString("root") != tree)
@@ -100,7 +100,7 @@ internal object RaSmartCache {
         submit: (String) -> Unit,
     ) {
         val shelf = File(root, "rom-library-cache-v1.json")
-        if (!shelf.isFile || shelf.length() !in 1..MAX_LIBRARY_BYTES) return
+        if (!shelf.isFile || shelf.length() !in 1L..MAX_LIBRARY_BYTES) return
         val data = JSONObject(shelf.readText(Charsets.UTF_8))
         if (data.optInt("schema") != 1) return
         val tree = data.optString("root")
@@ -125,10 +125,11 @@ internal object RaSmartCache {
                     fresh++
                 }
                 if (submitted.add(hash)) {
-                    // Never block emulation startup with background hashing.
+                    // Never block emulation startup or enqueue messages while
+                    // the Activity's GLSurfaceView is paused in the background.
                     while (isPlaying()) {
                         if (Thread.currentThread().isInterrupted) return
-                        Thread.sleep(800)
+                        Thread.sleep(1200)
                     }
                     submit(hash)
                     Thread.sleep(60) // prevent filling GL input during a 5k-game scan
