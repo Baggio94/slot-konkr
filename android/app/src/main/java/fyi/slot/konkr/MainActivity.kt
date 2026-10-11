@@ -206,7 +206,7 @@ class MainActivity : Activity() {
                         title + if (detail.isNotBlank()) "\n" + detail else ""
                     }
                     if (message.isNotBlank()) {
-                        SlotToast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+                        SlotToast.makeRaText(this@MainActivity, message, Toast.LENGTH_LONG).show()
                     }
                 } catch (_: Exception) {
                     Log.w(TAG, "Ignoring malformed RetroAchievements notice")
