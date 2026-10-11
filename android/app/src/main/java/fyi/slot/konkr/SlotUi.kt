@@ -79,16 +79,18 @@ internal object SlotUi {
     fun field(context: Context, hint: String, password: Boolean = false): EditText =
         EditText(context).apply {
             this.hint = hint
-            typeface = font(context)
-            textSize = 15f
-            setTextColor(ink)
-            setHintTextColor(muted)
-            letterSpacing = .04f
             isSingleLine = true
             inputType = if (password)
                 InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             else
                 InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            // Android changes a password field's font when inputType is set:
+            // re-apply upstream label.ttf AFTER masking/IME flags.
+            typeface = font(context)
+            textSize = 15f
+            setTextColor(ink)
+            setHintTextColor(muted)
+            letterSpacing = .04f
             imeOptions = if (password) EditorInfo.IME_ACTION_DONE
                 else EditorInfo.IME_ACTION_NEXT
             setSelectAllOnFocus(false)
