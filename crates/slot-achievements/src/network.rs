@@ -678,7 +678,7 @@ mod tests {
             storage::read(&root.path().join("smart-prefetch-budget.json")).unwrap();
         assert!(!reloaded.reserve(root.path(), 42_100).unwrap());
         assert_eq!(reloaded.attempts.len(), 100);
-        assert!(reloaded.reserve(root.path(), 43_900).unwrap());
+        assert!(reloaded.reserve(root.path(), 43_800).unwrap());
         assert_eq!(reloaded.attempts.len(), 100);
     }
 
