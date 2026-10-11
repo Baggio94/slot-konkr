@@ -102,6 +102,8 @@ class MainActivity : Activity() {
     external fun nativeFastAudioSupported(supported: Boolean)
     external fun nativeReadAudio(): ShortArray
     external fun nativePollMessage(): String?
+    external fun nativePollRaNotice(): String?
+    external fun nativeRaStatus(): String?
     external fun nativeSystemStatus(clock: String, batteryPercent: Int, charging: Boolean)
     external fun nativePollUiAction(): Int
     external fun nativeReloadVisualAssets()
@@ -189,6 +191,26 @@ class MainActivity : Activity() {
             nativePollMessage()?.let { message ->
                 Log.w(TAG, message)
                 SlotToast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
+            }
+            // Only present the next RA notice while Slot is foregrounded.
+            // Never expose account credentials or raw server payloads in toasts.
+            if (resumed) nativePollRaNotice()?.let { raw ->
+                try {
+                    val notice = JSONObject(raw)
+                    val title = notice.optString("title", "").take(100)
+                    val detail = notice.optString("detail", "").take(160)
+                    val message = if (notice.optBoolean("earned", false)) {
+                        "Achievement unlocked!\n" + title +
+                            if (detail.isNotBlank()) "\n" + detail else ""
+                    } else {
+                        title + if (detail.isNotBlank()) "\n" + detail else ""
+                    }
+                    if (message.isNotBlank()) {
+                        SlotToast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+                    }
+                } catch (_: Exception) {
+                    Log.w(TAG, "Ignoring malformed RetroAchievements notice")
+                }
             }
             if (!isDestroyed) uiHandler.postDelayed(this, 100L)
         }
@@ -593,6 +615,28 @@ class MainActivity : Activity() {
         audioThread = null
     }
 
+    /** Pulls a sanitized, nonblocking engine status copied by the GL thread. */
+    private fun retroAchievementsStatus(): String {
+        val raw = nativeRaStatus() ?: return "Engine starts when you launch a GBA game."
+        return try {
+            val data = JSONObject(raw)
+            val state = when (data.optString("state", "Disabled")) {
+                "Ready" -> "Online"
+                "Syncing" -> "Connecting / preparing cache"
+                "Offline" -> "Offline (cached achievements only)"
+                "Attention" -> "Needs attention - check network or account"
+                else -> "Inactive"
+            }
+            val work = if (data.optBoolean("pending", false)) "Pending work: yes" else "Pending work: no"
+            val progress = if (data.has("progress") && !data.isNull("progress")) {
+                "\nCache progress: " + data.optInt("progress", 0) + "%"
+            } else ""
+            "Engine: $state\n$work$progress"
+        } catch (_: Exception) {
+            "Engine status unavailable."
+        }
+    }
+
     /** First native RetroAchievements account onboarding; keeps passwords out of disk/logs. */
     private fun openRetroAchievementsAccount() {
         val existing = RaAccount.configuredUser(filesDir)
@@ -601,9 +645,9 @@ class MainActivity : Activity() {
                 .setTitle("RetroAchievements")
                 .setMessage(
                     "Account configured: $existing\n\n" +
-                        "GBA softcore is experimental. Play a supported GBA game while " +
-                        "online to let slot. prepare its achievement definitions. " +
-                        "No awards have been verified on this KONKR yet."
+                        retroAchievementsStatus() + "\n\n" +
+                        "GBA softcore is experimental. Online awards still require a " +
+                        "real-game hardware test; offline awards remain pending until synced."
                 )
                 .setPositiveButton("Close", null)
                 .setNeutralButton("Proxy status") { _, _ -> checkRaOfflineProxy() }
