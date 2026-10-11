@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use crate::game::GameSession;
 use crate::settings::Settings;
+use crate::emulation::EmulationProfile;
+use std::time::Duration;
 use crate::video_mode::{self, VideoMode};
 use crate::core_selection;
 use crate::cart_render::CartRender;
@@ -197,6 +199,7 @@ enum ShelfOverlay {
     ScreenSettings { row: usize },
     GameplaySettings { row: usize },
     EmulationSettings { row: usize },
+    GameEmulationSettings { row: usize },
     Personalization { row: usize },
     About,
     Scraping,
@@ -206,7 +209,7 @@ enum ShelfOverlay {
     States,
 }
 
-const MENU_TEXT: [&str; 55] = [
+const MENU_TEXT: [&str; 61] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -262,6 +265,12 @@ const MENU_TEXT: [&str; 55] = [
     "Frame pacing",                     // 52
     "STANDARD",                         // 53
     "RESPONSIVE",                       // 54
+    "Run-Ahead",                        // 55
+    "Frame Delay",                      // 56
+    "GPU Sync",                         // 57
+    "Audio Latency",                    // 58
+    "GAME EMULATION",                   // 59
+    "Reset to global",                  // 60
 ];
 
 struct Engine {
@@ -307,6 +316,7 @@ struct Engine {
     external_pending: bool,
     overlay: ShelfOverlay,
     settings: Settings,
+    game_emulation: Option<EmulationProfile>,
     video_mode: VideoMode,
     wallpaper_texture: Option<slot_gfx::TexId>,
     setting_values: Vec<(slot_gfx::TexId, u32, u32)>,
@@ -432,7 +442,9 @@ impl Engine {
         });
         let setting_values = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
-                              "STANDARD", "RESPONSIVE"]
+                              "STANDARD", "RESPONSIVE",
+                              "1 FRAME", "2 FRAMES", "1 ms", "2 ms",
+                              "LEGACY", "32 ms", "48 ms", "64 ms", "96 ms"]
             .into_iter().map(|value| {
                 let face = quick_value_face(value, true);
                 let tex = gpu.create_texture(face.w, face.h, &face.rgba);
@@ -540,6 +552,7 @@ impl Engine {
             external_pending: false,
             overlay: ShelfOverlay::None,
             settings,
+            game_emulation: None,
             video_mode: VideoMode::Actual,
             wallpaper_texture,
             setting_values,
@@ -855,6 +868,7 @@ impl Engine {
                 self.polaroids = None;
                 self.requested_uri = None;
                 self.prepared_rom = None;
+                self.game_emulation = None;
                 *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = None;
             }
             Input::GameError { uri, message } => {
@@ -1208,11 +1222,20 @@ impl Engine {
                             },
                             ShelfOverlay::EmulationSettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::EmulationSettings {
-                                    row: move_menu_row(row, code, 2),
+                                    row: move_menu_row(row, code, 6),
                                 },
                                 21 | 22 => self.change_setting(row + 10, code == 22),
                                 97 => self.overlay = ShelfOverlay::Settings { row: 2 },
                                 108 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
+                            ShelfOverlay::GameEmulationSettings { row } => match code {
+                                19 | 20 => self.overlay = ShelfOverlay::GameEmulationSettings {
+                                    row: move_menu_row(row, code, 7),
+                                },
+                                21 | 22 if row < 6 => self.change_game_emulation(row + 10, code == 22),
+                                96 if row == 6 => self.reset_game_emulation(),
+                                97 | 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
                             ShelfOverlay::GameplaySettings { row } => match code {
@@ -1302,6 +1325,12 @@ impl Engine {
                             UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(13);
                             return;
                         }
+                        // Y edits the selected cartridge. X remains Cart Studio.
+                        100 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
+                            self.load_selected_emulation();
+                            self.overlay = ShelfOverlay::GameEmulationSettings { row: 0 };
+                            return;
+                        }
                         108 if !self.inserted => {
                             self.shelves[self.active].release_hold();
                             self.overlay = ShelfOverlay::Menu { row: 0 };
@@ -1346,6 +1375,7 @@ impl Engine {
                             return;
                         }
                         96 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
+                            self.load_selected_emulation();
                             self.inserted = true;
                             let selected = &self.shelves[self.active].carts[self.shelves[self.active].index];
                             let uri = selected.rom.to_string_lossy();
@@ -1626,6 +1656,43 @@ impl Engine {
         }
     }
 
+    fn current_emulation(&self) -> EmulationProfile {
+        self.game_emulation.unwrap_or_else(|| EmulationProfile::from_settings(&self.settings))
+    }
+    fn selected_rom_uri(&self) -> Option<String> {
+        self.shelves.get(self.active)?.carts
+            .get(self.shelves[self.active].index)
+            .map(|cart| cart.rom.to_string_lossy().into_owned())
+    }
+    fn load_selected_emulation(&mut self) {
+        let uri = self.selected_rom_uri();
+        self.game_emulation = uri.as_deref().and_then(|uri| {
+            PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+                .and_then(|(root, _)| EmulationProfile::load(root, uri))
+        });
+    }
+    fn change_game_emulation(&mut self, key: usize, right: bool) {
+        let Some(uri) = self.selected_rom_uri() else { return; };
+        let mut profile = self.current_emulation();
+        if !profile.change(key, right) { return; }
+        if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            if let Err(error) = profile.save(root, &uri) {
+                set_message(format!("Cannot save game emulation settings: {error}"));
+                return;
+            }
+        } else { return; }
+        self.game_emulation = Some(profile);
+    }
+    fn reset_game_emulation(&mut self) {
+        let Some(uri) = self.selected_rom_uri() else { return; };
+        if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            if let Err(error) = EmulationProfile::clear(root, &uri) {
+                set_message(format!("Cannot reset game emulation settings: {error}"));
+                return;
+            }
+        } else { return; }
+        self.game_emulation = None;
+    }
     fn persist_settings(&self) {
         if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             if let Err(error) = self.settings.save(root) {
@@ -1650,6 +1717,9 @@ impl Engine {
 
     fn setting_value(&self, key: usize) -> usize {
         use crate::settings::Shader;
+        let profile = if matches!(self.overlay, ShelfOverlay::GameEmulationSettings { .. }) {
+            self.current_emulation()
+        } else { EmulationProfile::from_settings(&self.settings) };
         let shader = |shader| match shader {
             Shader::Off => 5, Shader::Lcd3x => 6, Shader::Grid => 7,
             Shader::Dot => 8, Shader::Simpletex => 9,
@@ -1665,8 +1735,12 @@ impl Engine {
             7 => if self.settings.turbo { 4 } else { 5 },
             8 => if self.settings.rumble { 4 } else { 5 },
             9 => if self.settings.eject_save { 4 } else { 5 },
-            10 => if self.settings.show_fps { 4 } else { 5 },
-            11 => if self.settings.responsive_pacing { 11 } else { 10 },
+            10 => if profile.show_fps { 4 } else { 5 },
+            11 => if profile.responsive_pacing { 11 } else { 10 },
+            12 => match profile.run_ahead_frames { 1 => 12, 2 => 13, _ => 5 },
+            13 => match profile.frame_delay_ms { 1 => 14, 2 => 15, _ => 5 },
+            14 => if profile.gpu_sync { 4 } else { 5 },
+            15 => match profile.audio_latency_ms { 32 => 17, 48 => 18, 64 => 19, 96 => 20, _ => 16 },
             _ => 5,
         }
     }
@@ -1674,6 +1748,7 @@ impl Engine {
     fn draw_setting_values(&self, row: usize, keys: &[usize], out: &mut Vec<Draw>) {
         let top = settings_row_top(keys.len());
         for (index, key) in keys.iter().copied().enumerate() {
+            if key > 15 { continue; } // Reset-to-global has no value.
             let (tex, width, height) = self.setting_values[self.setting_value(key)];
             let y = top + index as f32 * QUICK_PITCH + 8.0;
             let scale = 0.79;
@@ -1769,8 +1844,12 @@ impl Engine {
                 self.draw_original_style_menu(26, &[32, 33, 49, 40], row, out);
             }
             ShelfOverlay::EmulationSettings { row } => {
-                self.draw_original_style_menu(50, &[51, 52], row, out);
-                self.draw_setting_values(row, &[10, 11], out);
+                self.draw_original_style_menu(50, &[51, 52, 55, 56, 57, 58], row, out);
+                self.draw_setting_values(row, &[10, 11, 12, 13, 14, 15], out);
+            }
+            ShelfOverlay::GameEmulationSettings { row } => {
+                self.draw_original_style_menu(59, &[51, 52, 55, 56, 57, 58, 60], row, out);
+                self.draw_setting_values(row, &[10, 11, 12, 13, 14, 15, usize::MAX], out);
             }
             ShelfOverlay::Personalization { row } => {
                 self.draw_original_style_menu(41, &self.customize_items, row, out);
@@ -2042,7 +2121,8 @@ impl Engine {
             ShelfOverlay::Library { row } => (2u8, row, 5usize),
             ShelfOverlay::GameMenu { row } => (3u8, row, 3usize),
             ShelfOverlay::Settings { row } => (4u8, row, 4usize),
-            ShelfOverlay::EmulationSettings { row } => (8u8, row, 2usize),
+            ShelfOverlay::EmulationSettings { row } => (8u8, row, 6usize),
+            ShelfOverlay::GameEmulationSettings { row } => (9u8, row, 7usize),
             ShelfOverlay::ScreenSettings { row } => (5u8, row, 4usize),
             ShelfOverlay::GameplaySettings { row } => (6u8, row, 6usize),
             ShelfOverlay::Personalization { row } => (7u8, row, self.customize_items.len()),
