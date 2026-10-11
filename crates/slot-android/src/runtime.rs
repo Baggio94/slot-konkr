@@ -263,7 +263,7 @@ const MENU_TEXT: [&str; 61] = [
     "Apps",                             // 48
     "Emulation",                        // 49
     "EMULATION",                        // 50
-    "Show FPS",                         // 51
+    "Show Stats",                       // 51
     "Frame pacing",                     // 52
     "STANDARD",                         // 53
     "RESPONSIVE",                       // 54
@@ -1233,10 +1233,10 @@ impl Engine {
                             },
                             ShelfOverlay::GameEmulationSettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::GameEmulationSettings {
-                                    row: move_menu_row(row, code, 7),
+                                    row: move_menu_row(row, code, 6),
                                 },
-                                21 | 22 if row < 6 => self.change_game_emulation(row + 10, code == 22),
-                                96 if row == 6 => self.reset_game_emulation(),
+                                21 | 22 if row < 5 => self.change_game_emulation(row + 11, code == 22),
+                                96 if row == 5 => self.reset_game_emulation(),
                                 97 | 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -1659,7 +1659,12 @@ impl Engine {
     }
 
     fn current_emulation(&self) -> EmulationProfile {
-        self.game_emulation.unwrap_or_else(|| EmulationProfile::from_settings(&self.settings))
+        let mut profile = self.game_emulation
+            .unwrap_or_else(|| EmulationProfile::from_settings(&self.settings));
+        // Show Stats is global-only. Legacy per-cart JSON may still contain
+        // show_fps, but it must never override the current global setting.
+        profile.show_fps = self.settings.show_fps;
+        profile
     }
     fn selected_rom_uri(&self) -> Option<String> {
         self.shelves.get(self.active)?.carts
@@ -1850,8 +1855,8 @@ impl Engine {
                 self.draw_setting_values(row, &[10, 11, 12, 13, 14, 15], out);
             }
             ShelfOverlay::GameEmulationSettings { row } => {
-                self.draw_original_style_menu(59, &[51, 52, 55, 56, 57, 58, 60], row, out);
-                self.draw_setting_values(row, &[10, 11, 12, 13, 14, 15, usize::MAX], out);
+                self.draw_original_style_menu(59, &[52, 55, 56, 57, 58, 60], row, out);
+                self.draw_setting_values(row, &[11, 12, 13, 14, 15, usize::MAX], out);
             }
             ShelfOverlay::Personalization { row } => {
                 self.draw_original_style_menu(41, &self.customize_items, row, out);
@@ -2124,7 +2129,7 @@ impl Engine {
             ShelfOverlay::GameMenu { row } => (3u8, row, 3usize),
             ShelfOverlay::Settings { row } => (4u8, row, 4usize),
             ShelfOverlay::EmulationSettings { row } => (8u8, row, 6usize),
-            ShelfOverlay::GameEmulationSettings { row } => (9u8, row, 7usize),
+            ShelfOverlay::GameEmulationSettings { row } => (9u8, row, 6usize),
             ShelfOverlay::ScreenSettings { row } => (5u8, row, 4usize),
             ShelfOverlay::GameplaySettings { row } => (6u8, row, 6usize),
             ShelfOverlay::Personalization { row } => (7u8, row, self.customize_items.len()),
