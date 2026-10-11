@@ -6,6 +6,7 @@ use crate::plate::UndoFace;
 use crate::text;
 
 const STICKER_SVG: &str = include_str!("../assets/sticker.svg");
+const STICKER_KONKR_SVG: &str = include_str!("../assets/sticker-konkr.svg");
 
 const WORDMARK_SVG: &str = include_str!("../assets/wordmark.svg");
 // Scalable artwork traced from the KONKR and Pocket Advance branding
@@ -87,8 +88,8 @@ struct Canvas {
 }
 
 impl Canvas {
-    fn shape(w: u32, h: u32) -> Canvas {
-        let px = render_svg(STICKER_SVG, w, h).unwrap_or_else(|| vec![0; (w * h * 4) as usize]);
+    fn shape(source: &str, w: u32, h: u32) -> Canvas {
+        let px = render_svg(source, w, h).unwrap_or_else(|| vec![0; (w * h * 4) as usize]);
         Canvas { px, w, h }
     }
 
@@ -235,7 +236,10 @@ pub fn sticker_face_konkr(f: &StickerFields) -> UndoFace {
 fn sticker_face_custom(f: &StickerFields, credits: &[&str; 10],
                        origin: &[&str; 2], copyright: &str,
                        home: &str, model: &str) -> UndoFace {
-    let mut c = Canvas::shape(STICKER_W, STICKER_H);
+    let mut c = Canvas::shape(
+        if model == "MODEL NO. KONKR ADV" { STICKER_KONKR_SVG } else { STICKER_SVG },
+        STICKER_W, STICKER_H
+    );
     let panel_x = (PANEL_FX * STICKER_W as f32).round() as u32;
     let panel_y = (PANEL_FY * STICKER_H as f32).round() as u32;
     let panel_w = (PANEL_FW * STICKER_W as f32).round() as u32;
@@ -318,16 +322,16 @@ fn sticker_face_custom(f: &StickerFields, credits: &[&str; 10],
         // Reserve explicit space for all four rows. Keep the source artwork
         // vector-based, and give the very wide POCKET ADVANCE wordmark more
         // horizontal pixels so its thin strokes remain clean.
-        ry -= 3.0;
-        if let Some((logo, (w, h))) = vector_mark(KONKR_SVG, 165) {
+        ry = panel_y as f32 + panel_h as f32 + 3.0;
+        if let Some((logo, (w, h))) = vector_mark(KONKR_SVG, 155) {
             c.blit((right_edge - w as f32 - 14.0) as u32,
                    ry as u32, &logo, w, h);
-            ry += h as f32 + 3.0;
+            ry += h as f32 + 2.0;
         }
         if let Some((edition, (w, h))) = vector_mark(POCKET_ADVANCE_SVG, 305) {
             c.blit((right_edge - w as f32 - 14.0) as u32,
                    ry as u32, &edition, w, h);
-            ry += h as f32 + 3.0;
+            ry += h as f32 + 2.0;
         }
         for line in [copyright, home] {
             let px = SMALL_PX * 0.88;
