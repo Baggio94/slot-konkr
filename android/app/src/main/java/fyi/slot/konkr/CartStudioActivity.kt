@@ -79,7 +79,7 @@ class CartStudioActivity : Activity() {
             letterSpacing = .09f
             textSize = 18f
             gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
+            setTextColor(SlotUi.ink)
         }
         frame.addView(notice, FrameLayout.LayoutParams(-1, -1))
 
@@ -219,7 +219,7 @@ class CartStudioActivity : Activity() {
             typeface = SlotUi.font(this@CartStudioActivity)
             letterSpacing = .09f
             textSize = 17f
-            setTextColor(Color.WHITE)
+            setTextColor(SlotUi.ink)
             gravity = Gravity.CENTER
         }
         toolbar.addView(title, FrameLayout.LayoutParams(-1, -1))
@@ -228,7 +228,7 @@ class CartStudioActivity : Activity() {
             typeface = SlotUi.font(this@CartStudioActivity)
             letterSpacing = .09f
             textSize = 15f
-            setTextColor(Color.WHITE)
+            setTextColor(SlotUi.ink)
             gravity = Gravity.CENTER
             setOnClickListener { finish() }
             isFocusable = true
@@ -256,7 +256,7 @@ class CartStudioActivity : Activity() {
                 setPadding((12 * density).toInt(), 0, (12 * density).toInt(), 0)
                 background = GradientDrawable().apply {
                     setColor(if (pale) SlotUi.ink else SlotUi.surface)
-                    cornerRadius = 7 * density
+                    cornerRadius = 4 * density
                 }
                 visibility = View.GONE
                 isFocusable = true
