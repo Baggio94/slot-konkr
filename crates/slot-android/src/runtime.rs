@@ -1119,12 +1119,14 @@ impl Engine {
                                             ShelfOverlay::Menu { row }
                                         },
                                         2 => {
-                                            // Open the account dashboard/sign-in directly:
-                                            // the old "A: RA account / sign in" modal was
-                                            // a redundant extra press.
+                                            // Keep Menu rendered behind the RA dialog until
+                                            // Android has actually shown it, just like Apps.
+                                            // Closing the native overlay immediately flashes
+                                            // the carousel before Dialog.show() is reached.
                                             UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
                                                 .push_back(3);
-                                            ShelfOverlay::None
+                                            self.external_pending = true;
+                                            ShelfOverlay::Menu { row }
                                         },
                                         3 => {
                                             UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(15);
@@ -1269,6 +1271,7 @@ impl Engine {
                                 }
                                 96 if matches!(self.overlay, ShelfOverlay::Achievements) => {
                                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(3);
+                                    self.external_pending = true;
                                 }
                                 97 => self.overlay = ShelfOverlay::Menu {
                                     row: if matches!(self.overlay, ShelfOverlay::Scraping) { 1 } else { 2 },
