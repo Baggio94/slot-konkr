@@ -22,6 +22,9 @@ if [ "$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)" != "$PIN" ]; then
   git -C "$SRC" fetch --depth=1 origin "$PIN"
   git -C "$SRC" checkout --detach -q FETCH_HEAD
 fi
+# Patch only the pinned source's transient Run-Ahead audio snapshot ABI.
+# Real RetroArch save-state layout/format remains untouched.
+python3 "$ROOT/scripts/patch-mgba-speculative-audio.py" "$SRC"
 cmake -S "$SRC" -B "$BUILD" \
   -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-31 \
@@ -38,6 +41,15 @@ cmake -S "$SRC" -B "$BUILD" \
 cmake --build "$BUILD" --target mgba_libretro -j 4
 CORE="$(find "$BUILD" -type f -name '*libretro*.so' -print -quit)"
 [ -n "$CORE" ] && [ -s "$CORE" ] || { echo "mGBA libretro core missing" >&2; exit 1; }
+NM="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
+[ -x "$NM" ] || { echo "Android NDK llvm-nm missing: $NM" >&2; exit 1; }
+SYMBOLS="$("$NM" -D --defined-only "$CORE")"
+for symbol in slot_mgba_audio_sidecar slot_mgba_audio_sidecar_size; do
+  grep -q " $symbol$" <<< "$SYMBOLS" || {
+    echo "mGBA speculative-audio symbol missing: $symbol" >&2
+    exit 1
+  }
+done
 DEST="$ROOT/android/app/src/main/jniLibs/arm64-v8a"
 mkdir -p "$DEST"
 cp "$CORE" "$DEST/libmgba_libretro.so"
