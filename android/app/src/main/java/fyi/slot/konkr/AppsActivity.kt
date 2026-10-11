@@ -96,7 +96,7 @@ class AppsActivity : Activity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(SlotUi.background)
-            setPadding(dp(22), dp(10), dp(22), dp(15))
+            setPadding(dp(22), dp(10), dp(22), dp(4))
             isFocusableInTouchMode = true
         }
         setContentView(root)
@@ -125,6 +125,11 @@ class AppsActivity : Activity() {
             verticalSpacing = dp(12)
             stretchMode = GridView.STRETCH_COLUMN_WIDTH
             selector = plate(Color.TRANSPARENT)
+            // Hide Android's scrollbar, never the controller-scrolled content.
+            isVerticalScrollBarEnabled = false
+            isHorizontalScrollBarEnabled = false
+            isSmoothScrollbarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
             clipToPadding = false
             setPadding(0, dp(3), 0, dp(8))
         }
@@ -225,7 +230,9 @@ class AppsActivity : Activity() {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(0, dp(8), 0, dp(7))
+            // Keep the exact exported Slot hint PNGs and their scaled sizes.
+            // Only compress whitespace around the footer, not its artwork.
+            setPadding(0, dp(3), 0, dp(2))
             addView(hint("move"))
             val open = hint("open")
             (open.layoutParams as LinearLayout.LayoutParams).leftMargin = spacing
