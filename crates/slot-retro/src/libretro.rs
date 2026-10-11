@@ -681,20 +681,24 @@ impl RetroCore for LibretroCore {
     }
 
     fn serialize(&mut self) -> Result<Vec<u8>, CoreError> {
+        let mut buf = Vec::new();
+        self.serialize_into(&mut buf)?;
+        Ok(buf)
+    }
+
+    fn serialize_into(&mut self, buf: &mut Vec<u8>) -> Result<(), CoreError> {
         let size = unsafe { (self.api.serialize_size)() };
         if size == 0 {
             return Err(CoreError::State("core reports no state".into()));
         }
-        let mut buf = vec![0u8; size];
+        // Keep the caller's allocation across speculative frames. A same-sized
+        // libretro state does not need a new potentially large Vec each time.
+        buf.resize(size, 0);
         let ok = {
             let _a = Active::bind(&mut self.host);
             unsafe { (self.api.serialize)(buf.as_mut_ptr() as *mut c_void, size) }
         };
-        if ok {
-            Ok(buf)
-        } else {
-            Err(CoreError::State("serialize refused".into()))
-        }
+        if ok { Ok(()) } else { Err(CoreError::State("serialize refused".into())) }
     }
 
     fn unserialize(&mut self, data: &[u8]) -> Result<(), CoreError> {
