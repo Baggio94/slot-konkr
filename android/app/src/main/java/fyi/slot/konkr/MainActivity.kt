@@ -38,6 +38,7 @@ import android.widget.Toast
 import android.net.Uri
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.NetworkCapabilities
 import org.json.JSONObject
 import org.json.JSONArray
 import java.util.concurrent.ConcurrentHashMap
@@ -107,6 +108,8 @@ class MainActivity : Activity() {
     external fun nativePollRaNotice(): String?
     external fun nativeRaStatus(): String?
     external fun nativeRaNetworkAvailable()
+    external fun nativeRaAccountConfigured()
+    external fun nativeRaPrefetchHash(hash: String)
     external fun nativeSystemStatus(clock: String, batteryPercent: Int, charging: Boolean)
     external fun nativePollUiAction(): Int
     external fun nativeReloadVisualAssets()
@@ -122,6 +125,10 @@ class MainActivity : Activity() {
     private lateinit var cartSounds: CartSounds
     private val scanner = Executors.newSingleThreadExecutor()
     private val raLoginWorker = Executors.newSingleThreadExecutor()
+    private val raSmartWorker = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "slot-ra-smart-cache").apply { priority = Thread.MIN_PRIORITY }
+    }
+    private val raSmartRunning = AtomicBoolean(false)
     private val gameLoader = Executors.newSingleThreadExecutor()
     private val activeTargets = ConcurrentHashMap<String, RetroArchStorage.Target>()
     private val uiHandler = Handler(Looper.getMainLooper())
@@ -134,7 +141,15 @@ class MainActivity : Activity() {
     private val raConnectivityCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             // Signals only that a network appeared. Rust still verifies RA HTTPS.
-            if (!isDestroyed) nativeRaNetworkAvailable()
+            if (!isDestroyed) {
+                nativeRaNetworkAvailable()
+                startRaSmartCache()
+            }
+        }
+        override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+            if (!isDestroyed && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                startRaSmartCache()
+            }
         }
     }
     private val pulse = object : Runnable {
@@ -235,6 +250,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         nativeConfigure(filesDir.absolutePath, applicationInfo.nativeLibraryDir)
+        if (RaAccount.configuredUser(filesDir) != null) nativeRaAccountConfigured()
         cartSounds = CartSounds(this)
         view = object : GLSurfaceView(this) {
             init {
@@ -293,6 +309,7 @@ class MainActivity : Activity() {
         immersive()
         uiHandler.post(pulse)
         startRaNetworkWatch()
+        startRaSmartCache()
         // Stage BIOS files before the first queued ROM launch, using the same
         // worker that loads ROMs; no race between BIOS import and core startup.
         getSharedPreferences(PREFS, MODE_PRIVATE).getString(BIOS_ROOT, null)
@@ -626,6 +643,34 @@ class MainActivity : Activity() {
         audioThread = null
     }
 
+    /**
+     * Read SAF ROM fingerprints exclusively off UI/audio/GL threads. Only
+     * the complete ROM MD5 is forwarded to the native RA preparation queue.
+     */
+    private fun startRaSmartCache() {
+        if (isDestroyed || RaAccount.configuredUser(filesDir) == null) return
+        if (!raSmartRunning.compareAndSet(false, true)) return
+        try {
+            raSmartWorker.execute {
+                try {
+                    val manager = getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager
+                    val caps = manager?.getNetworkCapabilities(manager.activeNetwork)
+                    if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) != true)
+                        return@execute
+                    RaSmartCache.indexAndPrefetch(applicationContext, filesDir,
+                        isPlaying = { nativeIsPlaying() },
+                        submit = { hash -> nativeRaPrefetchHash(hash) })
+                } catch (_: Exception) {
+                    Log.w(TAG, "RA Smart Cache indexing postponed")
+                } finally {
+                    raSmartRunning.set(false)
+                }
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            raSmartRunning.set(false)
+        }
+    }
+
     private fun startRaNetworkWatch() {
         try {
             val manager = getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -727,8 +772,10 @@ class MainActivity : Activity() {
                         when (result) {
                             is RaAccount.Result.Connected -> {
                                 dialog.dismiss()
+                                nativeRaAccountConfigured()
+                                startRaSmartCache()
                                 SlotToast.makeText(this,
-                                    "RA connected as " + result.username + ". Start a GBA game online.",
+                                    "RA connected as " + result.username + ". GBA cache starts in background.",
                                     Toast.LENGTH_LONG).show()
                             }
                             is RaAccount.Result.Failed -> {
@@ -1196,6 +1243,7 @@ class MainActivity : Activity() {
                 if (count >= 0) {
                     try {
                         storeCachedLibrary(uri, result.json)
+                        startRaSmartCache()
                     } catch (error: Exception) {
                         Log.w(TAG, "Cannot cache ROM library; games remain available", error)
                     }
@@ -1233,6 +1281,7 @@ class MainActivity : Activity() {
         scanSerial.incrementAndGet()
         scanner.shutdownNow()
         raLoginWorker.shutdownNow()
+        raSmartWorker.shutdownNow()
         gameLoader.shutdownNow()
         uiHandler.removeCallbacks(pulse)
         stopAudio()
@@ -1263,6 +1312,10 @@ class MainActivity : Activity() {
         // Android's quick settings may return without a fresh onAvailable().
         // Waking a retry is safe even when no network is present.
         nativeRaNetworkAvailable()
+        if (RaAccount.configuredUser(filesDir) != null) {
+            nativeRaAccountConfigured()
+            startRaSmartCache()
+        }
         lastStatusPoll = -15000L
         cartSounds.resume()
         view.onResume()
