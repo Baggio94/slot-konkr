@@ -98,6 +98,8 @@ pub trait RetroCore: Send {
     fn set_frame_skip(&mut self, _skip: bool) {}
     fn video_xrgb8888(&self) -> &[u8];
     fn take_audio(&mut self) -> Vec<i16>;
+    /// Drop speculative audio without moving the core's output buffer.
+    fn discard_audio(&mut self) { let _ = self.take_audio(); }
     /// Optional reusable audio storage for worker-wrapped libretro cores.
     fn recycle_audio(&mut self, _audio: Vec<i16>) {}
     fn serialize(&mut self) -> Result<Vec<u8>, CoreError>;
