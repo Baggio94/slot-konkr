@@ -88,6 +88,8 @@ class MainActivity : Activity() {
     external fun nativeDrawFrame()
     external fun nativeKey(code: Int, pressed: Boolean)
     external fun nativeResetInput()
+    external fun nativeExternalReturn()
+    external fun nativePerformanceStats(): String?
     external fun nativeSetLibrary(json: String): Int
     external fun nativeConfigure(dataDir: String, libraryDir: String)
     external fun nativePollLaunchUri(): String?
@@ -133,6 +135,9 @@ class MainActivity : Activity() {
     private val vibrator by lazy { getSystemService(VIBRATOR_SERVICE) as? Vibrator }
     private var lastRumbleAt = 0L
     @Volatile private var resumed = false
+    private var returnFromSlotChild = false
+    private lateinit var performanceHud: TextView
+    private var lastPerfPoll = 0L
     private var audioThread: Thread? = null
     private var raConnectivity: ConnectivityManager? = null
     private val raConnectivityCallback = object : ConnectivityManager.NetworkCallback() {
@@ -209,9 +214,26 @@ class MainActivity : Activity() {
                 13 -> openSelectedCartStudio()
                 14 -> openAllCartStudio()
                 15 -> {
-                    startActivity(Intent(this@MainActivity, AppsActivity::class.java))
-                    SlotTransitions.open(this@MainActivity)
+                    try {
+                        returnFromSlotChild = true
+                        startActivity(Intent(this@MainActivity, AppsActivity::class.java))
+                        SlotTransitions.open(this@MainActivity)
+                    } catch (error: Exception) {
+                        returnFromSlotChild = false
+                        nativeExternalReturn()
+                        Log.w(TAG, "Cannot open Apps", error)
+                        SlotToast.makeText(this@MainActivity, "Unable to open Apps.",
+                            Toast.LENGTH_SHORT).show()
+                    }
                 }
+            }
+            val nowPerf = android.os.SystemClock.uptimeMillis()
+            if (resumed && nowPerf - lastPerfPoll >= 250) {
+                lastPerfPoll = nowPerf
+                val value = nativePerformanceStats()
+                performanceHud.visibility = if (value.isNullOrBlank()) View.GONE else View.VISIBLE
+                if (value != null && performanceHud.text.toString() != value)
+                    performanceHud.text = value
             }
             nativePollMessage()?.let { message ->
                 Log.w(TAG, message)
@@ -312,6 +334,22 @@ class MainActivity : Activity() {
             status,
             FrameLayout.LayoutParams(-1, -2, Gravity.TOP)
         )
+        performanceHud = TextView(this).apply {
+            typeface = SlotUi.font(this@MainActivity)
+            textSize = 10.5f
+            letterSpacing = .05f
+            setTextColor(SlotUi.ink)
+            setBackgroundColor(android.graphics.Color.rgb(23, 22, 25))
+            setPadding(10, 5, 10, 5)
+            isClickable = false
+            isFocusable = false
+            visibility = View.GONE
+        }
+        frame.addView(performanceHud,
+            FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply {
+                leftMargin = (12 * resources.displayMetrics.density).toInt()
+                topMargin = (10 * resources.displayMetrics.density).toInt()
+            })
         raAchievementOverlay = RaAchievementOverlay(this, frame)
         showSlotStartupSplash(frame)
         setContentView(frame)
@@ -1103,8 +1141,17 @@ class MainActivity : Activity() {
             if (selected != null) putExtra(CartStudioActivity.EXTRA_ROM, selected)
         }
         @Suppress("DEPRECATION")
-        startActivityForResult(intent, CART_STUDIO_REQUEST)
-        SlotTransitions.open(this)
+        try {
+            returnFromSlotChild = true
+            startActivityForResult(intent, CART_STUDIO_REQUEST)
+            SlotTransitions.open(this)
+        } catch (error: Exception) {
+            returnFromSlotChild = false
+            nativeExternalReturn()
+            Log.w(TAG, "Cannot open Cart Studio", error)
+            SlotToast.makeText(this, "Unable to open Cart Studio.",
+                Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun openAllCartStudio() = openCartStudio(null)
@@ -1392,6 +1439,12 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (returnFromSlotChild) {
+            // Clear the preserved native menu ONLY after Apps/Studio has
+            // finished and the shelf itself is about to be visible again.
+            returnFromSlotChild = false
+            nativeExternalReturn()
+        }
         resumed = true
         // Android's quick settings may return without a fresh onAvailable().
         // Waking a retry is safe even when no network is present.
