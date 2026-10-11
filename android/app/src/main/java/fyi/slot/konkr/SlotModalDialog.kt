@@ -30,6 +30,7 @@ internal class SlotModalDialog(
     private var busy = false
     private val buttons = ArrayList<TextView>()
     private val secretFields = ArrayList<EditText>()
+    private val fields = ArrayList<EditText>()
     private val dialog = object : Dialog(activity) {
         override fun dispatchKeyEvent(event: KeyEvent): Boolean {
             when (event.keyCode) {
@@ -110,6 +111,7 @@ internal class SlotModalDialog(
         body.addView(field, LinearLayout.LayoutParams(-1, dp(49)).apply {
             bottomMargin = dp(10)
         })
+        fields.add(field)
         if (password) secretFields.add(field)
         return field
     }
@@ -149,7 +151,9 @@ internal class SlotModalDialog(
             decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or
                 View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         }
-        buttons.firstOrNull()?.requestFocus()
+        // Start at the username field for first login; A summons the system
+        // keyboard, B always returns. Don't pop the IME until explicitly asked.
+        (fields.firstOrNull() ?: buttons.firstOrNull())?.requestFocus()
     }
 
     fun dismiss() = dialog.dismiss()
