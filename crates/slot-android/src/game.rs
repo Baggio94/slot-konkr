@@ -249,15 +249,29 @@ impl GameSession {
         }
     }
 
-    /// Render 1-2 predicted frames, while the core's true timeline stays on
-    /// the last normally executed frame. Caller must first consume real audio.
-    /// RetroAchievements wrappers skip RAM snapshots on speculative frames.
+    pub fn runahead_supported(&self) -> bool {
+        !self.runahead_unavailable && self.core.speculative_audio_supported()
+    }
+
+    /// Roll back both the standard libretro state and transient mixer state.
+    /// gpSP's mixer ring is not part of standard .state files by design;
+    /// mGBA continues its previous, unmodified run-ahead path.
     pub fn prepare_runahead(&mut self, buttons: u16, turbo: bool, frames: u8) {
         self.runahead_video.clear();
         if frames == 0 || frames > 2 || self.runahead_unavailable { return; }
+        if !self.core.speculative_audio_supported() {
+            self.runahead_unavailable = true;
+            log_launch_timing("Run-Ahead disabled: core has no safe speculative audio support");
+            return;
+        }
         if let Err(error) = self.core.serialize_into(&mut self.runahead_state) {
             self.runahead_unavailable = true;
             log_launch_timing(&format!("Run-Ahead disabled: serialize failed: {error}"));
+            return;
+        }
+        if let Err(error) = self.core.capture_speculative_audio() {
+            self.runahead_unavailable = true;
+            log_launch_timing(&format!("Run-Ahead disabled: audio snapshot failed: {error}"));
             return;
         }
         let pressed = ButtonMask(buttons);
@@ -268,7 +282,9 @@ impl GameSession {
             self.core.discard_audio();
         }
         self.runahead_video.extend_from_slice(self.core.video_xrgb8888());
-        if let Err(error) = self.core.restore_speculative_state(&self.runahead_state) {
+        let restored = self.core.restore_speculative_state(&self.runahead_state)
+            .and_then(|_| self.core.restore_speculative_audio());
+        if let Err(error) = restored {
             // Never display a frame if the core could not restore its real state.
             self.runahead_video.clear();
             self.runahead_unavailable = true;
