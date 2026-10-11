@@ -33,6 +33,8 @@ pub struct Settings {
     pub turbo: bool, pub eject_save: bool,
     // Android-only opt-in diagnostics; preserving original Slot defaults.
     pub show_fps: bool, pub responsive_pacing: bool,
+    pub run_ahead_frames: u8, pub frame_delay_ms: u8,
+    pub gpu_sync: bool, pub audio_latency_ms: u16,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -41,7 +43,9 @@ impl Default for Settings {
             rumble: true, shader_gba: Shader::Off, shader_gb: Shader::Off,
             gb_palettes: false, gb_palette: 1, rewind: true,
             turbo: true, eject_save: true,
-            show_fps: false, responsive_pacing: false }
+            show_fps: false, responsive_pacing: false,
+            run_ahead_frames: 0, frame_delay_ms: 0,
+            gpu_sync: false, audio_latency_ms: 0 }
     }
 }
 impl Settings {
@@ -53,6 +57,9 @@ impl Settings {
                 if !Shader::GBA.contains(&s.shader_gba) { s.shader_gba = Shader::Off; }
                 if !Shader::GB.contains(&s.shader_gb) { s.shader_gb = Shader::Off; }
                 if s.gb_palette >= 48 { s.gb_palette = 1; }
+                if s.run_ahead_frames > 2 { s.run_ahead_frames = 0; }
+                if s.frame_delay_ms > 2 { s.frame_delay_ms = 0; }
+                if ![0, 32, 48, 64, 96].contains(&s.audio_latency_ms) { s.audio_latency_ms = 0; }
                 s
             }).unwrap_or_default()
     }
@@ -88,6 +95,10 @@ impl Settings {
             9 => self.eject_save = !self.eject_save,
             10 => self.show_fps = !self.show_fps,
             11 => self.responsive_pacing = !self.responsive_pacing,
+            12 => self.run_ahead_frames = cycle_u8(self.run_ahead_frames, 2, right),
+            13 => self.frame_delay_ms = cycle_u8(self.frame_delay_ms, 2, right),
+            14 => self.gpu_sync = !self.gpu_sync,
+            15 => self.audio_latency_ms = cycle_audio(self.audio_latency_ms, right),
             _ => return false,
         }
         *self != before
@@ -97,6 +108,17 @@ impl Settings {
             .unwrap_or(GbPalette::DEFAULT).core_name()
     }
 }
+pub fn cycle_u8(value: u8, max: u8, right: bool) -> u8 {
+    if right { if value >= max { 0 } else { value + 1 } }
+    else if value == 0 || value > max { max } else { value - 1 }
+}
+pub fn cycle_audio(value: u16, right: bool) -> u16 {
+    let modes = [0, 32, 48, 64, 96];
+    let index = modes.iter().position(|x| *x == value).unwrap_or(0);
+    modes[if right { (index + 1) % modes.len() }
+          else { (index + modes.len() - 1) % modes.len() }]
+}
+
 /// Model of the frame-debt clamp. STANDARD retains RC3 behavior,
 /// RESPONSIVE never builds more than 1.5 emulated frames of debt.
 pub fn frame_debt(prev: f64, elapsed: f64, speed: f64, period: f64,
@@ -134,10 +156,14 @@ mod tests {
         s.change(4, false); assert_eq!(s.ff_speed, 6);
         s.change(4, true); assert_eq!(s.ff_speed, 2);
         for i in [2, 3, 5, 6, 7, 8, 9] { assert!(s.change(i, true)); }
-        assert!(!s.change(12, true));
+        assert!(!s.change(16, true));
         assert!(!s.rewind && !s.turbo && !s.eject_save);
         assert!(s.change(10, true) && s.show_fps);
         assert!(s.change(11, true) && s.responsive_pacing);
+        assert!(s.change(12, true) && s.run_ahead_frames == 1);
+        assert!(s.change(13, true) && s.frame_delay_ms == 1);
+        assert!(s.change(14, true) && s.gpu_sync);
+        assert!(s.change(15, true) && s.audio_latency_ms == 32);
     }
     #[test]
     fn dev13_json_migrates_without_wiping_preferences() {
@@ -148,6 +174,10 @@ mod tests {
         assert!(!s.ff_sound && !s.rumble);
         assert!(s.rewind && s.turbo && s.eject_save);
         assert!(!s.show_fps && !s.responsive_pacing);
+        assert_eq!(s.run_ahead_frames, 0);
+        assert_eq!(s.frame_delay_ms, 0);
+        assert!(!s.gpu_sync);
+        assert_eq!(s.audio_latency_ms, 0);
     }
     #[test]
     fn roundtrip_and_invalid_values() {
