@@ -55,7 +55,7 @@ class AppsActivity : Activity() {
     private fun text(label: String, size: Float, bright: Boolean = true) = TextView(this).apply {
         this.text = label
         textSize = size
-        typeface = SlotUi.font(this)
+        typeface = SlotUi.font(this@AppsActivity)
         setTextColor(if (bright) SlotUi.ink else SlotUi.muted)
         gravity = Gravity.CENTER_VERTICAL
     }
