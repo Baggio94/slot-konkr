@@ -87,6 +87,11 @@ impl RetroCore for Tracked {
         self.core.run_frame(input);
         self.snapshot();
     }
+    fn run_speculative_frame(&mut self, input: ButtonMask) {
+        // Run-Ahead must never earn speculative RetroAchievements awards,
+        // enqueue frames, or advance the persistent award journal.
+        self.core.run_speculative_frame(input);
+    }
     fn run_frame_linked(&mut self, p1: ButtonMask, p2: ButtonMask) {
         self.core.run_frame_linked(p1, p2);
         self.timeline += 1;
@@ -113,6 +118,11 @@ impl RetroCore for Tracked {
         self.core.unserialize(data)?;
         self.timeline += 1;
         Ok(())
+    }
+    fn restore_speculative_state(&mut self, data: &[u8]) -> Result<(), CoreError> {
+        // Unlike manual load/rewind, this rollback is invisible to the
+        // achievement evaluator: exactly one tracked frame per real frame.
+        self.core.restore_speculative_state(data)
     }
     fn save_ram(&self) -> Option<Vec<u8>> {
         self.core.save_ram()
