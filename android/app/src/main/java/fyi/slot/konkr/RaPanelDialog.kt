@@ -151,6 +151,12 @@ internal class RaPanelDialog(
         val cached = snapshot.cachedGba?.toString() ?: "Unknown"
         val indexed = snapshot.indexedGba?.toString() ?: "?"
         row("GBA prepared", "$cached / $indexed indexed")
+        val budgetUsed = snapshot.prefetchBudgetUsed
+        if (budgetUsed != null) {
+            row("Cache requests", "$budgetUsed / 100 (30 min)")
+            if (snapshot.nextBatchMinutes != null)
+                row("Next batch", "In ${snapshot.nextBatchMinutes} min")
+        }
         row("Awards to sync", snapshot.pendingAwards?.toString() ?: "Unknown")
         row("Awards saved", snapshot.recordedAwards?.toString() ?: "Unknown")
         row("GB / GBC", "Not supported yet")
