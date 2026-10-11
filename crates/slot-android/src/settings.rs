@@ -31,6 +31,8 @@ pub struct Settings {
     pub rumble: bool, pub shader_gba: Shader, pub shader_gb: Shader,
     pub gb_palettes: bool, pub gb_palette: u8, pub rewind: bool,
     pub turbo: bool, pub eject_save: bool,
+    // Android-only opt-in diagnostics; preserving original Slot defaults.
+    pub show_fps: bool, pub responsive_pacing: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -38,7 +40,8 @@ impl Default for Settings {
         Self { ff_speed: 2, ff_sound: true, colour_correction: false,
             rumble: true, shader_gba: Shader::Off, shader_gb: Shader::Off,
             gb_palettes: false, gb_palette: 1, rewind: true,
-            turbo: true, eject_save: true }
+            turbo: true, eject_save: true,
+            show_fps: false, responsive_pacing: false }
     }
 }
 impl Settings {
@@ -83,6 +86,8 @@ impl Settings {
             7 => self.turbo = !self.turbo,
             8 => self.rumble = !self.rumble,
             9 => self.eject_save = !self.eject_save,
+            10 => self.show_fps = !self.show_fps,
+            11 => self.responsive_pacing = !self.responsive_pacing,
             _ => return false,
         }
         *self != before
@@ -113,6 +118,8 @@ mod tests {
         for i in [2, 3, 5, 6, 7, 8, 9] { assert!(s.change(i, true)); }
         assert!(!s.change(10, true));
         assert!(!s.rewind && !s.turbo && !s.eject_save);
+        assert!(s.change(10, true) && s.show_fps);
+        assert!(s.change(11, true) && s.responsive_pacing);
     }
     #[test]
     fn dev13_json_migrates_without_wiping_preferences() {
@@ -122,6 +129,7 @@ mod tests {
         assert_eq!(s.ff_speed, 4);
         assert!(!s.ff_sound && !s.rumble);
         assert!(s.rewind && s.turbo && s.eject_save);
+        assert!(!s.show_fps && !s.responsive_pacing);
     }
     #[test]
     fn roundtrip_and_invalid_values() {
