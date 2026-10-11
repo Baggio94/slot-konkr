@@ -125,7 +125,12 @@ internal class RaPanelDialog(
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(14), 0, dp(10))
         }
-        loading = text("READING ACCOUNT CACHE...", 12.5f, muted)
+        // Account information must be visible immediately, even while the
+        // first cache diagnostics pass is scanning 115+ ROM definitions.
+        section("ACCOUNT")
+        row("Player", username)
+        row("Connection", "Direct to RA")
+        loading = text("CHECKING GAME CACHE AND BADGES...", 12.5f, muted)
         content.addView(loading)
         scroll.addView(content)
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -189,6 +194,7 @@ internal class RaPanelDialog(
         val badgesTotal = snapshot.badgesTotal
         val imageValue = if (badgesDownloaded != null && badgesTotal != null)
             "$badgesDownloaded / $badgesTotal    ${snapshot.badgesPercent}%"
+        else if (badgesTotal != null) "Checking $badgesTotal known badges..."
         else "Not indexed"
         row("Images downloaded", imageValue)
         badgeProgress(snapshot.badgesPercent)
