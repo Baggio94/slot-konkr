@@ -1,10 +1,6 @@
 package fyi.slot.konkr
 
 import android.app.Activity
-import android.app.AlertDialog
-import android.text.InputType
-import android.widget.EditText
-import android.widget.LinearLayout
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
@@ -751,23 +747,26 @@ class MainActivity : Activity() {
                         "Sign out of $username? Cached games and local achievements " +
                             "will remain on the device."
                 }
-                AlertDialog.Builder(this)
-                    .setTitle("SIGN OUT — KEEP LOCAL ACHIEVEMENTS")
-                    .setMessage("$message\n\nSigning in again requires internet. slot. must close to safely stop the old account's RA engine.")
-                    .setNegativeButton("Stay signed in", null)
-                    .setPositiveButton("Sign out & close slot.") { _, _ ->
-                        val unsavedInMemory = runCatching {
-                            JSONObject(nativeRaStatus() ?: "{}").optBoolean("unsaved", false)
-                        }.getOrDefault(false)
-                        if (unsavedInMemory) {
-                            SlotToast.makeText(this,
-                                "Some achievement records aren't saved yet. " +
-                                    "Sign out is blocked until storage recovers.",
-                                Toast.LENGTH_LONG).show()
-                            return@setPositiveButton
-                        }
+                val confirm = SlotModalDialog(
+                    this,
+                    "SIGN OUT — KEEP LOCAL ACHIEVEMENTS",
+                    "$message\n\nReconnecting requires Internet. Slot. closes to stop " +
+                        "the previous account's achievement worker safely."
+                )
+                confirm.addButton("STAY SIGNED IN") { confirm.dismiss() }
+                confirm.addButton("SIGN OUT & CLOSE") {
+                    val unsaved = runCatching {
+                        JSONObject(nativeRaStatus() ?: "{}").optBoolean("unsaved", false)
+                    }.getOrDefault(false)
+                    if (unsaved) {
+                        confirm.setError("Awards still need to be written locally. " +
+                            "Sign out is blocked to protect your progress.")
+                    } else {
+                        confirm.dismiss()
                         flushRaBeforeSignOut(panel, username, 0)
-                    }.show()
+                    }
+                }
+                confirm.show()
             }
         }
     }
@@ -831,70 +830,49 @@ class MainActivity : Activity() {
             return
         }
 
-        val inset = (24 * resources.displayMetrics.density).toInt()
-        val fields = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(inset, 0, inset, 0)
-        }
-        val username = EditText(this).apply {
-            hint = "RetroAchievements username"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-            isSingleLine = true
-        }
-        val password = EditText(this).apply {
-            hint = "Password (not saved)"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            isSingleLine = true
-        }
-        fields.addView(username)
-        fields.addView(password)
-
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("RetroAchievements")
-            .setMessage("Sign in directly to RetroAchievements over HTTPS. " +
-                "Only the returned session token is saved privately. " +
-                "GBA softcore is still experimental.")
-            .setView(fields)
-            .setPositiveButton("Sign in", null)
-            .setNegativeButton("Cancel", null)
-            .create()
-        dialog.setOnShowListener {
-            val signIn = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
-            signIn.setOnClickListener {
-                val name = username.text.toString().trim()
-                val secret = password.text.toString()
-                if (name.isEmpty() || secret.isEmpty()) {
-                    SlotToast.makeText(this, "Enter your RA username and password.",
-                        Toast.LENGTH_SHORT).show()
-                    return@setOnClickListener
-                }
-                // Do not retain the password in the visible input while awaiting HTTPS.
-                password.text.clear()
-                signIn.isEnabled = false
+        val login = SlotModalDialog(
+            this,
+            "RETROACHIEVEMENTS",
+            "Connect directly to RetroAchievements using HTTPS. " +
+                "Your password is never stored; only the returned account token " +
+                "is kept in app-private storage. GBA uses Casual (softcore)."
+        )
+        val username = login.addInput("USERNAME", "RetroAchievements username")
+        val password = login.addInput("PASSWORD", "Password (not saved)", password = true)
+        login.addButton("CANCEL") { login.dismiss() }
+        login.addButton("SIGN IN") {
+            val name = username.text.toString().trim()
+            val secret = password.text.toString()
+            if (name.isEmpty() || secret.isEmpty()) {
+                login.setError("Enter both your RetroAchievements username and password.")
+            } else {
+                password.text.clear() // Don't leave credentials in the visible form.
+                login.setError("Connecting securely…")
+                login.setBusy(true)
                 raLoginWorker.execute {
                     val result = RaAccount.authenticateAndSave(filesDir, name, secret)
                     runOnUiThread {
                         if (isDestroyed) return@runOnUiThread
                         when (result) {
                             is RaAccount.Result.Connected -> {
-                                dialog.dismiss()
+                                login.dismiss()
                                 nativeRaAccountConfigured()
                                 startRaSmartCache()
                                 SlotToast.makeText(this,
-                                    "RA connected as " + result.username + ". GBA cache starts in background.",
+                                    "RA connected as " + result.username +
+                                        ". Preparing GBA achievements in background.",
                                     Toast.LENGTH_LONG).show()
                             }
                             is RaAccount.Result.Failed -> {
-                                signIn.isEnabled = true
-                                SlotToast.makeText(this, result.message,
-                                    Toast.LENGTH_LONG).show()
+                                login.setBusy(false)
+                                login.setError(result.message)
                             }
                         }
                     }
                 }
             }
         }
-        dialog.show()
+        login.show()
     }
 
     private fun pollSystemStatus() {
