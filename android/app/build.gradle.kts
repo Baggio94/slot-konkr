@@ -15,7 +15,7 @@ android {
         // RetroAchievements (#4) branches. The original applicationId and
         // persistent signing certificate remain unchanged for in-place updates.
         versionCode = 53
-        versionName = "0.1.0-rc4-beta12-cores1"
+        versionName = "0.1.0-rc4-beta12-cores2"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
