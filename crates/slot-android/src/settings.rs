@@ -33,10 +33,10 @@ pub struct Settings {
     // X/Y Buttons: true = Slot's original Turbo, false = Y=A and X=B.
     // Existing persisted turbo=false now selects the alternative A/B mapping.
     pub turbo: bool, pub eject_save: bool,
-    // Android-only opt-in diagnostics; preserving original Slot defaults.
+    // Optional one-line FPS display and latency settings.
     pub show_fps: bool, pub responsive_pacing: bool,
-    // Beta 6 opt-in: Choreographer-driven display callbacks, still using
-    // the one-real-frame RESPONSIVE emulation budget.
+    // Choreographer-driven display callbacks, with a single real core
+    // frame maximum per callback and fractional frame time carryover.
     pub display_sync_pacing: bool,
     pub run_ahead_frames: u8,
 }
@@ -63,7 +63,7 @@ impl Settings {
                 if s.gb_palette >= 48 { s.gb_palette = 1; }
                 if !s.responsive_pacing { s.display_sync_pacing = false; }
                 if s.run_ahead_frames > 2 { s.run_ahead_frames = 0; }
-                 s
+                s
             }).unwrap_or_default()
     }
     pub fn save(self, dir: &Path) -> io::Result<()> {
@@ -134,17 +134,13 @@ pub fn frame_debt(prev: f64, elapsed: f64, speed: f64, period: f64,
     (prev + elapsed * speed).min(max)
 }
 
-/// Experimental DISPLAY SYNC pacing: keep up to 0.95 frame of carry-over
-/// after one simulation step. A 60Hz display can jitter around 59.7275Hz
-/// and dropping this fractional debt can cause permanent slow emulation.
-/// This is deliberately *not* the Beta 4 two-step catch-up mode:
-/// the engine still executes at most ONE real frame per GL callback.
-/// Return (bounded debt, intentionally discarded debt in frame units).
+/// DISPLAY SYNC pacing: retain up to 0.95 frame of fractional carryover
+/// after each simulation step, tolerating occasional 60Hz callback jitter.
+/// The engine still executes a maximum of ONE real core frame per callback,
+/// so this cannot reintroduce the Beta 4 catch-up/input-lag regression.
 pub fn frame_debt_display_sync(prev: f64, elapsed: f64, speed: f64,
-                               period: f64) -> (f64, f64) {
-    let limit = period * 1.95;
-    let proposed = prev + elapsed * speed;
-    ((proposed).min(limit), (proposed - limit).max(0.0) / period)
+                               period: f64) -> f64 {
+    (prev + elapsed * speed).min(period * 1.95)
 }
 
 #[cfg(test)]
@@ -183,7 +179,6 @@ mod tests {
         let mut beta8_debt = 0.0;
         let mut beta7_frames = 0u32;
         let mut beta8_frames = 0u32;
-        let mut beta8_lost = 0.0;
         // A reproducible 60Hz callback sequence with small scheduler jitter
         // and an occasional missed vsync, not a GPU throughput benchmark.
         for i in 0..6000 {
@@ -192,10 +187,7 @@ mod tests {
             if i % 8 == 1 || i % 8 == 2 { elapsed -= 0.001; }
             if i % 240 == 27 { elapsed += 1.0 / 60.0; }
             beta7_debt = frame_debt(beta7_debt, elapsed, 1.0, period, false, true);
-            let (debt, lost) =
-                frame_debt_display_sync(beta8_debt, elapsed, 1.0, period);
-            beta8_debt = debt;
-            beta8_lost += lost;
+            beta8_debt = frame_debt_display_sync(beta8_debt, elapsed, 1.0, period);
             // Both profiles have the same *single-frame* work limit.
             if beta7_debt >= period {
                 beta7_debt -= period;
@@ -212,18 +204,15 @@ mod tests {
             "do not discard extra fractions of emulation time");
         assert!(beta8_frames - beta7_frames < 100,
             "this must never simulate large catch-up bursts");
-        assert!(beta8_lost > 0.0,
-            "diagnostic must measure debt lost even at bounded catch-up");
     }
 
     #[test]
     fn display_sync_drops_large_hitches_without_overrunning_input() {
         let period = 1.0 / 59.7275;
-        let (debt, dropped) = frame_debt_display_sync(
+        let debt = frame_debt_display_sync(
             period * 0.2, period * 10.0, 1.0, period);
         assert!((debt - period * 1.95).abs() < 1e-9);
-        assert!(dropped > 8.0);
-        assert_eq!(frame_debt_display_sync(0.0, 0.0, 1.0, period), (0.0, 0.0));
+        assert_eq!(frame_debt_display_sync(0.0, 0.0, 1.0, period), 0.0);
     }
 
     #[test]
@@ -274,6 +263,25 @@ mod tests {
         assert!(s.rewind && s.turbo && s.eject_save);
         assert!(!s.show_fps && !s.responsive_pacing);
         assert_eq!(s.run_ahead_frames, 0);
+    }
+    #[test]
+    fn beta8_obsolete_experiment_fields_are_ignored_when_migrating() {
+        let old = r#"{
+            "responsive_pacing": true,
+            "display_sync_pacing": true,
+            "run_ahead_frames": 1,
+            "frame_delay_ms": 2,
+            "gpu_sync": true,
+            "audio_latency_ms": 96
+        }"#;
+        let parsed: Settings = serde_json::from_str(old).unwrap();
+        assert!(parsed.responsive_pacing && parsed.display_sync_pacing);
+        assert_eq!(parsed.run_ahead_frames, 1);
+        let serialized = serde_json::to_string(&parsed).unwrap();
+        for removed in ["frame_delay_ms", "gpu_sync", "audio_latency_ms"] {
+            assert!(!serialized.contains(removed),
+                "obsolete Beta 8 field must not survive next save: {removed}");
+        }
     }
     #[test]
     fn roundtrip_and_invalid_values() {
