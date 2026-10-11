@@ -26,6 +26,27 @@ internal object RaEndpoint {
     Mode.PROXY -> status?.base()?.let { Route.Available(it + "/dorequest.php", true) }
       ?: Route.ProxyUnavailable
   }
+
+  /**
+   * Prepared for the native rcheevos worker: only its authenticated API
+   * request may mark apiReachable=true. Never infer it from Wi-Fi strength.
+   * In automatic mode, a prepared library is read through our native ledger;
+   * RAOfflineProxy is used only after the user explicitly selects it.
+   *
+   * This plans transport and does not enable achievements by itself.
+   */
+  fun plan(
+    preference: RaRouting.Preference,
+    apiReachable: Boolean,
+    accountRemembered: Boolean,
+    gamePrepared: Boolean,
+    proxy: Status?
+  ): RaRouting.Plan = RaRouting.plan(preference, RaRouting.Observed(
+    apiReachable = apiReachable,
+    accountRemembered = accountRemembered,
+    gamePrepared = gamePrepared,
+    proxyEndpoint = proxy?.base()?.plus("/dorequest.php")
+  ))
   /** Call only from a worker thread. The status API requires no control permission. */
   fun discover(context: Context): Status? {
     return try {
