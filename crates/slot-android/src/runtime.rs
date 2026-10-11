@@ -2360,19 +2360,17 @@ impl Engine {
                 let fast = self.ff_held || self.ff_latched;
                 let multiplier = if fast { f64::from(self.settings.ff_speed) } else { 1.0 };
                 let period = 1.0 / session.fps;
-                // RESPONSIVE normally executes one core frame per display
-                // frame, with at most one extra recovery after a missed vsync.
-                // Unlike RC4 Beta 3 it must not permanently fall below game
-                // speed on panels running slightly under the core's 59.73Hz.
-                // STANDARD and fast-forward retain their previous scheduling.
+                // RC4 Beta 5 restores Beta 3's less aggressive RESPONSIVE mode:
+                // never insert catch-up frames on a single display callback.
+                // A slightly lower EMU FPS is preferable to observable bursts
+                // and inconsistent input response on the physical KONKR.
+                // STANDARD and fast-forward are not changed.
                 let responsive = profile.responsive_pacing && !fast;
                 self.game_accum = crate::settings::frame_debt(
                     self.game_accum, f64::from(dt), multiplier, period, fast, responsive
                 );
                 let frame_limit = if fast { usize::from(self.settings.ff_speed) * 4 }
-                    else if responsive {
-                        crate::settings::responsive_frame_budget(self.game_accum, period)
-                    } else { 4 };
+                    else if responsive { 1 } else { 4 };
                 while self.game_accum >= period && stepped < frame_limit {
                     let started = profile.show_fps.then(Instant::now);
                     session.advance(self.buttons, self.settings.turbo, self.settings.rewind);
