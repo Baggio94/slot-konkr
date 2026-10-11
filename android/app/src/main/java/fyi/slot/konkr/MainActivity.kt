@@ -110,6 +110,7 @@ class MainActivity : Activity() {
     external fun nativeRaNetworkAvailable()
     external fun nativeRaAccountConfigured()
     external fun nativeRaPrefetchHash(hash: String)
+    external fun nativeRaFlushReady(): Boolean
     external fun nativeSystemStatus(clock: String, batteryPercent: Int, charging: Boolean)
     external fun nativePollUiAction(): Int
     external fun nativeReloadVisualAssets()
@@ -760,18 +761,42 @@ class MainActivity : Activity() {
                                 Toast.LENGTH_LONG).show()
                             return@setPositiveButton
                         }
-                        if (!RaAccount.beginSignOut(filesDir, username)) {
-                            SlotToast.makeText(this,
-                                "Can't sign out safely. No awards were changed.",
-                                Toast.LENGTH_LONG).show()
-                        } else {
-                            panel.dismiss()
-                            uiHandler.postDelayed({
-                                finishAffinity()
-                                android.os.Process.killProcess(android.os.Process.myPid())
-                            }, 200L)
-                        }
+                        flushRaBeforeSignOut(panel, username, 0)
                     }.show()
+            }
+        }
+    }
+
+    /** Try up to ~2.5s without blocking the UI or the game/emulator threads. */
+    private fun flushRaBeforeSignOut(panel: RaPanelDialog, username: String, attempt: Int) {
+        if (isDestroyed || nativeIsPlaying()) return
+        if (attempt >= 25) {
+            SlotToast.makeText(this,
+                "Achievement writes haven't finished. Sign out cancelled to keep your awards.",
+                Toast.LENGTH_LONG).show()
+            return
+        }
+        view.queueEvent {
+            val ready = nativeRaFlushReady()
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                if (ready) {
+                    if (!RaAccount.beginSignOut(filesDir, username)) {
+                        SlotToast.makeText(this,
+                            "Can't sign out safely. No awards were changed.",
+                            Toast.LENGTH_LONG).show()
+                    } else {
+                        panel.dismiss()
+                        uiHandler.postDelayed({
+                            finishAffinity()
+                            android.os.Process.killProcess(android.os.Process.myPid())
+                        }, 200L)
+                    }
+                } else {
+                    uiHandler.postDelayed({
+                        flushRaBeforeSignOut(panel, username, attempt + 1)
+                    }, 100L)
+                }
             }
         }
     }
