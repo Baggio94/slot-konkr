@@ -142,6 +142,7 @@ class MainActivity : Activity() {
     private var returnFromSlotChild = false
     private lateinit var performanceHud: TextView
     private var lastPerfPoll = 0L
+    private var lastPerfDiagnosticMs = 0L
     private var displaySyncApplied = false
     @Volatile private var cadenceText = ""
     @Volatile private var audioUnderruns = 0
@@ -305,6 +306,17 @@ class MainActivity : Activity() {
                     val stats = if (detail.isNotBlank())
                         "$value\n$detail | A-UND $audioUnderruns" else value
                     if (performanceHud.text.toString() != stats) performanceHud.text = stats
+                    // Opt-in diagnostic stream for ADB capture. The GL thread
+                    // computes all counters; UI logging is capped at 1 Hz.
+                    // Only numeric performance statistics are emitted: never
+                    // ROM names, account identifiers, or RA credentials.
+                    if (nowPerf - lastPerfDiagnosticMs >= 1000L) {
+                        lastPerfDiagnosticMs = nowPerf
+                        Log.i("SlotPerf", "sync=${nativeDisplaySyncEnabled()} | " +
+                            stats.replace("\n", " | "))
+                    }
+                } else {
+                    lastPerfDiagnosticMs = 0L
                 }
             }
             nativePollMessage()?.let { message ->
