@@ -2609,6 +2609,25 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeKey(
         .push_back(Input::Key(key, pressed != 0));
 }
 
+/// Called on the GL thread through GLSurfaceView.queueEvent before changing
+/// account. The evaluator must drain its final queued frames, atomically store
+/// all earned awards and confirm none remain only in RAM.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaFlushReady(
+    _env: *mut c_void, _activity: *mut c_void,
+) -> jboolean {
+    ENGINE.with(|holder| {
+        let engine = holder.borrow();
+        let Some(engine) = engine.as_ref() else { return 1 };
+        if engine.game.is_some() || engine.pending_game.is_some() { return 0; }
+        match engine.ra_service.as_ref() {
+            Some(service) if service.flush_ready() && !service.has_unsaved_awards() => 1,
+            Some(_) => 0,
+            None => 1,
+        }
+    })
+}
+
 /// Account login or app startup: begin RA cache preparation and pending-award
 /// retries even when no GBA cartridge has been inserted.
 #[unsafe(no_mangle)]
