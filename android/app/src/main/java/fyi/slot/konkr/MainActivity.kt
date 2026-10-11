@@ -36,6 +36,8 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
 import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.Network
 import org.json.JSONObject
 import org.json.JSONArray
 import java.util.concurrent.ConcurrentHashMap
@@ -104,6 +106,7 @@ class MainActivity : Activity() {
     external fun nativePollMessage(): String?
     external fun nativePollRaNotice(): String?
     external fun nativeRaStatus(): String?
+    external fun nativeRaNetworkAvailable()
     external fun nativeSystemStatus(clock: String, batteryPercent: Int, charging: Boolean)
     external fun nativePollUiAction(): Int
     external fun nativeReloadVisualAssets()
@@ -127,6 +130,13 @@ class MainActivity : Activity() {
     private var lastRumbleAt = 0L
     @Volatile private var resumed = false
     private var audioThread: Thread? = null
+    private var raConnectivity: ConnectivityManager? = null
+    private val raConnectivityCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            // Signals only that a network appeared. Rust still verifies RA HTTPS.
+            if (!isDestroyed) nativeRaNetworkAvailable()
+        }
+    }
     private val pulse = object : Runnable {
         override fun run() {
             pollSystemStatus()
@@ -282,6 +292,7 @@ class MainActivity : Activity() {
         setContentView(frame)
         immersive()
         uiHandler.post(pulse)
+        startRaNetworkWatch()
         // Stage BIOS files before the first queued ROM launch, using the same
         // worker that loads ROMs; no race between BIOS import and core startup.
         getSharedPreferences(PREFS, MODE_PRIVATE).getString(BIOS_ROOT, null)
@@ -613,6 +624,19 @@ class MainActivity : Activity() {
         audioRunning.set(false)
         audioThread?.interrupt()
         audioThread = null
+    }
+
+    private fun startRaNetworkWatch() {
+        try {
+            val manager = getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return
+            manager.registerDefaultNetworkCallback(raConnectivityCallback)
+            raConnectivity = manager
+        } catch (error: Exception) {
+            // No background polling fallback: the HTTP engine already retries
+            // with bounded exponential backoff when notifications are unavailable.
+            Log.w(TAG, "RA network reconnect callback unavailable")
+        }
     }
 
     /** Pulls a sanitized, nonblocking engine status copied by the GL thread. */
@@ -1201,6 +1225,11 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        raConnectivity?.let { manager ->
+            try { manager.unregisterNetworkCallback(raConnectivityCallback) }
+            catch (_: Exception) { /* Callback may have already been removed. */ }
+        }
+        raConnectivity = null
         scanSerial.incrementAndGet()
         scanner.shutdownNow()
         raLoginWorker.shutdownNow()
@@ -1231,6 +1260,9 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         resumed = true
+        // Android's quick settings may return without a fresh onAvailable().
+        // Waking a retry is safe even when no network is present.
+        nativeRaNetworkAvailable()
         lastStatusPoll = -15000L
         cartSounds.resume()
         view.onResume()
