@@ -153,6 +153,33 @@ static RUMBLE_STRENGTH: AtomicI32 = AtomicI32::new(0);
 static PERF_STATUS: Mutex<Option<String>> = Mutex::new(None);
 static PERF_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+// CPU-side measurements only: these do not include the EGL buffer swap,
+// GPU execution or the screen's actual scan-out/input-to-photon delay.
+#[derive(Default)]
+struct PerfTimings {
+    core_ns: u128,
+    core_frames: u32,
+    ahead_ns: u128,
+    ahead_calls: u32,
+    upload_ns: u128,
+    uploads: u32,
+    gl_ns: u128,
+    draws: u32,
+}
+impl PerfTimings {
+    fn average_ms(total_ns: u128, samples: u32) -> f64 {
+        if samples == 0 { return 0.0; }
+        total_ns as f64 / samples as f64 / 1_000_000.0
+    }
+    fn line(&self) -> String {
+        format!("CPU ms: CORE {:.1} | AHEAD {:.1} | UP {:.1} | GL {:.1}",
+            Self::average_ms(self.core_ns, self.core_frames),
+            Self::average_ms(self.ahead_ns, self.ahead_calls),
+            Self::average_ms(self.upload_ns, self.uploads),
+            Self::average_ms(self.gl_ns, self.draws))
+    }
+}
+
 #[derive(Clone)]
 struct SystemStatus {
     clock: String,
@@ -315,6 +342,7 @@ struct Engine {
     perf_rendered: u32,
     perf_emulated: u32,
     perf_catchup: u32,
+    perf_timings: PerfTimings,
     external_pending: bool,
     overlay: ShelfOverlay,
     settings: Settings,
@@ -551,6 +579,7 @@ impl Engine {
             perf_rendered: 0,
             perf_emulated: 0,
             perf_catchup: 0,
+            perf_timings: PerfTimings::default(),
             external_pending: false,
             overlay: ShelfOverlay::None,
             settings,
@@ -2096,17 +2125,20 @@ impl Engine {
                     self.perf_rendered.max(1) as f64;
                 let target = self.game.as_ref().map_or(60.0, |g| g.fps);
                 *PERF_STATUS.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(format!("EMU {emu:.1}/{target:.1} | DISPLAY {render:.1} | CATCHUP {catchup:.0}%"));
+                    Some(format!("EMU {emu:.1}/{target:.1} | DISPLAY {render:.1} | CATCHUP {catchup:.0}%\n{}",
+                        self.perf_timings.line()));
                 self.perf_last = now;
                 self.perf_rendered = 0;
                 self.perf_emulated = 0;
                 self.perf_catchup = 0;
+                self.perf_timings = PerfTimings::default();
             }
         } else {
             self.perf_last = now;
             self.perf_rendered = 0;
             self.perf_emulated = 0;
             self.perf_catchup = 0;
+            self.perf_timings = PerfTimings::default();
             if PERF_ACTIVE.swap(false, Ordering::AcqRel) {
                 *PERF_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = None;
             }
@@ -2327,18 +2359,26 @@ impl Engine {
                 let fast = self.ff_held || self.ff_latched;
                 let multiplier = if fast { f64::from(self.settings.ff_speed) } else { 1.0 };
                 let period = 1.0 / session.fps;
-                // Optional opt-in: don't build a backlog of old simulation
-                // frames after a missed vsync. It can reduce delayed input,
-                // at the cost of slower game time on an overloaded device.
-                // STANDARD preserves the proven RC3 scheduler unchanged.
+                // RESPONSIVE normally executes one core frame per display
+                // frame, with at most one extra recovery after a missed vsync.
+                // Unlike RC4 Beta 3 it must not permanently fall below game
+                // speed on panels running slightly under the core's 59.73Hz.
+                // STANDARD and fast-forward retain their previous scheduling.
                 let responsive = profile.responsive_pacing && !fast;
                 self.game_accum = crate::settings::frame_debt(
                     self.game_accum, f64::from(dt), multiplier, period, fast, responsive
                 );
                 let frame_limit = if fast { usize::from(self.settings.ff_speed) * 4 }
-                    else if responsive { 1 } else { 4 };
+                    else if responsive {
+                        crate::settings::responsive_frame_budget(self.game_accum, period)
+                    } else { 4 };
                 while self.game_accum >= period && stepped < frame_limit {
+                    let started = profile.show_fps.then(Instant::now);
                     session.advance(self.buttons, self.settings.turbo, self.settings.rewind);
+                    if let Some(t) = started {
+                        self.perf_timings.core_ns += t.elapsed().as_nanos();
+                        self.perf_timings.core_frames += 1;
+                    }
                     self.perf_emulated = self.perf_emulated.saturating_add(1);
                     self.game_accum -= period;
                     stepped += 1;
@@ -2357,8 +2397,13 @@ impl Engine {
                 && self.active == 0 && profile.run_ahead_frames > 0 {
                 // The normal frames and their audio are already consumed.
                 // Predicted video never advances the real saved/RA timeline.
+                let started = profile.show_fps.then(Instant::now);
                 session.prepare_runahead(self.buttons, self.settings.turbo,
                     profile.run_ahead_frames);
+                if let Some(t) = started {
+                    self.perf_timings.ahead_ns += t.elapsed().as_nanos();
+                    self.perf_timings.ahead_calls += 1;
+                }
             }
             if stepped > 1 {
                 self.perf_catchup = self.perf_catchup.saturating_add(1);
@@ -2368,7 +2413,12 @@ impl Engine {
                     self.select_tap_frames = self.select_tap_frames.saturating_sub(stepped as u8);
                     if self.select_tap_frames == 0 { self.buttons &= !ButtonMask::SELECT; }
                 }
+                let started = profile.show_fps.then(Instant::now);
                 self.gpu.upload_game(session.frame());
+                if let Some(t) = started {
+                    self.perf_timings.upload_ns += t.elapsed().as_nanos();
+                    self.perf_timings.uploads += 1;
+                }
                 RUMBLE_STRENGTH.store(
                     if self.settings.rumble && !self.rewind_held {
                         i32::from(session.rumble_strength())
@@ -2376,12 +2426,17 @@ impl Engine {
                     Ordering::Release,
                 );
             }
+            let started = profile.show_fps.then(Instant::now);
             self.gpu.fit(self.size);
             self.gpu.begin_frame();
             let mut commands = vec![Draw::Game];
             self.hud.draw(self.born.elapsed().as_millis() as u64, &mut commands);
             self.gpu.draw_list(&commands);
             self.gpu.end_frame(self.size);
+            if let Some(t) = started {
+                self.perf_timings.gl_ns += t.elapsed().as_nanos();
+                self.perf_timings.draws += 1;
+            }
             return;
         }
 
