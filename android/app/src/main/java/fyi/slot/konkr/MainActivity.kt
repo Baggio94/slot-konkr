@@ -99,6 +99,8 @@ class MainActivity : Activity() {
     external fun nativeSuspend()
     external fun nativeIsPlaying(): Boolean
     external fun nativeAudioSampleRate(): Int
+    external fun nativeAudioBufferMs(): Int
+    external fun nativeGpuSyncEnabled(): Boolean
     external fun nativeAudioSpeedPermille(): Int
     external fun nativeFastAudioSupported(supported: Boolean)
     external fun nativeReadAudio(): ShortArray
@@ -300,6 +302,8 @@ class MainActivity : Activity() {
                     override fun onDrawFrame(gl: GL10?) {
                         if (ready) {
                             nativeDrawFrame()
+                            // Opt-in GPU fence bounds work queued to GLES; may cost FPS.
+                            if (nativeGpuSyncEnabled()) GLES20.glFinish()
                             // Drain on the render thread for frame-accurate insert/eject clicks.
                             var kind = nativePollCartSfx()
                             while (kind != 0) {
@@ -618,6 +622,7 @@ class MainActivity : Activity() {
         audioThread = Thread({
             var player: AudioTrack? = null
             var rate = 0
+            var chosenBufferMs = -1
             var requestedSpeed = 0
             try {
                 while (audioRunning.get()) {
@@ -627,7 +632,8 @@ class MainActivity : Activity() {
                         SystemClock.sleep(35)
                         continue
                     }
-                    if (player == null || rate != wanted) {
+                    val bufferMs = nativeAudioBufferMs().takeIf { it in listOf(32, 48, 64, 96) } ?: 0
+                    if (player == null || rate != wanted || chosenBufferMs != bufferMs) {
                         player?.release()
                         val minBytes = AudioTrack.getMinBufferSize(
                             wanted, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT
@@ -636,6 +642,8 @@ class MainActivity : Activity() {
                             SystemClock.sleep(100)
                             continue
                         }
+                        val bufferBytes = if (bufferMs == 0) maxOf(16384, minBytes * 2)
+                            else maxOf(minBytes, wanted * 4 * bufferMs / 1000)
                         player = AudioTrack.Builder()
                             .setAudioAttributes(AudioAttributes.Builder()
                                 .setUsage(AudioAttributes.USAGE_GAME)
@@ -644,10 +652,11 @@ class MainActivity : Activity() {
                                 .setSampleRate(wanted)
                                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                                 .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).build())
-                            .setBufferSizeInBytes(maxOf(16384, minBytes * 2))
+                            .setBufferSizeInBytes(bufferBytes)
                             .setTransferMode(AudioTrack.MODE_STREAM)
                             .build()
                         rate = wanted
+                        chosenBufferMs = bufferMs
                         requestedSpeed = 0
                         player.play()
                     }
