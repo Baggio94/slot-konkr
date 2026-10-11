@@ -29,11 +29,56 @@ internal object RaAccount {
     private fun configFile(root: File) = File(root, "Config/retroachievements.toml")
 
     fun configuredUser(root: File): String? {
+        if (logoutMarker(root).exists()) return null
         val config = configFile(root)
         if (!config.isFile || config.length() > 8192) return null
         return try {
             RaConfigCodec.displayedUsername(config.readText(Charsets.UTF_8))
         } catch (_: Exception) { null }
+    }
+
+    /**
+     * Sign-out is a two-phase shutdown. First write an atomic logout marker,
+     * then close the Slot process to stop its native HTTP/evaluator threads.
+     * Next launch MUST complete the marker before native RA is initialized.
+     *
+     * Account-scoped unlocks.json, game definitions and badges are NEVER
+     * deleted. auth.json carries a token, so that file IS removed.
+     */
+    private fun logoutMarker(root: File) = File(root, "Config/ra-signout-pending.txt")
+
+    fun beginSignOut(root: File, username: String): Boolean {
+        if (configuredUser(root) != username || logoutMarker(root).exists()) return false
+        return try {
+            val target = AtomicFile(logoutMarker(root))
+            val out = target.startWrite()
+            try {
+                out.write(username.toByteArray(Charsets.UTF_8))
+                target.finishWrite(out)
+                true
+            } catch (_: Exception) {
+                target.failWrite(out)
+                false
+            }
+        } catch (_: Exception) { false }
+    }
+
+    /** Run before native engine startup. If incomplete, retry next launch. */
+    fun finishPendingSignOut(root: File): Boolean {
+        val marker = logoutMarker(root)
+        if (!marker.exists()) return true
+        return try {
+            val username = marker.readText(Charsets.UTF_8)
+            if (username.isBlank() || username.length > 100) return false
+            val auth = File(root,
+                "Saves/RetroAchievements/" + RaDiagnostics.accountKey(username) + "/auth.json")
+            if (auth.exists() && !auth.delete()) return false
+            val config = configFile(root)
+            if (config.exists() && !config.delete()) return false
+            marker.delete()
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun writePrivateConfig(root: File, username: String, token: String) {
