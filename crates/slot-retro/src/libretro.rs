@@ -227,6 +227,12 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
     }
 }
 
+// gpSP 5819380c deliberately sets poll=NULL. In libretro's ABI it is an
+// OPTIONAL host poll callback; start/receive/stop are what actual games need.
+fn netpacket_ready(cb: &NetpacketCallback) -> bool {
+    cb.start.is_some() && cb.receive.is_some() && cb.stop.is_some()
+}
+
 unsafe extern "C" fn netpacket_send(
     _flags: c_int,
     buf: *const c_void,
@@ -257,22 +263,32 @@ unsafe extern "C" fn netpacket_poll_receive() {
     }
 }
 
-unsafe fn begin_link(client_id: u16) {
+unsafe fn begin_link(client_id: u16) -> bool {
     let Some(start) = with_host(|h| h.netpacket.as_ref().and_then(|cb| cb.start)).flatten() else {
-        return;
+        return false;
     };
     start(client_id, netpacket_send, netpacket_poll_receive);
 
     let peer = 1u16.wrapping_sub(client_id);
     let connected = with_host(|h| {
-        h.net.set_active(true);
         h.net_peer = Some(peer);
         h.netpacket.as_ref().and_then(|cb| cb.connected)
-    })
-    .flatten();
-    if let Some(connected) = connected {
-        connected(peer);
+    }).flatten();
+    // gpSP returns false if the actual serial mode cannot accept a peer.
+    // Calling 'disconnected' here would decrement its client counter even
+    // though connected never incremented it; stop directly instead.
+    if connected.is_some_and(|callback| !callback(peer)) {
+        let stop = with_host(|h| {
+            h.net_peer = None;
+            h.net.set_active(false);
+            h.net.clear();
+            h.netpacket.as_ref().and_then(|cb| cb.stop)
+        }).flatten();
+        if let Some(stop) = stop { stop(); }
+        return false;
     }
+    with_host(|h| h.net.set_active(true));
+    true
 }
 
 unsafe fn halt_link() {
@@ -936,9 +952,18 @@ impl RetroCore for LibretroCore {
         self.host.net.clone()
     }
 
+    fn supports_netpacket(&self) -> bool {
+        self.host.netpacket.as_ref().is_some_and(netpacket_ready)
+    }
+
     fn start_link(&mut self, client_id: u16) {
         let _a = Active::bind(&mut self.host);
-        unsafe { begin_link(client_id) };
+        let _ = unsafe { begin_link(client_id) };
+    }
+
+    fn try_start_link(&mut self, client_id: u16) -> bool {
+        let _a = Active::bind(&mut self.host);
+        unsafe { begin_link(client_id) }
     }
 
     fn pump_link(&mut self) {
@@ -1398,6 +1423,42 @@ mod tests {
             disconnected: None,
             protocol_version: ptr::null(),
         }
+    }
+
+    unsafe extern "C" fn test_reject_link(_client_id: u16) -> bool { false }
+
+    #[test]
+    fn gp_sp_refusing_serial_peer_never_activates_fake_link() {
+        let mut host = host_with(HashMap::new(), false);
+        let mut cb = test_netpacket_callback();
+        cb.connected = Some(test_reject_link);
+        cb.stop = Some(test_stop);
+        host.netpacket = Some(cb);
+        let accepted = {
+            let _active = Active::bind(&mut host);
+            unsafe { begin_link(0) }
+        };
+        assert!(!accepted, "Rejected serial peer cannot be marked connected");
+        assert!(!host.net.is_active());
+        assert!(host.net_peer.is_none());
+    }
+
+    #[test]
+    fn gpsp_null_poll_is_valid_for_real_netpacket_mode() {
+        // Pinned gpSP (5819380c) registers start/receive/stop and
+        // deliberately sets poll=NULL. The emulator supplies its own
+        // netpacket_poll_receive callback to the frontend during start().
+        let mut callback = test_netpacket_callback();
+        callback.stop = Some(test_stop);
+        callback.poll = None;
+        assert!(netpacket_ready(&callback));
+        callback.start = None;
+        assert!(!netpacket_ready(&callback));
+        callback.start = Some(test_start);
+        // A NULL callback is optional; this must never disable gpSP Wireless.
+        let mut host = host_with(HashMap::new(), false);
+        host.netpacket = Some(callback);
+        assert!(host.netpacket.as_ref().is_some_and(netpacket_ready));
     }
 
     #[test]

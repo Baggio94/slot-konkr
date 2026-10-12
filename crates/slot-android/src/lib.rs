@@ -23,6 +23,65 @@ mod retroarch_state;
 mod rewind;
 mod core_selection;
 mod core_legend;
+// The original Slot TCP framing and cartridge-specific link selection are
+// shared directly; only the Linux Wi-Fi radio driver is replaced on Android.
+mod link_net;
+#[path = "../../slot/src/link_kind.rs"]
+mod link_kind;
+// Fork's LAN/mDNS wire format remains interoperable across devices.
+mod link_mdns;
+mod link_lan;
+mod multiplayer;
+mod link_rom;
+// Single-threaded libretro link session adapter: core never runs from a socket worker.
+mod link_play;
+// Compile Slot's exact mechanical plug and wireless adapter renderer from
+// upstream instead of recreating SVGs, timings, easing or positions.
+mod app;
+#[path = "../../slot/src/link_screen.rs"]
+mod link_screen;
+
+#[cfg(test)]
+mod original_link_animation_tests {
+    use super::app::{GameMenu, LinkRow, LinkStep, LinkFail};
+    use super::link_screen;
+
+    #[test]
+    fn original_cable_timings_are_exactly_kept() {
+        let host = LinkRow::Host;
+        let pick = GameMenu::Pick(host);
+        let working = GameMenu::Working { role: host, step: LinkStep::Waiting, since: 0 };
+        let linked = GameMenu::Linked { role: host, worked: 0, since: 200, opened: false };
+        let failed = GameMenu::Failed { role: host, fail: LinkFail::NobodyCame, worked: 0, since: 200 };
+        let unplug = GameMenu::Unplug { role: host, since: 0 };
+        assert_eq!(link_screen::plug_tip(pick, 999), 330.0);
+        assert_eq!(link_screen::plug_tip(working, 0), 330.0);
+        assert_eq!(link_screen::plug_tip(working, 200), 419.0);
+        assert_eq!(link_screen::plug_tip(linked, 360), 419.0);
+        assert_eq!(link_screen::clicks_alpha(linked, 359), 0.0);
+        assert_eq!(link_screen::clicks_alpha(linked, 360), 1.0);
+        assert_eq!(link_screen::plug_tip(failed, 450), 276.0);
+        assert_eq!(link_screen::plug_tip(unplug, 260), 330.0);
+    }
+
+    #[test]
+    fn original_wireless_adapter_and_arc_stagger_are_kept() {
+        let working = GameMenu::Working { role: LinkRow::Join,
+            step: LinkStep::Radio, since: 0 };
+        assert_eq!(link_screen::adapter_base(working, 0), 336.0);
+        assert_eq!(link_screen::adapter_base(working, 200), slot_ui::PORT_Y);
+        assert_eq!(link_screen::arc_alphas(working, 199), [0.0; 3]);
+        let visible = link_screen::arc_alphas(working, 800);
+        assert!(visible[0] > visible[1] && visible[1] > visible[2]);
+    }
+}
+
+// Original Slot 3-frame cable input lockstep and paired savestate framing.
+// Import by path so Android and original never diverge on these wire formats.
+#[path = "../../slot/src/cable.rs"]
+mod cable;
+#[path = "../../slot/src/link_state.rs"]
+mod link_state;
 #[cfg(target_os = "android")]
 mod game;
 #[cfg(target_os = "android")]
