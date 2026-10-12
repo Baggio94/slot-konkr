@@ -75,6 +75,20 @@ impl From<std::io::Error> for CoreError {
     }
 }
 
+/// Stable in-process 64-bit FNV-1a fingerprint for interleaved PCM16.
+/// This is diagnostics-only, not a cryptographic hash or audible comparison.
+pub fn pcm_fingerprint(samples: &[i16]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for &sample in samples {
+        let value = sample as u16;
+        for byte in value.to_le_bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    hash
+}
+
 pub trait RetroCore: Send {
     /// Copies the physical GBA IWRAM (0x8000), EWRAM (0x40000), and
     /// cartridge SRAM (0x10000) into a bounded 0x58000-byte snapshot.
