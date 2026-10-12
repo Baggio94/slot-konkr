@@ -35,6 +35,7 @@ pub enum Frame {
 pub struct LinkPlay {
     wire: Box<dyn LinkChannel>,
     cable: Option<Cable>,
+    mode: LinkKind,
     net: Link,
     error: Option<LinkError>,
     state_bytes: usize,
@@ -55,8 +56,14 @@ impl LinkPlay {
         let net = core.net();
         net.clear();
         net.set_active(false);
+        // Original Slot's Cable fallback models two joypads in a single
+        // libretro core. gpSP actually emulates a SECOND GBA through its
+        // netpacket interface and needs its serial mode to exchange data;
+        // its Cable and Wireless paths must BOTH use netpacket, not lockstep.
+        // Keep the original Cable simulation only for upstream mock tests;
+        // GameSession rejects any unsupported real core before reaching here.
         let cable = match mode {
-            LinkKind::Cable => {
+            LinkKind::Cable if !core.supports_netpacket() => {
                 let player = if role == Role::Host { 0 } else { 1 };
                 let c = Cable::new(player);
                 if role == Role::Host {
@@ -70,21 +77,19 @@ impl LinkPlay {
                 }
                 Some(c)
             }
-            LinkKind::Wireless => {
+            LinkKind::Cable | LinkKind::Wireless => {
                 core.start_link(if role == Role::Host { 0 } else { 1 });
                 net.set_active(true);
                 None
             }
         };
         Ok(Self {
-            wire, cable, net, error: None, state_bytes: 0,
+            wire, cable, mode, net, error: None, state_bytes: 0,
             started: Instant::now(),
         })
     }
 
-    pub fn mode(&self) -> LinkKind {
-        if self.cable.is_some() { LinkKind::Cable } else { LinkKind::Wireless }
-    }
+    pub fn mode(&self) -> LinkKind { self.mode }
 
     pub fn fault(&self) -> Option<LinkError> { self.error }
 
