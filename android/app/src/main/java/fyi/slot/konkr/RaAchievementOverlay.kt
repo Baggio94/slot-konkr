@@ -49,6 +49,7 @@ internal class RaAchievementOverlay(
     }
     private val queue = ArrayDeque<Notice>()
     private var showing = false
+    private var currentNotice: Notice? = null
     private var destroyed = false
     private var serial = 0
     private val ink = SlotUi.ink
@@ -128,7 +129,9 @@ internal class RaAchievementOverlay(
             rightMargin = dp(11)
         })
         texts.addView(heading)
-        gameLine.addView(title, LinearLayout.LayoutParams(0, -2, 1f))
+        // WRAP_CONTENT keeps the mode directly after SHORT titles even when
+        // a long subtitle makes the notification card wider.
+        gameLine.addView(title, LinearLayout.LayoutParams(-2, -2))
         gameLine.addView(modeLabel, LinearLayout.LayoutParams(-2, -2).apply {
             leftMargin = dp(8)
         })
@@ -176,10 +179,12 @@ internal class RaAchievementOverlay(
         if (destroyed) return
         val notice = queue.pollFirst() ?: run {
             showing = false
+            currentNotice = null
             card.visibility = View.GONE
             return
         }
         showing = true
+        currentNotice = notice
         val seq = ++serial
         val status = notice.title.trim()
         if (notice.earned) {
@@ -228,6 +233,13 @@ internal class RaAchievementOverlay(
         (card.layoutParams as? FrameLayout.LayoutParams)?.let {
             it.width = desired.coerceIn(minWidth, maxWidth)
             card.layoutParams = it
+            val otherContent = dp(46 + 11 + 12 + 14)
+            val modeWidth = if (modeLabel.visibility == View.VISIBLE)
+                modeLabel.paint.measureText(modeLabel.text.toString()).toInt() + dp(8)
+                else 0
+            // Long titles ellipsize while the ON/OFFLINE MODE label remains
+            // fully visible on its own single line.
+            title.maxWidth = (it.width - otherContent - modeWidth).coerceAtLeast(dp(95))
         }
         card.visibility = View.VISIBLE
         card.animate().cancel()
@@ -244,6 +256,25 @@ internal class RaAchievementOverlay(
                     }.start()
             }
         }, if (notice.earned) 3600L else if (notice.badge != null) 3200L else 1750L)
+    }
+
+    /** Called after game ejection, never for a real earned-achievement toast.
+     * A stale launch notification must not remain on the empty cartridge shelf.
+     */
+    fun dismissGameLaunchNotices() {
+        if (destroyed) return
+        queue.removeAll { it.onlineMode != null }
+        if (currentNotice?.onlineMode == null) return
+        // Invalidate delayed fades and pending asynchronous icon loads.
+        val cancelled = ++serial
+        currentNotice = null
+        card.animate().cancel()
+        card.animate().alpha(0f).setDuration(130L).withEndAction {
+            if (!destroyed && serial == cancelled) {
+                card.visibility = View.GONE
+                showNext() // earned notices, if any, are preserved
+            }
+        }.start()
     }
 
     private fun loadBadge(path: String?, seq: Int) {
@@ -294,6 +325,7 @@ internal class RaAchievementOverlay(
         destroyed = true
         ++serial
         queue.clear()
+        currentNotice = null
         handler.removeCallbacksAndMessages(null)
         card.animate().cancel()
         card.visibility = View.GONE
