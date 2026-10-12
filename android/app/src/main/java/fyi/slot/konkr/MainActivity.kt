@@ -706,35 +706,25 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    // Only the Android emulator's hardware keyboard is translated into
-    // KONKR-style gamepad keycodes. The physical KONKR remains untouched.
-    private val slotEmulatorKeyboard by lazy {
-        val fingerprint = android.os.Build.FINGERPRINT.lowercase()
-        val hardware = android.os.Build.HARDWARE.lowercase()
-        fingerprint.startsWith("generic") || fingerprint.contains("sdk_gphone") ||
-            hardware.contains("ranchu") || hardware.contains("goldfish")
-    }
-
-    private fun emulatorButton(key: Int): Int? = if (!slotEmulatorKeyboard) null else when (key) {
-        KeyEvent.KEYCODE_Z -> KeyEvent.KEYCODE_BUTTON_A
-        KeyEvent.KEYCODE_X -> KeyEvent.KEYCODE_BUTTON_B
-        KeyEvent.KEYCODE_A -> KeyEvent.KEYCODE_BUTTON_X
-        KeyEvent.KEYCODE_S -> KeyEvent.KEYCODE_BUTTON_Y
-        KeyEvent.KEYCODE_Q -> KeyEvent.KEYCODE_BUTTON_L1
-        KeyEvent.KEYCODE_E -> KeyEvent.KEYCODE_BUTTON_R1
-        KeyEvent.KEYCODE_1 -> KeyEvent.KEYCODE_BUTTON_L2
-        KeyEvent.KEYCODE_2 -> KeyEvent.KEYCODE_BUTTON_R2
-        KeyEvent.KEYCODE_ENTER -> KeyEvent.KEYCODE_BUTTON_START
-        KeyEvent.KEYCODE_SPACE -> KeyEvent.KEYCODE_BUTTON_SELECT
-        KeyEvent.KEYCODE_TAB -> KeyEvent.KEYCODE_BUTTON_MODE
-        else -> null // Arrow keys are native Android DPAD events already
+    // Intercept before GLSurfaceView consumes character keys. Android keyevent
+    // 96/97 reached libretro, but keyevent 54/52 (Z/X) did not reach
+    // Activity.onKeyDown on the AVD. Physical KONKR receives no remapping.
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val button = SlotEmulatorKeys.translate(event.keyCode)
+        if (button != null) {
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> {
+                    if (event.repeatCount == 0) nativeKey(button, true)
+                    if (event.repeatCount == 0) Log.d(TAG, "AVD keyboard: ${event.keyCode} -> $button down")
+                }
+                KeyEvent.ACTION_UP -> nativeKey(button, false)
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        emulatorButton(keyCode)?.let { button ->
-            if (event.repeatCount == 0) nativeKey(button, true)
-            return true
-        }
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             onBackPressed()
             return true
@@ -759,10 +749,6 @@ class MainActivity : Activity() {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
-        emulatorButton(keyCode)?.let { button ->
-            nativeKey(button, false)
-            return true
-        }
         if (keyCode == KeyEvent.KEYCODE_BACK) return true
         if (keyCode == KeyEvent.KEYCODE_BUTTON_MODE) {
             Log.i(TAG, "KONKR MENU BTN_MODE up: Android code=" + keyCode)
