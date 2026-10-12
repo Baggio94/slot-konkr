@@ -1295,8 +1295,8 @@ impl Engine {
                                         }
                                         2 => self.handle(Input::Exit),
                                         3 => {
-                                            if self.game.as_ref().is_some_and(GameSession::linked) {
-                                                set_message("Save States unavailable during Multiplayer".into());
+                                            if self.game.as_ref().is_some_and(|g| g.linked() || g.requires_relaunch()) {
+                                                set_message("Relaunch the cartridge before using Save States".into());
                                             } else { self.open_polaroids(); }
                                         }
                                         _ => {
