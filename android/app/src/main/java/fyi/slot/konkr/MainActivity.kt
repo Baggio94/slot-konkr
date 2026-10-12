@@ -191,7 +191,7 @@ class MainActivity : Activity() {
             pollSystemStatus()
             if (::shelfStatus.isInitialized) {
                 val flags = nativeShelfIndicatorFlags()
-                shelfStatus.refresh(flags, if (flags and 8 != 0) nativeRaStatus() else null)
+                shelfStatus.refresh(flags)
             }
             pollRumble()
             updateDisplaySyncMode()
