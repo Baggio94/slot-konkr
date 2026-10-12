@@ -32,6 +32,7 @@ mod link_kind;
 mod link_mdns;
 mod link_lan;
 mod multiplayer;
+mod link_rom;
 // Original Slot 3-frame cable input lockstep and paired savestate framing.
 // Import by path so Android and original never diverge on these wire formats.
 #[path = "../../slot/src/cable.rs"]
