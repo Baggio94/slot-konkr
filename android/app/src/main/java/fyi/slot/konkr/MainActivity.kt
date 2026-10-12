@@ -171,6 +171,9 @@ class MainActivity : Activity() {
     }
 
     private var audioThread: Thread? = null
+    // Development diagnostics only: no collection unless explicitly armed by
+    // adb run-as, and no audio/graphics/savestate changes.
+    private val pcmProbe by lazy { AudioPcmProbe(this) }
     private var raConnectivity: ConnectivityManager? = null
     private val raConnectivityCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
@@ -690,6 +693,7 @@ class MainActivity : Activity() {
                 while (audioRunning.get()) {
                     val wanted = nativeAudioSampleRate()
                     if (wanted <= 0) {
+                        pcmProbe.stop()
                         player?.pause()
                         SystemClock.sleep(35)
                         continue
@@ -750,6 +754,7 @@ class MainActivity : Activity() {
                             } catch (_: Exception) { }
                         }
                     }
+                    pcmProbe.poll(wanted)
                     val samples = nativeReadAudio()
                     if (samples.isEmpty()) {
                         // Event-driven wakeup instead of sleeping blindly for 8ms:
@@ -766,6 +771,7 @@ class MainActivity : Activity() {
                     }
                     audioFrameSignal.drainPermits()
                     val written = player.write(samples, 0, samples.size, AudioTrack.WRITE_BLOCKING)
+                    if (written > 0) pcmProbe.capture(samples, written, wanted)
                     if (written < 0) {
                         Log.w(TAG, "AudioTrack write error: $written")
                     }
@@ -786,6 +792,7 @@ class MainActivity : Activity() {
             } catch (error: Exception) {
                 Log.e(TAG, "Android AudioTrack error", error)
             } finally {
+                pcmProbe.stop()
                 player?.stop()
                 player?.release()
             }
