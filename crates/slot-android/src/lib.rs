@@ -33,6 +33,8 @@ mod link_mdns;
 mod link_lan;
 mod multiplayer;
 mod link_rom;
+// Single-threaded libretro link session adapter: core never runs from a socket worker.
+mod link_play;
 // Original Slot 3-frame cable input lockstep and paired savestate framing.
 // Import by path so Android and original never diverge on these wire formats.
 #[path = "../../slot/src/cable.rs"]
