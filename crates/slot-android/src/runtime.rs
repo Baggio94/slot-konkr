@@ -1497,8 +1497,15 @@ impl Engine {
             let Some(shelf) = self.shelves.get(shelf_id) else { continue };
             if index >= shelf.carts.len() || shelf.face(index).is_some() { continue }
             let texture = if self.texture_cache.len() >= 42 {
+                // Keep one selected cartridge from EACH GBA/GB/GBC shelf
+                // resident. Active-shelf scroll churn must not evict the
+                // first GB/GBC image moments before L1/R1 switches systems.
+                let victim = self.texture_cache.iter().position(|(sid, index, _)| {
+                    self.shelves[*sid].carts.is_empty() ||
+                    self.shelves[*sid].index != *index
+                }).unwrap_or(0);
                 let (old_shelf, old_index, tex) = self.texture_cache
-                    .pop_front().expect("nonempty texture pool");
+                    .remove(victim).expect("nonempty texture pool");
                 self.shelves[old_shelf].take_face(old_index);
                 self.gpu.update_texture(tex, face.w, face.h, &face.rgba);
                 tex
@@ -1510,12 +1517,36 @@ impl Engine {
         }
         let shelf_id = self.active;
         let selected = self.shelves[shelf_id].index;
-        let mut needed = self.shelves[shelf_id].on_screen();
-        needed.sort_by_key(|&index| index.abs_diff(selected));
-        for index in needed {
-            if self.shelves[shelf_id].face(index).is_some() {
+        // Prioritise active selected artwork, then the other two SYSTEMS'
+        // selected artwork. Only after that prepare active neighbours.
+        // All three use exactly the same background PNG renderer and GPU
+        // cache; scheduling, not the GB/GBC rasterizer, was the difference.
+        let mut priority = vec![(shelf_id, selected)];
+        for (sid, shelf) in self.shelves.iter().enumerate() {
+            if sid != shelf_id && !shelf.carts.is_empty() {
+                priority.push((sid, shelf.index));
+            }
+        }
+        let mut visible = self.shelves[shelf_id].on_screen();
+        visible.sort_by_key(|&index| index.abs_diff(selected));
+        for index in visible {
+            if index != selected { priority.push((shelf_id, index)); }
+        }
+        // A single neighbour on either side of each inactive shelf provides
+        // instant L1/R1 navigation without decoding the entire ROM library.
+        for (sid, shelf) in self.shelves.iter().enumerate() {
+            if sid == shelf_id || shelf.carts.is_empty() { continue; }
+            for delta in [-1isize, 1] {
+                let index = shelf.index as isize + delta;
+                if index >= 0 && (index as usize) < shelf.carts.len() {
+                    priority.push((sid, index as usize));
+                }
+            }
+        }
+        for (sid, index) in priority {
+            if self.shelves[sid].face(index).is_some() {
                 if let Some(pos) = self.texture_cache.iter()
-                    .position(|(s, i, _)| *s == shelf_id && *i == index)
+                    .position(|(s, i, _)| *s == sid && *i == index)
                 {
                     if let Some(entry) = self.texture_cache.remove(pos) {
                         self.texture_cache.push_back(entry);
@@ -1523,8 +1554,7 @@ impl Engine {
                 }
                 continue;
             }
-            self.cart_render.request((shelf_id, index),
-                &self.shelves[shelf_id].carts[index]);
+            self.cart_render.request((sid, index), &self.shelves[sid].carts[index]);
         }
     }
 
