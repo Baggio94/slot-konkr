@@ -4,6 +4,7 @@
 //! Inspired by Slot emu.rs BeginCable/BeginLink paths (GPL-3.0-or-later).
 
 use slot_retro::{ButtonMask, Link, LinkChannel, RetroCore, NETPACKET_RELIABLE};
+use std::time::{Duration, Instant};
 
 use crate::cable::{self, Cable};
 use crate::link_kind::LinkKind;
@@ -12,6 +13,8 @@ use crate::multiplayer::Role;
 
 const MAX_RECEIVE_PER_FRAME: usize = 256;
 const MAX_INITIAL_STATE: usize = 16 * 1024 * 1024;
+const MAX_FUTURE_FRAMES: u64 = 256;
+const INITIAL_STATE_TIMEOUT: Duration = Duration::from_secs(12);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum LinkError {
@@ -35,6 +38,7 @@ pub struct LinkPlay {
     net: Link,
     error: Option<LinkError>,
     state_bytes: usize,
+    started: Instant,
     // The cable protocol deliberately has a 3-frame input delay, as upstream.
     // Wireless passes bytes through the core's registered netpacket ABI.
 }
@@ -74,6 +78,7 @@ impl LinkPlay {
         };
         Ok(Self {
             wire, cable, net, error: None, state_bytes: 0,
+            started: Instant::now(),
         })
     }
 
@@ -98,6 +103,11 @@ impl LinkPlay {
                     if self.state_bytes > MAX_INITIAL_STATE { return self.fail(LinkError::InvalidState); }
                 }
                 let completed = matches!(packet.first(), Some(2));
+                if let Some((frame, _)) = cable::decode(&packet) {
+                    if frame > cable.frame().saturating_add(MAX_FUTURE_FRAMES) {
+                        return self.fail(LinkError::InvalidState);
+                    }
+                }
                 cable.accept(&packet);
                 if completed { self.state_bytes = 0; }
             } else {
@@ -120,6 +130,9 @@ impl LinkPlay {
                 self.wire.send(NETPACKET_RELIABLE, &cable::ready_packet());
             }
             if !cable.primed() {
+                if self.started.elapsed() >= INITIAL_STATE_TIMEOUT {
+                    return self.fail(LinkError::Timeout);
+                }
                 return Frame::Waiting;
             }
             // The original sampler is idempotent across a stalled frame.
