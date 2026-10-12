@@ -201,6 +201,10 @@ internal class RaPanelDialog(
         val cached = snapshot.cachedGba?.toString() ?: "Unknown"
         val indexed = snapshot.indexedGba?.toString() ?: "?"
         row("GBA prepared", "$cached / $indexed indexed")
+        row("Game icons cached", if (snapshot.gameIconsTotal != null &&
+            snapshot.gameIconsCached != null)
+            "${snapshot.gameIconsCached} / ${snapshot.gameIconsTotal}"
+            else "Checking cache...")
         section("ACHIEVEMENT BADGES")
         val badgesDownloaded = snapshot.badgesDownloaded
         val badgesTotal = snapshot.badgesTotal
