@@ -55,12 +55,6 @@ pub struct GameSession {
     // Preserve the libretro state allocation across speculative frames.
     runahead_state: Vec<u8>,
     runahead_unavailable: bool,
-    // Observability only: confirms actual speculative frames and measures
-    // CPU wall time; never changes pacing, audio or normal savestates.
-    runahead_probe_count: u32,
-    runahead_probe_sum_us: u64,
-    runahead_probe_max_us: u64,
-    runahead_probe_logged: bool,
     palette_live: bool,
     core_kind: Core,
     pending_undo: Option<(Instant, PendingUndo)>,
@@ -227,8 +221,6 @@ impl GameSession {
             frame_count: 0, palette_live, core_kind: which,
             runahead_video: Vec::new(), runahead_state: Vec::new(),
             runahead_unavailable: false,
-            runahead_probe_count: 0, runahead_probe_sum_us: 0,
-            runahead_probe_max_us: 0, runahead_probe_logged: false,
             pending_undo: None, last_sram: Instant::now(),
             sample_rate: sample_rate.clamp(8_000, 96_000),
             fps,
@@ -266,7 +258,6 @@ impl GameSession {
     pub fn prepare_runahead(&mut self, buttons: u16, turbo: bool, frames: u8) {
         self.runahead_video.clear();
         if frames == 0 || frames > 2 || self.runahead_unavailable { return; }
-        let started = Instant::now();
         if !self.core.speculative_audio_supported() {
             self.runahead_unavailable = true;
             log_launch_timing("Run-Ahead disabled: core has no safe speculative audio support");
@@ -299,28 +290,7 @@ impl GameSession {
             log_launch_timing(&format!("Run-Ahead disabled: restore failed: {error}"));
             return;
         }
-        if !self.runahead_probe_logged {
-            log_launch_timing(&format!(
-                "Run-Ahead ACTIVE: core={} frames={} (speculative video + audio rollback succeeded)",
-                self.core_kind.text(), frames
-            ));
-            self.runahead_probe_logged = true;
-        }
-        let micros = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
-        self.runahead_probe_count += 1;
-        self.runahead_probe_sum_us = self.runahead_probe_sum_us.saturating_add(micros);
-        self.runahead_probe_max_us = self.runahead_probe_max_us.max(micros);
-        if self.runahead_probe_count >= 120 {
-            log_launch_timing(&format!(
-                "Run-Ahead cost: core={} frames={} avg_us={} peak_us={} samples=120",
-                self.core_kind.text(), frames,
-                self.runahead_probe_sum_us / u64::from(self.runahead_probe_count),
-                self.runahead_probe_max_us
-            ));
-            self.runahead_probe_count = 0;
-            self.runahead_probe_sum_us = 0;
-            self.runahead_probe_max_us = 0;
-        }
+
     }
 
     pub fn rewind_step(&mut self) -> bool {

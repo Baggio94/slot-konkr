@@ -11,12 +11,18 @@ android {
         applicationId = "fyi.slot.konkr"
         minSdk = 31
         targetSdk = 32
-        // RC1 consolidates the stacked Cart Studio (#3) and native
-        // RetroAchievements (#4) branches. The original applicationId and
-        // persistent signing certificate remain unchanged for in-place updates.
-        versionCode = 63
-        versionName = "0.1.0-rc4-beta19b-ra-notice-fix"
+        // Clean RC4 consolidates the validated Beta19b state without changing
+        // applicationId, user data paths or the persistent signing certificate.
+        versionCode = 64
+        versionName = "0.1.0-rc4"
         ndk { abiFilters += listOf("arm64-v8a") }
+    }
+
+    // This APK is distributed directly for KONKR Android 12 (not via Google
+    // Play). Keep targetSdk 32 to preserve the validated system/input behavior;
+    // suppress only Play's expired-target submission check, not other lint.
+    lint {
+        disable += "ExpiredTargetSdkVersion"
     }
 
     // A stable signing key can be provided by GitHub Actions secrets or a
@@ -37,6 +43,12 @@ android {
         }
         buildTypes {
             getByName("debug") {
+                signingConfig = signingConfigs.getByName("slotPersistent")
+            }
+            getByName("release") {
+                // Release candidates must be non-debuggable while preserving
+                // the same update-compatible signing certificate as debug RCs.
+                isDebuggable = false
                 signingConfig = signingConfigs.getByName("slotPersistent")
             }
         }
