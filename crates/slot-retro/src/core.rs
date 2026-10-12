@@ -134,6 +134,9 @@ pub trait RetroCore: Send {
     fn net(&self) -> Link {
         Link::default()
     }
+    /// Core must have registered libretro netpacket callbacks; the default
+    /// mock/foreign core cannot silently pretend to support wireless linking.
+    fn supports_netpacket(&self) -> bool { false }
     fn start_link(&mut self, _client_id: u16) {}
     fn pump_link(&mut self) {}
     fn stop_link(&mut self) {}
