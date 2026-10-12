@@ -62,6 +62,10 @@ pub(crate) struct Game {
     pub console: u32,
     #[serde(rename = "Title")]
     pub title: String,
+    // Official game/mastery icon, distinct from individual achievement badges.
+    // Defaults for previously cached PatchData created before this version.
+    #[serde(rename = "ImageIcon", default)]
+    pub image_icon: String,
     #[serde(rename = "Achievements")]
     pub achievements: Vec<Achievement>,
 }
