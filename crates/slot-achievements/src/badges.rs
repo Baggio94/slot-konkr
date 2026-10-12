@@ -24,6 +24,19 @@ pub(crate) fn path(dir: &Path, name: &str) -> Option<PathBuf> {
     .then(|| dir.join("badges").join(format!("{name}.png")))
 }
 
+// The patch API supplies /Images/NNNNNN.png, never an arbitrary URL.
+// Store the game's icon with a reserved cache name to avoid confusing it
+// with an earned achievement badge or permitting image-path traversal.
+fn game_icon_name(image_icon: &str) -> Option<String> {
+    let number = image_icon.strip_prefix("/Images/")?.strip_suffix(".png")?;
+    (number.len() >= 1 && number.len() <= 12 && number.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| format!("slotgame_{number}"))
+}
+
+pub(crate) fn game_icon_path(dir: &Path, image_icon: &str) -> Option<PathBuf> {
+    path(dir, &game_icon_name(image_icon)?)
+}
+
 pub fn load_badge(path: &Path) -> Option<BadgeImage> {
     let mut bytes = Vec::new();
     std::fs::File::open(path)
@@ -93,6 +106,15 @@ impl Queue {
     }
 
     pub fn enqueue(&mut self, game: &Game) {
+        if let Some(name) = game_icon_name(&game.image_icon) {
+            if let Some(icon_path) = path(&self.dir, &name) {
+                self.known.insert(name.clone());
+                if !self.names.contains(&name) && load_badge(&icon_path).is_none() {
+                    self.names.insert(name.clone());
+                    self.pending.push_back(name);
+                }
+            }
+        }
         for achievement in &game.achievements {
             if achievement.flags != 3 {
                 continue;
@@ -148,7 +170,12 @@ impl Queue {
         let result = if load_badge(&target).is_some() {
             Ok(())
         } else {
-            http.badge(&name).and_then(|bytes| {
+            let fetched = if let Some(number) = name.strip_prefix("slotgame_") {
+                http.game_icon(number)
+            } else {
+                http.badge(&name)
+            };
+            fetched.and_then(|bytes| {
                 decode(&bytes).ok_or(Failure::Invalid)?;
                 std::fs::create_dir_all(target.parent().unwrap()).map_err(|_| Failure::Invalid)?;
                 slot_store::atomic_write(&target, &bytes).map_err(|_| Failure::Invalid)
@@ -170,6 +197,23 @@ impl Queue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn game_icon_is_independent_of_unlock_badges_and_sanitized() {
+        let root = Path::new("/app/Saves/RetroAchievements/account");
+        assert_eq!(
+            game_icon_path(root, "/Images/067895.png"),
+            Some(root.join("badges/slotgame_067895.png"))
+        );
+        for bad in [
+            "../067895.png", "/Badge/067895.png", "/Images/../../x.png",
+            "/Images/067895.svg", "https://example.com/Images/123.png",
+            "/Images/123.png?auth=x", "/Images/.png", "/Images/123/456.png",
+        ] {
+            assert!(game_icon_path(root, bad).is_none(), "accepted {bad}");
+        }
+    }
+
 
     #[test]
     #[ignore = "fetches one public RA badge; no account or award request"]
