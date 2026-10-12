@@ -713,7 +713,7 @@ mod tests {
     fn smart_cache_only_skips_valid_prepared_gba_patches() {
         let root = tempfile::tempdir().unwrap();
         let hash = "0123456789abcdef0123456789abcdef";
-        assert!(!already_prepared(root.path(), hash));
+        assert!(!already_prepared(root.path(), hash, 5));
         storage::write(&root.path().join(format!("{hash}.json")),
             &(Game {
                 presence: String::new(),
@@ -723,9 +723,9 @@ mod tests {
                 image_icon: String::new(),
                 achievements: Vec::new(),
             }, BTreeSet::<u32>::new())).unwrap();
-        assert!(already_prepared(root.path(), hash));
+        assert!(already_prepared(root.path(), hash, 5));
         std::fs::write(root.path().join(format!("{hash}.json")), b"broken").unwrap();
-        assert!(!already_prepared(root.path(), hash));
+        assert!(!already_prepared(root.path(), hash, 5));
     }
 
     #[test]
