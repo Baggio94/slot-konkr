@@ -1128,6 +1128,13 @@ impl Engine {
                 }
             }
             Input::Key(code, pressed) => {
+                if code == 110 && matches!(self.overlay, ShelfOverlay::Multiplayer) {
+                    if !pressed {
+                        self.cancel_link_discovery();
+                        self.overlay = ShelfOverlay::GameMenu { row: 1 };
+                    }
+                    return;
+                }
                 // KONKR's top-round controller key emits Linux BTN_MODE. Android
                 // normally delivers that as KEYCODE_BUTTON_MODE (110); this is
                 // separate from the system HOME launcher key.
