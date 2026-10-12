@@ -3196,6 +3196,16 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeAudioSampleRate(
     _env: *mut c_void, _this: *mut c_void,
 ) -> jint { SAMPLE_RATE.load(Ordering::Acquire) }
 
+/// Debug build only: audio worker arms one on-device test by atomic flag.
+/// The next 120 existing mGBA RA1 speculative frames are compared against
+/// their corresponding real frames. No extra libretro runs, WAVs or savestates.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeAudioCompareArm(
+    _env: *mut c_void, _activity: *mut c_void,
+) {
+    crate::game::arm_pcm_compare();
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeReadAudio(
     mut env: JNIEnv<'_>, _this: JObject<'_>,
