@@ -2909,7 +2909,7 @@ impl Engine {
                 session.prepare_runahead(self.buttons, self.settings.turbo,
                     profile.run_ahead_frames);
             }
-            if stepped > 0 {
+            if stepped > 0 && !self.rewind_held {
                 // Don't swallow taps if both key events were drained on the
                 // same display callback. This is AVD-only and follows the
                 // *real* core advance, not a predicted run-ahead frame.
