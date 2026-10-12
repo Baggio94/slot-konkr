@@ -252,6 +252,7 @@ impl Service {
 struct Playing {
     generation: u64,
     hash: String,
+    console: u32,
     runtime: runtime::Runtime,
     achievements: BTreeMap<u32, storage::Achievement>,
     previous: Option<(u64, u64)>,
@@ -484,6 +485,7 @@ fn run(
             playing = Some(Playing {
                 generation,
                 hash: prepared.hash,
+                console: prepared.game.console,
                 runtime,
                 achievements,
                 previous: None,
