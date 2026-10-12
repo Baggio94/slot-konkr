@@ -2402,7 +2402,14 @@ impl Engine {
                 let frame_limit = if fast { usize::from(self.settings.ff_speed) * 4 }
                     else if responsive { 1 } else { 4 };
                 while self.game_accum >= period && stepped < frame_limit {
-                    session.advance(self.buttons, self.settings.turbo, self.settings.rewind);
+                    // Cable lockstep must not consume emulation time while
+                    // the remote frame has not arrived. NEVER invent a solo
+                    // frame or perform speculative Run-Ahead on a held link.
+                    if !session.advance(self.buttons, self.settings.turbo,
+                        self.settings.rewind && !session.linked()) {
+                        self.game_accum = 0.0;
+                        break;
+                    }
                     self.perf_emulated = self.perf_emulated.saturating_add(1);
                     self.game_accum -= period;
                     stepped += 1;
