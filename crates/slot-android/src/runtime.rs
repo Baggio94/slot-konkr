@@ -1827,7 +1827,8 @@ impl Engine {
         // selected artwork. Only after that prepare active neighbours.
         // All three use exactly the same background PNG renderer and GPU
         // cache; scheduling, not the GB/GBC rasterizer, was the difference.
-        let mut priority = vec![(shelf_id, selected)];
+        let mut priority: Vec<(usize, usize)> = selected_prefetch_entry(&self.shelves, shelf_id)
+            .into_iter().collect();
         for (sid, shelf) in self.shelves.iter().enumerate() {
             if sid != shelf_id && !shelf.carts.is_empty() {
                 priority.push((sid, shelf.index));
@@ -1860,7 +1861,11 @@ impl Engine {
                 }
                 continue;
             }
-            self.cart_render.request((sid, index), &self.shelves[sid].carts[index]);
+            // A freshly configured AVD has no ROMs yet. Skip the empty
+            // shelf instead of indexing carts[0] and aborting the GL thread.
+            let Some(cart) = self.shelves.get(sid).and_then(|shelf| shelf.carts.get(index))
+            else { continue; };
+            self.cart_render.request((sid, index), cart);
         }
     }
 
@@ -2956,6 +2961,13 @@ impl Engine {
     }
 }
 
+/// A clean install has three shelves but zero cartridges. Never enqueue
+/// nonexistent artwork for the first draw (or after clearing the library).
+fn selected_prefetch_entry(shelves: &[Shelf], active: usize) -> Option<(usize, usize)> {
+    let shelf = shelves.get(active)?;
+    shelf.carts.get(shelf.index).map(|_| (active, shelf.index))
+}
+
 /// Slot. keeps the label timer alive even when fade-in alpha is initially zero.
 /// Time-based expiry (not alpha-based) is essential for reliable GBA startup
 /// and every L1/R1 GB/GBC/GBA switch on a high-refresh-rate Android panel.
@@ -3019,6 +3031,14 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 #[cfg(test)]
 mod ui_feedback_tests {
     use super::*;
+
+    #[test]
+    fn fresh_avd_without_roms_has_no_selected_artwork_to_prefetch() {
+        let shelves: Vec<Shelf> = (0..3).map(|_| Shelf::new(Vec::new())).collect();
+        assert_eq!(selected_prefetch_entry(&shelves, 0), None);
+        assert_eq!(selected_prefetch_entry(&shelves, 2), None);
+        assert_eq!(selected_prefetch_entry(&shelves, 3), None);
+    }
 
     #[test]
     fn in_game_shortcut_keycaps_fit_720x480_without_clipping() {
