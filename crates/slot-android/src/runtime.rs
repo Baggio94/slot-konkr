@@ -224,7 +224,7 @@ enum ShelfOverlay {
     States,
 }
 
-const MENU_TEXT: [&str; 78] = [
+const MENU_TEXT: [&str; 79] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -303,6 +303,7 @@ const MENU_TEXT: [&str; 78] = [
     "Connection failed",               // 75
     "Choose the other console's role", // 76
     "Press A to retry",                 // 77
+    "Eject to play solo",               // 78
 ];
 
 struct Engine {
@@ -837,6 +838,10 @@ impl Engine {
 
     fn enter_multiplayer_menu(&mut self) {
         if self.game.is_none() { return; }
+        if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
+            set_message("Eject and relaunch the cartridge before linking again".into());
+            return;
+        }
         if self.link_identity.is_none() {
             set_message("Multiplayer currently requires a valid GBA ROM".into());
             return;
@@ -1032,7 +1037,11 @@ impl Engine {
                 // Android calls Reset onPause. Retain the *native menu* behind
                 // Apps/Studio while the new Activity animates in, otherwise
                 // the user briefly sees the cartridge carousel again.
-                if !self.external_pending { self.overlay = ShelfOverlay::None; }
+                if !self.external_pending {
+                    self.overlay = if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
+                        ShelfOverlay::GameMenu { row: 2 }
+                    } else { ShelfOverlay::None };
+                }
                 self.picker = None;
                 for shelf in &mut self.shelves {
                     shelf.release_hold();
@@ -1286,10 +1295,18 @@ impl Engine {
                                                 set_message("Save States unavailable during Multiplayer".into());
                                             } else { self.open_polaroids(); }
                                         }
-                                        _ => self.overlay = ShelfOverlay::None,
+                                        _ => {
+                                            if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
+                                                set_message("Multiplayer ended. Eject to return to solo.".into());
+                                            } else { self.overlay = ShelfOverlay::None; }
+                                        }
                                     }
                                 }
-                                97 => self.overlay = ShelfOverlay::None,
+                                97 => {
+                                    if !self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
+                                        self.overlay = ShelfOverlay::None;
+                                    } else { set_message("Eject to return to solo.".into()); }
+                                },
                                 _ => {}
                             },
                             _ => {}
@@ -2247,10 +2264,13 @@ impl Engine {
                 self.draw_menu_hints(141.0, 311.0, out);
             }
             ShelfOverlay::GameMenu { row } => {
+                let first = if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
+                    78
+                } else { 20 };
                 let second = if self.game.as_ref().is_some_and(GameSession::linked) {
                     67
                 } else { 66 };
-                self.draw_original_style_menu(19, &[20, second, 21, 22], row, out);
+                self.draw_original_style_menu(19, &[first, second, 21, 22], row, out);
             }
             ShelfOverlay::Multiplayer => self.draw_multiplayer(out),
             ShelfOverlay::Core => {
