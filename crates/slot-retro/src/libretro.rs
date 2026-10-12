@@ -227,6 +227,12 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
     }
 }
 
+// gpSP 5819380c deliberately sets poll=NULL. In libretro's ABI it is an
+// OPTIONAL host poll callback; start/receive/stop are what actual games need.
+fn netpacket_ready(cb: &NetpacketCallback) -> bool {
+    cb.start.is_some() && cb.receive.is_some() && cb.stop.is_some()
+}
+
 unsafe extern "C" fn netpacket_send(
     _flags: c_int,
     buf: *const c_void,
@@ -937,9 +943,7 @@ impl RetroCore for LibretroCore {
     }
 
     fn supports_netpacket(&self) -> bool {
-        self.host.netpacket.as_ref().is_some_and(|callbacks|
-            callbacks.start.is_some() && callbacks.receive.is_some() &&
-            callbacks.stop.is_some())
+        self.host.netpacket.as_ref().is_some_and(netpacket_ready)
     }
 
     fn start_link(&mut self, client_id: u16) {
@@ -1414,14 +1418,14 @@ mod tests {
         let mut callback = test_netpacket_callback();
         callback.stop = Some(test_stop);
         callback.poll = None;
-        assert!(callback.start.is_some() && callback.receive.is_some() &&
-            callback.stop.is_some());
+        assert!(netpacket_ready(&callback));
+        callback.start = None;
+        assert!(!netpacket_ready(&callback));
+        callback.start = Some(test_start);
         // A NULL callback is optional; this must never disable gpSP Wireless.
         let mut host = host_with(HashMap::new(), false);
         host.netpacket = Some(callback);
-        assert!(host.netpacket.as_ref().is_some_and(|interface|
-            interface.start.is_some() && interface.receive.is_some() &&
-            interface.stop.is_some()));
+        assert!(host.netpacket.as_ref().is_some_and(netpacket_ready));
     }
 
     #[test]
