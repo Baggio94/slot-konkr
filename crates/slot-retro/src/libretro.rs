@@ -939,7 +939,7 @@ impl RetroCore for LibretroCore {
     fn supports_netpacket(&self) -> bool {
         self.host.netpacket.as_ref().is_some_and(|callbacks|
             callbacks.start.is_some() && callbacks.receive.is_some() &&
-            callbacks.poll.is_some() && callbacks.stop.is_some())
+            callbacks.stop.is_some())
     }
 
     fn start_link(&mut self, client_id: u16) {
@@ -1404,6 +1404,24 @@ mod tests {
             disconnected: None,
             protocol_version: ptr::null(),
         }
+    }
+
+    #[test]
+    fn gpsp_null_poll_is_valid_for_real_netpacket_mode() {
+        // Pinned gpSP (5819380c) registers start/receive/stop and
+        // deliberately sets poll=NULL. The emulator supplies its own
+        // netpacket_poll_receive callback to the frontend during start().
+        let mut callback = test_netpacket_callback();
+        callback.stop = Some(test_stop);
+        callback.poll = None;
+        assert!(callback.start.is_some() && callback.receive.is_some() &&
+            callback.stop.is_some());
+        // A NULL callback is optional; this must never disable gpSP Wireless.
+        let mut host = host_with(HashMap::new(), false);
+        host.netpacket = Some(callback);
+        assert!(host.netpacket.as_ref().is_some_and(|interface|
+            interface.start.is_some() && interface.receive.is_some() &&
+            interface.stop.is_some()));
     }
 
     #[test]
