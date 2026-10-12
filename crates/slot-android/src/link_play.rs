@@ -78,7 +78,9 @@ impl LinkPlay {
                 Some(c)
             }
             LinkKind::Cable | LinkKind::Wireless => {
-                core.start_link(if role == Role::Host { 0 } else { 1 });
+                if !core.try_start_link(if role == Role::Host { 0 } else { 1 }) {
+                    return Err("Emulation core refused the GBA Link peer in its current serial mode".into());
+                }
                 net.set_active(true);
                 None
             }
@@ -253,6 +255,11 @@ mod tests {
         fn net(&self) -> Link { self.channel.clone() }
         fn supports_netpacket(&self) -> bool { true }
         fn start_link(&mut self, _client_id: u16) { self.began = true; }
+        fn try_start_link(&mut self, _client_id: u16) -> bool {
+            self.began = true;
+            self.channel.set_active(true);
+            true
+        }
         fn pump_link(&mut self) {
             while self.channel.take_inbound().is_some() { self.received += 1; }
         }
