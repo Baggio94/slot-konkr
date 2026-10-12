@@ -45,6 +45,9 @@ pub struct GameSession {
     core: Box<dyn RetroCore>,
     // Optional: only used after the real network handshake, never in solo play.
     link: Option<LinkPlay>,
+    // A linked mGBA state may contain TWO cores, incompatible with solo
+    // RetroArch .state files. Never overwrite solo timeline after link use.
+    link_touched: bool,
     save: PathBuf,
     rtc: PathBuf,
     manual_export_prefix: PathBuf,
@@ -221,7 +224,7 @@ impl GameSession {
         let sample_rate = core.av_info().sample_rate.round() as i32;
         let fps = core.av_info().fps.clamp(30.0, 120.0);
         Ok(Self {
-            core, link: None, save, rtc, manual_export_prefix, state, retroarch_export, retroarch_import, ring,
+            core, link: None, link_touched: false, save, rtc, manual_export_prefix, state, retroarch_export, retroarch_import, ring,
             rewind: RewindThread::spawn(REWIND_BYTES), rewind_frames: 0,
             frame_count: 0, palette_live, core_kind: which,
             runahead_video: Vec::new(), runahead_state: Vec::new(),
@@ -247,7 +250,7 @@ impl GameSession {
             self.core.run_frame(mapped);
         }
         self.frame_count = self.frame_count.wrapping_add(1);
-        if record_rewind {
+        if record_rewind && !self.link_touched {
             self.rewind_frames += 1;
             if self.rewind_frames >= REWIND_CAPTURE_FRAMES {
                 self.rewind_frames = 0;
@@ -281,6 +284,7 @@ impl GameSession {
         }
         let link = LinkPlay::begin(self.core.as_mut(), role, mode, transport)?;
         self.link = Some(link);
+        self.link_touched = true;
         self.runahead_video.clear();
         self.rewind_frames = 0;
         self.pending_undo = None;
@@ -302,14 +306,14 @@ impl GameSession {
     }
 
     pub fn runahead_supported(&self) -> bool {
-        self.link.is_none() && !self.runahead_unavailable && self.core.speculative_audio_supported()
+        !self.link_touched && self.link.is_none() && !self.runahead_unavailable && self.core.speculative_audio_supported()
     }
 
     /// Roll back both standard libretro state and core-specific transient
     /// audio: gpSP's sound ring, or mGBA's converter/filter/queue sidecar.
     pub fn prepare_runahead(&mut self, buttons: u16, turbo: bool, frames: u8) {
         self.runahead_video.clear();
-        if frames == 0 || frames > 2 || self.runahead_unavailable || self.link.is_some() { return; }
+        if frames == 0 || frames > 2 || self.runahead_unavailable || self.link_touched { return; }
         if !self.core.speculative_audio_supported() {
             self.runahead_unavailable = true;
             log_launch_timing("Run-Ahead disabled: core has no safe speculative audio support");
@@ -346,7 +350,7 @@ impl GameSession {
     }
 
     pub fn rewind_step(&mut self) -> bool {
-        if self.link.is_some() { return false; }
+        if self.link_touched { return false; }
         self.runahead_video.clear();
         let Some(previous) = self.rewind.pop() else { return false; };
         if self.core.unserialize(&previous).is_err() { return false; }
@@ -425,7 +429,7 @@ impl GameSession {
         let mut state_written = false;
         // Exporting a single-core state during linked play would silently
         // corrupt the shared timeline. SRAM/RTC can still be saved safely.
-        if with_state && self.link.is_none() {
+        if with_state && !self.link_touched {
             if let Ok(data) = self.core.serialize() {
                 if let Err(err) = atomic_write(&self.state, &data) {
                     eprintln!("slot-konkr: state save failed: {err}");
@@ -444,7 +448,7 @@ impl GameSession {
     /// Original Slot ring: 10 timestamped states per ROM/core, each with
     /// a 240×160 PNG thumbnail. Independent from RetroArch's manual slots.
     pub fn save_manual(&mut self) -> Result<String, String> {
-        if self.link.is_some() { return Err("Save States unavailable during Multiplayer".into()); }
+        if self.link_touched { return Err("Save States unavailable after linked play; relaunch cartridge".into()); }
         let state = self.core.serialize().map_err(|e|e.to_string())?;
         let preview = thumb::png(self.core.video_xrgb8888()).unwrap_or_default();
         let entries = self.ring.list().map_err(|e|e.to_string())?;
