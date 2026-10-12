@@ -138,6 +138,12 @@ pub trait RetroCore: Send {
     /// mock/foreign core cannot silently pretend to support wireless linking.
     fn supports_netpacket(&self) -> bool { false }
     fn start_link(&mut self, _client_id: u16) {}
+    /// Reject sessions when the core refuses a peer (e.g. serial mode
+    /// disabled), rather than displaying a false "Connected" message.
+    fn try_start_link(&mut self, client_id: u16) -> bool {
+        self.start_link(client_id);
+        self.net().is_active()
+    }
     fn pump_link(&mut self) {}
     fn stop_link(&mut self) {}
 }
