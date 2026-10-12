@@ -370,6 +370,7 @@ struct Engine {
     menu_textures: Vec<(slot_gfx::TexId, u32, u32)>,
     menu_hints: [(slot_gfx::TexId, u32); 2],
     game_menu_hints: [(slot_gfx::TexId, u32); 3],
+    link_hints: [(slot_gfx::TexId, u32); 3],
     board_texture: Option<slot_gfx::TexId>,
     chip_texture: slot_gfx::TexId,
     picker: Option<CorePicker>,
@@ -495,6 +496,13 @@ impl Engine {
         // shortcuts, so users need not guess physical controller buttons.
         let game_menu_hints = [
             ("B", "Back"), ("SEL+R1", "Save"), ("SEL+L1", "Load"),
+        ].map(|(key, label)| {
+            let face = hint_face(key, label);
+            let tex = gpu.create_texture(face.w, face.h, &face.rgba);
+            (tex, face.w)
+        });
+        let link_hints = [
+            ("B", "Cancel"), ("LEFT/RIGHT", "Swap"), ("A", "Link"),
         ].map(|(key, label)| {
             let face = hint_face(key, label);
             let tex = gpu.create_texture(face.w, face.h, &face.rgba);
@@ -637,6 +645,7 @@ impl Engine {
             menu_textures,
             menu_hints,
             game_menu_hints,
+            link_hints,
             board_texture: None,
             chip_texture,
             picker: None,
@@ -2116,6 +2125,40 @@ impl Engine {
                     tex, alpha: fade,
                 });
             }
+        }
+    }
+
+    /// The original Slot cable plug/wireless adapter and their exact motion
+    /// curves are reused without forking them. Only text and the KONKR
+    /// controller keycap legend are native additions.
+    fn draw_multiplayer(&self, out: &mut Vec<Draw>) {
+        out.push(Draw::Rect {
+            x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
+            colour: opening(),
+        });
+        let now = self.link_millis();
+        link_screen::draw_link_art(self.link_phase, self.link_mode,
+            now, &self.link_art, out);
+        self.text_fit(68, 30.0, 20.0, 610.0, 0.9, out);
+        self.text_fit(if self.link_mode == LinkKind::Cable { 71 } else { 72 },
+            30.0, 71.0, 140.0, 0.75, out);
+        self.text_fit(if self.link_role == LinkRow::Host { 69 } else { 70 },
+            300.0, 61.0, 110.0, 1.0, out);
+        let status = match self.link_phase {
+            LinkMenu::Pick(_) => 76,
+            LinkMenu::Working { .. } => 73,
+            LinkMenu::Linked { .. } => 74,
+            LinkMenu::Failed { .. } => 77,
+            LinkMenu::Unplug { .. } => 75,
+        };
+        self.text_fit(status, 178.0, 119.0, 465.0, 0.8, out);
+        out.push(Draw::Rect {
+            x: 0.0, y: 420.0, w: OUT_W as f32, h: 60.0,
+            colour: opening(),
+        });
+        for (tex, w, x) in centred_hints(&self.link_hints, 15.0) {
+            out.push(Draw::Tex { x, y: 427.0, w: w as f32,
+                h: HINT_H as f32, tex, alpha: 1.0 });
         }
     }
 
