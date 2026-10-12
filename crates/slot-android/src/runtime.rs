@@ -1497,12 +1497,13 @@ impl Engine {
             let Some(shelf) = self.shelves.get(shelf_id) else { continue };
             if index >= shelf.carts.len() || shelf.face(index).is_some() { continue }
             let texture = if self.texture_cache.len() >= 42 {
-                // Keep one selected cartridge from EACH GBA/GB/GBC shelf
-                // resident. Active-shelf scroll churn must not evict the
-                // first GB/GBC image moments before L1/R1 switches systems.
+                // Pin selected +/- one cart from EACH system so the entire
+                // immediately-visible GB/GBC trio survives GBA scrolling.
+                // At most nine textures are pinned inside our existing 42,
+                // preventing background prefetch/re-eviction thrashing.
                 let victim = self.texture_cache.iter().position(|(sid, index, _)| {
                     self.shelves[*sid].carts.is_empty() ||
-                    self.shelves[*sid].index != *index
+                    self.shelves[*sid].index.abs_diff(*index) > 1
                 }).unwrap_or(0);
                 let (old_shelf, old_index, tex) = self.texture_cache
                     .remove(victim).expect("nonempty texture pool");
