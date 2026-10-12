@@ -315,6 +315,13 @@ class MainActivity : Activity() {
             if (::shelfStatus.isInitialized) {
                 val flags = nativeShelfIndicatorFlags()
                 shelfStatus.refresh(flags)
+                // Slot owns menu/onboarding drawing. Never show native Android
+                // scan/error status across an open menu or active game.
+                if (::status.isInitialized) {
+                    val shouldShow = status.text.isNotBlank() && (flags and 1) != 0
+                    val target = if (shouldShow) View.VISIBLE else View.GONE
+                    if (status.visibility != target) status.visibility = target
+                }
             }
             pollRumble()
             updateDisplaySyncMode()
@@ -345,8 +352,16 @@ class MainActivity : Activity() {
                             }
                             if (failures.isNotEmpty()) {
                                 runOnUiThread {
-                                    if (!isDestroyed) SlotToast.makeText(this@MainActivity,
-                                        "Some saves couldn't be copied. Check your Save and Save State folders.", Toast.LENGTH_LONG).show()
+                                    if (!isDestroyed) {
+                                        Log.w(TAG, "Save export warnings: " + failures.joinToString(" | "))
+                                        val onlyMirrors = failures.all {
+                                            it.startsWith("Shared GBA save sync deferred")
+                                        }
+                                        val notice = if (onlyMirrors)
+                                            "Game saved locally. mGBA/gpSP copy deferred."
+                                        else "Game saved locally; some external/state exports need attention."
+                                        SlotToast.makeText(this@MainActivity, notice, Toast.LENGTH_LONG).show()
+                                    }
                                 }
                             }
                         }
@@ -560,7 +575,9 @@ class MainActivity : Activity() {
         }
         frame.addView(
             status,
-            FrameLayout.LayoutParams(-1, -2, Gravity.TOP)
+            FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply {
+                topMargin = (76 * resources.displayMetrics.density).toInt()
+            }
         )
         performanceHud = TextView(this).apply {
             typeface = SlotUi.font(this@MainActivity)
@@ -617,7 +634,10 @@ class MainActivity : Activity() {
                 status.text = "Games folder access expired. Choose it again. — START to choose again"
             }
         } else {
-            status.text = "Press START to open the menu and add your ROMs."
+            // First-run START keycap is now rendered by the native Slot GL
+            // renderer; no Android TextView must float above the carousel.
+            status.text = ""
+            status.visibility = View.GONE
         }
     }
 
