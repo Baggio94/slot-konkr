@@ -266,25 +266,26 @@ impl GameSession {
         true
     }
 
-    /// Physical link is kept out of GameSession until the transport completes
-    /// the fork's game-specific greeting. Only mGBA cable and gpSP RFU are
-    /// admitted to this first emulation integration; gpSP cable has a separate
-    /// libretro netpacket path that will be wired with its core options later.
+    /// The pinned mGBA libretro core is SINGLE-PLAYER (it ignores controller
+    /// port 1 and never registers a netpacket interface). gpSP is the ONLY
+    /// installed core with genuine GBA serial/RFU netpacket callbacks. Both
+    /// Cable and Wireless therefore use gpSP's network interface, never the
+    /// simulated two-input single-core path used by original Slot tests.
     pub fn begin_multiplayer(&mut self, role: Role, mode: LinkKind,
                              transport: Box<dyn LinkChannel>) -> Result<(), String> {
         if self.link.is_some() { return Err("Already linked".into()); }
         if self.link_touched {
             return Err("Relaunch cartridge before another link".into());
         }
-        if matches!(mode, LinkKind::Cable) && self.core_kind != Core::Mgba {
-            return Err("Cable mode currently requires mGBA".into());
+        if self.core_kind != Core::Gpsp {
+            return Err("Multiplayer requires gpSP: this mGBA libretro build has no GBA Link interface".into());
         }
-        if matches!(mode, LinkKind::Wireless) && self.core_kind != Core::Gpsp {
-            return Err("Wireless mode currently requires gpSP".into());
+        if !self.core.supports_netpacket() {
+            return Err("gpSP did not register GBA serial/RFU netpacket callbacks".into());
         }
-        if matches!(mode, LinkKind::Wireless) && !self.core.supports_netpacket() {
-            return Err("Installed gpSP core has no wireless netpacket interface".into());
-        }
+        // The auto-detected serial mode must be decided when the cartridge is
+        // loaded. Never attempt to switch RFU to Cable on a running gpSP core.
+        let _ = mode;
         let link = LinkPlay::begin(self.core.as_mut(), role, mode, transport)?;
         self.link = Some(link);
         self.link_touched = true;
