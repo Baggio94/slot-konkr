@@ -25,6 +25,7 @@ import java.util.Locale
 internal object RetroArchStorage {
     private const val TAG = "SlotKonkr"
     private const val MAX_SAVE = 2 * 1024 * 1024
+    class SaveConflict(message: String) : IllegalStateException(message)
     private const val MAX_STATE = 65 * 1024 * 1024
 
     data class Target(
@@ -38,7 +39,9 @@ internal object RetroArchStorage {
         val stateImportLocal: File,
         val stateExportLocal: File,
         val savesTree: Uri?,
-        val statesTree: Uri?
+        val statesTree: Uri?,
+        val isGba: Boolean,
+        val romIdentity: String
     )
 
     fun target(context: Context, rawUri: String, core: String, savesTree: Uri?, statesTree: Uri?,
@@ -69,7 +72,8 @@ internal object RetroArchStorage {
             File(File(prefix, "ManualExports").apply { mkdirs() }, "$digest.$coreLower"),
             File(prefix, "$digest.$coreLower.retroarch-import.state.auto"),
             File(prefix, "$digest.$coreLower.retroarch-export.state.auto"),
-            savesTree, statesTree)
+            savesTree, statesTree,
+            name.endsWith(".gba", ignoreCase = true), digest)
     }
 
     fun importBeforeLaunch(context: Context, target: Target) {
@@ -81,9 +85,15 @@ internal object RetroArchStorage {
         // hierarchical. Use the user-granted tree to open the exact document
         // directly, without listing its siblings. Other providers retain the
         // existing safe directory-enumeration fallback.
+        if (target.isGba) {
+            importSharedGba(context, target)
+        } else {
+            target.savesTree?.let { root ->
+                readNamed(context, root, target.core, target.stem + ".srm", MAX_SAVE)
+                    ?.let { stage(target.saveLocal, it) }
+            }
+        }
         target.savesTree?.let { root ->
-            readNamed(context, root, target.core, target.stem + ".srm", MAX_SAVE)
-                ?.let { stage(target.saveLocal, it) }
             readNamed(context, root, target.core, target.stem + ".rtc", 4096)
                 ?.let { bytes ->
                     require(bytes.isNotEmpty()) { "Empty RetroArch RTC" }
@@ -118,7 +128,14 @@ internal object RetroArchStorage {
     /** Returns human-readable export errors; no silent data loss. */
     fun exportAfterSave(context: Context, target: Target): List<String> {
         val failures = mutableListOf<String>()
-        if (target.savesTree != null && target.saveLocal.isFile) {
+        if (target.isGba) {
+            try {
+                exportSharedGba(context, target)
+            } catch (e: Exception) {
+                Log.e(TAG, "Shared GBA SRAM sync deferred; originals preserved", e)
+                failures.add("Shared GBA save sync deferred: " + (e.message ?: "check existing saves"))
+            }
+        } else if (target.savesTree != null && target.saveLocal.isFile) {
             try {
                 val data = target.saveLocal.readBytes()
                 if (data.isNotEmpty() && data.size <= MAX_SAVE) {
@@ -165,6 +182,174 @@ internal object RetroArchStorage {
             }
         }
         return failures
+    }
+
+    /** Shared GBA battery RAM only. Save states and RTC remain core-specific.
+     *  A new shared journal is recorded ONLY after both RetroArch mirrors were
+     *  verified. If existing mGBA/gpSP saves disagree without a reliable
+     *  common ancestor, NEVER choose a winner behind the user's back.
+     */
+    private fun sharedFiles(context: Context, target: Target): Pair<File, File> {
+        val root = File(context.filesDir, "Saves/SharedGBA").apply { mkdirs() }
+        val snapshot = File(root, target.romIdentity + ".srm")
+        val loaded = File(root, target.romIdentity + ".loaded.srm")
+        return snapshot to loaded
+    }
+
+    private fun otherCore(core: String) = if (core == "mGBA") "gpSP" else "mGBA"
+
+    private fun otherPrivate(context: Context, target: Target) =
+        File(context.filesDir, "Saves/${otherCore(target.core)}/${target.stem}.srm")
+
+    private fun validGbaRam(data: ByteArray): Boolean {
+        // GBA EEPROM 512B/8KiB, SRAM 32KiB, Flash 64KiB/128KiB.
+        // Leave exotic sizes unmirrored until actually validated on both cores.
+        return data.size in setOf(512, 8192, 32768, 65536, 131072)
+    }
+
+    internal enum class SharedGbaSource { NONE, OWN, OTHER, CONFLICT }
+
+    /** Pure migration decision: never infer recency from SAF timestamp or
+     * file size, which Syncthing / document providers frequently rewrite.
+     */
+    internal fun chooseGbaSource(
+        own: ByteArray?, other: ByteArray?, lastPublished: ByteArray?
+    ): SharedGbaSource = when {
+        own == null && other == null -> SharedGbaSource.NONE
+        own == null -> SharedGbaSource.OTHER
+        other == null -> SharedGbaSource.OWN
+        own.contentEquals(other) -> SharedGbaSource.OWN
+        lastPublished != null && own.contentEquals(lastPublished) -> SharedGbaSource.OTHER
+        lastPublished != null && other.contentEquals(lastPublished) -> SharedGbaSource.OWN
+        else -> SharedGbaSource.CONFLICT
+    }
+
+
+
+    private fun importSharedGba(context: Context, target: Target) {
+        val (journal, loaded) = sharedFiles(context, target)
+        val conflict = File(journal.path + ".conflict")
+        val previous = journal.takeIf { it.isFile }?.readBytes()
+        val ownPrivate = target.saveLocal.takeIf { it.isFile }?.readBytes()
+        val peerPrivateFile = otherPrivate(context, target)
+        val peerPrivate = peerPrivateFile.takeIf { it.isFile }?.readBytes()
+        val ownExternal = target.savesTree?.let {
+            readNamed(context, it, target.core, target.stem + ".srm", MAX_SAVE)
+        }
+        val peerExternal = target.savesTree?.let {
+            readNamed(context, it, otherCore(target.core), target.stem + ".srm", MAX_SAVE)
+        }
+        // External RetroArch saves are authoritative if the user edited
+        // either one; private caches only fill genuine external absences.
+        val own = ownExternal ?: ownPrivate
+        val peer = peerExternal ?: peerPrivate
+        val decision = chooseGbaSource(own, peer, previous)
+        if (decision == SharedGbaSource.CONFLICT) {
+            // Two different first-run saves: no automatic migration,
+            // and no mirror writes until both files are reconciled.
+            stage(conflict, "Conflicting mGBA/gpSP GBA SRAM; keep both originals".toByteArray())
+            if (ownExternal != null && !ownExternal.contentEquals(ownPrivate)) {
+                if (ownPrivate != null) {
+                    val backup = File(journal.path + ".${target.core}.before-share.srm")
+                    if (!backup.exists()) stage(backup, ownPrivate)
+                }
+                stage(target.saveLocal, ownExternal)
+            }
+            // Do not auto-resume a stale savestate over either differing save.
+            val lower = if (target.core == "mGBA") "mgba" else "gpsp"
+            stage(File(context.filesDir,
+                "Saves/${target.romIdentity}.$lower.skip-resume.once"), byteArrayOf(1))
+            target.stateImportLocal.delete()
+            throw SaveConflict("Different mGBA / gpSP saves found. Both are preserved; syncing paused.")
+        }
+        val source = if (decision == SharedGbaSource.OTHER) otherCore(target.core)
+            else target.core
+        val choice = when (decision) {
+            SharedGbaSource.OWN -> own
+            SharedGbaSource.OTHER -> peer
+            SharedGbaSource.NONE -> previous
+            SharedGbaSource.CONFLICT -> null
+        }
+        if (choice == null) {
+            loaded.delete()
+            return
+        }
+        if (!validGbaRam(choice) || (previous != null && !validGbaRam(previous))) {
+            stage(conflict, "Unsupported GBA SRAM size; no shared writes".toByteArray())
+            return
+        }
+        conflict.delete()
+        if (ownPrivate != null && !ownPrivate.contentEquals(choice)) {
+            // Preserve an old private slot cache before importing a newer
+            // SRAM from the other core or from RetroArch's SAF folder.
+            val backup = File(journal.path + ".${target.core}.before-share.srm")
+            if (!backup.exists()) stage(backup, ownPrivate)
+        }
+        stage(target.saveLocal, choice)
+        // Never overwrite the OTHER core's existing private save before the
+        // launched core confirms it can deserialize the shared battery RAM.
+        stage(loaded, choice)
+        val lastWriter = File(journal.path + ".core").takeIf { it.isFile }?.readText()?.trim()
+        if (source != target.core || (lastWriter != null && lastWriter != target.core)) {
+            // A stale per-core .state.auto must NEVER roll back a newer SRAM
+            // imported from the other emulator.
+            val lower = if (target.core == "mGBA") "mgba" else "gpsp"
+            val marker = File(context.filesDir, "Saves/${target.romIdentity}.$lower.skip-resume.once")
+            stage(marker, byteArrayOf(1))
+        }
+    }
+
+    private fun exportSharedGba(context: Context, target: Target) {
+        val current = target.saveLocal.takeIf { it.isFile }?.readBytes() ?: return
+        if (!validGbaRam(current)) error("unsupported GBA SRAM size, keeping existing mirrors")
+        val (journal, loadedFile) = sharedFiles(context, target)
+        if (File(journal.path + ".conflict").exists()) {
+            // The currently selected core can keep its own progress; do not
+            // destroy the other emulator's differing SRAM.
+            target.savesTree?.let {
+                writeSaf(context, it, target.core, target.stem + ".srm",
+                    current, isState = false)
+            }
+            error("mGBA and gpSP saves conflict; both folders kept separate")
+        }
+        val baseline = journal.takeIf { it.isFile }?.readBytes()
+        val atLaunch = loadedFile.takeIf { it.isFile }?.readBytes()
+        if (baseline != null && current.size != baseline.size) {
+            error("GBA save size changed between cores; no mirrors overwritten")
+        }
+        val external = target.savesTree
+        if (external != null) {
+            // PRE-FLIGHT both destinations before writing ANY of them. A
+            // concurrent RetroArch/Syncthing edit is a conflict, not a signal
+            // to overwrite the other core's progress.
+            for (core in arrayOf(target.core, otherCore(target.core))) {
+                val old = readNamed(context, external, core, target.stem + ".srm", MAX_SAVE)
+                if (old != null && !old.contentEquals(current) &&
+                    baseline?.contentEquals(old) != true &&
+                    atLaunch?.contentEquals(old) != true) {
+                    error("$core SRAM changed outside Slot; mirroring cancelled")
+                }
+                if (old != null && !validGbaRam(old)) {
+                    error("$core SRAM has an unrecognized size; mirroring cancelled")
+                }
+            }
+            for (core in arrayOf(target.core, otherCore(target.core))) {
+                writeSaf(context, external, core, target.stem + ".srm",
+                    current, isState = false)
+            }
+        }
+        val otherLocal = otherPrivate(context, target)
+        if (otherLocal.isFile) {
+            val prior = otherLocal.readBytes()
+            if (!prior.contentEquals(current)) {
+                val backup = File(journal.path + ".${otherCore(target.core)}.before-share.srm")
+                if (!backup.exists()) stage(backup, prior)
+            }
+        }
+        stage(otherLocal, current)
+        stage(journal, current)
+        stage(File(journal.path + ".core"), target.core.toByteArray())
+        loadedFile.delete()
     }
 
     /** Export each new Slot Polaroid to the first EMPTY RetroArch manual slot.
