@@ -2418,7 +2418,7 @@ impl Engine {
                 }
             }
             if stepped > 0 && !self.rewind_held && !self.ff_held && !self.ff_latched
-                && self.active == 0 && profile.run_ahead_frames > 0 {
+                && profile.run_ahead_frames > 0 {
                 // The normal frames and their audio are already consumed.
                 // Predicted video never advances the real saved/RA timeline.
                 session.prepare_runahead(self.buttons, self.settings.turbo,
