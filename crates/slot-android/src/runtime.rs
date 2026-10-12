@@ -1559,8 +1559,8 @@ impl Engine {
                 .map_or(Platform::Gba, |cart|cart.platform);
             // First game still wakes RA if the asynchronous SAF scan has not run.
             // Perform this mutable operation BEFORE borrowing rom_stem.
-            // GB/GBC memory/hash layouts are not yet verified.
-            if platform == Platform::Gba { self.ensure_ra_service(); }
+            // GBA, GB and GBC use the verified per-console memory maps.
+            self.ensure_ra_service();
             let rom_stem = self.shelves[self.active].carts
                 .get(self.shelves[self.active].index)
                 .map_or("", |cart| cart.stem.as_str());
@@ -1569,7 +1569,7 @@ impl Engine {
                 core, platform, self.settings.eject_save && !self.fresh_launch,
                 rom_stem, self.settings.gb_palettes.then(|| self.settings.palette_name()),
                 self.settings.colour_correction,
-                if platform == Platform::Gba { self.ra_service.as_ref() } else { None }) {
+                self.ra_service.as_ref()) {
                 Ok(session) => {
                     // Create libretro on the same GL thread, but defer audio
                     // and CRT presentation until Slot's seated hold completes.
