@@ -11,6 +11,10 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
@@ -37,6 +41,10 @@ internal class RaAchievementOverlay(
         val detail: String,
         val earned: Boolean,
         val badge: String?,
+        // Nullable means ordinary RA notice (not a game-launch status).
+        // For the launch notice, true/false is the Android-validated internet
+        // snapshot, independent of whether RA data came from the local cache.
+        val onlineMode: Boolean? = null,
     )
 
     private val handler = Handler(Looper.getMainLooper())
@@ -177,7 +185,20 @@ internal class RaAchievementOverlay(
             // mastery icon, never an arbitrary individual achievement badge.
             // Other diagnostic notices continue without a fabricated icon.
             heading.text = "RETROACHIEVEMENTS"
-            title.text = status.uppercase(Locale.ROOT)
+            // Keep the mode *next to the game title*, not in an extra row.
+            // Android wraps both together for long game titles.
+            val gameTitle = SpannableStringBuilder(status.uppercase(Locale.ROOT))
+            notice.onlineMode?.let { online ->
+                val mode = if (online) "ONLINE MODE" else "OFFLINE MODE"
+                gameTitle.append("  ")
+                val modeStart = gameTitle.length
+                gameTitle.append(mode)
+                gameTitle.setSpan(RelativeSizeSpan(0.63f), modeStart,
+                    gameTitle.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                gameTitle.setSpan(ForegroundColorSpan(if (online) accent else secondary),
+                    modeStart, gameTitle.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            title.text = gameTitle
             subtitle.text = notice.detail.uppercase(Locale.ROOT)
             subtitle.visibility = if (notice.detail.isBlank()) View.GONE else View.VISIBLE
             badge.visibility = View.GONE
