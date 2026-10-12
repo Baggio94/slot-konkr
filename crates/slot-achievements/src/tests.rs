@@ -275,6 +275,30 @@ fn runtime_evaluates_real_definitions_and_never_awards_missing_memory() {
 }
 
 #[test]
+fn game_boy_wram_is_tracked_but_unmapped_echo_ram_never_awards() {
+    let mut runtime = runtime::Runtime::new().unwrap();
+    assert!(runtime.activate(121, "0xH00C001=7"));
+    assert!(runtime.activate(122, "0xH00E000=0"));
+    let mut ram = vec![0; RAM_SIZE + GB_COVERAGE_SIZE];
+    ram[0xc001] = 7;
+    ram[RAM_SIZE + 0xc001] = 1;
+    assert_eq!(runtime.frame(&ram, &[1, 0, 0], 4), &[121]);
+    assert!(runtime.frame(&ram, &[1, 0, 0], 4).is_empty());
+}
+
+#[test]
+fn game_boy_color_extended_bank_is_valid_only_when_core_exposes_it() {
+    let mut runtime = runtime::Runtime::new().unwrap();
+    assert!(runtime.activate(123, "0xH010100=9"));
+    let mut ram = vec![0; RAM_SIZE + GB_COVERAGE_SIZE];
+    ram[0x10100] = 9;
+    // No mapping yet: an unobserved zero must never trigger an award.
+    assert!(runtime.frame(&ram, &[1, 0, 0], 6).is_empty());
+    ram[RAM_SIZE + 0x10100] = 1;
+    assert_eq!(runtime.frame(&ram, &[1, 0, 0], 6), &[123]);
+}
+
+#[test]
 fn offline_unlock_is_durable_then_syncs_without_reopening_the_game() {
     let root = configured();
     let rom = root.path().join("Games/GBA/Test.gba");
