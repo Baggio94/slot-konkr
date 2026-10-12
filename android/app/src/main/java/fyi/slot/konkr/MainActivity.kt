@@ -35,6 +35,8 @@ import android.net.Uri
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.wifi.WifiManager
+import java.net.Inet4Address
 import org.json.JSONObject
 import org.json.JSONArray
 import java.util.concurrent.ConcurrentHashMap
@@ -121,6 +123,11 @@ class MainActivity : Activity() {
     external fun nativePollRumbleStrength(): Int
     external fun nativeCoreForUri(uri: String): String
     external fun nativePollSaveFlush(): String?
+    // The renderer requests LAN only when Host/Join is selected. It never
+    // touches WifiManager, Android UI or permissions from the GL thread.
+    external fun nativeLinkNetworkReady(ipv4: String)
+    external fun nativeLinkNetworkError(reason: String)
+    external fun nativeLinkNeedsMulticast(): Boolean
 
     private var pendingCartLabelUri: String? = null
     private var pendingCartStudioUri: String? = null
@@ -179,6 +186,60 @@ class MainActivity : Activity() {
 
     private var audioThread: Thread? = null
     private var raConnectivity: ConnectivityManager? = null
+    private var linkMulticastLock: WifiManager.MulticastLock? = null
+
+    /** The LAN need not have Internet: the two handhelds only need the same Wi-Fi.
+     *  Resolve the actual interface's IPv4 address, never use the default
+     *  network's mobile/VPN address or a hardcoded 10.42.0.1 Linux radio. */
+    private fun linkWifiAddress(): String? {
+        val cm = getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return null
+        for (network in cm.allNetworks) {
+            val capabilities = cm.getNetworkCapabilities(network) ?: continue
+            if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue
+            val links = cm.getLinkProperties(network) ?: continue
+            for (address in links.linkAddresses) {
+                val ip = address.address
+                if (ip is Inet4Address && !ip.isLoopbackAddress &&
+                    !ip.isLinkLocalAddress && !ip.isMulticastAddress && !ip.isAnyLocalAddress) {
+                    return ip.hostAddress
+                }
+            }
+        }
+        return null
+    }
+
+    private fun releaseLinkMulticast() {
+        val current = linkMulticastLock
+        linkMulticastLock = null
+        try { if (current?.isHeld == true) current.release() }
+        catch (error: RuntimeException) { Log.w(TAG, "Link multicast release failed", error) }
+    }
+
+    private fun requestLinkWifi() {
+        if (!resumed) {
+            nativeLinkNetworkError("Return to Slot before starting Multiplayer")
+            return
+        }
+        val address = linkWifiAddress()
+        if (address == null) {
+            nativeLinkNetworkError("Connect both consoles to the same Wi-Fi network")
+            return
+        }
+        try {
+            releaseLinkMulticast()
+            val manager = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
+            val lock = manager.createMulticastLock("slot-konkr-multiplayer")
+            lock.setReferenceCounted(false)
+            lock.acquire()
+            linkMulticastLock = lock
+            // Lock must be held before the Rust discovery worker starts.
+            nativeLinkNetworkReady(address)
+        } catch (error: Exception) {
+            releaseLinkMulticast()
+            Log.w(TAG, "Unable to acquire LAN discovery lock", error)
+            nativeLinkNetworkError("Wi-Fi multicast unavailable on this device")
+        }
+    }
     private val raConnectivityCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             // Signals only that a network appeared. Rust still verifies RA HTTPS.
@@ -287,6 +348,12 @@ class MainActivity : Activity() {
                             Toast.LENGTH_SHORT).show()
                     }
                 }
+                16 -> requestLinkWifi()
+            }
+            // Multicast is required during discovery, not for ongoing TCP
+            // emulation. Release on success, cancellation and timeout.
+            if (linkMulticastLock != null && !nativeLinkNeedsMulticast()) {
+                releaseLinkMulticast()
             }
             val nowPerf = android.os.SystemClock.uptimeMillis()
             if (resumed && nowPerf - lastPerfPoll >= 250) {
@@ -1564,6 +1631,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        releaseLinkMulticast()
         Choreographer.getInstance().removeFrameCallback(vsyncCallback)
         raConnectivity?.let { manager ->
             try { manager.unregisterNetworkCallback(raConnectivityCallback) }
@@ -1585,6 +1653,9 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         resumed = false
+        // Rust nativeSuspend aborts discovery/linked play; never keep a
+        // multicast lock across Android background sleep.
+        releaseLinkMulticast()
         if (::shelfStatus.isInitialized) shelfStatus.onPause()
         Choreographer.getInstance().removeFrameCallback(vsyncCallback)
         if (displaySyncApplied) {
