@@ -771,6 +771,10 @@ impl RetroCore for LibretroCore {
         std::mem::take(&mut self.host.audio)
     }
 
+    fn speculative_pcm_fingerprint(&self) -> Option<(usize, u64)> {
+        Some((self.host.audio.len(), crate::core::pcm_fingerprint(&self.host.audio)))
+    }
+
     fn discard_audio(&mut self) {
         // Speculative run-ahead audio is intentionally inaudible. Clearing
         // preserves capacity for the next speculative libretro frame.
