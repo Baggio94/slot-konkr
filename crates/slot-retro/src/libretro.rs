@@ -440,6 +440,24 @@ impl LibretroCore {
             .inspect_err(|_| LIVE.store(false, Ordering::SeqCst))
     }
 
+    fn try_init_mgba_audio(&mut self) {
+        if self.mgba_audio.is_some() || !self.loaded {
+            return;
+        }
+        // mGBA may defer its audio queue allocation until the first
+        // retro_run(); retry on the real frame path before enabling run-ahead.
+        self.mgba_audio = self.mgba_audio_exports.and_then(|(size_fn, transfer)| {
+            let size = unsafe { size_fn() };
+            if (4..=1024 * 1024).contains(&size) {
+                Some(AudioSidecar {
+                    transfer,
+                    snapshot: vec![0; size],
+                    captured: false,
+                })
+            } else { None }
+        });
+    }
+
     pub fn reported_system_dir(&self) -> String {
         self.host.system_dir.to_string_lossy().into_owned()
     }
@@ -587,6 +605,9 @@ impl LibretroCore {
             let _a = Active::bind(&mut self.host);
             unsafe { (self.api.unload_game)() };
         }
+        // This snapshot belongs to the currently loaded ROM and must never
+        // be reused when another ROM allocates a different audio queue.
+        self.mgba_audio = None;
         // Release the borrowed descriptor pointers only after libretro
         // returns and Active drops its exclusive Host borrow.
         self.host.memory.clear();
@@ -700,16 +721,7 @@ impl RetroCore for LibretroCore {
             return Err(CoreError::Load(format!("core refused {}", rom.display())));
         }
         self.loaded = true;
-        self.mgba_audio = self.mgba_audio_exports.and_then(|(size_fn, transfer)| {
-            let size = unsafe { size_fn() };
-            if (4..=1024 * 1024).contains(&size) {
-                Some(AudioSidecar {
-                    transfer,
-                    snapshot: vec![0; size],
-                    captured: false,
-                })
-            } else { None }
-        });
+        self.try_init_mgba_audio();
         let mut av = SystemAvInfo::default();
         unsafe { (self.api.get_system_av_info)(&mut av) };
         self.av = AvInfo {
@@ -729,8 +741,15 @@ impl RetroCore for LibretroCore {
             return;
         }
         self.host.inputs = [p1.0, p2.0];
-        let _a = Active::bind(&mut self.host);
-        unsafe { (self.api.run)() };
+        {
+            let _a = Active::bind(&mut self.host);
+            unsafe { (self.api.run)() };
+        }
+        // Retry after deferred initialization; never run an mGBA
+        // speculative frame without a correctly sized audio snapshot.
+        if self.is_mgba && self.mgba_audio.is_none() {
+            self.try_init_mgba_audio();
+        }
     }
 
     fn set_frame_skip(&mut self, skip: bool) {
