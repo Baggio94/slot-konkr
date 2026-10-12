@@ -84,6 +84,7 @@ enum Input {
     RaAccountConfigured,
     // Kotlin acquires the multicast lock before returning a Wi-Fi IPv4.
     LinkNetworkReady(String),
+    LinkDirectHost(String),
     LinkNetworkError(String),
     RaPrefetchHash(String),
     ExternalReturn,
@@ -965,6 +966,33 @@ impl Engine {
                     }
                 } else {
                     LINK_NEEDS_MULTICAST.store(false, Ordering::Release);
+                }
+            }
+            Input::LinkDirectHost(pair) => {
+                if matches!(self.overlay, ShelfOverlay::Multiplayer) &&
+                    matches!(self.link_phase, LinkMenu::Working {..}) {
+                    let result = (|| {
+                        if self.link_role != LinkRow::Join {
+                            return Err("Direct IP is supported for Join only".to_owned());
+                        }
+                        let (local, host) = pair.split_once(',')
+                            .ok_or_else(|| "Invalid direct IP address pair".to_owned())?;
+                        let local = local.parse::<Ipv4Addr>()
+                            .map_err(|_| "Invalid emulator local IPv4".to_owned())?;
+                        let host = host.parse::<Ipv4Addr>()
+                            .map_err(|_| "Invalid KONKR host IPv4".to_owned())?;
+                        let id = self.link_identity.as_ref()
+                            .ok_or_else(|| "No GBA game identity".to_owned())?;
+                        LinkStarter::spawn_direct_join(local, host, &id.code)
+                            .map_err(|e| e.to_string())
+                    })();
+                    match result {
+                        Ok(starter) => {
+                            self.link_starter = Some(starter);
+                            LINK_NEEDS_MULTICAST.store(false, Ordering::Release);
+                        }
+                        Err(error) => self.fail_multiplayer(&error, LinkFail::Radio),
+                    }
                 }
             }
             Input::LinkNetworkError(reason) => {
@@ -3248,6 +3276,16 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkNetworkReady(
     if let Ok(value) = env.get_string(&ipv4) {
         INPUT.lock().unwrap_or_else(|e| e.into_inner())
             .push_back(Input::LinkNetworkReady(value.to_string_lossy().into_owned()));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkDirectHost(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, address_pair: JString<'_>,
+) {
+    if let Ok(value) = env.get_string(&address_pair) {
+        INPUT.lock().unwrap_or_else(|e| e.into_inner())
+            .push_back(Input::LinkDirectHost(value.to_string_lossy().into_owned()));
     }
 }
 
