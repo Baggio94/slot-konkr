@@ -206,6 +206,25 @@ internal object RetroArchStorage {
         return data.size in setOf(512, 8192, 32768, 65536, 131072)
     }
 
+    internal enum class SharedGbaSource { NONE, OWN, OTHER, CONFLICT }
+
+    /** Pure migration decision: never infer recency from SAF timestamp or
+     * file size, which Syncthing / document providers frequently rewrite.
+     */
+    internal fun chooseGbaSource(
+        own: ByteArray?, other: ByteArray?, lastPublished: ByteArray?
+    ): SharedGbaSource = when {
+        own == null && other == null -> SharedGbaSource.NONE
+        own == null -> SharedGbaSource.OTHER
+        other == null -> SharedGbaSource.OWN
+        own.contentEquals(other) -> SharedGbaSource.OWN
+        lastPublished != null && own.contentEquals(lastPublished) -> SharedGbaSource.OTHER
+        lastPublished != null && other.contentEquals(lastPublished) -> SharedGbaSource.OWN
+        else -> SharedGbaSource.CONFLICT
+    }
+
+
+
     private fun importSharedGba(context: Context, target: Target) {
         val (journal, loaded) = sharedFiles(context, target)
         val conflict = File(journal.path + ".conflict")
@@ -223,25 +242,21 @@ internal object RetroArchStorage {
         // either one; private caches only fill genuine external absences.
         val own = ownExternal ?: ownPrivate
         val peer = peerExternal ?: peerPrivate
-        val source: String
-        val choice: ByteArray? = when {
-            own == null && peer == null -> { source = target.core; previous }
-            own == null -> { source = otherCore(target.core); peer }
-            peer == null -> { source = target.core; own }
-            own.contentEquals(peer) -> { source = target.core; own }
-            previous != null && own.contentEquals(previous) -> {
-                source = otherCore(target.core); peer
-            }
-            previous != null && peer.contentEquals(previous) -> {
-                source = target.core; own
-            }
-            else -> {
-                // Two different first-run saves: no automatic migration,
-                // and no mirror writes until both files are reconciled.
-                stage(conflict, "Conflicting mGBA/gpSP GBA SRAM; keep both originals".toByteArray())
-                Log.w(TAG, "GBA SRAM conflict: the two source files were preserved")
-                return
-            }
+        val decision = chooseGbaSource(own, peer, previous)
+        if (decision == SharedGbaSource.CONFLICT) {
+            // Two different first-run saves: no automatic migration,
+            // and no mirror writes until both files are reconciled.
+            stage(conflict, "Conflicting mGBA/gpSP GBA SRAM; keep both originals".toByteArray())
+            Log.w(TAG, "GBA SRAM conflict: the two source files were preserved")
+            return
+        }
+        val source = if (decision == SharedGbaSource.OTHER) otherCore(target.core)
+            else target.core
+        val choice = when (decision) {
+            SharedGbaSource.OWN -> own
+            SharedGbaSource.OTHER -> peer
+            SharedGbaSource.NONE -> previous
+            SharedGbaSource.CONFLICT -> null
         }
         if (choice == null) {
             loaded.delete()
