@@ -71,6 +71,9 @@ impl Surface for AndroidSurface {
 #[derive(Clone)]
 enum Input {
     Key(i32, bool),
+    // Dedicated Mac AVD keyboard events: a quick Z/X tap must survive until
+    // the emulator core has actually sampled it for one frame.
+    EmulatorKey(i32, bool),
     Reset,
     GameReady { uri: String, path: String },
     GameError { uri: String, message: String },
@@ -88,6 +91,45 @@ enum Input {
     LinkNetworkError(String),
     RaPrefetchHash(String, u32),
     ExternalReturn,
+}
+
+/// AVD keyboard letters can press and release between two GL callbacks.
+/// The physical KONKR bypasses this latch entirely. Only A and B use it.
+#[derive(Default, Debug)]
+struct EmulatorKeyLatch {
+    waiting_for_frame: u16,
+    release_after_frame: u16,
+}
+
+impl EmulatorKeyLatch {
+    fn press(&mut self, mask: u16) {
+        self.waiting_for_frame |= mask;
+        self.release_after_frame &= !mask;
+    }
+
+    /// True means the normal key-up can be applied now. Otherwise we must
+    /// keep the key pressed until at least one real emulation frame succeeds.
+    fn release_now(&mut self, mask: u16) -> bool {
+        if self.waiting_for_frame & mask != 0 {
+            self.release_after_frame |= mask;
+            false
+        } else {
+            true
+        }
+    }
+
+    /// Called only after a successfully advanced libretro frame, never on
+    /// a GL draw, speculative run-ahead, paused menu or a waiting link frame.
+    fn on_emulated_frame(&mut self) -> u16 {
+        let releases = self.release_after_frame;
+        self.waiting_for_frame = 0;
+        self.release_after_frame = 0;
+        releases
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
 }
 
 static INPUT: Mutex<VecDeque<Input>> = Mutex::new(VecDeque::new());
@@ -326,6 +368,7 @@ struct Engine {
     born: Instant,
     last: Instant,
     library_version: u64,
+    emulator_key_latch: EmulatorKeyLatch,
     texture_cache: VecDeque<(usize, usize, slot_gfx::TexId)>,
     cart_render: CartRender,
     game: Option<GameSession>,
@@ -610,6 +653,7 @@ impl Engine {
             born: now,
             last: now,
             library_version,
+            emulator_key_latch: EmulatorKeyLatch::default(),
             texture_cache: VecDeque::new(),
             cart_render: CartRender::start()?,
             game: None,
@@ -1067,6 +1111,7 @@ impl Engine {
                 }
             }
             Input::Reset => {
+                self.emulator_key_latch.reset();
                 self.reset_time_controls();
                 self.buttons = 0;
                 self.mode_down_at = None;
@@ -1088,6 +1133,7 @@ impl Engine {
                 }
             }
             Input::Suspend => {
+                self.emulator_key_latch.reset();
                 self.cancel_link_discovery();
                 if let Some(session) = self.game.as_mut() { session.end_multiplayer(); }
                 if matches!(self.overlay, ShelfOverlay::Multiplayer) {
@@ -1109,6 +1155,7 @@ impl Engine {
                 AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
             }
             Input::Exit => {
+                self.emulator_key_latch.reset();
                 self.cancel_link_discovery();
                 self.link_identity = None;
                 self.reset_time_controls();
@@ -1174,6 +1221,29 @@ impl Engine {
                 {
                     self.awaiting_game = false;
                     self.prepared_rom = Some(path);
+                }
+            }
+            Input::EmulatorKey(code, pressed) => {
+                // This pathway is called only for AVD keyboard Z/X (mapped to
+                // gamepad A/B); physical KONKR input always uses Input::Key.
+                let mask = controls(code);
+                if mask != ButtonMask::A && mask != ButtonMask::B {
+                    self.handle(Input::Key(code, pressed));
+                    return;
+                }
+                if !pressed && self.game.is_some()
+                    && matches!(self.overlay, ShelfOverlay::None)
+                    && !self.emulator_key_latch.release_now(mask)
+                {
+                    // Keep this press alive until libretro has seen it.
+                    return;
+                }
+                self.handle(Input::Key(code, pressed));
+                if pressed && self.game.is_some()
+                    && matches!(self.overlay, ShelfOverlay::None)
+                    && self.buttons & mask != 0
+                {
+                    self.emulator_key_latch.press(mask);
                 }
             }
             Input::Key(code, pressed) => {
@@ -2839,6 +2909,13 @@ impl Engine {
                 session.prepare_runahead(self.buttons, self.settings.turbo,
                     profile.run_ahead_frames);
             }
+            if stepped > 0 && !self.rewind_held {
+                // Don't swallow taps if both key events were drained on the
+                // same display callback. This is AVD-only and follows the
+                // *real* core advance, not a predicted run-ahead frame.
+                let releases = self.emulator_key_latch.on_emulated_frame();
+                self.buttons &= !releases;
+            }
             if stepped > 1 {
                 self.perf_catchup = self.perf_catchup.saturating_add(1);
             }
@@ -3069,6 +3146,36 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 #[cfg(test)]
 mod ui_feedback_tests {
     use super::*;
+
+    #[test]
+    fn avd_short_tap_is_held_until_one_actual_core_frame() {
+        let mut latch = EmulatorKeyLatch::default();
+        latch.press(ButtonMask::A);
+        assert!(!latch.release_now(ButtonMask::A));
+        assert_eq!(latch.on_emulated_frame(), ButtonMask::A);
+        assert_eq!(latch.on_emulated_frame(), 0);
+    }
+
+    #[test]
+    fn avd_held_key_releases_normally_after_first_frame() {
+        let mut latch = EmulatorKeyLatch::default();
+        latch.press(ButtonMask::B);
+        assert_eq!(latch.on_emulated_frame(), 0);
+        assert!(latch.release_now(ButtonMask::B));
+        assert_eq!(latch.on_emulated_frame(), 0);
+    }
+
+    #[test]
+    fn avd_waiting_multiplayer_frame_does_not_consume_release() {
+        let mut latch = EmulatorKeyLatch::default();
+        latch.press(ButtonMask::A);
+        assert!(!latch.release_now(ButtonMask::A));
+        // Linked frame hasn't advanced, so no on_emulated_frame call yet.
+        assert_eq!(latch.waiting_for_frame, ButtonMask::A);
+        assert_eq!(latch.on_emulated_frame(), ButtonMask::A);
+        latch.reset();
+        assert_eq!(latch.waiting_for_frame, 0);
+    }
 
     #[test]
     fn rebuilding_an_empty_library_keeps_selection_safe() {
@@ -3359,6 +3466,19 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
             engine.draw();
         }
     });
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeEmulatorKey(
+    _env: *mut c_void,
+    _activity: *mut c_void,
+    key: i32,
+    pressed: u8,
+) {
+    // No emulator events are synthesized for real physical KONKR controls.
+    if key != 96 && key != 97 { return; }
+    INPUT.lock().unwrap_or_else(|poison| poison.into_inner())
+        .push_back(Input::EmulatorKey(key, pressed != 0));
 }
 
 #[unsafe(no_mangle)]

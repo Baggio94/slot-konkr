@@ -92,6 +92,7 @@ class MainActivity : Activity() {
     external fun nativeSurfaceChanged(width: Int, height: Int)
     external fun nativeDrawFrame()
     external fun nativeKey(code: Int, pressed: Boolean)
+    external fun nativeEmulatorKey(code: Int, pressed: Boolean)
     external fun nativeResetInput()
     external fun nativeExternalReturn()
     external fun nativePerformanceStats(): String?
@@ -732,12 +733,21 @@ class MainActivity : Activity() {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val button = SlotEmulatorKeys.translate(event.keyCode)
         if (button != null) {
+            // Only Z/X on the Android emulator need an emulated-frame latch.
+            // Normal keys, actual controller buttons and the KONKR itself are
+            // kept on the unmodified input path.
+            val isGameplayTap = button == KeyEvent.KEYCODE_BUTTON_A ||
+                button == KeyEvent.KEYCODE_BUTTON_B
+            val sendKey: (Boolean) -> Unit = { down ->
+                if (isGameplayTap) nativeEmulatorKey(button, down)
+                else nativeKey(button, down)
+            }
             when (event.action) {
                 KeyEvent.ACTION_DOWN -> {
-                    if (event.repeatCount == 0) nativeKey(button, true)
+                    if (event.repeatCount == 0) sendKey(true)
                     if (event.repeatCount == 0) Log.d(TAG, "AVD keyboard: ${event.keyCode} -> $button down")
                 }
-                KeyEvent.ACTION_UP -> nativeKey(button, false)
+                KeyEvent.ACTION_UP -> sendKey(false)
             }
             return true
         }
