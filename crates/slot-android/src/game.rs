@@ -528,6 +528,14 @@ impl GameSession {
 
 }
 
+impl Drop for GameSession {
+    fn drop(&mut self) {
+        // Ejection, Android lifecycle teardown and failed launches must tell
+        // the remote console the link ended, not leave an orphaned TCP session.
+        self.end_multiplayer();
+    }
+}
+
 #[cfg(test)]
 mod xy_mapping_tests {
     use super::*;
