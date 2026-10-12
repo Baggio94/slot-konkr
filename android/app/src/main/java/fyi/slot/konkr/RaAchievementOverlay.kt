@@ -169,17 +169,21 @@ internal class RaAchievementOverlay(
             subtitle.text = notice.detail.uppercase(Locale.ROOT)
             subtitle.visibility = if (notice.detail.isBlank()) View.GONE else View.VISIBLE
             badge.visibility = View.GONE
+            badgeFallback.text = "★"
             badgeFallback.visibility = View.VISIBLE
             loadBadge(notice.badge, seq)
         } else {
-            // Concise system notifications: server-sync state does not masquerade
-            // as an achievement unlock and never displays an unrelated badge.
+            // The game-ready notice displays the real game's official RA
+            // mastery icon, never an arbitrary individual achievement badge.
+            // Other diagnostic notices continue without a fabricated icon.
             heading.text = "RETROACHIEVEMENTS"
             title.text = status.uppercase(Locale.ROOT)
             subtitle.text = notice.detail.uppercase(Locale.ROOT)
             subtitle.visibility = if (notice.detail.isBlank()) View.GONE else View.VISIBLE
             badge.visibility = View.GONE
-            badgeFallback.visibility = View.GONE
+            badgeFallback.text = "RA"
+            badgeFallback.visibility = if (notice.badge != null) View.VISIBLE else View.GONE
+            loadBadge(notice.badge, seq)
         }
         card.visibility = View.VISIBLE
         card.animate().cancel()
@@ -195,7 +199,7 @@ internal class RaAchievementOverlay(
                         if (seq == serial && !destroyed) showNext()
                     }.start()
             }
-        }, if (notice.earned) 3600L else 1750L)
+        }, if (notice.earned) 3600L else if (notice.badge != null) 3200L else 1750L)
     }
 
     private fun loadBadge(path: String?, seq: Int) {
