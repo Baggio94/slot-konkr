@@ -817,6 +817,115 @@ impl Engine {
         true
     }
 
+    fn link_millis(&self) -> u64 {
+        self.born.elapsed().as_millis() as u64
+    }
+
+    fn cancel_link_discovery(&mut self) {
+        if let Some(starter) = self.link_starter.take() { starter.cancel(); }
+        LINK_NEEDS_MULTICAST.store(false, Ordering::Release);
+    }
+
+    fn enter_multiplayer_menu(&mut self) {
+        if self.game.is_none() { return; }
+        if self.link_identity.is_none() {
+            set_message("Multiplayer currently requires a valid GBA ROM".into());
+            return;
+        }
+        let game = self.game.as_ref().expect("checked above");
+        self.link_mode = if game.core_kind() == Core::Gpsp {
+            LinkKind::Wireless
+        } else { LinkKind::Cable };
+        if self.link_mode == LinkKind::Wireless && !game.wireless_capable() {
+            set_message("This gpSP build has no supported Wireless link callbacks".into());
+            return;
+        }
+        if self.link_mode == LinkKind::Wireless {
+            let identity = self.link_identity.as_ref().expect("checked above");
+            if !link_kind::link_carried(&identity.code, &identity.title) {
+                set_message("This game has no verified gpSP multiplayer mode; select mGBA for Cable".into());
+                return;
+            }
+        }
+        self.cancel_link_discovery();
+        self.link_role = LinkRow::Host;
+        self.link_phase = LinkMenu::Pick(self.link_role);
+        self.game_accum = 0.0;
+        self.buttons = 0;
+        self.overlay = ShelfOverlay::Multiplayer;
+    }
+
+    fn request_multiplayer_network(&mut self) {
+        if !matches!(self.overlay, ShelfOverlay::Multiplayer) { return; }
+        if matches!(self.link_phase, LinkMenu::Working {..} | LinkMenu::Linked {..}) { return; }
+        self.cancel_link_discovery();
+        let now = self.link_millis();
+        self.link_worked_at = now;
+        self.link_phase = LinkMenu::Working {
+            role: self.link_role, step: LinkStep::Radio, since: now,
+        };
+        LINK_NEEDS_MULTICAST.store(true, Ordering::Release);
+        UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(16);
+    }
+
+    fn fail_multiplayer(&mut self, reason: &str, failure: LinkFail) {
+        self.cancel_link_discovery();
+        self.link_phase = LinkMenu::Failed {
+            role: self.link_role, fail: failure,
+            worked: self.link_worked_at, since: self.link_millis(),
+        };
+        set_message(format!("Multiplayer: {reason}"));
+    }
+
+    fn poll_multiplayer(&mut self) {
+        if !matches!(self.overlay, ShelfOverlay::Multiplayer) { return; }
+        let event = self.link_starter.as_mut().and_then(LinkStarter::poll);
+        if let Some(event) = event {
+            match event {
+                LinkProgress::Looking => {
+                    self.link_phase = LinkMenu::Working {
+                        role: self.link_role, step: LinkStep::Waiting,
+                        since: self.link_worked_at,
+                    };
+                }
+                LinkProgress::Ready(wire) => {
+                    self.cancel_link_discovery();
+                    let role = if self.link_role == LinkRow::Host {
+                        LinkRole::Host
+                    } else { LinkRole::Join };
+                    let joined = self.game.as_mut().ok_or_else(|| "No game active".to_owned())
+                        .and_then(|game| game.begin_multiplayer(role, self.link_mode, Box::new(wire)));
+                    match joined {
+                        Ok(()) => {
+                            self.link_phase = LinkMenu::Linked {
+                                role: self.link_role,
+                                worked: self.link_worked_at,
+                                since: self.link_millis(), opened: false,
+                            };
+                        }
+                        Err(reason) => self.fail_multiplayer(&reason, LinkFail::PeerVanished),
+                    }
+                }
+                LinkProgress::Failed(reason) => {
+                    let fail = match reason {
+                        crate::multiplayer::Failure::NoNetwork => LinkFail::Radio,
+                        crate::multiplayer::Failure::NobodyCame => LinkFail::NobodyCame,
+                        crate::multiplayer::Failure::Cancelled => LinkFail::Cancelled,
+                        crate::multiplayer::Failure::PeerVanished => LinkFail::PeerVanished,
+                    };
+                    self.fail_multiplayer(&format!("{reason:?}"), fail);
+                }
+            }
+        }
+        if let LinkMenu::Linked { since, .. } = self.link_phase {
+            if self.link_millis().saturating_sub(since) >= 1000 {
+                self.overlay = ShelfOverlay::None;
+                self.game_accum = 0.0;
+                self.buttons = 0;
+            }
+        }
+    }
+
     fn handle(&mut self, input: Input) {
         match input {
             Input::RaAccountConfigured => {
