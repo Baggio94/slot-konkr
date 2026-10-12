@@ -39,10 +39,36 @@ def main() -> None:
  * mGBA's GBA/GB APU state is serialized, but its libretro converter, optional
  * low-pass history and queued output samples are not. A single-instance
  * run-ahead rollback must restore these too, after retro_unserialize. */
+/* Derived PSG channel samples are omitted by mGBA's normal savestate
+ * serializer. On speculative rollback, preserve their *exact* values,
+ * rather than leaving samples synthesized by the speculative frame.
+ * In particular, channel 4 noise changes timbre without any dropout. */
+static struct GBAudio* slot_mgba_psg(void) {
+    if (!core) {
+        return NULL;
+    }
+#ifdef M_CORE_GBA
+    if (core->platform(core) == mPLATFORM_GBA) {
+        struct GBA* gba = core->board;
+        return &gba->audio.psg;
+    }
+#endif
+#ifdef M_CORE_GB
+    if (core->platform(core) == mPLATFORM_GB) {
+        struct GB* gb = core->board;
+        return &gb->audio;
+    }
+#endif
+    return NULL;
+}
+
 struct SlotMgbaAudioSnapshot {
     struct LibretroAudioConverter converter;
     int32_t lowPassLeft;
     int32_t lowPassRight;
+    int8_t channelSamples[4];
+    int noiseSamples;
+    int noiseNSamples;
     size_t frames;
 };
 
@@ -51,7 +77,7 @@ size_t slot_mgba_audio_sidecar_size(void) {
         return 0;
     }
     struct mAudioBuffer* queue = core->getAudioBuffer(core);
-    if (!queue || queue->channels != 2) {
+    if (!queue || queue->channels != 2 || !slot_mgba_psg()) {
         return 0;
     }
     size_t cap = mAudioBufferCapacity(queue);
@@ -69,7 +95,12 @@ bool slot_mgba_audio_sidecar(void* buffer, size_t size, bool restore) {
         return false;
     }
     struct mAudioBuffer* queue = core->getAudioBuffer(core);
+    struct GBAudio* psg = slot_mgba_psg();
+    if (!queue || !psg) {
+        return false;
+    }
     struct SlotMgbaAudioSnapshot snapshot;
+    memset(&snapshot, 0, sizeof(snapshot));
     unsigned char* bytes = (unsigned char*) buffer;
     int16_t* pcm = (int16_t*) (bytes + sizeof(snapshot));
     if (restore) {
@@ -80,6 +111,12 @@ bool slot_mgba_audio_sidecar(void* buffer, size_t size, bool restore) {
         audioConverter = snapshot.converter;
         audioLowPassLeftPrev = snapshot.lowPassLeft;
         audioLowPassRightPrev = snapshot.lowPassRight;
+        psg->ch1.sample = snapshot.channelSamples[0];
+        psg->ch2.sample = snapshot.channelSamples[1];
+        psg->ch3.sample = snapshot.channelSamples[2];
+        psg->ch4.sample = snapshot.channelSamples[3];
+        psg->ch4.samples = snapshot.noiseSamples;
+        psg->ch4.nSamples = snapshot.noiseNSamples;
         mAudioBufferClear(queue);
         return mAudioBufferWrite(queue, pcm, snapshot.frames) == snapshot.frames;
     }
@@ -87,6 +124,12 @@ bool slot_mgba_audio_sidecar(void* buffer, size_t size, bool restore) {
     snapshot.converter = audioConverter;
     snapshot.lowPassLeft = audioLowPassLeftPrev;
     snapshot.lowPassRight = audioLowPassRightPrev;
+    snapshot.channelSamples[0] = psg->ch1.sample;
+    snapshot.channelSamples[1] = psg->ch2.sample;
+    snapshot.channelSamples[2] = psg->ch3.sample;
+    snapshot.channelSamples[3] = psg->ch4.sample;
+    snapshot.noiseSamples = psg->ch4.samples;
+    snapshot.noiseNSamples = psg->ch4.nSamples;
     snapshot.frames = mAudioBufferAvailable(queue);
     if (snapshot.frames > mAudioBufferCapacity(queue)) {
         return false;
