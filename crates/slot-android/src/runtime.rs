@@ -1079,6 +1079,10 @@ impl Engine {
                         self.select_forwarded = true;
                         self.buttons |= ButtonMask::SELECT;
                     }
+                    // Linked frames are ordered by both players. Never allow
+                    // local time travel or accelerated single-player frames.
+                    if self.game.as_ref().is_some_and(GameSession::linked)
+                        && (code == 104 || code == 105) { return; }
                     if code == 104 {
                         if !self.settings.rewind { return; }
                         if pressed {
@@ -2408,6 +2412,14 @@ impl Engine {
                     if !session.advance(self.buttons, self.settings.turbo,
                         self.settings.rewind && !session.linked()) {
                         self.game_accum = 0.0;
+                        if let Some(fault) = session.link_fault() {
+                            // Fail closed on link loss: pause the game instead
+                            // of silently continuing a divergent solo timeline.
+                            session.end_multiplayer();
+                            self.reset_time_controls();
+                            self.overlay = ShelfOverlay::GameMenu { row: 0 };
+                            set_message(format!("Multiplayer paused: {fault:?}"));
+                        }
                         break;
                     }
                     self.perf_emulated = self.perf_emulated.saturating_add(1);
