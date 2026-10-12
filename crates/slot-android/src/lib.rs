@@ -32,6 +32,12 @@ mod link_kind;
 mod link_mdns;
 mod link_lan;
 mod multiplayer;
+// Original Slot 3-frame cable input lockstep and paired savestate framing.
+// Import by path so Android and original never diverge on these wire formats.
+#[path = "../../slot/src/cable.rs"]
+mod cable;
+#[path = "../../slot/src/link_state.rs"]
+mod link_state;
 #[cfg(target_os = "android")]
 mod game;
 #[cfg(target_os = "android")]
