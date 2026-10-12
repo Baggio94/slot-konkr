@@ -18,6 +18,13 @@ android {
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
+    // This APK is distributed directly for KONKR Android 12 (not via Google
+    // Play). Keep targetSdk 32 to preserve the validated system/input behavior;
+    // suppress only Play's expired-target submission check, not other lint.
+    lint {
+        disable += "ExpiredTargetSdkVersion"
+    }
+
     // A stable signing key can be provided by GitHub Actions secrets or a
     // local development environment. Never commit the keystore or credentials.
     // Without these variables Gradle falls back to its ephemeral debug key.
