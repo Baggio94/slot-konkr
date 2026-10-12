@@ -176,6 +176,12 @@ impl GameSession {
         });
         if let Ok(ram) = ram {
             if let Err(error) = core.load_save_ram(&ram) {
+                // Never continue with blank RAM and subsequently export it
+                // over a verified shared save from the OTHER emulator.
+                let marker = root.join(format!("{id}.{}.skip-resume.once", which.as_str()));
+                if marker.is_file() {
+                    return Err(format!("Core rejected shared GBA SRAM; originals preserved: {error}"));
+                }
                 eprintln!("slot-konkr: SRAM restore skipped: {error}");
             }
         }
@@ -184,7 +190,19 @@ impl GameSession {
                 eprintln!("slot-konkr: RTC restore skipped: {error}");
             }
         }
-        if resume_state {
+        // Switching GBA emulation cores can import a newer battery save from
+        // the other core. A stale same-core .state.auto would roll progress
+        // backwards despite correct SRAM syncing. Kotlin stages a one-shot
+        // marker ONLY when the imported save comes from the other core.
+        let skip_resume_marker = root.join(format!("{id}.{}.skip-resume.once", which.as_str()));
+        let cross_core_import = skip_resume_marker.exists();
+        if cross_core_import {
+            if let Err(error) = std::fs::remove_file(&skip_resume_marker) {
+                return Err(format!("Cannot clear cross-core resume guard: {error}"));
+            }
+            eprintln!("slot-konkr: cross-core SRAM selected; old savestate auto-resume suppressed");
+        }
+        if resume_state && !cross_core_import {
             // Prefer a successfully decoded RetroArch auto state, then the
             // Slot private state. A compressed/unrecognized external file is
             // kept intact and is NEVER interpreted as raw emulator memory.
