@@ -20,6 +20,7 @@ use slot_retro::RetroCore;
 use storage::{Config, Store, Unlock};
 
 const RAM_SIZE: usize = 0x58000;
+const GB_COVERAGE_SIZE: usize = 0x17000;
 const QUEUE_SIZE: usize = 8;
 
 /// A passive shelf indicator. Reading it never acquires a worker's lock.
@@ -99,7 +100,7 @@ enum Control {
     Unload(u64),
     Flush(Arc<AtomicBool>),
     // Android's SAF scanner sends only full-ROM MD5s; no ROM bytes go over HTTP.
-    PrefetchHash(String),
+    PrefetchHash(String, u32),
 }
 
 struct Frame {
@@ -109,6 +110,7 @@ struct Frame {
     earned_at: u64,
     ram: Vec<u8>,
     valid: [usize; 3],
+    console: u32,
     recycle: mpsc::SyncSender<Vec<u8>>,
 }
 
@@ -198,10 +200,15 @@ impl Service {
     /// Enqueue one uncompressed GBA ROM hash without touching the network or the UI.
     /// The HTTP worker deduplicates hashes and throttles all requests.
     pub fn prefetch_rom_hash(&self, hash: &str) -> bool {
-        if hash.len() != 32 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
+        self.prefetch_rom_hash_for_console(hash, 5)
+    }
+
+    pub fn prefetch_rom_hash_for_console(&self, hash: &str, console: u32) -> bool {
+        if !matches!(console, 4 | 5 | 6)
+            || hash.len() != 32 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
             return false;
         }
-        self.controls.send(Control::PrefetchHash(hash.to_ascii_lowercase())).is_ok()
+        self.controls.send(Control::PrefetchHash(hash.to_ascii_lowercase(), console)).is_ok()
     }
 
     /// Poll during power-off. The UI keeps rendering while the evaluator drains final
@@ -219,7 +226,13 @@ impl Service {
     }
 
     pub fn wrap(&self, core: Box<dyn RetroCore>) -> Box<dyn RetroCore> {
-        Box::new(core::Tracked::new(core, self))
+        self.wrap_for_console(core, 5)
+    }
+
+    /// GB=4, GBA=5, GBC=6; original rcheevos worker shared without forks.
+    pub fn wrap_for_console(&self, core: Box<dyn RetroCore>, console: u32) -> Box<dyn RetroCore> {
+        assert!(matches!(console, 4 | 5 | 6));
+        Box::new(core::Tracked::new(core, self, console))
     }
 
     pub fn take_notice(&self) -> Option<Notice> {
@@ -239,6 +252,7 @@ impl Service {
 struct Playing {
     generation: u64,
     hash: String,
+    console: u32,
     runtime: runtime::Runtime,
     achievements: BTreeMap<u32, storage::Achievement>,
     previous: Option<(u64, u64)>,
@@ -331,8 +345,8 @@ fn run(
                 evaluate(frame, &mut playing, &store, &notices, &mut unsaved);
             }
             match controls.try_recv() {
-                Ok(Control::PrefetchHash(hash)) => {
-                    let _ = prefetch_tx.send(hash);
+                Ok(Control::PrefetchHash(hash, console)) => {
+                    let _ = prefetch_tx.send((hash, console));
                 }
                 Ok(Control::Flush(done)) => {
                     retry_unsaved(&mut unsaved, &store, &notices);
@@ -352,7 +366,7 @@ fn run(
                                     &dir.join(format!("{hash}.json")),
                                 )
                             {
-                                if game.console == 5 {
+                                if matches!(game.console, 4 | 5 | 6) {
                                     let _ = cached_prepared.send(network::Prepared {
                                         generation,
                                         hash,
@@ -471,6 +485,7 @@ fn run(
             playing = Some(Playing {
                 generation,
                 hash: prepared.hash,
+                console: prepared.game.console,
                 runtime,
                 achievements,
                 previous: None,
@@ -518,7 +533,7 @@ fn evaluate(
             }
         }
         game.previous = Some((frame.sequence, frame.timeline));
-        if frame.valid[0] == 0 || frame.valid[1] == 0 {
+        if frame.valid[0] == 0 || (frame.console == 5 && frame.valid[1] == 0) {
             if !game.warned_gap {
                 let _ = notices.send(Notice::status(
                     game.generation,
@@ -527,7 +542,12 @@ fn evaluate(
                 game.warned_gap = true;
             }
         } else {
-            let earned = game.runtime.frame(&frame.ram, &frame.valid).to_vec();
+            let earned = if game.console == frame.console {
+                game.runtime.frame(&frame.ram, &frame.valid, frame.console).to_vec()
+            } else {
+                // ROM with an incompatible RA console ID: no false awards.
+                Vec::new()
+            };
             for id in earned {
                 let unlock = Unlock {
                     id,
@@ -591,7 +611,7 @@ pub fn artwork_title(root: &std::path::Path, rom: &std::path::Path) -> Option<St
     let hash = library::content_hash(rom).ok()?;
     let (game, _): (storage::Game, std::collections::BTreeSet<u32>) =
         storage::read(&dir.join(format!("{hash}.json"))).ok()?;
-    (game.console == 5
+    (matches!(game.console, 4 | 5 | 6)
         && game.id != 0
         && !game.title.trim().is_empty()
         && !game.title.starts_with("Unsupported Game Version"))

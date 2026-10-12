@@ -26,11 +26,13 @@ internal object RaDiagnostics {
         val badgesPercent: Int?,
         val gameIconsCached: Int? = null,
         val gameIconsTotal: Int? = null,
+        val libraryGb: Int? = null, val indexedGb: Int? = null, val cachedGb: Int? = null,
+        val libraryGbc: Int? = null, val indexedGbc: Int? = null, val cachedGbc: Int? = null,
     )
 
     private data class PatchEntry(
         val length: Long, val modified: Long,
-        val prepared: Boolean, val badgeIds: Set<String>,
+        val prepared: Boolean, val console: Int, val badgeIds: Set<String>,
         val gameIconName: String?
     )
     private data class BadgeEntry(val length: Long, val modified: Long, val valid: Boolean)
@@ -114,15 +116,24 @@ internal object RaDiagnostics {
             }
         }
 
-        var totalGba = 0
-        val discovered = HashSet<String>()
+        val totalByConsole = hashMapOf(4 to 0, 5 to 0, 6 to 0)
+        val indexedByConsole = hashMapOf(4 to 0, 5 to 0, 6 to 0)
+        val cachedByConsole = hashMapOf(4 to 0, 5 to 0, 6 to 0)
+        val discovered = HashMap<String, Int>()
         if (games != null) {
             for (i in 0 until games.length().coerceAtMost(5000)) {
                 val item = games.optJSONObject(i) ?: continue
-                if (item.optString("platform") != "GBA") continue
-                totalGba++
+                val console = when (item.optString("platform")) {
+                    "GB" -> 4
+                    "GBA" -> 5
+                    "GBC" -> 6
+                    else -> continue
+                }
+                totalByConsole[console] = totalByConsole.getValue(console) + 1
                 val hash = hashesByUri[item.optString("uri")] ?: continue
-                discovered.add(hash)
+                if (discovered.putIfAbsent(hash, console) == null) {
+                    indexedByConsole[console] = indexedByConsole.getValue(console) + 1
+                }
             }
         }
         val budget = readJson(File(account, "smart-prefetch-budget.json"))
@@ -144,20 +155,21 @@ internal object RaDiagnostics {
         // account-specific file identity and metadata still match.
         val badgeIds = HashSet<String>()
         val gameIcons = HashSet<String>()
-        for (hash in discovered) {
+        for ((hash, console) in discovered) {
             val file = File(account, "$hash.json")
             if (!file.isFile || file.length() !in 4L..(8L * 1024 * 1024)) continue
             val fileKey = file.absolutePath
             val size = file.length()
             val modified = file.lastModified()
             val old = patches[fileKey]
-            val entry = if (old != null && old.length == size && old.modified == modified) {
+            val entry = if (old != null && old.length == size && old.modified == modified
+                && old.console == console) {
                 old
             } else {
                 val parsed = runCatching {
                     val data = JSONArray(file.readText(Charsets.UTF_8))
                     val patch = data.optJSONObject(0)
-                    if (data.length() != 2 || patch?.optInt("ConsoleID") != 5)
+                    if (data.length() != 2 || patch?.optInt("ConsoleID") != console)
                         Triple(false, emptySet<String>(), null)
                     else {
                         val rawIcon = patch.optString("ImageIcon")
@@ -178,10 +190,11 @@ internal object RaDiagnostics {
                         Triple(true, ids.toSet(), gameIconName)
                     }
                 }.getOrElse { Triple(false, emptySet<String>(), null) }
-                PatchEntry(size, modified, parsed.first, parsed.second, parsed.third)
+                PatchEntry(size, modified, parsed.first, console, parsed.second, parsed.third)
                     .also { patches[fileKey] = it }
             }
             if (entry.prepared) {
+                cachedByConsole[console] = cachedByConsole.getValue(console) + 1
                 cached++
                 badgeIds.addAll(entry.badgeIds)
                 entry.gameIconName?.let(gameIcons::add)
@@ -189,9 +202,15 @@ internal object RaDiagnostics {
         }
 
         val preliminary = Snapshot(
-            libraryGba = if (games != null) totalGba else null,
-            indexedGba = if (games != null) discovered.size else null,
-            cachedGba = if (games != null) cached else null,
+            libraryGba = if (games != null) totalByConsole.getValue(5) else null,
+            indexedGba = if (games != null) indexedByConsole.getValue(5) else null,
+            cachedGba = if (games != null) cachedByConsole.getValue(5) else null,
+            libraryGb = if (games != null) totalByConsole.getValue(4) else null,
+            indexedGb = if (games != null) indexedByConsole.getValue(4) else null,
+            cachedGb = if (games != null) cachedByConsole.getValue(4) else null,
+            libraryGbc = if (games != null) totalByConsole.getValue(6) else null,
+            indexedGbc = if (games != null) indexedByConsole.getValue(6) else null,
+            cachedGbc = if (games != null) cachedByConsole.getValue(6) else null,
             pendingAwards = pending,
             recordedAwards = recorded,
             warning = warning,
@@ -251,9 +270,15 @@ internal object RaDiagnostics {
         }
         val badgeTotal = badgeIds.size.takeIf { it > 0 }
         val result = Snapshot(
-            libraryGba = if (games != null) totalGba else null,
-            indexedGba = if (games != null) discovered.size else null,
-            cachedGba = if (games != null) cached else null,
+            libraryGba = if (games != null) totalByConsole.getValue(5) else null,
+            indexedGba = if (games != null) indexedByConsole.getValue(5) else null,
+            cachedGba = if (games != null) cachedByConsole.getValue(5) else null,
+            libraryGb = if (games != null) totalByConsole.getValue(4) else null,
+            indexedGb = if (games != null) indexedByConsole.getValue(4) else null,
+            cachedGb = if (games != null) cachedByConsole.getValue(4) else null,
+            libraryGbc = if (games != null) totalByConsole.getValue(6) else null,
+            indexedGbc = if (games != null) indexedByConsole.getValue(6) else null,
+            cachedGbc = if (games != null) cachedByConsole.getValue(6) else null,
             pendingAwards = pending,
             recordedAwards = recorded,
             warning = warning,

@@ -84,6 +84,14 @@ pub trait RetroCore: Send {
     fn achievement_memory(&self, _ram: &mut [u8]) -> [usize; 3] {
         [0; 3]
     }
+    /// Game Boy consoles use their own memory-space, not the GBA layout.
+    /// The coverage mask prevents unwritten or unmapped addresses from being
+    /// incorrectly evaluated as zero-valued achievement conditions.
+    fn achievement_memory_for_console(
+        &self, ram: &mut [u8], _coverage: &mut [u8], _console: u32
+    ) -> [usize; 3] {
+        self.achievement_memory(ram)
+    }
     fn load(&mut self, rom: &Path) -> Result<(), CoreError>;
     fn run_frame(&mut self, input: ButtonMask);
     /// A speculative video-only frame. Wrappers must not dispatch gameplay events,

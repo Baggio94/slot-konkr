@@ -86,7 +86,7 @@ enum Input {
     LinkNetworkReady(String),
     LinkDirectHost(String),
     LinkNetworkError(String),
-    RaPrefetchHash(String),
+    RaPrefetchHash(String, u32),
     ExternalReturn,
 }
 
@@ -1004,10 +1004,10 @@ impl Engine {
             Input::RaAccountConfigured => {
                 self.ensure_ra_service();
             }
-            Input::RaPrefetchHash(hash) => {
+            Input::RaPrefetchHash(hash, console) => {
                 self.ensure_ra_service();
                 if let Some(service) = self.ra_service.as_ref() {
-                    service.prefetch_rom_hash(&hash);
+                    service.prefetch_rom_hash_for_console(&hash, console);
                 }
             }
             Input::RaNetworkAvailable => {
@@ -1895,8 +1895,8 @@ impl Engine {
                 .map_or(Platform::Gba, |cart|cart.platform);
             // First game still wakes RA if the asynchronous SAF scan has not run.
             // Perform this mutable operation BEFORE borrowing rom_stem.
-            // GB/GBC memory/hash layouts are not yet verified.
-            if platform == Platform::Gba { self.ensure_ra_service(); }
+            // GBA, GB and GBC use the verified per-console memory maps.
+            self.ensure_ra_service();
             let rom_stem = self.shelves[self.active].carts
                 .get(self.shelves[self.active].index)
                 .map_or("", |cart| cart.stem.as_str());
@@ -1905,7 +1905,7 @@ impl Engine {
                 core, platform, self.settings.eject_save && !self.fresh_launch,
                 rom_stem, self.settings.gb_palettes.then(|| self.settings.palette_name()),
                 self.settings.colour_correction,
-                if platform == Platform::Gba { self.ra_service.as_ref() } else { None }) {
+                self.ra_service.as_ref()) {
                 Ok(session) => {
                     self.link_identity = if platform == Platform::Gba {
                         crate::link_rom::identify(Path::new(local)).ok()
@@ -2820,7 +2820,7 @@ impl Engine {
                 }
             }
             if stepped > 0 && !self.rewind_held && !self.ff_held && !self.ff_latched
-                && self.active == 0 && profile.run_ahead_frames > 0 {
+                && profile.run_ahead_frames > 0 {
                 // The normal frames and their audio are already consumed.
                 // Predicted video never advances the real saved/RA timeline.
                 session.prepare_runahead(self.buttons, self.settings.turbo,
@@ -3366,12 +3366,13 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaAccountConfigure
         .push_back(Input::RaAccountConfigured);
 }
 
-/// Full uncompressed GBA ROM MD5 comes from an Android SAF background reader.
+/// Full uncompressed GBA/GB/GBC ROM MD5 comes from Android SAF off the GL thread.
 /// No ROM bytes or credentials are passed via this JNI boundary.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaPrefetchHash(
-    mut env: JNIEnv<'_>, _this: JObject<'_>, hash: JString<'_>,
+    mut env: JNIEnv<'_>, _this: JObject<'_>, hash: JString<'_>, console: jint,
 ) {
+    if !matches!(console, 4 | 5 | 6) { return; }
     let Ok(hash) = env.get_string(&hash) else { return };
     let hash = hash.to_string_lossy().into_owned();
     if hash.len() != 32 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -3379,7 +3380,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaPrefetchHash(
     }
     let mut input = INPUT.lock().unwrap_or_else(|e| e.into_inner());
     // Bound the GL input queue if Android is indexing thousands of files.
-    if input.len() < 128 { input.push_back(Input::RaPrefetchHash(hash)); }
+    if input.len() < 128 { input.push_back(Input::RaPrefetchHash(hash, console as u32)); }
 }
 
 /// Wake the RA HTTP worker on Android network reconnection. Do not perform

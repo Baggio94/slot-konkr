@@ -114,7 +114,7 @@ class MainActivity : Activity() {
     external fun nativeRaStatus(): String?
     external fun nativeRaNetworkAvailable()
     external fun nativeRaAccountConfigured()
-    external fun nativeRaPrefetchHash(hash: String)
+    external fun nativeRaPrefetchHash(hash: String, console: Int)
     external fun nativeRaFlushReady(): Boolean
     external fun nativeSystemStatus(clock: String, batteryPercent: Int, charging: Boolean)
     external fun nativePollUiAction(): Int
@@ -1015,7 +1015,7 @@ class MainActivity : Activity() {
                         return@execute
                     RaSmartCache.indexAndPrefetch(applicationContext, filesDir,
                         isPlaying = { nativeIsPlaying() || !resumed },
-                        submit = { hash -> nativeRaPrefetchHash(hash) })
+                        submit = { hash, console -> nativeRaPrefetchHash(hash, console) })
                 } catch (_: Exception) {
                     Log.w(TAG, "RA Smart Cache indexing postponed")
                 } finally {
@@ -1236,7 +1236,7 @@ class MainActivity : Activity() {
                                 startRaSmartCache()
                                 SlotToast.makeText(this,
                                     "RA connected as " + result.username +
-                                        ". Preparing GBA achievements in background.",
+                                        ". Preparing GB/GBC/GBA achievements in background.",
                                     Toast.LENGTH_LONG).show()
                             }
                             is RaAccount.Result.Failed -> {

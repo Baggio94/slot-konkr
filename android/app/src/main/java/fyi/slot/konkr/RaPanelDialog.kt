@@ -211,6 +211,8 @@ internal class RaPanelDialog(
         val cached = snapshot.cachedGba?.toString() ?: "Unknown"
         val indexed = snapshot.indexedGba?.toString() ?: "?"
         row("GBA prepared", "$cached / $indexed indexed")
+        row("GB prepared", "${snapshot.cachedGb ?: "?"} / ${snapshot.indexedGb ?: "?"} indexed")
+        row("GBC prepared", "${snapshot.cachedGbc ?: "?"} / ${snapshot.indexedGbc ?: "?"} indexed")
         row("Game icons cached", if (snapshot.gameIconsTotal != null &&
             snapshot.gameIconsCached != null)
             "${snapshot.gameIconsCached} / ${snapshot.gameIconsTotal}"
@@ -233,9 +235,9 @@ internal class RaPanelDialog(
         }
         row("Awards to sync", snapshot.pendingAwards?.toString() ?: "Unknown")
         row("Awards saved", snapshot.recordedAwards?.toString() ?: "Unknown")
-        row("GB / GBC", "Not supported yet")
+        row("GB / GBC", "Online + offline (mGBA)")
         val note = snapshot.warning ?:
-            "Image percentage covers unique badges of GBA games already prepared. " +
+            "Image percentage covers unique badges of GB/GBC/GBA games already prepared. " +
                 "New games can increase the total. Local awards remain after sign out."
         content.addView(text(note, 11f, muted).apply {
             setPadding(0, dp(15), 0, dp(2))
