@@ -266,12 +266,12 @@ fn runtime_evaluates_real_definitions_and_never_awards_missing_memory() {
     assert!(runtime.activate(7, "0xH000000=1"));
     assert!(runtime.activate(8, "0xH048000=1"));
     assert!(!runtime.activate(9, "not a definition"));
-    let mut ram = vec![0; RAM_SIZE];
-    assert!(runtime.frame(&ram, &[0x8000, 0x40000, 0]).is_empty());
+    let mut ram = vec![0; RAM_SIZE + GB_COVERAGE_SIZE];
+    assert!(runtime.frame(&ram, &[0x8000, 0x40000, 0], 5).is_empty());
     ram[0] = 1;
     ram[0x48000] = 1;
-    assert_eq!(runtime.frame(&ram, &[0x8000, 0x40000, 0]), &[7]);
-    assert!(runtime.frame(&ram, &[0x8000, 0x40000, 0]).is_empty());
+    assert_eq!(runtime.frame(&ram, &[0x8000, 0x40000, 0], 5), &[7]);
+    assert!(runtime.frame(&ram, &[0x8000, 0x40000, 0], 5).is_empty());
 }
 
 #[test]
@@ -435,7 +435,7 @@ fn damaged_ledger_is_preserved_and_failed_writes_are_not_acknowledged() {
 }
 
 fn frame(sequence: u64, timeline: u64, value: u8) -> Frame {
-    let mut ram = vec![0; RAM_SIZE];
+    let mut ram = vec![0; RAM_SIZE + GB_COVERAGE_SIZE];
     ram[0] = value;
     let (recycle, _) = mpsc::sync_channel(1);
     Frame {
@@ -445,6 +445,7 @@ fn frame(sequence: u64, timeline: u64, value: u8) -> Frame {
         earned_at: 1000,
         ram,
         valid: [0x8000, 0x40000, 0],
+        console: 5,
         recycle,
     }
 }
@@ -460,6 +461,7 @@ fn dropped_frames_and_rewinds_reset_partial_hit_counts() {
         let mut playing = Some(Playing {
             generation: 1,
             hash: "hash".into(),
+            console: 5,
             runtime,
             achievements: [(7, a)].into(),
             previous: None,
@@ -582,6 +584,7 @@ fn unsaved_unlocks_retry_with_the_original_time_after_storage_recovers() {
     let mut playing = Some(Playing {
         generation: 1,
         hash: "hash".into(),
+        console: 5,
         runtime,
         achievements: [(7, a)].into(),
         previous: None,
@@ -635,14 +638,14 @@ fn cache_percentage_counts_unique_badges_and_resumes_from_disk() {
 fn rich_presence_tracks_memory_and_clears_invalid_replacements() {
     let mut runtime = runtime::Runtime::new().unwrap();
     assert!(runtime.activate_presence("Display:\n?0xH000000=1?In the castle\nOn the map"));
-    let mut ram = vec![0; RAM_SIZE];
-    runtime.frame(&ram, &[0x8000, 0x40000, 0x10000]);
+    let mut ram = vec![0; RAM_SIZE + GB_COVERAGE_SIZE];
+    runtime.frame(&ram, &[0x8000, 0x40000, 0x10000], 5);
     assert_eq!(runtime.presence(), "On the map");
     ram[0] = 1;
-    runtime.frame(&ram, &[0x8000, 0x40000, 0x10000]);
+    runtime.frame(&ram, &[0x8000, 0x40000, 0x10000], 5);
     assert_eq!(runtime.presence(), "In the castle");
     assert!(!runtime.activate_presence("not a valid script"));
-    runtime.frame(&ram, &[0x8000, 0x40000, 0x10000]);
+    runtime.frame(&ram, &[0x8000, 0x40000, 0x10000], 5);
     assert!(runtime.presence().is_empty());
 }
 
