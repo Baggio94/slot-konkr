@@ -252,8 +252,15 @@ internal object RetroArchStorage {
             return
         }
         conflict.delete()
+        if (ownPrivate != null && !ownPrivate.contentEquals(choice)) {
+            // Preserve an old private slot cache before importing a newer
+            // SRAM from the other core or from RetroArch's SAF folder.
+            val backup = File(journal.path + ".${target.core}.before-share.srm")
+            if (!backup.exists()) stage(backup, ownPrivate)
+        }
         stage(target.saveLocal, choice)
-        stage(peerPrivateFile, choice)
+        // Never overwrite the OTHER core's existing private save before the
+        // launched core confirms it can deserialize the shared battery RAM.
         stage(loaded, choice)
         val lastWriter = File(journal.path + ".core").takeIf { it.isFile }?.readText()?.trim()
         if (source != target.core || (lastWriter != null && lastWriter != target.core)) {
@@ -304,7 +311,15 @@ internal object RetroArchStorage {
                     current, isState = false)
             }
         }
-        stage(otherPrivate(context, target), current)
+        val otherLocal = otherPrivate(context, target)
+        if (otherLocal.isFile) {
+            val prior = otherLocal.readBytes()
+            if (!prior.contentEquals(current)) {
+                val backup = File(journal.path + ".${otherCore(target.core)}.before-share.srm")
+                if (!backup.exists()) stage(backup, prior)
+            }
+        }
+        stage(otherLocal, current)
         stage(journal, current)
         stage(File(journal.path + ".core"), target.core.toByteArray())
         loadedFile.delete()
