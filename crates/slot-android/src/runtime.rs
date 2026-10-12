@@ -928,6 +928,33 @@ impl Engine {
 
     fn handle(&mut self, input: Input) {
         match input {
+            Input::LinkNetworkReady(address) => {
+                if matches!(self.overlay, ShelfOverlay::Multiplayer) &&
+                    matches!(self.link_phase, LinkMenu::Working {..}) {
+                    let start = address.parse::<Ipv4Addr>()
+                        .map_err(|_| "Invalid Wi-Fi IPv4 address".to_string())
+                        .and_then(|ip| {
+                            let code = self.link_identity.as_ref()
+                                .ok_or_else(|| "Game identity missing".to_owned())?;
+                            let role = if self.link_role == LinkRow::Host {
+                                LinkRole::Host
+                            } else { LinkRole::Join };
+                            LinkStarter::spawn(role, ip, &code.code).map_err(|e| e.to_string())
+                        });
+                    match start {
+                        Ok(starter) => self.link_starter = Some(starter),
+                        Err(e) => self.fail_multiplayer(&e, LinkFail::Radio),
+                    }
+                } else {
+                    LINK_NEEDS_MULTICAST.store(false, Ordering::Release);
+                }
+            }
+            Input::LinkNetworkError(reason) => {
+                if matches!(self.overlay, ShelfOverlay::Multiplayer) &&
+                    matches!(self.link_phase, LinkMenu::Working {..}) {
+                    self.fail_multiplayer(&reason, LinkFail::Radio);
+                }
+            }
             Input::RaAccountConfigured => {
                 self.ensure_ra_service();
             }
@@ -1003,6 +1030,11 @@ impl Engine {
                 }
             }
             Input::Suspend => {
+                self.cancel_link_discovery();
+                if let Some(session) = self.game.as_mut() { session.end_multiplayer(); }
+                if matches!(self.overlay, ShelfOverlay::Multiplayer) {
+                    self.overlay = ShelfOverlay::GameMenu { row: 0 };
+                }
                 if let Some(session) = self.game.as_mut() {
                     if session.save(true) {
                         if let Some(uri) = self.requested_uri.as_deref() {
@@ -1019,6 +1051,8 @@ impl Engine {
                 AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
             }
             Input::Exit => {
+                self.cancel_link_discovery();
+                self.link_identity = None;
                 self.reset_time_controls();
                 self.pending_game = None;
                 // Preserve the final video texture for the original 160ms CRT
@@ -1058,6 +1092,7 @@ impl Engine {
                 self.polaroids = None;
                 self.requested_uri = None;
                 self.prepared_rom = None;
+                self.link_identity = None;
                 self.game_emulation = None;
                 *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = None;
             }
@@ -1739,6 +1774,9 @@ impl Engine {
                 self.settings.colour_correction,
                 if platform == Platform::Gba { self.ra_service.as_ref() } else { None }) {
                 Ok(session) => {
+                    self.link_identity = if platform == Platform::Gba {
+                        crate::link_rom::identify(Path::new(local)).ok()
+                    } else { None };
                     // Create libretro on the same GL thread, but defer audio
                     // and CRT presentation until Slot's seated hold completes.
                     crate::game::log_launch_timing(&format!(
@@ -2348,6 +2386,7 @@ impl Engine {
         for event in events {
             self.handle(event);
         }
+        self.poll_multiplayer();
         if self.picker.is_some_and(|p| p.finished(self.born.elapsed().as_millis() as u64)) {
             self.picker = None;
             self.overlay = ShelfOverlay::None;
