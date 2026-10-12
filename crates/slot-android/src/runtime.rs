@@ -1176,6 +1176,26 @@ impl Engine {
                     }
                     return;
                 }
+                if self.game.is_some() && matches!(self.overlay, ShelfOverlay::Multiplayer) {
+                    if pressed {
+                        match code {
+                            21 | 22 if matches!(self.link_phase, LinkMenu::Pick(_)
+                                | LinkMenu::Failed {..}) => {
+                                self.link_role = if self.link_role == LinkRow::Host {
+                                    LinkRow::Join
+                                } else { LinkRow::Host };
+                                self.link_phase = LinkMenu::Pick(self.link_role);
+                            }
+                            96 => self.request_multiplayer_network(),
+                            97 | 108 => {
+                                self.cancel_link_discovery();
+                                self.overlay = ShelfOverlay::GameMenu { row: 1 };
+                            }
+                            _ => {}
+                        }
+                    }
+                    return;
+                }
                 if self.game.is_some() && matches!(self.overlay, ShelfOverlay::States) {
                     if pressed {
                         match code {
@@ -1231,14 +1251,26 @@ impl Engine {
                             ShelfOverlay::GameMenu { row } => match code {
                                 19 | 20 => {
                                     self.overlay = ShelfOverlay::GameMenu {
-                                        row: move_menu_row(row, code, 3),
+                                        row: move_menu_row(row, code, 4),
                                     };
                                 }
                                 96 => {
                                     match row {
-                                        1=>self.handle(Input::Exit),
-                                        2=>self.open_polaroids(),
-                                        _=>self.overlay=ShelfOverlay::None,
+                                        1 => {
+                                            if self.game.as_ref().is_some_and(GameSession::linked) {
+                                                if let Some(game) = self.game.as_mut() {
+                                                    game.end_multiplayer();
+                                                }
+                                                set_message("Multiplayer disconnected".into());
+                                            } else { self.enter_multiplayer_menu(); }
+                                        }
+                                        2 => self.handle(Input::Exit),
+                                        3 => {
+                                            if self.game.as_ref().is_some_and(GameSession::linked) {
+                                                set_message("Save States unavailable during Multiplayer".into());
+                                            } else { self.open_polaroids(); }
+                                        }
+                                        _ => self.overlay = ShelfOverlay::None,
                                     }
                                 }
                                 97 => self.overlay = ShelfOverlay::None,
@@ -1557,7 +1589,8 @@ impl Engine {
                                     }
                                 }
                             },
-                            ShelfOverlay::GameMenu { .. } | ShelfOverlay::States | ShelfOverlay::None => {}
+                            ShelfOverlay::GameMenu { .. } | ShelfOverlay::Multiplayer |
+                            ShelfOverlay::States | ShelfOverlay::None => {}
                         }
                     }
                     return;
@@ -2164,8 +2197,12 @@ impl Engine {
                 self.draw_menu_hints(141.0, 311.0, out);
             }
             ShelfOverlay::GameMenu { row } => {
-                self.draw_original_style_menu(19, &[20, 21, 22], row, out);
+                let second = if self.game.as_ref().is_some_and(GameSession::linked) {
+                    67
+                } else { 66 };
+                self.draw_original_style_menu(19, &[20, second, 21, 22], row, out);
             }
+            ShelfOverlay::Multiplayer => self.draw_multiplayer(out),
             ShelfOverlay::Core => {
                 self.draw_original_core_picker(out);
             }
@@ -2396,7 +2433,8 @@ impl Engine {
         let (kind, selected, count) = match self.overlay {
             ShelfOverlay::Menu { row } => (1u8, row, 6usize),
             ShelfOverlay::Library { row } => (2u8, row, 5usize),
-            ShelfOverlay::GameMenu { row } => (3u8, row, 3usize),
+            ShelfOverlay::GameMenu { row } => (3u8, row, 4usize),
+            ShelfOverlay::Multiplayer => (11u8, 0, 0usize),
             ShelfOverlay::Settings { row } => (4u8, row, 4usize),
             ShelfOverlay::InterfaceSettings { row } => (10u8, row, if self.custom_wallpaper_present { 5 } else { 4 }),
             ShelfOverlay::EmulationSettings { row } => (8u8, row, 3usize),
@@ -2538,7 +2576,8 @@ impl Engine {
             self.gpu.end_frame(self.size);
             return;
         }
-        if self.game.is_some() && matches!(self.overlay, ShelfOverlay::GameMenu { .. }) {
+        if self.game.is_some() && matches!(self.overlay,
+            ShelfOverlay::GameMenu { .. } | ShelfOverlay::Multiplayer) {
             // Rendering the pause menu does not borrow an active libretro session
             // or advance the core, so input and audio stay frozen.
             self.game_accum = 0.0;
