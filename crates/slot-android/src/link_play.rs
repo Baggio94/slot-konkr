@@ -212,6 +212,74 @@ mod tests {
          Box::new(Wire { recv: b, send: a }))
     }
 
+    // Exercises the actual gpSP path, not the original mGBA single-core
+    // lockstep simulator. Both visual Cable and Wireless share netpacket.
+    struct NetworkCore {
+        inner: MockCore,
+        channel: Link,
+        received: usize,
+        began: bool,
+        ended: bool,
+    }
+    impl NetworkCore {
+        fn new() -> Self {
+            Self { inner: MockCore::new(), channel: Link::default(),
+                   received: 0, began: false, ended: false }
+        }
+    }
+    impl RetroCore for NetworkCore {
+        fn load(&mut self, path: &std::path::Path) -> Result<(), slot_retro::CoreError> {
+            self.inner.load(path)
+        }
+        fn run_frame(&mut self, input: ButtonMask) {
+            self.inner.run_frame(input);
+            if self.channel.is_active() {
+                self.channel.push_outbound(vec![0x47, input.0 as u8]);
+            }
+        }
+        fn video_xrgb8888(&self) -> &[u8] { self.inner.video_xrgb8888() }
+        fn take_audio(&mut self) -> Vec<i16> { self.inner.take_audio() }
+        fn serialize(&mut self) -> Result<Vec<u8>, slot_retro::CoreError> {
+            self.inner.serialize()
+        }
+        fn unserialize(&mut self, data: &[u8]) -> Result<(), slot_retro::CoreError> {
+            self.inner.unserialize(data)
+        }
+        fn save_ram(&self) -> Option<Vec<u8>> { self.inner.save_ram() }
+        fn load_save_ram(&mut self, data: &[u8]) -> Result<(), slot_retro::CoreError> {
+            self.inner.load_save_ram(data)
+        }
+        fn av_info(&self) -> slot_retro::AvInfo { self.inner.av_info() }
+        fn net(&self) -> Link { self.channel.clone() }
+        fn supports_netpacket(&self) -> bool { true }
+        fn start_link(&mut self, _client_id: u16) { self.began = true; }
+        fn pump_link(&mut self) {
+            while self.channel.take_inbound().is_some() { self.received += 1; }
+        }
+        fn stop_link(&mut self) { self.ended = true; }
+    }
+
+    #[test]
+    fn gpsp_netpacket_carries_both_cable_and_wireless_without_input_replay() {
+        for mode in [LinkKind::Cable, LinkKind::Wireless] {
+            let (hw, gw) = pair();
+            let (mut host, mut guest) = (NetworkCore::new(), NetworkCore::new());
+            let mut h = LinkPlay::begin(&mut host, Role::Host, mode, hw).unwrap();
+            let mut g = LinkPlay::begin(&mut guest, Role::Join, mode, gw).unwrap();
+            assert!(host.began && guest.began);
+            assert_eq!(h.mode(), mode);
+            assert_eq!(g.mode(), mode);
+            assert_eq!(h.frame(&mut host, ButtonMask(10)), Frame::Advanced);
+            assert_eq!(g.frame(&mut guest, ButtonMask(11)), Frame::Advanced);
+            assert_eq!(guest.received, 1, "mode={mode:?} must deliver host netpacket");
+            assert_eq!(h.frame(&mut host, ButtonMask(12)), Frame::Advanced);
+            assert_eq!(host.received, 1, "mode={mode:?} must deliver guest netpacket");
+            h.end(&mut host);
+            g.end(&mut guest);
+            assert!(host.ended && guest.ended);
+        }
+    }
+
     #[test]
     fn host_and_guest_share_exact_snapshot_before_linked_frames() {
         let mut host = MockCore::new();
