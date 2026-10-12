@@ -78,11 +78,12 @@ internal class SlotStatusIndicators(
     private val bluetooth = sprite()
     private val sprites = HashMap<String, android.graphics.Bitmap>()
     private var statusAtlas: android.graphics.Bitmap? = null
+    private val spriteSize = 64
     private val spriteNames = listOf(
         "sleepmanager_running", "sleepmanager_stopped",
         "basicsync_running", "basicsync_stopped",
         "syncthing_running", "syncthing_stopped",
-        "raofflineproxy_running", "raofflineproxy_stopped",
+        "raonline", "raoffline",
         "bluetooth_on"
     )
     private val worker = Executors.newSingleThreadExecutor { task ->
@@ -251,14 +252,15 @@ internal class SlotStatusIndicators(
 
     private fun sprite(name: String, view: ImageView) {
         val bitmap = sprites.getOrPut(name) {
-            // A single sprite atlas avoids nine asset opens and retains the
-            // pixel geometry of the provided v6 status icons.
-            val atlas = statusAtlas ?: host.assets.open("status/status_sprites.png")
+            // Approved v6 artwork at native 64x64 instead of upscaled 24px
+            // sprites; new RA online/offline badges replace Play/Stop.
+            val atlas = statusAtlas ?: host.assets.open("status/status_sprites_hd.png")
                 .use { requireNotNull(BitmapFactory.decodeStream(it)) }
                 .also { statusAtlas = it }
             val index = spriteNames.indexOf(name)
             require(index >= 0) { "Unknown status sprite: $name" }
-            android.graphics.Bitmap.createBitmap(atlas, index * 24, 0, 24, 24)
+            android.graphics.Bitmap.createBitmap(atlas,
+                index * spriteSize, 0, spriteSize, spriteSize)
         }
         view.setImageBitmap(bitmap)
     }
@@ -317,8 +319,12 @@ internal class SlotStatusIndicators(
                 JSONObject(raRaw ?: "{}").optString("state", "Disabled")
             }.getOrDefault("Disabled")
             val raEnabled = state != "Disabled" && state != "null" && state.isNotEmpty()
-            show(ra, if (state == "Ready" || state == "Syncing")
-                "raofflineproxy_running" else "raofflineproxy_stopped", raEnabled)
+            // Mode must agree with the launch notification: require Android
+            // validated Internet, not merely enabled Wi-Fi or cached RA data.
+            val netCaps = connections.activeNetwork?.let(connections::getNetworkCapabilities)
+            val online = netCaps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
+                netCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            show(ra, if (online) "raonline" else "raoffline", raEnabled)
         } else {
             for (v in listOf(sleep, basicsync, syncthing, ra)) v.visibility = View.GONE
         }
