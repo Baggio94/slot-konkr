@@ -77,7 +77,7 @@ enum Input {
     // Never infer RA API authentication/reachability from Wi-Fi alone.
     RaNetworkAvailable,
     RaAccountConfigured,
-    RaPrefetchHash(String),
+    RaPrefetchHash(String, u32),
     ExternalReturn,
 }
 
@@ -767,10 +767,10 @@ impl Engine {
             Input::RaAccountConfigured => {
                 self.ensure_ra_service();
             }
-            Input::RaPrefetchHash(hash) => {
+            Input::RaPrefetchHash(hash, console) => {
                 self.ensure_ra_service();
                 if let Some(service) = self.ra_service.as_ref() {
-                    service.prefetch_rom_hash(&hash);
+                    service.prefetch_rom_hash_for_console(&hash, console);
                 }
             }
             Input::RaNetworkAvailable => {
@@ -2925,12 +2925,13 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaAccountConfigure
         .push_back(Input::RaAccountConfigured);
 }
 
-/// Full uncompressed GBA ROM MD5 comes from an Android SAF background reader.
+/// Full uncompressed GBA/GB/GBC ROM MD5 comes from Android SAF off the GL thread.
 /// No ROM bytes or credentials are passed via this JNI boundary.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaPrefetchHash(
-    mut env: JNIEnv<'_>, _this: JObject<'_>, hash: JString<'_>,
+    mut env: JNIEnv<'_>, _this: JObject<'_>, hash: JString<'_>, console: jint,
 ) {
+    if !matches!(console, 4 | 5 | 6) { return; }
     let Ok(hash) = env.get_string(&hash) else { return };
     let hash = hash.to_string_lossy().into_owned();
     if hash.len() != 32 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -2938,7 +2939,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaPrefetchHash(
     }
     let mut input = INPUT.lock().unwrap_or_else(|e| e.into_inner());
     // Bound the GL input queue if Android is indexing thousands of files.
-    if input.len() < 128 { input.push_back(Input::RaPrefetchHash(hash)); }
+    if input.len() < 128 { input.push_back(Input::RaPrefetchHash(hash, console as u32)); }
 }
 
 /// Wake the RA HTTP worker on Android network reconnection. Do not perform
