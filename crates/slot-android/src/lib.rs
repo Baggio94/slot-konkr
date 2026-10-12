@@ -23,6 +23,15 @@ mod retroarch_state;
 mod rewind;
 mod core_selection;
 mod core_legend;
+// The original Slot TCP framing and cartridge-specific link selection are
+// shared directly; only the Linux Wi-Fi radio driver is replaced on Android.
+#[path = "../../slot/src/link_net.rs"]
+mod link_net;
+#[path = "../../slot/src/link_kind.rs"]
+mod link_kind;
+// Fork's LAN/mDNS wire format remains interoperable across devices.
+mod link_mdns;
+mod link_lan;
 #[cfg(target_os = "android")]
 mod game;
 #[cfg(target_os = "android")]
