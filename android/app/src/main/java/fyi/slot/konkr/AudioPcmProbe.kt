@@ -44,6 +44,13 @@ internal class AudioPcmProbe(private val activity: Activity) {
         val now = SystemClock.elapsedRealtime()
         if (now - lastPollMs < 250L) return
         lastPollMs = now
+        // One-shot deterministic native audio check (no WAV or disk writes
+        // while the game runs). Marker is consumed exactly once via run-as.
+        val compareRequest = File(activity.filesDir, "pcm-compare-request")
+        if (compareRequest.exists() && compareRequest.delete()) {
+            (activity as? MainActivity)?.nativeAudioCompareArm()
+            Log.i(TAG, "PCM_COMPARE armed via debug ADB marker")
+        }
         for (label in arrayOf("OFF", "RA1")) {
             val request = File(activity.filesDir, "pcm-request-$label")
             if (!request.exists()) continue
