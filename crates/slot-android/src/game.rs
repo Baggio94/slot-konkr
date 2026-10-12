@@ -297,6 +297,12 @@ impl GameSession {
 
     pub fn linked(&self) -> bool { self.link.is_some() }
 
+    /// An ended link must never become a local solo timeline. Eject and
+    /// reopen the ROM to reinitialize both save and emulation state safely.
+    pub fn requires_relaunch(&self) -> bool {
+        self.link_touched && self.link.is_none()
+    }
+
     pub fn core_kind(&self) -> Core { self.core_kind }
 
     pub fn wireless_capable(&self) -> bool {
