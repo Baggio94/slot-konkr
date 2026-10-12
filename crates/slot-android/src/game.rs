@@ -152,13 +152,15 @@ impl GameSession {
                     if colour_correction { "enabled" } else { "disabled" });
             }
         }
-        // Apply libretro core options BEFORE wrapping. The native rcheevos
-        // worker observes Load/Frame/Unload but never holds emulator pointers.
-        // GB/GBC need their own verified RA hash and RAM maps, so they are
-        // explicitly excluded from this initial GBA-only milestone.
-        let mut core: Box<dyn RetroCore> = match (platform, achievements) {
-            (Platform::Gba, Some(service)) => service.wrap(Box::new(core)),
-            _ => Box::new(core),
+        // rcheevos shares ONE evaluator, protected against cross-console
+        // memory reads. GB=4 / GBA=5 / GBC=6 use their own libretro maps.
+        // Speculative frames never reach it (including GB/GBC Run-Ahead).
+        let console = match platform {
+            Platform::Gb => 4, Platform::Gba => 5, Platform::Gbc => 6,
+        };
+        let mut core: Box<dyn RetroCore> = match achievements {
+            Some(service) => service.wrap_for_console(Box::new(core), console),
+            None => Box::new(core),
         };
         core.load(rom).map_err(|e| e.to_string())?;
         let load_ms = opening_at.elapsed().as_millis();

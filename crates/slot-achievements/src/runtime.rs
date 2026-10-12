@@ -23,6 +23,8 @@ unsafe extern "C" {
         runtime: *mut c_void,
         ram: *const u8,
         valid: *const usize,
+        coverage: *const u8,
+        console: u32,
         earned: *mut u32,
         capacity: usize,
         presence: *mut c_char,
@@ -118,14 +120,20 @@ impl Runtime {
         }
     }
 
-    pub fn frame(&mut self, ram: &[u8], valid: &[usize; 3]) -> &[u32] {
-        assert!(ram.len() >= 0x58000);
-        assert!(valid[0] <= 0x8000 && valid[1] <= 0x40000 && valid[2] <= 0x10000);
+    pub fn frame(&mut self, ram: &[u8], valid: &[usize; 3], console: u32) -> &[u32] {
+        const GBA_SIZE: usize = 0x58000;
+        assert!(ram.len() >= GBA_SIZE + 0x17000);
+        assert!(matches!(console, 4 | 5 | 6));
+        if console == 5 {
+            assert!(valid[0] <= 0x8000 && valid[1] <= 0x40000 && valid[2] <= 0x10000);
+        }
         let count = unsafe {
             slot_ra_frame(
                 self.ptr.as_ptr(),
                 ram.as_ptr(),
                 valid.as_ptr(),
+                ram[GBA_SIZE..].as_ptr(),
+                console,
                 self.earned.as_mut_ptr(),
                 self.earned.len(),
                 self.presence.as_mut_ptr().cast(),

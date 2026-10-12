@@ -677,7 +677,55 @@ fn copy_gba_achievement_map(descriptors: &[MemoryDescriptor], ram: &mut [u8]) ->
     valid
 }
 
+/// mGBA's GB/GBC libretro memory descriptors use actual GB CPU addresses:
+/// ROM 0000-7fff, VRAM 8000-9fff, battery A000-bfff, WRAM C000-dfff,
+/// IO ff00-ff7f and HRAM ff80-ffff. GBC extended banks occupy 10000+.
+/// Assemble the address space without inventing values for unmapped windows.
+fn copy_gb_achievement_map(
+    descriptors: &[MemoryDescriptor], ram: &mut [u8], coverage: &mut [u8],
+) -> usize {
+    const LIMIT: usize = 0x17000;
+    if ram.len() < LIMIT || coverage.len() < LIMIT { return 0; }
+    coverage[..LIMIT].fill(0);
+    let mut filled = 0usize;
+    for desc in descriptors {
+        if desc.ptr.is_null() || desc.disconnect != 0 { continue; }
+        let start = desc.start;
+        if start >= LIMIT { continue; }
+        let len = desc.len.min(LIMIT - start);
+        if len == 0 { continue; }
+        if desc.offset.checked_add(len).is_none_or(|end| end > isize::MAX as usize) {
+            continue;
+        }
+        // mGBA descriptors can carry select masks for OAM/HRAM. These
+        // windows still expose a contiguous, explicitly sized span.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                (desc.ptr as *const u8).add(desc.offset),
+                ram[start..start + len].as_mut_ptr(), len,
+            );
+        }
+        for flag in &mut coverage[start..start + len] {
+            if *flag == 0 { filled += 1; }
+            *flag = 1;
+        }
+    }
+    filled
+}
+
 impl RetroCore for LibretroCore {
+    fn achievement_memory_for_console(
+        &self, ram: &mut [u8], coverage: &mut [u8], console: u32
+    ) -> [usize; 3] {
+        if !self.loaded { return [0; 3]; }
+        if console == 4 || console == 6 {
+            let filled = copy_gb_achievement_map(&self.host.memory, ram, coverage);
+            // An actual mapped WRAM window is required, not merely ROM/VRAM.
+            return [if filled > 0 && coverage.get(0xc000) == Some(&1) { filled } else { 0 }, 0, 0];
+        }
+        self.achievement_memory(ram)
+    }
+
     fn achievement_memory(&self, ram: &mut [u8]) -> [usize; 3] {
         if ram.len() < 0x58000 || !self.loaded {
             return [0; 3];
@@ -1008,6 +1056,32 @@ mod tests {
             len,
             addrspace: ptr::null(),
         }
+    }
+
+    #[test]
+    fn gb_and_gbc_memory_descriptor_windows_respect_validity_and_extended_wram() {
+        let mut wram = vec![0x15u8; 0x8000];
+        let mut hram = vec![0x87u8; 0x80];
+        let mut oam = vec![0x55u8; 0xa0];
+        let mut regions = vec![
+            test_ra_descriptor(&mut wram, 0xc000, 0, 0x1000),
+            test_ra_descriptor(&mut wram, 0xd000, 0x1000, 0x1000),
+            test_ra_descriptor(&mut wram, 0x10000, 0x2000, 0x6000),
+            test_ra_descriptor(&mut hram, 0xff80, 0, 0x7f),
+            test_ra_descriptor(&mut oam, 0xfe00, 0, 0xa0),
+        ];
+        regions[3].select = 0xFFFFFF80;
+        let mut ram = vec![0xCC; 0x58000];
+        let mut coverage = vec![0; 0x17000];
+        assert!(copy_gb_achievement_map(&regions, &mut ram, &mut coverage) > 0);
+        assert_eq!(ram[0xc000], 0x15);
+        assert_eq!(ram[0x10000], 0x15);
+        assert_eq!(ram[0xff80], 0x87);
+        assert_eq!(coverage[0xc000], 1);
+        assert_eq!(coverage[0xe000], 0, "echo RAM must never imply valid gameplay RAM");
+        assert_eq!(coverage[0xff7f], 0);
+        assert_eq!(coverage[0xff80], 1);
+        assert_eq!(coverage[0x16fff], 0);
     }
 
     #[test]

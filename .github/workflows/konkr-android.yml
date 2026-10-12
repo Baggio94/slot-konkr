@@ -25,6 +25,10 @@ on:
       - 'scripts/package-konkr-cart-studio.py'
       - '.github/workflows/konkr-android.yml'
 
+concurrency:
+  group: konkr-android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   debug-apk:
     runs-on: ubuntu-latest
