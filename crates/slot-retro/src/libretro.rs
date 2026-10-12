@@ -413,6 +413,9 @@ pub struct LibretroCore {
     is_mgba: bool,
     mgba_audio_exports: Option<(AudioSidecarSizeFn, AudioSidecarFn)>,
     mgba_audio: Option<AudioSidecar>,
+    // mGBA's retro_serialize_size() serializes the whole core internally;
+    // skip this duplicate work on stable-sized speculative snapshots.
+    mgba_runahead_size_age: u16,
     host: Box<Host>,
     rom: Vec<u8>,
     rom_path: Option<CString>,
@@ -585,6 +588,7 @@ impl LibretroCore {
             is_mgba,
             mgba_audio_exports,
             mgba_audio: None,
+            mgba_runahead_size_age: 0,
             host,
             rom: Vec::new(),
             rom_path: None,
@@ -608,6 +612,7 @@ impl LibretroCore {
         // This snapshot belongs to the currently loaded ROM and must never
         // be reused when another ROM allocates a different audio queue.
         self.mgba_audio = None;
+        self.mgba_runahead_size_age = 0;
         // Release the borrowed descriptor pointers only after libretro
         // returns and Active drops its exclusive Host borrow.
         self.host.memory.clear();
@@ -721,6 +726,7 @@ impl RetroCore for LibretroCore {
             return Err(CoreError::Load(format!("core refused {}", rom.display())));
         }
         self.loaded = true;
+        self.mgba_runahead_size_age = 0;
         self.try_init_mgba_audio();
         let mut av = SystemAvInfo::default();
         unsafe { (self.api.get_system_av_info)(&mut av) };
@@ -778,17 +784,43 @@ impl RetroCore for LibretroCore {
     }
 
     fn serialize_into(&mut self, buf: &mut Vec<u8>) -> Result<(), CoreError> {
-        let size = unsafe { (self.api.serialize_size)() };
+        // Unlike gpSP, pinned mGBA's retro_serialize_size() calls
+        // mCoreSaveStateNamed() and allocates/writes an entire extra state.
+        // Calling it before every retro_serialize() doubles the state-work
+        // in Run-Ahead. Only reuse a known nonempty caller-owned buffer;
+        // normal save/rewind calls supply an empty Vec and remain unchanged.
+        // Revalidate periodically and retry immediately if the state grows.
+        let reuse_mgba = self.is_mgba && !buf.is_empty()
+            && self.mgba_runahead_size_age < 120;
+        let size = if reuse_mgba {
+            self.mgba_runahead_size_age += 1;
+            buf.len()
+        } else {
+            self.mgba_runahead_size_age = 0;
+            unsafe { (self.api.serialize_size)() }
+        };
         if size == 0 {
             return Err(CoreError::State("core reports no state".into()));
         }
-        // Keep the caller's allocation across speculative frames. A same-sized
-        // libretro state does not need a new potentially large Vec each time.
         buf.resize(size, 0);
-        let ok = {
+        let mut ok = {
             let _a = Active::bind(&mut self.host);
             unsafe { (self.api.serialize)(buf.as_mut_ptr() as *mut c_void, size) }
         };
+        if !ok && reuse_mgba {
+            // A newly required save-data/RTC section may increase size.
+            // Never continue Run-Ahead with a truncated libretro state.
+            let fresh = unsafe { (self.api.serialize_size)() };
+            if fresh == 0 {
+                return Err(CoreError::State("core reports no state".into()));
+            }
+            self.mgba_runahead_size_age = 0;
+            buf.resize(fresh, 0);
+            ok = {
+                let _a = Active::bind(&mut self.host);
+                unsafe { (self.api.serialize)(buf.as_mut_ptr() as *mut c_void, fresh) }
+            };
+        }
         if ok { Ok(()) } else { Err(CoreError::State("serialize refused".into())) }
     }
 
