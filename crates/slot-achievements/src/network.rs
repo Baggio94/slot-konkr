@@ -38,6 +38,9 @@ pub(crate) trait Transport {
     fn badge(&mut self, _name: &str) -> Result<Vec<u8>, Failure> {
         Err(Failure::Invalid)
     }
+    fn game_icon(&mut self, _id: &str) -> Result<Vec<u8>, Failure> {
+        Err(Failure::Invalid)
+    }
 }
 
 pub(crate) struct Http(ureq::Agent);
@@ -60,6 +63,21 @@ impl Http {
 }
 
 impl Transport for Http {
+    fn game_icon(&mut self, id: &str) -> Result<Vec<u8>, Failure> {
+        // Strict numeric ImageIcon identifier; never accept caller-supplied URL.
+        if id.is_empty() || id.len() > 12 || !id.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(Failure::Invalid);
+        }
+        self.0
+            .get(format!("https://media.retroachievements.org/Images/{id}.png"))
+            .call()
+            .map_err(|_| Failure::Network)?
+            .body_mut()
+            .with_config()
+            .limit(crate::badges::MAX_BYTES)
+            .read_to_vec()
+            .map_err(|_| Failure::Invalid)
+    }
     fn badge(&mut self, name: &str) -> Result<Vec<u8>, Failure> {
         crate::badges::path(std::path::Path::new(""), name).ok_or(Failure::Invalid)?;
         self.0
@@ -242,6 +260,7 @@ fn prefetch(
                 id: 0,
                 console: 5,
                 title: "No achievements for this ROM".into(),
+                image_icon: String::new(),
                 achievements: vec![],
             },
             BTreeSet::new(),
@@ -696,6 +715,7 @@ mod tests {
                 id: 1,
                 console: 5,
                 title: "fixture".into(),
+                image_icon: String::new(),
                 achievements: Vec::new(),
             }, BTreeSet::<u32>::new())).unwrap();
         assert!(already_prepared(root.path(), hash));
@@ -834,6 +854,7 @@ mod presence_tests {
             id: 1,
             console: 5,
             title: "Test".into(),
+                image_icon: String::new(),
             presence: String::new(),
             achievements: vec![],
         };
