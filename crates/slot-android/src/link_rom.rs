@@ -9,10 +9,11 @@ use crate::multiplayer::game_code;
 pub struct GbaIdentity {
     pub code: String,
     pub title: String,
+    pub clean_header: bool,
 }
 
 fn parse(buf: &[u8]) -> io::Result<GbaIdentity> {
-    if buf.len() < 0xb0 {
+    if buf.len() < 0xb3 {
         return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "GBA ROM header truncated"));
     }
     let code = std::str::from_utf8(&buf[0xac..0xb0])
@@ -24,11 +25,13 @@ fn parse(buf: &[u8]) -> io::Result<GbaIdentity> {
     if title.is_empty() || !title.is_ascii() || title.chars().any(|c| c.is_control()) {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid GBA title"));
     }
-    Ok(GbaIdentity { code, title })
+    // gpSP chooses RFU for retail Pokémon but Cable for some modified carts.
+    let clean_header = buf[3] == 0xea && buf[0xb2] == 0x96;
+    Ok(GbaIdentity { code, title, clean_header })
 }
 
 pub fn identify(path: &Path) -> io::Result<GbaIdentity> {
-    let mut head = [0u8; 0xb0];
+    let mut head = [0u8; 0xb3];
     File::open(path)?.read_exact(&mut head)?;
     parse(&head)
 }
@@ -38,17 +41,22 @@ mod tests {
     use super::*;
     #[test]
     fn original_gba_header_is_network_identifier() {
-        let mut head = [0u8; 0xb0];
+        let mut head = [0u8; 0xb3];
         head[0xa0..0xac].copy_from_slice(b"POKEMON FIRE");
         head[0xac..0xb0].copy_from_slice(b"BPRE");
+        head[3] = 0xea;
+        head[0xb2] = 0x96;
         let id = parse(&head).unwrap();
         assert_eq!(id.code, "BPRE");
         assert_eq!(id.title, "POKEMON FIRE");
+        assert!(id.clean_header);
+        head[0xb2] = 0;
+        assert!(!parse(&head).unwrap().clean_header);
     }
     #[test]
     fn empty_invalid_and_short_headers_are_rejected_without_guessing() {
         assert!(parse(&[]).is_err());
-        let mut head = [0u8; 0xb0];
+        let mut head = [0u8; 0xb3];
         head[0xa0..0xa4].copy_from_slice(b"GAME");
         head[0xac..0xb0].copy_from_slice(b"bpre");
         assert!(parse(&head).is_err());
