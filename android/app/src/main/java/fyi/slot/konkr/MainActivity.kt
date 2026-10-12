@@ -179,18 +179,38 @@ class MainActivity : Activity() {
 
     private var audioThread: Thread? = null
     private var raConnectivity: ConnectivityManager? = null
+    private var activeRaPanel: Pair<RaPanelDialog, String>? = null
+    private fun refreshRaConnectivityOnScreen() {
+        // ConnectivityManager may call us from a binder thread: touch views
+        // only on main, and reuse the already scanned account snapshot.
+        runOnUiThread {
+            val (panel, user) = activeRaPanel ?: return@runOnUiThread
+            if (panel.isShowing()) {
+                RaDiagnostics.lastSnapshot(user)?.let { snapshot ->
+                    panel.update(retroAchievementsStatus(), hasValidatedInternet(), snapshot)
+                }
+            }
+        }
+    }
     private val raConnectivityCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             // Signals only that a network appeared. Rust still verifies RA HTTPS.
             if (!isDestroyed) {
                 nativeRaNetworkAvailable()
                 startRaSmartCache()
+                refreshRaConnectivityOnScreen()
             }
         }
         override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-            if (!isDestroyed && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
-                startRaSmartCache()
+            if (!isDestroyed) {
+                if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                    startRaSmartCache()
+                }
+                refreshRaConnectivityOnScreen()
             }
+        }
+        override fun onLost(network: Network) {
+            if (!isDestroyed) refreshRaConnectivityOnScreen()
         }
     }
     private val pulse = object : Runnable {
@@ -1023,8 +1043,12 @@ class MainActivity : Activity() {
                 activity = this, username = existing,
                 onRefresh = { refreshRaPanel(panel, existing) },
                 onSignOut = { confirmRaSignOut(panel, existing) },
-                onDismiss = { nativeExternalReturn() }
+                onDismiss = {
+                    activeRaPanel = null
+                    nativeExternalReturn()
+                }
             )
+            activeRaPanel = panel to existing
             panel.show()
             // Show last known values immediately when reopening the dashboard.
             // They are refreshed safely in the background on every opening.
