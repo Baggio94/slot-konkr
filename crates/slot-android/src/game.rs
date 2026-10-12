@@ -1,6 +1,9 @@
 //! Native libretro mGBA / gpSP game session. All core calls occur on GLSurfaceView's GL thread.
 //! Android's SAF bridge materializes a **bounded private cache** copy of each selected ROM.
-use slot_retro::{ButtonMask, LibretroCore, RetroCore};
+use slot_retro::{ButtonMask, LibretroCore, RetroCore, LinkChannel};
+use crate::link_kind::LinkKind;
+use crate::link_play::{Frame as LinkFrame, LinkError, LinkPlay};
+use crate::multiplayer::Role;
 use slot_store::{atomic_write, Core, Platform, StateEntry, StateRing, stamp_now, parse_stamp, format_stamp, RING_MAX};
 use crate::thumb;
 use crate::retroarch_state;
@@ -40,6 +43,8 @@ enum PendingUndo {
 pub struct GameSession {
     // Wrapped with the native softcore evaluator for opted-in GBA sessions.
     core: Box<dyn RetroCore>,
+    // Optional: only used after the real network handshake, never in solo play.
+    link: Option<LinkPlay>,
     save: PathBuf,
     rtc: PathBuf,
     manual_export_prefix: PathBuf,
@@ -216,7 +221,7 @@ impl GameSession {
         let sample_rate = core.av_info().sample_rate.round() as i32;
         let fps = core.av_info().fps.clamp(30.0, 120.0);
         Ok(Self {
-            core, save, rtc, manual_export_prefix, state, retroarch_export, retroarch_import, ring,
+            core, link: None, save, rtc, manual_export_prefix, state, retroarch_export, retroarch_import, ring,
             rewind: RewindThread::spawn(REWIND_BYTES), rewind_frames: 0,
             frame_count: 0, palette_live, core_kind: which,
             runahead_video: Vec::new(), runahead_state: Vec::new(),
@@ -227,12 +232,20 @@ impl GameSession {
         })
     }
 
-    pub fn advance(&mut self, buttons: u16, turbo: bool, record_rewind: bool) {
+    /// False while cable lockstep is awaiting the other player. The caller
+    /// must not subtract an emulated-frame budget until this returns true.
+    pub fn advance(&mut self, buttons: u16, turbo: bool, record_rewind: bool) -> bool {
         self.runahead_video.clear();
-        // Reuse Slot's actual 3-on/3-off X/Y to A/B turbo algorithm.
         let pressed = ButtonMask(buttons);
         let mapped = xy_buttons(pressed, turbo, self.frame_count);
-        self.core.run_frame(mapped);
+        if let Some(link) = self.link.as_mut() {
+            match link.frame(self.core.as_mut(), mapped) {
+                LinkFrame::Advanced => {},
+                LinkFrame::Waiting | LinkFrame::Failed(_) => return false,
+            }
+        } else {
+            self.core.run_frame(mapped);
+        }
         self.frame_count = self.frame_count.wrapping_add(1);
         if record_rewind {
             self.rewind_frames += 1;
@@ -247,17 +260,53 @@ impl GameSession {
         if self.last_sram.elapsed() >= SRAM_PERIOD {
             self.save_sram();
         }
+        true
+    }
+
+    /// Physical link is kept out of GameSession until the transport completes
+    /// the fork's game-specific greeting. Only mGBA cable and gpSP RFU are
+    /// admitted to this first emulation integration; gpSP cable has a separate
+    /// libretro netpacket path that will be wired with its core options later.
+    pub fn begin_multiplayer(&mut self, role: Role, mode: LinkKind,
+                             transport: Box<dyn LinkChannel>) -> Result<(), String> {
+        if self.link.is_some() { return Err("Already linked".into()); }
+        if matches!(mode, LinkKind::Cable) && self.core_kind != Core::Mgba {
+            return Err("Cable mode currently requires mGBA".into());
+        }
+        if matches!(mode, LinkKind::Wireless) && self.core_kind != Core::Gpsp {
+            return Err("Wireless mode currently requires gpSP".into());
+        }
+        let link = LinkPlay::begin(self.core.as_mut(), role, mode, transport)?;
+        self.link = Some(link);
+        self.runahead_video.clear();
+        self.rewind_frames = 0;
+        self.pending_undo = None;
+        Ok(())
+    }
+
+    pub fn link_fault(&self) -> Option<LinkError> {
+        self.link.as_ref().and_then(|link| link.fault())
+    }
+
+    pub fn linked(&self) -> bool { self.link.is_some() }
+
+    pub fn end_multiplayer(&mut self) {
+        if let Some(mut link) = self.link.take() {
+            link.end(self.core.as_mut());
+        }
+        self.runahead_video.clear();
+        self.rewind_frames = 0;
     }
 
     pub fn runahead_supported(&self) -> bool {
-        !self.runahead_unavailable && self.core.speculative_audio_supported()
+        self.link.is_none() && !self.runahead_unavailable && self.core.speculative_audio_supported()
     }
 
     /// Roll back both standard libretro state and core-specific transient
     /// audio: gpSP's sound ring, or mGBA's converter/filter/queue sidecar.
     pub fn prepare_runahead(&mut self, buttons: u16, turbo: bool, frames: u8) {
         self.runahead_video.clear();
-        if frames == 0 || frames > 2 || self.runahead_unavailable { return; }
+        if frames == 0 || frames > 2 || self.runahead_unavailable || self.link.is_some() { return; }
         if !self.core.speculative_audio_supported() {
             self.runahead_unavailable = true;
             log_launch_timing("Run-Ahead disabled: core has no safe speculative audio support");
@@ -294,6 +343,7 @@ impl GameSession {
     }
 
     pub fn rewind_step(&mut self) -> bool {
+        if self.link.is_some() { return false; }
         self.runahead_video.clear();
         let Some(previous) = self.rewind.pop() else { return false; };
         if self.core.unserialize(&previous).is_err() { return false; }
@@ -370,7 +420,9 @@ impl GameSession {
     pub fn save(&mut self, with_state: bool) -> bool {
         let saved_sram = self.save_sram();
         let mut state_written = false;
-        if with_state {
+        // Exporting a single-core state during linked play would silently
+        // corrupt the shared timeline. SRAM/RTC can still be saved safely.
+        if with_state && self.link.is_none() {
             if let Ok(data) = self.core.serialize() {
                 if let Err(err) = atomic_write(&self.state, &data) {
                     eprintln!("slot-konkr: state save failed: {err}");
@@ -389,6 +441,7 @@ impl GameSession {
     /// Original Slot ring: 10 timestamped states per ROM/core, each with
     /// a 240×160 PNG thumbnail. Independent from RetroArch's manual slots.
     pub fn save_manual(&mut self) -> Result<String, String> {
+        if self.link.is_some() { return Err("Save States unavailable during Multiplayer".into()); }
         let state = self.core.serialize().map_err(|e|e.to_string())?;
         let preview = thumb::png(self.core.video_xrgb8888()).unwrap_or_default();
         let entries = self.ring.list().map_err(|e|e.to_string())?;
@@ -423,6 +476,7 @@ impl GameSession {
     }
 
     pub fn load_manual(&mut self, stamp:&str) -> Result<(), String> {
+        if self.link.is_some() { return Err("Load State unavailable during Multiplayer".into()); }
         let (bytes, _) = self.ring.read(stamp).map_err(|e|e.to_string())?;
         let prior = self.core.serialize().map_err(|e|e.to_string())?;
         self.core.unserialize(&bytes).map_err(|e|e.to_string())?;
@@ -441,6 +495,7 @@ impl GameSession {
     }
 
     pub fn undo_manual(&mut self)->Result<(),String> {
+        if self.link.is_some() { return Err("Undo unavailable during Multiplayer".into()); }
         let Some((since,_))=&self.pending_undo else { return Err("Nothing to undo".into())};
         if since.elapsed()>UNDO_WINDOW {
             self.pending_undo=None;
