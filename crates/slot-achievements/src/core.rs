@@ -4,7 +4,7 @@ use std::sync::{mpsc, Arc};
 
 use slot_retro::{AvInfo, ButtonMask, CoreError, Link, RetroCore, Rumble};
 
-use crate::{network, Control, Frame, Service, QUEUE_SIZE, RAM_SIZE};
+use crate::{network, Control, Frame, Service, QUEUE_SIZE, RAM_SIZE, GB_COVERAGE_SIZE};
 
 static NEXT_GAME: AtomicU64 = AtomicU64::new(1);
 
@@ -18,12 +18,13 @@ pub(crate) struct Tracked {
     current: Arc<AtomicU64>,
     generation: u64,
     sequence: u64,
+    console: u32,
     timeline: u64,
     allocated: usize,
 }
 
 impl Tracked {
-    pub fn new(core: Box<dyn RetroCore>, service: &Service) -> Self {
+    pub fn new(core: Box<dyn RetroCore>, service: &Service, console: u32) -> Self {
         let (recycle, recycled) = mpsc::sync_channel(QUEUE_SIZE + 1);
         Self {
             core,
@@ -35,6 +36,7 @@ impl Tracked {
             current: service.current.clone(),
             generation: 0,
             sequence: 0,
+            console,
             timeline: 0,
             allocated: 0,
         }
@@ -49,11 +51,12 @@ impl Tracked {
             Ok(ram) => ram,
             Err(_) if self.allocated < QUEUE_SIZE + 1 => {
                 self.allocated += 1;
-                vec![0; RAM_SIZE]
+                vec![0; RAM_SIZE + GB_COVERAGE_SIZE]
             }
             Err(_) => return,
         };
-        let valid = self.core.achievement_memory(&mut ram);
+        let (snapshot, coverage) = ram.split_at_mut(RAM_SIZE);
+        let valid = self.core.achievement_memory_for_console(snapshot, coverage, self.console);
         let frame = Frame {
             generation: self.generation,
             sequence: self.sequence,
@@ -61,6 +64,7 @@ impl Tracked {
             earned_at: network::now(),
             ram,
             valid,
+            console: self.console,
             recycle: self.recycle.clone(),
         };
         // In particular, never use send(): HTTPS, fsync, or evaluation must not backpressure
@@ -80,6 +84,7 @@ impl RetroCore for Tracked {
         let _ = self.controls.send(Control::Load(network::Load {
             generation: self.generation,
             path: rom.to_path_buf(),
+            console: self.console,
         }));
         Ok(())
     }
@@ -177,6 +182,10 @@ impl RetroCore for Tracked {
     }
     fn achievement_memory(&self, ram: &mut [u8]) -> [usize; 3] {
         self.core.achievement_memory(ram)
+    }
+
+    fn achievement_memory_for_console(&self, ram: &mut [u8], cover: &mut [u8], console: u32) -> [usize; 3] {
+        self.core.achievement_memory_for_console(ram, cover, console)
     }
 }
 
