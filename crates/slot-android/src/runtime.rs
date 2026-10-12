@@ -3204,6 +3204,35 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeKey(
         .push_back(Input::Key(key, pressed != 0));
 }
 
+/// Kotlin resolves the connected Wi-Fi interface and takes a MulticastLock
+/// before handing its IPv4 address to the independent Rust discovery worker.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkNetworkReady(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, ipv4: JString<'_>,
+) {
+    if let Ok(value) = env.get_string(&ipv4) {
+        INPUT.lock().unwrap_or_else(|e| e.into_inner())
+            .push_back(Input::LinkNetworkReady(value.to_string_lossy().into_owned()));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkNetworkError(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, reason: JString<'_>,
+) {
+    if let Ok(value) = env.get_string(&reason) {
+        INPUT.lock().unwrap_or_else(|e| e.into_inner())
+            .push_back(Input::LinkNetworkError(value.to_string_lossy().into_owned()));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkNeedsMulticast(
+    _env: *mut c_void, _this: *mut c_void,
+) -> jboolean {
+    LINK_NEEDS_MULTICAST.load(Ordering::Acquire) as jboolean
+}
+
 /// Called on the GL thread through GLSurfaceView.queueEvent before changing
 /// account. The evaluator must drain its final queued frames, atomically store
 /// all earned awards and confirm none remain only in RAM.
