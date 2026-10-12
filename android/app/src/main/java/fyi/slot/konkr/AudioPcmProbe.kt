@@ -6,9 +6,6 @@ import android.os.SystemClock
 import android.util.Log
 import java.io.File
 import java.io.RandomAccessFile
-import java.util.concurrent.ArrayBlockingQueue
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Opt-in, debug-build-only PCM probe. Captures the *real* stereo 16-bit PCM
@@ -19,14 +16,14 @@ import java.util.concurrent.atomic.AtomicBoolean
  *   touch files/pcm-request-RA1
  * Output: files/AudioPCMDiagnostic/{OFF,RA1}.wav and {OFF,RA1}.txt
  *
- * No I/O, blocking offer, resampling or AudioTrack modification on the
- * emulator/render thread. The audio worker only copies into a bounded queue.
+ * Audio captures remain entirely in a single preallocated 3MiB RAM buffer.
+ * Only AFTER the measurement finishes do we write the WAV on a worker thread.
+ * No emulator/render-thread hooks, libretro changes, or per-chunk allocation.
  */
 internal class AudioPcmProbe(private val activity: Activity) {
     private companion object {
         const val TAG = "SlotAudioPCM"
         const val SECONDS = 12
-        const val QUEUE_CAPACITY = 128
     }
     private val enabled =
         activity.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
@@ -34,11 +31,11 @@ internal class AudioPcmProbe(private val activity: Activity) {
     private var lastPollMs = 0L
     private var current: Capture? = null
 
+    // Only the Android audio worker accesses current and writes the PCM array.
     private class Capture(val label: String, val rate: Int) {
-        val queue = ArrayBlockingQueue<ShortArray>(QUEUE_CAPACITY)
-        val recording = AtomicBoolean(true)
-        var samples = 0 // audio thread exclusively; number of 16-bit samples
-        var dropped = 0 // audio thread exclusively
+        val pcm = ShortArray(rate * SECONDS * 2)
+        val startedMs = SystemClock.elapsedRealtime()
+        var samples = 0 // number of interleaved PCM16 samples
     }
 
     /** Called from the Android audio worker, at most one file probe per 250ms. */
@@ -55,18 +52,19 @@ internal class AudioPcmProbe(private val activity: Activity) {
                 return
             }
             directory.mkdirs()
-            val capture = Capture(label, rate)
-            current = capture
-            Thread({ writeCapture(capture) }, "slot-pcm-$label").apply {
-                priority = Thread.MIN_PRIORITY
-                start()
+            // One allocation before the timer starts; no background disk
+            // I/O while collecting audio frames.
+            try {
+                current = Capture(label, rate)
+                Log.i(TAG, "CAPTURE START label=$label rate=$rate Hz seconds=$SECONDS method=RAM_ONLY")
+            } catch (error: OutOfMemoryError) {
+                Log.e(TAG, "PCM buffer allocation failed", error)
             }
-            Log.i(TAG, "CAPTURE START label=$label rate=$rate Hz seconds=$SECONDS")
             return
         }
     }
 
-    /** Called AFTER AudioTrack.write; write count is shorts, not stereo frames. */
+    /** Called AFTER AudioTrack.write; count is shorts, not stereo frames. */
     fun capture(pcm: ShortArray, written: Int, rate: Int) {
         val c = current ?: return
         if (rate != c.rate) {
@@ -74,51 +72,60 @@ internal class AudioPcmProbe(private val activity: Activity) {
             stop()
             return
         }
-        val remaining = c.rate * SECONDS * 2 - c.samples
-        val length = written.coerceAtLeast(0).coerceAtMost(pcm.size).coerceAtMost(remaining)
-        // Never block the audio worker waiting for disk or a saturated queue.
-        if (length > 0 && !c.queue.offer(pcm.copyOfRange(0, length))) {
-            c.dropped += length
+        val count = written.coerceAtLeast(0).coerceAtMost(pcm.size)
+            .coerceAtMost(c.pcm.size - c.samples)
+        if (count > 0) {
+            // JVM intrinsic; avoids allocating a new ShortArray every chunk.
+            System.arraycopy(pcm, 0, c.pcm, c.samples, count)
+            c.samples += count
         }
-        c.samples += length
-        if (c.samples >= c.rate * SECONDS * 2) stop()
+        if (c.samples >= c.pcm.size) stop()
     }
 
+    /** Write only when the capture has ended; never during its timed interval. */
     fun stop() {
         val c = current ?: return
         current = null
-        c.recording.set(false)
-        Log.i(TAG, "CAPTURE STOP label=${c.label} offered=${c.samples / 2} frames lost=${c.dropped / 2}")
+        val elapsedMs = SystemClock.elapsedRealtime() - c.startedMs
+        Log.i(TAG, "CAPTURE STOP label=${c.label} samples=${c.samples} elapsedMs=$elapsedMs")
+        Thread({ writeCapture(c, elapsedMs) }, "slot-pcm-write-${c.label}").apply {
+            priority = Thread.MIN_PRIORITY
+            start()
+        }
     }
 
-    private fun writeCapture(c: Capture) {
+    private fun writeCapture(c: Capture, elapsedMs: Long) {
         val partial = File(directory, "${c.label}.wav.partial")
         val result = File(directory, "${c.label}.wav")
         val report = File(directory, "${c.label}.txt")
-        var bytes = 0L
+        var bytes = 0
         var error = ""
         try {
             RandomAccessFile(partial, "rw").use { out ->
                 out.setLength(0)
                 wavHeader(out, c.rate, 0)
-                while (c.recording.get() || c.queue.isNotEmpty()) {
-                    val samples = c.queue.poll(300, TimeUnit.MILLISECONDS) ?: continue
-                    val buffer = ByteArray(samples.size * 2)
-                    for (i in samples.indices) {
-                        val sample = samples[i].toInt()
-                        buffer[i * 2] = sample.toByte()
-                        buffer[i * 2 + 1] = (sample ushr 8).toByte()
+                // Buffer is allocated ONLY after the capture ends.
+                val buffer = ByteArray(32 * 1024)
+                var index = 0
+                while (index < c.samples) {
+                    val count = minOf(c.samples - index, buffer.size / 2)
+                    for (i in 0 until count) {
+                        val sample = c.pcm[index + i].toInt()
+                        buffer[2 * i] = sample.toByte()
+                        buffer[2 * i + 1] = (sample ushr 8).toByte()
                     }
-                    out.write(buffer)
-                    bytes += buffer.size
+                    out.write(buffer, 0, count * 2)
+                    index += count
+                    bytes += count * 2
                 }
-                // Replace the placeholder header after writing actual PCM bytes.
                 out.seek(0)
-                wavHeader(out, c.rate, bytes.toInt())
+                wavHeader(out, c.rate, bytes)
                 out.fd.sync()
             }
-            if (!partial.renameTo(result)) throw IllegalStateException("Cannot publish WAV")
-            Log.i(TAG, "CAPTURE COMPLETE label=${c.label} pcmBytes=$bytes dropShorts=${c.dropped}")
+            if (!partial.renameTo(result)) {
+                throw IllegalStateException("Cannot publish PCM diagnostic WAV")
+            }
+            Log.i(TAG, "CAPTURE COMPLETE label=${c.label} pcmBytes=$bytes elapsedMs=$elapsedMs")
         } catch (e: Exception) {
             error = e.toString()
             Log.e(TAG, "CAPTURE FAILED label=${c.label}", e)
@@ -126,8 +133,11 @@ internal class AudioPcmProbe(private val activity: Activity) {
             try {
                 report.writeText(
                     "label=${c.label}\nrate=${c.rate}\nchannels=2\nformat=pcm_s16le\n" +
-                    "duration_requested_seconds=$SECONDS\nframes_written=${bytes / 4}\n" +
-                    "lost_stereo_frames=${c.dropped / 2}\nerror=$error\n"
+                    "method=RAM_ONLY_POST_CAPTURE_WRITE\n" +
+                    "duration_requested_seconds=$SECONDS\n" +
+                    "capture_elapsed_ms=$elapsedMs\n" +
+                    "frames_written=${bytes / 4}\n" +
+                    "lost_stereo_frames=0\nerror=$error\n"
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Cannot save diagnostic metadata", e)
