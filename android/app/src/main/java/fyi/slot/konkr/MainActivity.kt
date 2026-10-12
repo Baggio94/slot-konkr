@@ -31,6 +31,8 @@ import android.view.Gravity
 import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
+import android.widget.EditText
+import android.app.AlertDialog
 import android.net.Uri
 import android.net.ConnectivityManager
 import android.net.Network
@@ -126,6 +128,7 @@ class MainActivity : Activity() {
     // The renderer requests LAN only when Host/Join is selected. It never
     // touches WifiManager, Android UI or permissions from the GL thread.
     external fun nativeLinkNetworkReady(ipv4: String)
+    external fun nativeLinkDirectHost(addressPair: String)
     external fun nativeLinkNetworkError(reason: String)
     external fun nativeLinkNeedsMulticast(): Boolean
 
@@ -223,6 +226,38 @@ class MainActivity : Activity() {
         val address = linkWifiAddress()
         if (address == null) {
             nativeLinkNetworkError("Connect both consoles to the same Wi-Fi network")
+            return
+        }
+        // Android emulator's NAT does not support IGMP/mDNS reliably.
+        // For virtual KONKR testing, Join directly to the physical KONKR
+        // Host's LAN IP; DO NOT request an unusable Android MulticastLock.
+        val fingerprint = android.os.Build.FINGERPRINT.lowercase()
+        val hardware = android.os.Build.HARDWARE.lowercase()
+        if (fingerprint.startsWith("generic") || fingerprint.contains("sdk_gphone") ||
+            hardware.contains("ranchu") || hardware.contains("goldfish")) {
+            releaseLinkMulticast()
+            val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+            val field = EditText(this).apply {
+                hint = "192.168.1.20"
+                setSingleLine(true)
+                setText(prefs.getString("slot_link_host_ipv4", ""))
+                inputType = android.text.InputType.TYPE_CLASS_PHONE
+                setPadding(28, 16, 28, 16)
+            }
+            AlertDialog.Builder(this)
+                .setTitle("Join physical KONKR")
+                .setMessage("Enter the KONKR Wi-Fi IPv4 address. Start Host on KONKR first.")
+                .setView(field)
+                .setPositiveButton("Join") { _, _ ->
+                    val host = field.text.toString().trim()
+                    prefs.edit().putString("slot_link_host_ipv4", host).apply()
+                    nativeLinkDirectHost("$address,$host")
+                }
+                .setNegativeButton("Cancel") { _, _ ->
+                    nativeLinkNetworkError("Direct Join cancelled")
+                }
+                .setOnCancelListener { nativeLinkNetworkError("Direct Join cancelled") }
+                .show()
             return
         }
         try {
