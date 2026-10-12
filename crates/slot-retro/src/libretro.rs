@@ -936,6 +936,12 @@ impl RetroCore for LibretroCore {
         self.host.net.clone()
     }
 
+    fn supports_netpacket(&self) -> bool {
+        self.host.netpacket.as_ref().is_some_and(|callbacks|
+            callbacks.start.is_some() && callbacks.receive.is_some() &&
+            callbacks.poll.is_some() && callbacks.stop.is_some())
+    }
+
     fn start_link(&mut self, client_id: u16) {
         let _a = Active::bind(&mut self.host);
         unsafe { begin_link(client_id) };
