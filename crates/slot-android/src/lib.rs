@@ -31,6 +31,7 @@ mod link_kind;
 // Fork's LAN/mDNS wire format remains interoperable across devices.
 mod link_mdns;
 mod link_lan;
+mod multiplayer;
 #[cfg(target_os = "android")]
 mod game;
 #[cfg(target_os = "android")]
