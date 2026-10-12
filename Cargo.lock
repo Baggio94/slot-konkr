@@ -2219,6 +2219,7 @@ name = "slot-android"
 version = "0.0.1"
 dependencies = [
  "jni 0.21.1",
+ "libc",
  "lz4_flex",
  "png 0.17.16",
  "serde",
