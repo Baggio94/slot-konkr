@@ -1425,6 +1425,24 @@ mod tests {
         }
     }
 
+    unsafe extern "C" fn test_reject_link(_client_id: u16) -> bool { false }
+
+    #[test]
+    fn gp_sp_refusing_serial_peer_never_activates_fake_link() {
+        let mut host = host_with(HashMap::new(), false);
+        let mut cb = test_netpacket_callback();
+        cb.connected = Some(test_reject_link);
+        cb.stop = Some(test_stop);
+        host.netpacket = Some(cb);
+        let accepted = {
+            let _active = Active::bind(&mut host);
+            unsafe { begin_link(0) }
+        };
+        assert!(!accepted, "Rejected serial peer cannot be marked connected");
+        assert!(!host.net.is_active());
+        assert!(host.net_peer.is_none());
+    }
+
     #[test]
     fn gpsp_null_poll_is_valid_for_real_netpacket_mode() {
         // Pinned gpSP (5819380c) registers start/receive/stop and
