@@ -187,14 +187,24 @@ internal class RaPanelDialog(
         // No highlighted footer selection; button hints describe direct keys.
     }
 
-    fun update(engine: String, snapshot: RaDiagnostics.Snapshot) {
+    fun update(engine: String, internet: Boolean, snapshot: RaDiagnostics.Snapshot) {
         if (!dialog.isShowing) return
         val previousScroll = scroll.scrollY
         content.removeAllViews()
         section("ACCOUNT")
         row("Player", username)
-        row("Connection", "Direct to RA")
-        row("Engine", engine)
+        row("Engine", if (engine == "Inactive") "Inactive" else "Active")
+        // Android's validated Internet is not proof of a successful RA HTTPS
+        // handshake. Sync status is derived separately from the native worker.
+        row("Connection", if (internet) "Internet available" else "Offline")
+        row("Sync", when {
+            !internet -> "Waiting for connection"
+            engine == "Online" -> "Up to date"
+            engine == "Preparing" -> "Preparing"
+            engine == "Needs attention" -> "Needs attention"
+            engine == "Offline" -> "Waiting for RA service"
+            else -> engine
+        })
         row("Mode", "Casual")
         section("GAME CACHE")
         row("GBA ROMs", snapshot.libraryGba?.toString() ?: "Not indexed")
