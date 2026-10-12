@@ -293,6 +293,7 @@ class MainActivity : Activity() {
             // original Slot label font. Foreground-only, in our Activity frame,
             // never a system Toast that Android may place at screen bottom.
             if (resumed) {
+                val gameActive = nativeIsPlaying()
                 repeat(4) {
                     val raw = nativePollRaNotice() ?: return@repeat
                     try {
@@ -306,6 +307,10 @@ class MainActivity : Activity() {
                             val isGameReady = !earned &&
                                 detail.startsWith("You have ") &&
                                 detail.contains(" achievements unlocked")
+                            // A one-frame launch can finish before the 100ms
+                            // Android poll. Never present its stale ready notice
+                            // after eject; earned achievements are unaffected.
+                            if (isGameReady && !gameActive) return@repeat
                             raAchievementOverlay.push(RaAchievementOverlay.Notice(
                                 title = title,
                                 detail = detail,
@@ -318,6 +323,7 @@ class MainActivity : Activity() {
                         Log.w(TAG, "Ignoring malformed RetroAchievements notice")
                     }
                 }
+                if (!gameActive) raAchievementOverlay.dismissGameLaunchNotices()
             }
             if (!isDestroyed) uiHandler.postDelayed(this, 100L)
         }
