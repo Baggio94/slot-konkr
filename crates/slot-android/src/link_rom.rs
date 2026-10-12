@@ -39,7 +39,7 @@ mod tests {
     #[test]
     fn original_gba_header_is_network_identifier() {
         let mut head = [0u8; 0xb0];
-        head[0xa0..0xab].copy_from_slice(b"POKEMON FIRE");
+        head[0xa0..0xac].copy_from_slice(b"POKEMON FIRE");
         head[0xac..0xb0].copy_from_slice(b"BPRE");
         let id = parse(&head).unwrap();
         assert_eq!(id.code, "BPRE");
