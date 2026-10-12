@@ -549,7 +549,12 @@ internal object RetroArchStorage {
                 // Existing file cannot be read; replace it atomically below.
             }
         }
-        // An untouched installation may have only the currently used core's\n        // Saves directory. Create the other core's path before the SRAM mirror.\n        val parent = requireNotNull(local.parentFile) { "Save has no parent directory" }\n        check(parent.isDirectory || parent.mkdirs()) { "Cannot create save directory: $parent" }\n        check(parent.isDirectory) { "Save path is not a directory: $parent" }\n        val pending = File(local.parentFile, local.name + ".partial")
+        // An untouched installation may have only the currently used core's
+        // Saves directory. Create the other core's path before the SRAM mirror.
+        val parent = requireNotNull(local.parentFile) { "Save has no parent directory" }
+        check(parent.isDirectory || parent.mkdirs()) { "Cannot create save directory: $parent" }
+        check(parent.isDirectory) { "Save path is not a directory: $parent" }
+        val pending = File(local.parentFile, local.name + ".partial")
         try {
             pending.outputStream().use { it.write(bytes); it.fd.sync() }
             check(pending.renameTo(local)) { "Cannot import RetroArch file" }
