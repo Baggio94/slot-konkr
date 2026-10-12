@@ -16,10 +16,10 @@ bash tools/mac-kpa-avd/setup.sh
 After emulator boot (use a second Terminal):
 
 ```bash
-SLOT_AVD_SERIAL=emulator-5554 bash tools/mac-kpa-avd/configure.sh /path/to/signed-slot.apk
+bash tools/mac-kpa-avd/configure.sh /path/to/signed-slot.apk
 ```
 
-The setup creates a new AVD with the correct aspect ratio, API level, keyboard input and OpenGL renderer. It modifies **only** the new virtual device configuration.
+The configuration script resolves the AVD by its exact name (`Slot_KONKR_API32`). It will **refuse to touch an existing SleepSync emulator** even if Android assigns it serial `emulator-5554`. The setup creates a new AVD with the correct aspect ratio, API level, keyboard input and OpenGL renderer. It modifies **only** the new virtual device configuration.
 
 ## Keyboard controls
 
