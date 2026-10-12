@@ -677,6 +677,8 @@ class MainActivity : Activity() {
             var player: AudioTrack? = null
             var rate = 0
             var requestedSpeed = 0
+            var observedUnderruns = 0
+            var audioProbeAt = 0L
             try {
                 while (audioRunning.get()) {
                     val wanted = nativeAudioSampleRate()
@@ -709,6 +711,8 @@ class MainActivity : Activity() {
                             .build()
                         rate = wanted
                         requestedSpeed = 0
+                        observedUnderruns = 0
+                        audioProbeAt = SystemClock.elapsedRealtime()
                         player.play()
                     } else if (player.playState != AudioTrack.PLAYSTATE_PLAYING) {
                         // A paused legacy buffer is reused when the next game has
@@ -754,7 +758,23 @@ class MainActivity : Activity() {
                         continue
                     }
                     audioFrameSignal.drainPermits()
-                    player.write(samples, 0, samples.size, AudioTrack.WRITE_BLOCKING)
+                    val written = player.write(samples, 0, samples.size, AudioTrack.WRITE_BLOCKING)
+                    if (written < 0) {
+                        Log.w(TAG, "AudioTrack write error: $written")
+                    }
+                    // Diagnostic only; do not modify audio queue, buffer size or
+                    // event-driven wakeup. A rise here distinguishes Android
+                    // playback underruns from mGBA mixer discontinuities.
+                    val probeNow = SystemClock.elapsedRealtime()
+                    if (probeNow - audioProbeAt >= 5_000L) {
+                        val underflows = player.underrunCount
+                        if (underflows > observedUnderruns) {
+                            Log.i(TAG, "AudioTrack underruns: +${underflows - observedUnderruns}" +
+                                " over 5s (total=$underflows, rate=$wanted Hz)")
+                        }
+                        observedUnderruns = underflows
+                        audioProbeAt = probeNow
+                    }
                 }
             } catch (error: Exception) {
                 Log.e(TAG, "Android AudioTrack error", error)
