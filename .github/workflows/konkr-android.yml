@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     # Follow the current development families instead of maintaining dozens of stale branch names.
-    branches: [develop/konkr, 'feat/konkr-*', 'fix/konkr-*', 'release/konkr-*']
+    branches: [develop/konkr, 'feat/konkr-*', 'feat/kpa-*', 'fix/konkr-*', 'release/konkr-*']
     paths:
       - 'android/**'
       - 'crates/slot-android/**'
@@ -24,6 +24,10 @@ on:
       - 'scripts/patch-gpsp-speculative-audio.py'
       - 'scripts/package-konkr-cart-studio.py'
       - '.github/workflows/konkr-android.yml'
+
+concurrency:
+  group: konkr-android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   debug-apk:
