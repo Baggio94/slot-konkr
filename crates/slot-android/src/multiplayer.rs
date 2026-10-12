@@ -4,7 +4,7 @@
 //! On-wire discovery, greeting and TCP frame packing are the fork's GPL code.
 
 use std::io;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::Duration;
@@ -105,6 +105,40 @@ impl LinkStarter {
         Ok(Self { events, cancel })
     }
 
+    /// Android Emulator is behind a NAT that does not support IGMP. Allow
+    /// emulator Join to use a physical KONKR's explicitly supplied LAN IP,
+    /// while retaining SLOT/1 + ROM-code authentication and all async guards.
+    pub fn spawn_direct_join(local: Ipv4Addr, host: Ipv4Addr, game: &str) -> io::Result<Self> {
+        let code = game_code(game).ok_or_else(|| io::Error::new(
+            io::ErrorKind::InvalidInput, "Game has no valid GBA Link code",
+        ))?;
+        if local.is_unspecified() || local.is_loopback() || local.is_multicast() ||
+            local.is_link_local() || host.is_unspecified() || host.is_loopback() ||
+            host.is_link_local() || host.is_multicast() || host.is_broadcast() ||
+            !host.is_private() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput,
+                "Direct Join requires a private LAN IPv4 address"));
+        }
+        let (tx, events) = mpsc::channel();
+        let cancel = Cancel::new();
+        let worker_cancel = cancel.clone();
+        thread::spawn(move || {
+            let _ = tx.send(Progress::Looking);
+            let result = if worker_cancel.is_cancelled() {
+                Err(io::Error::new(io::ErrorKind::Interrupted, "Join cancelled"))
+            } else {
+                TcpLink::join_greeted(SocketAddrV4::new(host, PORT).into(), &code)
+            };
+            let report = match result {
+                Ok(link) if !worker_cancel.is_cancelled() => Progress::Ready(link),
+                Ok(_) => Progress::Failed(Failure::Cancelled),
+                Err(error) => Progress::Failed(classify(&error)),
+            };
+            let _ = tx.send(report);
+        });
+        Ok(Self { events, cancel })
+    }
+
     pub fn poll(&mut self) -> Option<Progress> {
         match self.events.try_recv() {
             Ok(event) => Some(event),
@@ -129,6 +163,16 @@ mod tests {
         for bad in ["", "GAME BOY", "bpre", "BP RE", "A", "ABCD!", "😀"] {
             assert!(game_code(bad).is_none(), "{bad}");
         }
+    }
+
+    #[test]
+    fn direct_join_rejects_public_and_loopback_addresses() {
+        for invalid in [Ipv4Addr::LOCALHOST, Ipv4Addr::BROADCAST,
+            Ipv4Addr::new(8, 8, 8, 8), Ipv4Addr::new(224, 0, 0, 251)] {
+            assert!(LinkStarter::spawn_direct_join(Ipv4Addr::new(10,0,2,16), invalid, "BPRE").is_err());
+        }
+        assert!(LinkStarter::spawn_direct_join(Ipv4Addr::new(10,0,2,16),
+            Ipv4Addr::new(192,168,68,84), "bad").is_err());
     }
 
     #[test]
