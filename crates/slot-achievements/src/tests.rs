@@ -22,7 +22,7 @@ fn game() -> Game {
         id: 1,
         console: 5,
         title: "Test game".into(),
-        image_icon: "/Images/067895.png".into(),
+        image_icon: String::new(),
         achievements: vec![achievement("0xH000000=1")],
     }
 }
