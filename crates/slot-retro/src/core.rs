@@ -75,6 +75,20 @@ impl From<std::io::Error> for CoreError {
     }
 }
 
+/// Stable in-process 64-bit FNV-1a fingerprint for interleaved PCM16.
+/// This is diagnostics-only, not a cryptographic hash or audible comparison.
+pub fn pcm_fingerprint(samples: &[i16]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for &sample in samples {
+        let value = sample as u16;
+        for byte in value.to_le_bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    hash
+}
+
 pub trait RetroCore: Send {
     /// Copies the physical GBA IWRAM (0x8000), EWRAM (0x40000), and
     /// cartridge SRAM (0x10000) into a bounded 0x58000-byte snapshot.
@@ -98,6 +112,10 @@ pub trait RetroCore: Send {
     fn set_frame_skip(&mut self, _skip: bool) {}
     fn video_xrgb8888(&self) -> &[u8];
     fn take_audio(&mut self) -> Vec<i16>;
+    /// Read-only fingerprint of speculative PCM buffered for this frame.
+    /// Diagnostic only: no allocation, consumption or mutation of the audio
+    /// stream. None means the core does not expose this optional probe.
+    fn speculative_pcm_fingerprint(&self) -> Option<(usize, u64)> { None }
     /// Drop speculative audio without moving the core's output buffer.
     fn discard_audio(&mut self) { let _ = self.take_audio(); }
     /// Optional reusable audio storage for worker-wrapped libretro cores.
@@ -177,6 +195,14 @@ mod tests {
                 sample_rate: 48_000.0,
             }
         }
+    }
+
+    #[test]
+    fn pcm_fingerprint_is_stable_and_sample_sensitive() {
+        assert_eq!(pcm_fingerprint(&[0, 1, -1]), pcm_fingerprint(&[0, 1, -1]));
+        assert_ne!(pcm_fingerprint(&[0, 1, -1]), pcm_fingerprint(&[0, -1, 1]));
+        assert_ne!(pcm_fingerprint(&[0, 1]), pcm_fingerprint(&[0, 1, 0]));
+        assert_ne!(pcm_fingerprint(&[]), pcm_fingerprint(&[0]));
     }
 
     #[test]
