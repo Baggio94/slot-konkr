@@ -39,6 +39,9 @@ android {
                 signingConfig = signingConfigs.getByName("slotPersistent")
             }
             getByName("release") {
+                // Release candidates must be non-debuggable while preserving
+                // the same update-compatible signing certificate as debug RCs.
+                isDebuggable = false
                 signingConfig = signingConfigs.getByName("slotPersistent")
             }
         }
