@@ -195,12 +195,14 @@ jobs:
           set -euo pipefail
           APK=android/app/build/outputs/apk/release/app-release.apk
           test -s "$APK"
-          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK"
+          CERT="$("$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK")"
+          printf '%s\n' "$CERT"
+          # Enforce install-over compatibility with RC4's permanent signer.
+          echo "$CERT" | grep -Fi '4f42b8f0ac98f6a0102804ab51020ea0e7e2de7685c6ce09400a744de0b0fa2f'
           shasum -a 256 "$APK"
       - uses: actions/upload-artifact@v4
         if: github.ref == 'refs/heads/integration/konkr-rc4-next'
         with:
           name: slot-konkr-rc5-beta1-signed-release
           path: android/app/build/outputs/apk/release/app-release.apk
-          if-no-files-found: error
           if-no-files-found: error
