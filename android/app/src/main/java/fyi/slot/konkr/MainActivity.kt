@@ -707,7 +707,9 @@ class MainActivity : Activity() {
                     Log.w(TAG, "RetroArch SAF import skipped, keeping private saves", error)
                     runOnUiThread {
                         if (!isDestroyed) SlotToast.makeText(this@MainActivity,
-                            "Couldn't load existing saves. Check your Saves and Save States folders.",
+                            if (error is RetroArchStorage.SaveConflict) error.message
+                                ?: "Different core saves preserved; sharing paused."
+                            else "Couldn't load existing saves. Check your Saves and Save State folders.",
                             Toast.LENGTH_LONG).show()
                     }
                 }
