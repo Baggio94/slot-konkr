@@ -273,6 +273,9 @@ impl GameSession {
     pub fn begin_multiplayer(&mut self, role: Role, mode: LinkKind,
                              transport: Box<dyn LinkChannel>) -> Result<(), String> {
         if self.link.is_some() { return Err("Already linked".into()); }
+        if self.link_touched {
+            return Err("Relaunch cartridge before another link".into());
+        }
         if matches!(mode, LinkKind::Cable) && self.core_kind != Core::Mgba {
             return Err("Cable mode currently requires mGBA".into());
         }
