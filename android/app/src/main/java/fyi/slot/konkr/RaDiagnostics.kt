@@ -24,11 +24,14 @@ internal object RaDiagnostics {
         val badgesDownloaded: Int?,
         val badgesTotal: Int?,
         val badgesPercent: Int?,
+        val gameIconsCached: Int? = null,
+        val gameIconsTotal: Int? = null,
     )
 
     private data class PatchEntry(
         val length: Long, val modified: Long,
-        val prepared: Boolean, val badgeIds: Set<String>
+        val prepared: Boolean, val badgeIds: Set<String>,
+        val gameIconName: String?
     )
     private data class BadgeEntry(val length: Long, val modified: Long, val valid: Boolean)
 
@@ -140,6 +143,7 @@ internal object RaDiagnostics {
         // The patch index changes rarely; reuse a parsed patch only if its
         // account-specific file identity and metadata still match.
         val badgeIds = HashSet<String>()
+        val gameIcons = HashSet<String>()
         for (hash in discovered) {
             val file = File(account, "$hash.json")
             if (!file.isFile || file.length() !in 4L..(8L * 1024 * 1024)) continue
@@ -154,8 +158,12 @@ internal object RaDiagnostics {
                     val data = JSONArray(file.readText(Charsets.UTF_8))
                     val patch = data.optJSONObject(0)
                     if (data.length() != 2 || patch?.optInt("ConsoleID") != 5)
-                        Pair(false, emptySet<String>())
+                        Triple(false, emptySet<String>(), null)
                     else {
+                        val rawIcon = patch.optString("ImageIcon")
+                        val iconId = Regex("^/Images/([0-9]{1,12})\\.png$")
+                            .matchEntire(rawIcon)?.groupValues?.get(1)
+                        val gameIconName = iconId?.let { "slotgame_$it" }
                         val ids = HashSet<String>()
                         val achievements = patch.optJSONArray("Achievements")
                         if (achievements != null) {
@@ -167,15 +175,16 @@ internal object RaDiagnostics {
                                     ids.add(badge)
                             }
                         }
-                        Pair(true, ids.toSet())
+                        Triple(true, ids.toSet(), gameIconName)
                     }
-                }.getOrElse { Pair(false, emptySet<String>()) }
-                PatchEntry(size, modified, parsed.first, parsed.second)
+                }.getOrElse { Triple(false, emptySet<String>(), null) }
+                PatchEntry(size, modified, parsed.first, parsed.second, parsed.third)
                     .also { patches[fileKey] = it }
             }
             if (entry.prepared) {
                 cached++
                 badgeIds.addAll(entry.badgeIds)
+                entry.gameIconName?.let(gameIcons::add)
             }
         }
 
@@ -191,6 +200,8 @@ internal object RaDiagnostics {
             badgesDownloaded = null,
             badgesTotal = badgeIds.size.takeIf { it > 0 },
             badgesPercent = null,
+            gameIconsCached = null,
+            gameIconsTotal = gameIcons.size.takeIf { it > 0 },
         )
         onRulesReady?.invoke(preliminary)
 
@@ -221,6 +232,23 @@ internal object RaDiagnostics {
             }
             if (isValid) validBadgeCount++
         }
+        val validGameIcons = gameIcons.count { name ->
+            val file = File(badgeRoot, "$name.png")
+            if (!file.isFile || file.length() !in 1L..(128L * 1024)) false
+            else {
+                val key = file.absolutePath
+                val old = badgeFiles[key]
+                if (old != null && old.length == file.length() &&
+                    old.modified == file.lastModified()) old.valid
+                else runCatching {
+                    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeFile(key, opts)
+                    val good = opts.outWidth in 1..256 && opts.outHeight in 1..256
+                    badgeFiles[key] = BadgeEntry(file.length(), file.lastModified(), good)
+                    good
+                }.getOrDefault(false)
+            }
+        }
         val badgeTotal = badgeIds.size.takeIf { it > 0 }
         val result = Snapshot(
             libraryGba = if (games != null) totalGba else null,
@@ -234,6 +262,8 @@ internal object RaDiagnostics {
             badgesDownloaded = if (badgeTotal != null) validBadgeCount else null,
             badgesTotal = badgeTotal,
             badgesPercent = badgePercentage(validBadgeCount, badgeIds.size),
+            gameIconsCached = validGameIcons,
+            gameIconsTotal = gameIcons.size,
         )
         synchronized(this) { lastSnapshots[accountKey(username)] = result }
         return result
