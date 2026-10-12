@@ -171,6 +171,10 @@ impl RetroCore for Tracked {
         self.timeline += 1;
         self.core.start_link(client_id);
     }
+    fn try_start_link(&mut self, client_id: u16) -> bool {
+        self.timeline += 1;
+        self.core.try_start_link(client_id)
+    }
     fn pump_link(&mut self) {
         self.core.pump_link();
     }
