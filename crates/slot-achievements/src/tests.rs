@@ -22,6 +22,7 @@ fn game() -> Game {
         id: 1,
         console: 5,
         title: "Test game".into(),
+        image_icon: String::new(),
         achievements: vec![achievement("0xH000000=1")],
     }
 }
@@ -299,7 +300,7 @@ fn offline_unlock_is_durable_then_syncs_without_reopening_the_game() {
     wait_for(|| {
         service
             .take_notice()
-            .is_some_and(|n| n.title.starts_with("Achievements ready"))
+            .is_some_and(|n| n.title == "Test game" && n.detail.contains(" achievements unlocked"))
     });
     core.run_frame(ButtonMask(0));
     core.run_frame(ButtonMask(1));
@@ -322,7 +323,7 @@ fn offline_unlock_is_durable_then_syncs_without_reopening_the_game() {
     wait_for(|| {
         restarted
             .take_notice()
-            .is_some_and(|n| n.title.starts_with("Achievements ready"))
+            .is_some_and(|n| n.title == "Test game" && n.detail.contains(" achievements unlocked"))
     });
     core.run_frame(ButtonMask(0));
     core.run_frame(ButtonMask(1));
@@ -548,7 +549,7 @@ fn a_cached_game_can_earn_and_flush_while_https_is_stalled() {
     wait_for(|| {
         service
             .take_notice()
-            .is_some_and(|n| n.title.starts_with("Achievements ready"))
+            .is_some_and(|n| n.title == "Test game" && n.detail.contains(" achievements unlocked"))
     });
     core.run_frame(ButtonMask(0));
     core.run_frame(ButtonMask(1));

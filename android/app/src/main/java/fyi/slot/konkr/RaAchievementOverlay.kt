@@ -11,6 +11,10 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
@@ -37,6 +41,10 @@ internal class RaAchievementOverlay(
         val detail: String,
         val earned: Boolean,
         val badge: String?,
+        // Nullable means ordinary RA notice (not a game-launch status).
+        // For the launch notice, true/false is the Android-validated internet
+        // snapshot, independent of whether RA data came from the local cache.
+        val onlineMode: Boolean? = null,
     )
 
     private val handler = Handler(Looper.getMainLooper())
@@ -169,17 +177,34 @@ internal class RaAchievementOverlay(
             subtitle.text = notice.detail.uppercase(Locale.ROOT)
             subtitle.visibility = if (notice.detail.isBlank()) View.GONE else View.VISIBLE
             badge.visibility = View.GONE
+            badgeFallback.text = "★"
             badgeFallback.visibility = View.VISIBLE
             loadBadge(notice.badge, seq)
         } else {
-            // Concise system notifications: server-sync state does not masquerade
-            // as an achievement unlock and never displays an unrelated badge.
+            // The game-ready notice displays the real game's official RA
+            // mastery icon, never an arbitrary individual achievement badge.
+            // Other diagnostic notices continue without a fabricated icon.
             heading.text = "RETROACHIEVEMENTS"
-            title.text = status.uppercase(Locale.ROOT)
+            // Keep the mode *next to the game title*, not in an extra row.
+            // Android wraps both together for long game titles.
+            val gameTitle = SpannableStringBuilder(status.uppercase(Locale.ROOT))
+            notice.onlineMode?.let { online ->
+                val mode = if (online) "ONLINE MODE" else "OFFLINE MODE"
+                gameTitle.append("  ")
+                val modeStart = gameTitle.length
+                gameTitle.append(mode)
+                gameTitle.setSpan(RelativeSizeSpan(0.63f), modeStart,
+                    gameTitle.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                gameTitle.setSpan(ForegroundColorSpan(if (online) accent else secondary),
+                    modeStart, gameTitle.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            title.text = gameTitle
             subtitle.text = notice.detail.uppercase(Locale.ROOT)
             subtitle.visibility = if (notice.detail.isBlank()) View.GONE else View.VISIBLE
             badge.visibility = View.GONE
-            badgeFallback.visibility = View.GONE
+            badgeFallback.text = "RA"
+            badgeFallback.visibility = if (notice.badge != null) View.VISIBLE else View.GONE
+            loadBadge(notice.badge, seq)
         }
         card.visibility = View.VISIBLE
         card.animate().cancel()
@@ -195,7 +220,7 @@ internal class RaAchievementOverlay(
                         if (seq == serial && !destroyed) showNext()
                     }.start()
             }
-        }, if (notice.earned) 3600L else 1750L)
+        }, if (notice.earned) 3600L else if (notice.badge != null) 3200L else 1750L)
     }
 
     private fun loadBadge(path: String?, seq: Int) {

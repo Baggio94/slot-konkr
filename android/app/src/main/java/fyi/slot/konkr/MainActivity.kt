@@ -300,11 +300,18 @@ class MainActivity : Activity() {
                         val title = notice.optString("title", "").take(100)
                         val detail = notice.optString("detail", "").take(160)
                         if (title.isNotBlank()) {
+                            val earned = notice.optBoolean("earned", false)
+                            // This line is only for a recognized game's launch
+                            // notification. Never decorate unlock/error notices.
+                            val isGameReady = !earned &&
+                                detail.startsWith("You have ") &&
+                                detail.contains(" achievements unlocked")
                             raAchievementOverlay.push(RaAchievementOverlay.Notice(
                                 title = title,
                                 detail = detail,
-                                earned = notice.optBoolean("earned", false),
-                                badge = notice.optString("badge", "").takeIf { it.isNotBlank() }
+                                earned = earned,
+                                badge = notice.optString("badge", "").takeIf { it.isNotBlank() },
+                                onlineMode = if (isGameReady) hasValidatedInternet() else null
                             ))
                         }
                     } catch (_: Exception) {
@@ -819,6 +826,19 @@ class MainActivity : Activity() {
         } catch (_: java.util.concurrent.RejectedExecutionException) {
             raSmartRunning.set(false)
         }
+    }
+
+    /** Android-confirmed internet access, not Wi-Fi enabled or cached RA metadata.
+     * Snapshotted when the game-ready notice is queued; no HTTP request on UI.
+     */
+    private fun hasValidatedInternet(): Boolean = try {
+        val manager = raConnectivity
+            ?: (getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager)
+        val capabilities = manager?.getNetworkCapabilities(manager.activeNetwork)
+        capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
+            capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+    } catch (_: RuntimeException) {
+        false
     }
 
     private fun startRaNetworkWatch() {
