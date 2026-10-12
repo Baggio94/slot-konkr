@@ -111,7 +111,10 @@ impl Queue {
                 self.known.insert(name.clone());
                 if !self.names.contains(&name) && load_badge(&icon_path).is_none() {
                     self.names.insert(name.clone());
-                    self.pending.push_back(name);
+                    // Icons identify games in the launch notification. Put them
+                    // before the much larger unlock-badge backlog so they are
+                    // already cached for first launch and offline reuse.
+                    self.pending.push_front(name);
                 }
             }
         }

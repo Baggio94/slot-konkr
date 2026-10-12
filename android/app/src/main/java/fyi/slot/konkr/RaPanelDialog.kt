@@ -41,12 +41,22 @@ internal class RaPanelDialog(
                 if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) dismiss()
                 return true
             }
-            if (event.keyCode == KeyEvent.KEYCODE_BUTTON_A) {
-                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                    val focus = currentFocus
-                    if (focus != null && focus.isClickable) focus.performClick()
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_BUTTON_START, KeyEvent.KEYCODE_BUTTON_X -> {
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                        if (event.keyCode == KeyEvent.KEYCODE_BUTTON_START) onRefresh()
+                        else onSignOut()
+                    }
+                    return true
                 }
-                return true
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        val dy = dp(if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 58 else -58)
+                        scroll.smoothScrollBy(0, dy)
+                    }
+                    return true
+                }
+                KeyEvent.KEYCODE_BUTTON_A -> return true
             }
             return super.dispatchKeyEvent(event)
         }
@@ -54,6 +64,7 @@ internal class RaPanelDialog(
     private lateinit var content: LinearLayout
     private lateinit var loading: TextView
     private lateinit var actions: LinearLayout
+    private lateinit var scroll: ScrollView
 
     private fun text(message: String, px: Float, color: Int = ink) = TextView(activity).apply {
         this.text = message.uppercase(java.util.Locale.ROOT)
@@ -117,8 +128,10 @@ internal class RaPanelDialog(
         }
         root.addView(text("RETROACHIEVEMENTS", 23f), LinearLayout.LayoutParams(-1, dp(43)))
         root.addView(separator(), LinearLayout.LayoutParams(-1, dp(1)))
-        val scroll = ScrollView(activity).apply {
+        scroll = ScrollView(activity).apply {
             isFillViewport = false
+            isFocusable = false
+            isFocusableInTouchMode = false
             isVerticalScrollBarEnabled = false
             clipToPadding = false
         }
@@ -141,24 +154,20 @@ internal class RaPanelDialog(
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, dp(12), 0, 0)
         }
-        fun addAction(label: String, callback: () -> Unit) {
-            val button = text(label, 12.5f).apply {
-                gravity = Gravity.CENTER
-                isFocusable = true
+        // One concise fixed footer. Controller shortcuts do not take D-pad
+        // focus; ↑/↓ are reserved exclusively for scrolling statistics.
+        for ((key, action, callback) in listOf(
+            Triple("START", "REFRESH", onRefresh),
+            Triple("X", "SIGN OUT", onSignOut),
+            Triple("B", "BACK", { dialog.dismiss() })
+        )) {
+            val hint = SlotUi.hint(activity, key, action).apply {
+                isFocusable = false
                 isClickable = true
-                minimumHeight = dp(36)
-                setPadding(dp(7), dp(5), dp(7), dp(5))
                 setOnClickListener { callback() }
-                setOnFocusChangeListener { view, focused ->
-                    view.setBackgroundColor(if (focused) SlotUi.selected else Color.TRANSPARENT)
-                }
             }
-            actions.addView(button, LinearLayout.LayoutParams(0, dp(39), 1f))
+            actions.addView(hint, LinearLayout.LayoutParams(0, dp(39), 1f))
         }
-        addAction("REFRESH", onRefresh)
-        addAction("SIGN OUT", onSignOut)
-        val hint = SlotUi.hint(activity, "B", "BACK")
-        actions.addView(hint, LinearLayout.LayoutParams(0, dp(39), 1f))
         root.addView(actions)
         dialog.setContentView(root)
         dialog.setOnDismissListener { onDismiss() }
@@ -175,11 +184,12 @@ internal class RaPanelDialog(
                 View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
             )
         }
-        actions.getChildAt(0)?.requestFocus()
+        // No highlighted footer selection; button hints describe direct keys.
     }
 
     fun update(engine: String, snapshot: RaDiagnostics.Snapshot) {
         if (!dialog.isShowing) return
+        val previousScroll = scroll.scrollY
         content.removeAllViews()
         section("ACCOUNT")
         row("Player", username)
@@ -191,6 +201,10 @@ internal class RaPanelDialog(
         val cached = snapshot.cachedGba?.toString() ?: "Unknown"
         val indexed = snapshot.indexedGba?.toString() ?: "?"
         row("GBA prepared", "$cached / $indexed indexed")
+        row("Game icons cached", if (snapshot.gameIconsTotal != null &&
+            snapshot.gameIconsCached != null)
+            "${snapshot.gameIconsCached} / ${snapshot.gameIconsTotal}"
+            else "Checking cache...")
         section("ACHIEVEMENT BADGES")
         val badgesDownloaded = snapshot.badgesDownloaded
         val badgesTotal = snapshot.badgesTotal
@@ -216,6 +230,8 @@ internal class RaPanelDialog(
         content.addView(text(note, 11f, muted).apply {
             setPadding(0, dp(15), 0, dp(2))
         })
+        // The 15-second dashboard refresh must never jump to the top.
+        scroll.post { if (dialog.isShowing) scroll.scrollTo(0, previousScroll) }
     }
 
     fun isShowing(): Boolean = dialog.isShowing

@@ -11,10 +11,6 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
-import android.text.SpannableStringBuilder
-import android.text.Spanned
-import android.text.style.ForegroundColorSpan
-import android.text.style.RelativeSizeSpan
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
@@ -108,9 +104,21 @@ internal class RaAchievementOverlay(
         }
     }
     private val texts = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-    private val heading = label(10.5f, accent)
-    private val title = label(15f, ink).apply { maxLines = 2 }
-    private val subtitle = label(11f, secondary).apply { maxLines = 2 }
+    private val heading = label(10f, accent)
+    private val title = label(14.2f, ink).apply {
+        setSingleLine(true)
+        ellipsize = android.text.TextUtils.TruncateAt.END
+    }
+    private val modeLabel = label(9.5f, accent).apply {
+        setSingleLine(true)
+        visibility = View.GONE
+        letterSpacing = .05f
+    }
+    private val gameLine = LinearLayout(activity).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+    }
+    private val subtitle = label(10.5f, secondary).apply { maxLines = 2 }
 
     init {
         card.addView(badge, LinearLayout.LayoutParams(dp(46), dp(46)).apply {
@@ -120,11 +128,14 @@ internal class RaAchievementOverlay(
             rightMargin = dp(11)
         })
         texts.addView(heading)
-        texts.addView(title)
+        gameLine.addView(title, LinearLayout.LayoutParams(0, -2, 1f))
+        gameLine.addView(modeLabel, LinearLayout.LayoutParams(-2, -2).apply {
+            leftMargin = dp(8)
+        })
+        texts.addView(gameLine)
         texts.addView(subtitle)
         card.addView(texts, LinearLayout.LayoutParams(0, -2, 1f))
-        val maxWidth = minOf(dp(358), (activity.resources.displayMetrics.widthPixels * .68f).toInt())
-        parent.addView(card, FrameLayout.LayoutParams(maxWidth, -2, Gravity.TOP or Gravity.START).apply {
+        parent.addView(card, FrameLayout.LayoutParams(dp(358), -2, Gravity.TOP or Gravity.START).apply {
             leftMargin = dp(15)
             topMargin = dp(14)
         })
@@ -174,6 +185,7 @@ internal class RaAchievementOverlay(
         if (notice.earned) {
             heading.text = "ACHIEVEMENT EARNED  •  SYNC PENDING"
             title.text = status.uppercase(Locale.ROOT)
+            modeLabel.visibility = View.GONE
             subtitle.text = notice.detail.uppercase(Locale.ROOT)
             subtitle.visibility = if (notice.detail.isBlank()) View.GONE else View.VISIBLE
             badge.visibility = View.GONE
@@ -181,30 +193,41 @@ internal class RaAchievementOverlay(
             badgeFallback.visibility = View.VISIBLE
             loadBadge(notice.badge, seq)
         } else {
-            // The game-ready notice displays the real game's official RA
-            // mastery icon, never an arbitrary individual achievement badge.
-            // Other diagnostic notices continue without a fabricated icon.
             heading.text = "RETROACHIEVEMENTS"
-            // Keep the mode *next to the game title*, not in an extra row.
-            // Android wraps both together for long game titles.
-            val gameTitle = SpannableStringBuilder(status.uppercase(Locale.ROOT))
-            notice.onlineMode?.let { online ->
-                val mode = if (online) "ONLINE MODE" else "OFFLINE MODE"
-                gameTitle.append("  ")
-                val modeStart = gameTitle.length
-                gameTitle.append(mode)
-                gameTitle.setSpan(RelativeSizeSpan(0.63f), modeStart,
-                    gameTitle.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                gameTitle.setSpan(ForegroundColorSpan(if (online) accent else secondary),
-                    modeStart, gameTitle.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            title.text = status.uppercase(Locale.ROOT)
+            // Two independent single-line labels guarantee that the mode
+            // can never wrap below a long game title.
+            modeLabel.visibility = if (notice.onlineMode != null) View.VISIBLE else View.GONE
+            modeLabel.text = when (notice.onlineMode) {
+                true -> "ONLINE MODE"
+                false -> "OFFLINE MODE"
+                null -> ""
             }
-            title.text = gameTitle
+            modeLabel.setTextColor(if (notice.onlineMode == true) accent else secondary)
             subtitle.text = notice.detail.uppercase(Locale.ROOT)
             subtitle.visibility = if (notice.detail.isBlank()) View.GONE else View.VISIBLE
             badge.visibility = View.GONE
             badgeFallback.text = "RA"
             badgeFallback.visibility = if (notice.badge != null) View.VISIBLE else View.GONE
             loadBadge(notice.badge, seq)
+        }
+        // Prefer the natural text width and enlarge only as far as the screen
+        // allows. Exceptionally long titles ellipsize rather than wrapping or
+        // shrinking the status mode out of view.
+        val maxWidth = (activity.resources.displayMetrics.widthPixels * .85f).toInt()
+        val minWidth = minOf(dp(315), maxWidth)
+        val textPixels = maxOf(
+            title.paint.measureText(title.text.toString()) +
+                if (modeLabel.visibility == View.VISIBLE)
+                    modeLabel.paint.measureText(modeLabel.text.toString()) + dp(8)
+                else 0f,
+            subtitle.paint.measureText(subtitle.text.toString()),
+            heading.paint.measureText(heading.text.toString())
+        )
+        val desired = (textPixels + dp(46 + 11 + 12 + 14)).toInt()
+        (card.layoutParams as? FrameLayout.LayoutParams)?.let {
+            it.width = desired.coerceIn(minWidth, maxWidth)
+            card.layoutParams = it
         }
         card.visibility = View.VISIBLE
         card.animate().cancel()

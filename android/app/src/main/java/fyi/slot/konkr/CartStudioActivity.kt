@@ -44,6 +44,7 @@ class CartStudioActivity : Activity() {
     private val worker = Executors.newSingleThreadExecutor()
     private val changed = AtomicBoolean(false)
     private var web: WebView? = null
+    private var singleCartMode = false
     private var pendingPngPicker: ValueCallback<Array<Uri>>? = null
 
     private fun immersive() {
@@ -84,6 +85,7 @@ class CartStudioActivity : Activity() {
         frame.addView(notice, FrameLayout.LayoutParams(-1, -1))
 
         val selected = intent.getStringExtra(EXTRA_ROM)?.takeIf { it.startsWith("content://") }
+        singleCartMode = selected != null
         worker.execute {
             try {
                 val carts = CartStudioCatalog.games(this)
@@ -314,7 +316,10 @@ class CartStudioActivity : Activity() {
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) {
                         save.visibility = if (canSave) View.VISIBLE else View.INVISIBLE
-                        fill.visibility = if (!canSave && canFill) View.VISIBLE else View.INVISIBLE
+                        // X from carousel edits exactly one cart; never flash
+                        // the catalog-wide Fill unlabelled action in this mode.
+                        fill.visibility = if (!singleCartMode && !canSave && canFill)
+                            View.VISIBLE else View.INVISIBLE
                     }
                 }
             }
