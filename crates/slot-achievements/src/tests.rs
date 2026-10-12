@@ -276,14 +276,23 @@ fn runtime_evaluates_real_definitions_and_never_awards_missing_memory() {
 
 #[test]
 fn game_boy_wram_is_tracked_but_unmapped_echo_ram_never_awards() {
+    // rcheevos triggers on a transition, not on first seeing an already-true
+    // condition. Keep a valid and an invalid definition in separate runtimes:
+    // missing memory must never suppress legitimate awards in other sets.
     let mut runtime = runtime::Runtime::new().unwrap();
     assert!(runtime.activate(121, "0xH00C001=7"));
-    assert!(runtime.activate(122, "0xH00E000=0"));
     let mut ram = vec![0; RAM_SIZE + GB_COVERAGE_SIZE];
-    ram[0xc001] = 7;
     ram[RAM_SIZE + 0xc001] = 1;
+    assert!(runtime.frame(&ram, &[1, 0, 0], 4).is_empty());
+    ram[0xc001] = 7;
     assert_eq!(runtime.frame(&ram, &[1, 0, 0], 4), &[121]);
     assert!(runtime.frame(&ram, &[1, 0, 0], 4).is_empty());
+
+    let mut invalid = runtime::Runtime::new().unwrap();
+    assert!(invalid.activate(122, "0xH00E000=0"));
+    for _ in 0..3 {
+        assert!(invalid.frame(&ram, &[1, 0, 0], 4).is_empty());
+    }
 }
 
 #[test]
@@ -291,11 +300,11 @@ fn game_boy_color_extended_bank_is_valid_only_when_core_exposes_it() {
     let mut runtime = runtime::Runtime::new().unwrap();
     assert!(runtime.activate(123, "0xH010100=9"));
     let mut ram = vec![0; RAM_SIZE + GB_COVERAGE_SIZE];
-    ram[0x10100] = 9;
-    // No mapping yet: an unobserved zero must never trigger an award.
-    assert!(runtime.frame(&ram, &[1, 0, 0], 6).is_empty());
     ram[RAM_SIZE + 0x10100] = 1;
+    assert!(runtime.frame(&ram, &[1, 0, 0], 6).is_empty());
+    ram[0x10100] = 9;
     assert_eq!(runtime.frame(&ram, &[1, 0, 0], 6), &[123]);
+    assert!(runtime.frame(&ram, &[1, 0, 0], 6).is_empty());
 }
 
 #[test]
