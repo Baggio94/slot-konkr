@@ -375,24 +375,6 @@ class CartStudioActivity : Activity() {
         }
     }
 
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // Share the same A/B keyboard behaviour with the main Slot shelf and
-        // Apps; the original WebView editor remains touch/mouse-owned.
-        val mapped = SlotEmulatorKeys.translate(event.keyCode)
-        if (mapped == KeyEvent.KEYCODE_BUTTON_B) {
-            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) finish()
-            return true
-        }
-        if (mapped == KeyEvent.KEYCODE_BUTTON_A) {
-            if (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP) {
-                val centre = KeyEvent(event.action, KeyEvent.KEYCODE_DPAD_CENTER)
-                web?.dispatchKeyEvent(centre)
-            }
-            return true
-        }
-        return super.dispatchKeyEvent(event)
-    }
-
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         when (keyCode) {
             KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK -> {
