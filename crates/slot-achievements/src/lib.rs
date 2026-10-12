@@ -422,6 +422,17 @@ fn run(
             };
             runtime.activate_presence(&prepared.game.presence);
             let store = store.lock().unwrap();
+            // Server unlocks plus locally recorded (including pending-sync)
+            // awards, counted once and limited to core/official achievements.
+            let total = prepared.game.achievements.iter()
+                .filter(|achievement| achievement.flags == 3).count();
+            let unlocked_count = prepared.game.achievements.iter()
+                .filter(|achievement| achievement.flags == 3
+                    && (prepared.unlocked.contains(&achievement.id)
+                        || store.unlocks.contains_key(&achievement.id)
+                        || unsaved.contains_key(&achievement.id)))
+                .count();
+            let game_icon = badges::game_icon_path(&store.dir, &prepared.game.image_icon);
             let mut achievements = BTreeMap::new();
             let mut unsupported = 0;
             for achievement in prepared.game.achievements {
@@ -438,19 +449,20 @@ fn run(
                 }
             }
             drop(store);
-            let state = if prepared.cached { "cached" } else { "online" };
             let title = if prepared.game.id == 0 {
                 "No achievements for this ROM".into()
             } else {
-                format!("Achievements ready ({state}, softcore)")
-            };
-            let detail = if unsupported == 0 {
                 prepared.game.title
+            };
+            let detail = if prepared.game.id == 0 {
+                String::new()
+            } else if unsupported == 0 {
+                format!("You have {unlocked_count} of {total} achievements unlocked")
             } else {
-                format!("{} - {unsupported} unsupported", prepared.game.title)
+                format!("You have {unlocked_count} of {total} achievements unlocked ({unsupported} unsupported)")
             };
             let _ = notices.send(Notice {
-                badge: None,
+                badge: game_icon,
                 generation,
                 title,
                 detail,
