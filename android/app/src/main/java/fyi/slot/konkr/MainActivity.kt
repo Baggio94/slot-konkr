@@ -43,6 +43,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
+import android.view.Choreographer
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
@@ -88,6 +89,9 @@ class MainActivity : Activity() {
     external fun nativeDrawFrame()
     external fun nativeKey(code: Int, pressed: Boolean)
     external fun nativeResetInput()
+    external fun nativeExternalReturn()
+    external fun nativePerformanceStats(): String?
+    external fun nativeShelfIndicatorFlags(): Int
     external fun nativeSetLibrary(json: String): Int
     external fun nativeConfigure(dataDir: String, libraryDir: String)
     external fun nativePollLaunchUri(): String?
@@ -97,6 +101,7 @@ class MainActivity : Activity() {
     external fun nativeSuspend()
     external fun nativeIsPlaying(): Boolean
     external fun nativeAudioSampleRate(): Int
+    external fun nativeDisplaySyncEnabled(): Boolean
     external fun nativeAudioSpeedPermille(): Int
     external fun nativeFastAudioSupported(supported: Boolean)
     external fun nativeReadAudio(): ShortArray
@@ -130,9 +135,41 @@ class MainActivity : Activity() {
     private val activeTargets = ConcurrentHashMap<String, RetroArchStorage.Target>()
     private val uiHandler = Handler(Looper.getMainLooper())
     private val audioRunning = AtomicBoolean(false)
+    // A single pending wakeup is enough. GLSurfaceView never waits for audio.
+    // Prevent an empty-read 8ms sleep from missing a freshly produced frame.
+    private val audioFrameSignal = java.util.concurrent.Semaphore(0)
     private val vibrator by lazy { getSystemService(VIBRATOR_SERVICE) as? Vibrator }
     private var lastRumbleAt = 0L
     @Volatile private var resumed = false
+    private var returnFromSlotChild = false
+    private lateinit var performanceHud: TextView
+    private lateinit var shelfStatus: SlotStatusIndicators
+    private var lastPerfPoll = 0L
+    private var displaySyncApplied = false
+
+    // Only attach the Choreographer callback while DISPLAY SYNC is selected.
+    // Normal RESPONSIVE and STANDARD add no extra work to every UI vsync.
+    private val vsyncCallback = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            if (!displaySyncApplied || !resumed || isDestroyed) return
+            view.requestRender()
+            Choreographer.getInstance().postFrameCallback(this)
+        }
+    }
+    private fun updateDisplaySyncMode() {
+        if (!::view.isInitialized) return
+        val enabled = resumed && nativeIsPlaying() && nativeDisplaySyncEnabled()
+        if (enabled == displaySyncApplied) return
+        displaySyncApplied = enabled
+        if (enabled) {
+            view.renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
+            Choreographer.getInstance().postFrameCallback(vsyncCallback)
+        } else {
+            Choreographer.getInstance().removeFrameCallback(vsyncCallback)
+            view.renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+        }
+    }
+
     private var audioThread: Thread? = null
     private var raConnectivity: ConnectivityManager? = null
     private val raConnectivityCallback = object : ConnectivityManager.NetworkCallback() {
@@ -152,7 +189,12 @@ class MainActivity : Activity() {
     private val pulse = object : Runnable {
         override fun run() {
             pollSystemStatus()
+            if (::shelfStatus.isInitialized) {
+                val flags = nativeShelfIndicatorFlags()
+                shelfStatus.refresh(flags, if (flags and 8 != 0) nativeRaStatus() else null)
+            }
             pollRumble()
+            updateDisplaySyncMode()
             if (resumed && nativeIsPlaying()) {
                 if (!audioRunning.get()) startAudio()
             } else if (audioRunning.get()) {
@@ -196,7 +238,19 @@ class MainActivity : Activity() {
             when (nativePollUiAction()) {
                 1 -> openRomFolderPicker()
                 2 -> refreshLibrary()
-                3 -> openRetroAchievementsAccount()
+                3 -> {
+                    try {
+                        // Dialog.show() returns before Android's first
+                        // composited frame. The RA dialog's dismiss callback,
+                        // not this call, owns closing the native Slot Menu.
+                        openRetroAchievementsAccount()
+                    } catch (error: Exception) {
+                        nativeExternalReturn()
+                        Log.e(TAG, "Unable to open RetroAchievements", error)
+                        SlotToast.makeText(this@MainActivity,
+                            "Unable to open RetroAchievements.", Toast.LENGTH_SHORT).show()
+                    }
+                }
                 4 -> openBiosFolderPicker()
                 5 -> openSharedFolderPicker(SAVE_REQUEST)
                 6 -> openSharedFolderPicker(STATE_REQUEST)
@@ -209,8 +263,26 @@ class MainActivity : Activity() {
                 13 -> openSelectedCartStudio()
                 14 -> openAllCartStudio()
                 15 -> {
-                    startActivity(Intent(this@MainActivity, AppsActivity::class.java))
-                    SlotTransitions.open(this@MainActivity)
+                    try {
+                        returnFromSlotChild = true
+                        startActivity(Intent(this@MainActivity, AppsActivity::class.java))
+                        SlotTransitions.open(this@MainActivity)
+                    } catch (error: Exception) {
+                        returnFromSlotChild = false
+                        nativeExternalReturn()
+                        Log.w(TAG, "Cannot open Apps", error)
+                        SlotToast.makeText(this@MainActivity, "Unable to open Apps.",
+                            Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            val nowPerf = android.os.SystemClock.uptimeMillis()
+            if (resumed && nowPerf - lastPerfPoll >= 250) {
+                lastPerfPoll = nowPerf
+                val value = nativePerformanceStats()
+                performanceHud.visibility = if (value.isNullOrBlank()) View.GONE else View.VISIBLE
+                if (!value.isNullOrBlank() && performanceHud.text.toString() != value) {
+                    performanceHud.text = value
                 }
             }
             nativePollMessage()?.let { message ->
@@ -278,6 +350,11 @@ class MainActivity : Activity() {
                     override fun onDrawFrame(gl: GL10?) {
                         if (ready) {
                             nativeDrawFrame()
+                            // Notify the existing AudioTrack worker that libretro
+                            // may have produced samples. Never block GL on audio.
+                            if (audioRunning.get() && nativeIsPlaying() &&
+                                audioFrameSignal.availablePermits() == 0
+                            ) audioFrameSignal.release()
                             // Drain on the render thread for frame-accurate insert/eject clicks.
                             var kind = nativePollCartSfx()
                             while (kind != 0) {
@@ -299,6 +376,7 @@ class MainActivity : Activity() {
         }
         val frame = FrameLayout(this)
         frame.addView(view, FrameLayout.LayoutParams(-1, -1))
+        shelfStatus = SlotStatusIndicators(this, frame)
         status = TextView(this).apply {
             typeface = SlotUi.font(this@MainActivity)
             letterSpacing = .09f
@@ -312,6 +390,23 @@ class MainActivity : Activity() {
             status,
             FrameLayout.LayoutParams(-1, -2, Gravity.TOP)
         )
+        performanceHud = TextView(this).apply {
+            typeface = SlotUi.font(this@MainActivity)
+            textSize = 10.5f
+            letterSpacing = .05f
+            setTextColor(Color.argb(230, 242, 242, 245))
+            // Subtle translucent HUD; keep the game visible behind it.
+            setBackgroundColor(Color.argb(166, 23, 22, 25))
+            setPadding(10, 5, 10, 5)
+            isClickable = false
+            isFocusable = false
+            visibility = View.GONE
+        }
+        frame.addView(performanceHud,
+            FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END).apply {
+                rightMargin = (12 * resources.displayMetrics.density).toInt()
+                bottomMargin = (12 * resources.displayMetrics.density).toInt()
+            })
         raAchievementOverlay = RaAchievementOverlay(this, frame)
         showSlotStartupSplash(frame)
         setContentView(frame)
@@ -577,10 +672,13 @@ class MainActivity : Activity() {
 
     private fun startAudio() {
         if (!audioRunning.compareAndSet(false, true)) return
+        audioFrameSignal.drainPermits()
         audioThread = Thread({
             var player: AudioTrack? = null
             var rate = 0
             var requestedSpeed = 0
+            var observedUnderruns = 0
+            var audioProbeAt = 0L
             try {
                 while (audioRunning.get()) {
                     val wanted = nativeAudioSampleRate()
@@ -598,6 +696,8 @@ class MainActivity : Activity() {
                             SystemClock.sleep(100)
                             continue
                         }
+                        // Preserve the validated low-latency legacy AudioTrack buffer.
+                        val bufferBytes = maxOf(16384, minBytes * 2)
                         player = AudioTrack.Builder()
                             .setAudioAttributes(AudioAttributes.Builder()
                                 .setUsage(AudioAttributes.USAGE_GAME)
@@ -606,11 +706,17 @@ class MainActivity : Activity() {
                                 .setSampleRate(wanted)
                                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                                 .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).build())
-                            .setBufferSizeInBytes(maxOf(16384, minBytes * 2))
+                            .setBufferSizeInBytes(bufferBytes)
                             .setTransferMode(AudioTrack.MODE_STREAM)
                             .build()
                         rate = wanted
                         requestedSpeed = 0
+                        observedUnderruns = 0
+                        audioProbeAt = SystemClock.elapsedRealtime()
+                        player.play()
+                    } else if (player.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                        // A paused legacy buffer is reused when the next game has
+                        // the same sample rate; it still must be resumed.
                         player.play()
                     }
                     val speed = nativeAudioSpeedPermille().coerceIn(1000, 6000)
@@ -639,10 +745,36 @@ class MainActivity : Activity() {
                     }
                     val samples = nativeReadAudio()
                     if (samples.isEmpty()) {
-                        SystemClock.sleep(8)
+                        // Event-driven wakeup instead of sleeping blindly for 8ms:
+                        // GLSurfaceView signals after each libretro callback.
+                        // The 30ms timeout is a safety fallback for paused frames.
+                        try {
+                            audioFrameSignal.tryAcquire(30, TimeUnit.MILLISECONDS)
+                        } catch (_: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                            break
+                        }
+                        audioFrameSignal.drainPermits()
                         continue
                     }
-                    player.write(samples, 0, samples.size, AudioTrack.WRITE_BLOCKING)
+                    audioFrameSignal.drainPermits()
+                    val written = player.write(samples, 0, samples.size, AudioTrack.WRITE_BLOCKING)
+                    if (written < 0) {
+                        Log.w(TAG, "AudioTrack write error: $written")
+                    }
+                    // Diagnostic only; do not modify audio queue, buffer size or
+                    // event-driven wakeup. A rise here distinguishes Android
+                    // playback underruns from mGBA mixer discontinuities.
+                    val probeNow = SystemClock.elapsedRealtime()
+                    if (probeNow - audioProbeAt >= 5_000L) {
+                        val underflows = player.underrunCount
+                        if (underflows > observedUnderruns) {
+                            Log.i(TAG, "AudioTrack underruns: +${underflows - observedUnderruns}" +
+                                " over 5s (total=$underflows, rate=$wanted Hz)")
+                        }
+                        observedUnderruns = underflows
+                        audioProbeAt = probeNow
+                    }
                 }
             } catch (error: Exception) {
                 Log.e(TAG, "Android AudioTrack error", error)
@@ -655,6 +787,8 @@ class MainActivity : Activity() {
 
     private fun stopAudio() {
         audioRunning.set(false)
+        // Unblock the audio worker if it is waiting on a video frame.
+        audioFrameSignal.release()
         audioThread?.interrupt()
         audioThread = null
     }
@@ -825,7 +959,8 @@ class MainActivity : Activity() {
             panel = RaPanelDialog(
                 activity = this, username = existing,
                 onRefresh = { refreshRaPanel(panel, existing) },
-                onSignOut = { confirmRaSignOut(panel, existing) }
+                onSignOut = { confirmRaSignOut(panel, existing) },
+                onDismiss = { nativeExternalReturn() }
             )
             panel.show()
             // Show last known values immediately when reopening the dashboard.
@@ -852,7 +987,8 @@ class MainActivity : Activity() {
             "RETROACHIEVEMENTS",
             "Connect directly to RetroAchievements using HTTPS. " +
                 "Your password is never stored; only the returned account token " +
-                "is kept in app-private storage. GBA uses Casual (softcore)."
+                "is kept in app-private storage. GBA uses Casual (softcore).",
+            onDismiss = { nativeExternalReturn() }
         )
         val username = login.addInput("USERNAME", "RetroAchievements username")
         val password = login.addInput("PASSWORD", "Password (not saved)", password = true)
@@ -1103,8 +1239,17 @@ class MainActivity : Activity() {
             if (selected != null) putExtra(CartStudioActivity.EXTRA_ROM, selected)
         }
         @Suppress("DEPRECATION")
-        startActivityForResult(intent, CART_STUDIO_REQUEST)
-        SlotTransitions.open(this)
+        try {
+            returnFromSlotChild = true
+            startActivityForResult(intent, CART_STUDIO_REQUEST)
+            SlotTransitions.open(this)
+        } catch (error: Exception) {
+            returnFromSlotChild = false
+            nativeExternalReturn()
+            Log.w(TAG, "Cannot open Cart Studio", error)
+            SlotToast.makeText(this, "Unable to open Cart Studio.",
+                Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun openAllCartStudio() = openCartStudio(null)
@@ -1356,6 +1501,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        Choreographer.getInstance().removeFrameCallback(vsyncCallback)
         raConnectivity?.let { manager ->
             try { manager.unregisterNetworkCallback(raConnectivityCallback) }
             catch (_: Exception) { /* Callback may have already been removed. */ }
@@ -1368,6 +1514,7 @@ class MainActivity : Activity() {
         gameLoader.shutdownNow()
         uiHandler.removeCallbacks(pulse)
         if (::raAchievementOverlay.isInitialized) raAchievementOverlay.destroy()
+        if (::shelfStatus.isInitialized) shelfStatus.close()
         stopAudio()
         cartSounds.release()
         super.onDestroy()
@@ -1375,6 +1522,12 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         resumed = false
+        if (::shelfStatus.isInitialized) shelfStatus.onPause()
+        Choreographer.getInstance().removeFrameCallback(vsyncCallback)
+        if (displaySyncApplied) {
+            view.renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+            displaySyncApplied = false
+        }
         stopAudio()
         cartSounds.pause()
         // Preserve SRAM and automatic resume state while the GL context is still current.
@@ -1392,7 +1545,14 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (returnFromSlotChild) {
+            // Clear the preserved native menu ONLY after Apps/Studio has
+            // finished and the shelf itself is about to be visible again.
+            returnFromSlotChild = false
+            nativeExternalReturn()
+        }
         resumed = true
+        if (::shelfStatus.isInitialized) shelfStatus.onResume()
         // Android's quick settings may return without a fresh onAvailable().
         // Waking a retry is safe even when no network is present.
         nativeRaNetworkAvailable()
@@ -1403,6 +1563,7 @@ class MainActivity : Activity() {
         lastStatusPoll = -15000L
         cartSounds.resume()
         view.onResume()
+        updateDisplaySyncMode()
         immersive()
     }
 

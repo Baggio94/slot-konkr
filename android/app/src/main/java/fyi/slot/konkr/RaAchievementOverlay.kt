@@ -183,12 +183,14 @@ internal class RaAchievementOverlay(
         }
         card.visibility = View.VISIBLE
         card.animate().cancel()
+        // Never translate the card beyond its 15dp inset: Android would clip
+        // the left border during the entrance. Fade the full card in place.
+        card.translationX = 0f
         card.alpha = 0f
-        card.translationX = -dp(18).toFloat()
-        card.animate().alpha(1f).translationX(0f).setDuration(220).start()
+        card.animate().alpha(1f).setDuration(220).start()
         handler.postDelayed({
             if (seq == serial && !destroyed) {
-                card.animate().alpha(0f).translationX(-dp(12).toFloat())
+                card.animate().alpha(0f)
                     .setDuration(180).withEndAction {
                         if (seq == serial && !destroyed) showNext()
                     }.start()

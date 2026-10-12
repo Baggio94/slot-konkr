@@ -396,8 +396,26 @@ unsafe extern "C" fn input_state(port: c_uint, device: c_uint, _index: c_uint, i
     .unwrap_or(0)
 }
 
+// Frontend-private per-core audio sidecar ABI. Ordinary .state files remain
+// unchanged: this memory exists only between speculative save and restore.
+type AudioSidecarFn = unsafe extern "C" fn(*mut c_void, usize, bool) -> bool;
+type AudioSidecarSizeFn = unsafe extern "C" fn() -> usize;
+struct AudioSidecar {
+    transfer: AudioSidecarFn,
+    snapshot: Vec<u8>,
+    captured: bool,
+}
+
 pub struct LibretroCore {
     api: Api,
+    is_gpsp: bool,
+    gpsp_audio: Option<AudioSidecar>,
+    is_mgba: bool,
+    mgba_audio_exports: Option<(AudioSidecarSizeFn, AudioSidecarFn)>,
+    mgba_audio: Option<AudioSidecar>,
+    // mGBA's retro_serialize_size() serializes the whole core internally;
+    // skip this duplicate work on stable-sized speculative snapshots.
+    mgba_runahead_size_age: u16,
     host: Box<Host>,
     rom: Vec<u8>,
     rom_path: Option<CString>,
@@ -423,6 +441,24 @@ impl LibretroCore {
         }
         Self::open_inner(dylib, system_dir, save_dir)
             .inspect_err(|_| LIVE.store(false, Ordering::SeqCst))
+    }
+
+    fn try_init_mgba_audio(&mut self) {
+        if self.mgba_audio.is_some() || !self.loaded {
+            return;
+        }
+        // mGBA may defer its audio queue allocation until the first
+        // retro_run(); retry on the real frame path before enabling run-ahead.
+        self.mgba_audio = self.mgba_audio_exports.and_then(|(size_fn, transfer)| {
+            let size = unsafe { size_fn() };
+            if (4..=1024 * 1024).contains(&size) {
+                Some(AudioSidecar {
+                    transfer,
+                    snapshot: vec![0; size],
+                    captured: false,
+                })
+            } else { None }
+        });
     }
 
     pub fn reported_system_dir(&self) -> String {
@@ -477,6 +513,42 @@ impl LibretroCore {
     fn open_inner(dylib: &Path, system_dir: &Path, save_dir: &Path) -> Result<Self, CoreError> {
         let lib = unsafe { Library::new(dylib) }.map_err(|e| CoreError::Load(e.to_string()))?;
         let api = unsafe { Api::load(&lib) }?;
+        let name = dylib.file_name().and_then(|name| name.to_str());
+        let is_gpsp = name == Some("libgpsp_libretro.so");
+        let is_mgba = name == Some("libmgba_libretro.so");
+        // mGBA sizes its audio ring after a ROM is loaded. Resolve its
+        // private exports now, but allocate only after core.load_game().
+        let mgba_audio_exports = if is_mgba {
+            let size = unsafe { lib.get::<AudioSidecarSizeFn>(b"slot_mgba_audio_sidecar_size\0") };
+            let transfer = unsafe { lib.get::<AudioSidecarFn>(b"slot_mgba_audio_sidecar\0") };
+            match (size, transfer) {
+                (Ok(size), Ok(transfer)) => Some((*size, *transfer)),
+                _ => None,
+            }
+        } else { None };
+        // An unpatched/foreign gpSP must not run speculative frames: core
+        // savestates intentionally omit its audio mixer ring.
+        let gpsp_audio = if is_gpsp {
+            let size_fn = unsafe {
+                lib.get::<AudioSidecarSizeFn>(b"slot_gpsp_audio_sidecar_size\0")
+            };
+            let transfer = unsafe {
+                lib.get::<AudioSidecarFn>(b"slot_gpsp_audio_sidecar\0")
+            };
+            match (size_fn, transfer) {
+                (Ok(size_fn), Ok(transfer)) => {
+                    let size = unsafe { (*size_fn)() };
+                    if (4..=512 * 1024).contains(&size) {
+                        Some(AudioSidecar {
+                            transfer: *transfer,
+                            snapshot: vec![0; size],
+                            captured: false,
+                        })
+                    } else { None }
+                }
+                _ => None,
+            }
+        } else { None };
         let version = unsafe { (api.api_version)() };
         if version != API_VERSION {
             return Err(CoreError::Unsupported(format!("libretro api {version}")));
@@ -511,6 +583,12 @@ impl LibretroCore {
         }
         Ok(LibretroCore {
             api,
+            is_gpsp,
+            gpsp_audio,
+            is_mgba,
+            mgba_audio_exports,
+            mgba_audio: None,
+            mgba_runahead_size_age: 0,
             host,
             rom: Vec::new(),
             rom_path: None,
@@ -531,6 +609,10 @@ impl LibretroCore {
             let _a = Active::bind(&mut self.host);
             unsafe { (self.api.unload_game)() };
         }
+        // This snapshot belongs to the currently loaded ROM and must never
+        // be reused when another ROM allocates a different audio queue.
+        self.mgba_audio = None;
+        self.mgba_runahead_size_age = 0;
         // Release the borrowed descriptor pointers only after libretro
         // returns and Active drops its exclusive Host borrow.
         self.host.memory.clear();
@@ -644,6 +726,8 @@ impl RetroCore for LibretroCore {
             return Err(CoreError::Load(format!("core refused {}", rom.display())));
         }
         self.loaded = true;
+        self.mgba_runahead_size_age = 0;
+        self.try_init_mgba_audio();
         let mut av = SystemAvInfo::default();
         unsafe { (self.api.get_system_av_info)(&mut av) };
         self.av = AvInfo {
@@ -663,8 +747,15 @@ impl RetroCore for LibretroCore {
             return;
         }
         self.host.inputs = [p1.0, p2.0];
-        let _a = Active::bind(&mut self.host);
-        unsafe { (self.api.run)() };
+        {
+            let _a = Active::bind(&mut self.host);
+            unsafe { (self.api.run)() };
+        }
+        // Retry after deferred initialization; never run an mGBA
+        // speculative frame without a correctly sized audio snapshot.
+        if self.is_mgba && self.mgba_audio.is_none() {
+            self.try_init_mgba_audio();
+        }
     }
 
     fn set_frame_skip(&mut self, skip: bool) {
@@ -680,21 +771,57 @@ impl RetroCore for LibretroCore {
         std::mem::take(&mut self.host.audio)
     }
 
+    fn discard_audio(&mut self) {
+        // Speculative run-ahead audio is intentionally inaudible. Clearing
+        // preserves capacity for the next speculative libretro frame.
+        self.host.audio.clear();
+    }
+
     fn serialize(&mut self) -> Result<Vec<u8>, CoreError> {
-        let size = unsafe { (self.api.serialize_size)() };
+        let mut buf = Vec::new();
+        self.serialize_into(&mut buf)?;
+        Ok(buf)
+    }
+
+    fn serialize_into(&mut self, buf: &mut Vec<u8>) -> Result<(), CoreError> {
+        // Unlike gpSP, pinned mGBA's retro_serialize_size() calls
+        // mCoreSaveStateNamed() and allocates/writes an entire extra state.
+        // Calling it before every retro_serialize() doubles the state-work
+        // in Run-Ahead. Only reuse a known nonempty caller-owned buffer;
+        // normal save/rewind calls supply an empty Vec and remain unchanged.
+        // Revalidate periodically and retry immediately if the state grows.
+        let reuse_mgba = self.is_mgba && !buf.is_empty()
+            && self.mgba_runahead_size_age < 120;
+        let size = if reuse_mgba {
+            self.mgba_runahead_size_age += 1;
+            buf.len()
+        } else {
+            self.mgba_runahead_size_age = 0;
+            unsafe { (self.api.serialize_size)() }
+        };
         if size == 0 {
             return Err(CoreError::State("core reports no state".into()));
         }
-        let mut buf = vec![0u8; size];
-        let ok = {
+        buf.resize(size, 0);
+        let mut ok = {
             let _a = Active::bind(&mut self.host);
             unsafe { (self.api.serialize)(buf.as_mut_ptr() as *mut c_void, size) }
         };
-        if ok {
-            Ok(buf)
-        } else {
-            Err(CoreError::State("serialize refused".into()))
+        if !ok && reuse_mgba {
+            // A newly required save-data/RTC section may increase size.
+            // Never continue Run-Ahead with a truncated libretro state.
+            let fresh = unsafe { (self.api.serialize_size)() };
+            if fresh == 0 {
+                return Err(CoreError::State("core reports no state".into()));
+            }
+            self.mgba_runahead_size_age = 0;
+            buf.resize(fresh, 0);
+            ok = {
+                let _a = Active::bind(&mut self.host);
+                unsafe { (self.api.serialize)(buf.as_mut_ptr() as *mut c_void, fresh) }
+            };
         }
+        if ok { Ok(()) } else { Err(CoreError::State("serialize refused".into())) }
     }
 
     fn unserialize(&mut self, data: &[u8]) -> Result<(), CoreError> {
@@ -707,6 +834,52 @@ impl RetroCore for LibretroCore {
         } else {
             Err(CoreError::State("unserialize refused".into()))
         }
+    }
+
+    fn speculative_audio_supported(&self) -> bool {
+        (!self.is_gpsp || self.gpsp_audio.is_some())
+            && (!self.is_mgba || self.mgba_audio.is_some())
+    }
+
+    fn capture_speculative_audio(&mut self) -> Result<(), CoreError> {
+        let state = if self.is_gpsp {
+            self.gpsp_audio.as_mut()
+        } else if self.is_mgba {
+            self.mgba_audio.as_mut()
+        } else {
+            return Ok(());
+        }.ok_or_else(|| {
+            CoreError::Unsupported("core has no safe speculative audio snapshot".into())
+        })?;
+        state.captured = false;
+        let ok = unsafe {
+            (state.transfer)(state.snapshot.as_mut_ptr().cast(),
+                state.snapshot.len(), false)
+        };
+        if !ok { return Err(CoreError::State("core audio capture failed".into())); }
+        state.captured = true;
+        Ok(())
+    }
+
+    fn restore_speculative_audio(&mut self) -> Result<(), CoreError> {
+        let state = if self.is_gpsp {
+            self.gpsp_audio.as_mut()
+        } else if self.is_mgba {
+            self.mgba_audio.as_mut()
+        } else {
+            return Ok(());
+        }.ok_or_else(|| {
+            CoreError::Unsupported("core has no safe speculative audio snapshot".into())
+        })?;
+        if !state.captured {
+            return Err(CoreError::State("missing speculative audio snapshot".into()));
+        }
+        state.captured = false;
+        let ok = unsafe {
+            (state.transfer)(state.snapshot.as_mut_ptr().cast(),
+                state.snapshot.len(), true)
+        };
+        if ok { Ok(()) } else { Err(CoreError::State("core audio restore failed".into())) }
     }
 
     fn save_ram(&self) -> Option<Vec<u8>> {

@@ -50,12 +50,34 @@ pub struct GameSession {
     rewind: RewindThread,
     rewind_frames: u8,
     frame_count: u32,
+    // Presentation-only pixels from speculative frames; save/RA keep the real state.
+    runahead_video: Vec<u8>,
+    // Preserve the libretro state allocation across speculative frames.
+    runahead_state: Vec<u8>,
+    runahead_unavailable: bool,
+    // Observability only: confirms actual speculative frames and measures
+    // CPU wall time; never changes pacing, audio or normal savestates.
+    runahead_probe_count: u32,
+    runahead_probe_sum_us: u64,
+    runahead_probe_max_us: u64,
+    runahead_probe_logged: bool,
     palette_live: bool,
     core_kind: Core,
     pending_undo: Option<(Instant, PendingUndo)>,
     last_sram: Instant,
     pub sample_rate: i32,
     pub fps: f64,
+}
+
+/// Preserve original Slot turbo in TURBO mode; in A/B mode Y acts as A
+/// and X as B, *in addition to* both original buttons. Applied equally to
+/// real and speculative Run-Ahead frames so input prediction never diverges.
+fn xy_buttons(buttons: ButtonMask, turbo: bool, frame: u32) -> ButtonMask {
+    if turbo { return buttons.turbo(frame); }
+    let mut mapped = buttons.without_turbo().0;
+    if buttons.0 & ButtonMask::Y != 0 { mapped |= ButtonMask::A; }
+    if buttons.0 & ButtonMask::X != 0 { mapped |= ButtonMask::B; }
+    ButtonMask(mapped)
 }
 
 impl GameSession {
@@ -203,6 +225,10 @@ impl GameSession {
             core, save, rtc, manual_export_prefix, state, retroarch_export, retroarch_import, ring,
             rewind: RewindThread::spawn(REWIND_BYTES), rewind_frames: 0,
             frame_count: 0, palette_live, core_kind: which,
+            runahead_video: Vec::new(), runahead_state: Vec::new(),
+            runahead_unavailable: false,
+            runahead_probe_count: 0, runahead_probe_sum_us: 0,
+            runahead_probe_max_us: 0, runahead_probe_logged: false,
             pending_undo: None, last_sram: Instant::now(),
             sample_rate: sample_rate.clamp(8_000, 96_000),
             fps,
@@ -210,10 +236,10 @@ impl GameSession {
     }
 
     pub fn advance(&mut self, buttons: u16, turbo: bool, record_rewind: bool) {
+        self.runahead_video.clear();
         // Reuse Slot's actual 3-on/3-off X/Y to A/B turbo algorithm.
         let pressed = ButtonMask(buttons);
-        let mapped = if turbo { pressed.turbo(self.frame_count) }
-            else { pressed.without_turbo() };
+        let mapped = xy_buttons(pressed, turbo, self.frame_count);
         self.core.run_frame(mapped);
         self.frame_count = self.frame_count.wrapping_add(1);
         if record_rewind {
@@ -231,7 +257,74 @@ impl GameSession {
         }
     }
 
+    pub fn runahead_supported(&self) -> bool {
+        !self.runahead_unavailable && self.core.speculative_audio_supported()
+    }
+
+    /// Roll back both standard libretro state and core-specific transient
+    /// audio: gpSP's sound ring, or mGBA's converter/filter/queue sidecar.
+    pub fn prepare_runahead(&mut self, buttons: u16, turbo: bool, frames: u8) {
+        self.runahead_video.clear();
+        if frames == 0 || frames > 2 || self.runahead_unavailable { return; }
+        let started = Instant::now();
+        if !self.core.speculative_audio_supported() {
+            self.runahead_unavailable = true;
+            log_launch_timing("Run-Ahead disabled: core has no safe speculative audio support");
+            return;
+        }
+        if let Err(error) = self.core.serialize_into(&mut self.runahead_state) {
+            self.runahead_unavailable = true;
+            log_launch_timing(&format!("Run-Ahead disabled: serialize failed: {error}"));
+            return;
+        }
+        if let Err(error) = self.core.capture_speculative_audio() {
+            self.runahead_unavailable = true;
+            log_launch_timing(&format!("Run-Ahead disabled: audio snapshot failed: {error}"));
+            return;
+        }
+        let pressed = ButtonMask(buttons);
+        let mapped = xy_buttons(pressed, turbo, self.frame_count);
+        for _ in 0..frames {
+            self.core.run_speculative_frame(mapped);
+            // Discard predicted audio without reallocating libretro's buffer.
+            self.core.discard_audio();
+        }
+        self.runahead_video.extend_from_slice(self.core.video_xrgb8888());
+        let restored = self.core.restore_speculative_state(&self.runahead_state)
+            .and_then(|_| self.core.restore_speculative_audio());
+        if let Err(error) = restored {
+            // Never display a frame if the core could not restore its real state.
+            self.runahead_video.clear();
+            self.runahead_unavailable = true;
+            log_launch_timing(&format!("Run-Ahead disabled: restore failed: {error}"));
+            return;
+        }
+        if !self.runahead_probe_logged {
+            log_launch_timing(&format!(
+                "Run-Ahead ACTIVE: core={} frames={} (speculative video + audio rollback succeeded)",
+                self.core_kind.text(), frames
+            ));
+            self.runahead_probe_logged = true;
+        }
+        let micros = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        self.runahead_probe_count += 1;
+        self.runahead_probe_sum_us = self.runahead_probe_sum_us.saturating_add(micros);
+        self.runahead_probe_max_us = self.runahead_probe_max_us.max(micros);
+        if self.runahead_probe_count >= 120 {
+            log_launch_timing(&format!(
+                "Run-Ahead cost: core={} frames={} avg_us={} peak_us={} samples=120",
+                self.core_kind.text(), frames,
+                self.runahead_probe_sum_us / u64::from(self.runahead_probe_count),
+                self.runahead_probe_max_us
+            ));
+            self.runahead_probe_count = 0;
+            self.runahead_probe_sum_us = 0;
+            self.runahead_probe_max_us = 0;
+        }
+    }
+
     pub fn rewind_step(&mut self) -> bool {
+        self.runahead_video.clear();
         let Some(previous) = self.rewind.pop() else { return false; };
         if self.core.unserialize(&previous).is_err() { return false; }
         // Most libretro cores only refresh video after retro_run. Run a single
@@ -272,7 +365,8 @@ impl GameSession {
     }
 
     pub fn frame(&self) -> &[u8] {
-        self.core.video_xrgb8888()
+        if !self.runahead_video.is_empty() { &self.runahead_video }
+        else { self.core.video_xrgb8888() }
     }
 
     pub fn take_audio(&mut self) -> Vec<i16> {
@@ -400,4 +494,26 @@ impl GameSession {
         self.pending_undo.as_ref().is_some_and(|(at,_)|at.elapsed()<=UNDO_WINDOW)
     }
 
+}
+
+#[cfg(test)]
+mod xy_mapping_tests {
+    use super::*;
+    #[test]
+    fn classic_turbo_keeps_the_original_slot_x_y_behavior() {
+        for frame in 0..12 {
+            let buttons = ButtonMask(ButtonMask::X | ButtonMask::Y);
+            assert_eq!(xy_buttons(buttons, true, frame), buttons.turbo(frame));
+        }
+    }
+    #[test]
+    fn ab_mode_maps_y_to_a_and_x_to_b_without_losing_original_buttons() {
+        let y = xy_buttons(ButtonMask(ButtonMask::Y), false, 0);
+        let x = xy_buttons(ButtonMask(ButtonMask::X), false, 3);
+        assert_eq!(y.0, ButtonMask::A);
+        assert_eq!(x.0, ButtonMask::B);
+        let both = xy_buttons(ButtonMask(ButtonMask::A | ButtonMask::B |
+            ButtonMask::X | ButtonMask::Y | ButtonMask::RIGHT), false, 5);
+        assert_eq!(both.0, ButtonMask::A | ButtonMask::B | ButtonMask::RIGHT);
+    }
 }

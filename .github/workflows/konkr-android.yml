@@ -3,10 +3,12 @@ name: KONKR Android preview
 on:
   workflow_dispatch:
   push:
-    branches: [feat/android-bootstrap, feat/konkr-ui-feedback, feat/konkr-retroachievements, feat/konkr-integration, feat/konkr-slot-parity, feat/konkr-save-parity, feat/konkr-dev4-performance-material, feat/konkr-dev5-launch-parity, feat/konkr-dev6-saf-launch, fix/konkr-dev7-saf-root-uri, fix/konkr-dev8-missing-optional-retroarch-files, feat/konkr-dev9-original-menus, feat/konkr-dev10-in-game-ui, feat/konkr-dev11-fastforward-rewind, feat/konkr-dev12-audio-startup-performance, feat/konkr-dev13-settings-about, feat/konkr-dev14-screen-gameplay, feat/konkr-dev15-gb-display, feat/konkr-dev16-personalization, feat/konkr-dev17-cart-labels, feat/konkr-dev18-original-color, feat/konkr-dev19-original-gestures-crt-boot, feat/konkr-dev20-official-icons-platform-labels, fix/konkr-dev21-platform-name-retrigger, feat/konkr-dev22-official-v3-icons, feat/konkr-dev23-original-v1-icons, feat/konkr-dev24-platform-labels-receiver-cleanup, feat/konkr-dev25-v1-hd-icons, fix/konkr-dev25-v1-hd-splash-recents, feat/konkr-dev26-cart-studio-foundation, feat/konkr-retroachievements-native, release/konkr-0.1.0-rc1, develop/konkr, fix/konkr-rc1-ui-polish]
+    # Follow the current development families instead of maintaining dozens of stale branch names.
+    branches: [develop/konkr, 'feat/konkr-*', 'fix/konkr-*', 'release/konkr-*']
     paths:
       - 'android/**'
       - 'crates/slot-android/**'
+      - 'crates/slot/src/**'  # Android imports pinned upstream rewind, wallpaper, thumb and core picker
       - 'crates/slot-gfx/**'
       - 'crates/slot-ui/**'
       - 'crates/slot-store/**'
@@ -17,6 +19,9 @@ on:
       - 'rust-toolchain.toml'
       - 'scripts/build-konkr-android.sh'
       - 'scripts/build-mgba-android.sh'
+      - 'scripts/build-gpsp-android.sh'
+      - 'scripts/patch-mgba-speculative-audio.py'
+      - 'scripts/patch-gpsp-speculative-audio.py'
       - 'scripts/package-konkr-cart-studio.py'
       - '.github/workflows/konkr-android.yml'
 
@@ -75,6 +80,8 @@ jobs:
         run: cargo test -p slot-android --lib
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
+      - name: Validate pinned speculative-audio patch scripts
+        run: python3 -m py_compile scripts/patch-mgba-speculative-audio.py scripts/patch-gpsp-speculative-audio.py
       - name: Build mGBA arm64 libretro core
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
@@ -135,6 +142,16 @@ jobs:
             echo "::warning::No persistent signing key configured. Android updates between CI builds require reinstall."
           fi
           bash scripts/build-konkr-android.sh
+      - name: Verify native dynamic exports survived metadata stripping
+        run: |
+          set -euo pipefail
+          NM="$(find "$ANDROID_SDK_ROOT/ndk/27.2.12479018/toolchains/llvm/prebuilt" -type f -name llvm-nm -print -quit)"
+          test -x "$NM"
+          DIR="android/app/src/main/jniLibs/arm64-v8a"
+          # Keep JNI and libretro dynamic exports; only unused symbols are stripped.
+          "$NM" -D --defined-only "$DIR/libslot_android.so" | grep -F 'Java_fyi_slot_konkr_MainActivity_nativeDrawFrame'
+          "$NM" -D --defined-only "$DIR/libmgba_libretro.so" | grep -E ' retro_run$'
+          "$NM" -D --defined-only "$DIR/libgpsp_libretro.so" | grep -E ' retro_run$'
       - name: Verify APK signature and print certificate fingerprint
         run: |
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs \

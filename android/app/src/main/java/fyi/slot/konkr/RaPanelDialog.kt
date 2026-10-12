@@ -26,6 +26,7 @@ internal class RaPanelDialog(
     private val username: String,
     private val onRefresh: () -> Unit,
     private val onSignOut: () -> Unit,
+    private val onDismiss: () -> Unit = {},
 ) {
     private val ink = SlotUi.ink
     private val muted = SlotUi.muted
@@ -160,6 +161,7 @@ internal class RaPanelDialog(
         actions.addView(hint, LinearLayout.LayoutParams(0, dp(39), 1f))
         root.addView(actions)
         dialog.setContentView(root)
+        dialog.setOnDismissListener { onDismiss() }
         dialog.show()
         dialog.window?.apply {
             setWindowAnimations(R.style.SlotWindowAnimation)

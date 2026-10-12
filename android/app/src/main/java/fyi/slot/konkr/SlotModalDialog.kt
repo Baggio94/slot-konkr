@@ -27,6 +27,7 @@ internal class SlotModalDialog(
     private val activity: Activity,
     title: String,
     message: String,
+    private val onDismiss: () -> Unit = {},
 ) {
     private var busy = false
     private val buttons = ArrayList<TextView>()
@@ -109,6 +110,7 @@ internal class SlotModalDialog(
         dialog.setCanceledOnTouchOutside(false)
         dialog.setOnDismissListener {
             secretFields.forEach { it.text.clear() }
+            onDismiss()
         }
     }
 

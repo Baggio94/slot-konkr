@@ -86,6 +86,11 @@ pub trait RetroCore: Send {
     }
     fn load(&mut self, rom: &Path) -> Result<(), CoreError>;
     fn run_frame(&mut self, input: ButtonMask);
+    /// A speculative video-only frame. Wrappers must not dispatch gameplay events,
+    /// achievements or save notifications from this provisional timeline.
+    fn run_speculative_frame(&mut self, input: ButtonMask) {
+        self.run_frame(input);
+    }
     fn run_frame_linked(&mut self, p1: ButtonMask, _p2: ButtonMask) {
         self.run_frame(p1);
     }
@@ -93,10 +98,28 @@ pub trait RetroCore: Send {
     fn set_frame_skip(&mut self, _skip: bool) {}
     fn video_xrgb8888(&self) -> &[u8];
     fn take_audio(&mut self) -> Vec<i16>;
+    /// Drop speculative audio without moving the core's output buffer.
+    fn discard_audio(&mut self) { let _ = self.take_audio(); }
     /// Optional reusable audio storage for worker-wrapped libretro cores.
     fn recycle_audio(&mut self, _audio: Vec<i16>) {}
     fn serialize(&mut self) -> Result<Vec<u8>, CoreError>;
+    /// Reuse a caller-owned buffer for per-frame speculative snapshots.
+    /// The fallback preserves compatibility with existing RetroCore mocks.
+    fn serialize_into(&mut self, output: &mut Vec<u8>) -> Result<(), CoreError> {
+        *output = self.serialize()?;
+        Ok(())
+    }
     fn unserialize(&mut self, data: &[u8]) -> Result<(), CoreError>;
+    /// Revert speculative execution without announcing a user timeline jump.
+    fn restore_speculative_state(&mut self, data: &[u8]) -> Result<(), CoreError> {
+        self.unserialize(data)
+    }
+    /// Sidecars capture mutable state deliberately omitted from ordinary
+    /// save states (notably gpSP's internal audio mixer ring). They are
+    /// never written into a RetroArch-compatible state file.
+    fn speculative_audio_supported(&self) -> bool { true }
+    fn capture_speculative_audio(&mut self) -> Result<(), CoreError> { Ok(()) }
+    fn restore_speculative_audio(&mut self) -> Result<(), CoreError> { Ok(()) }
     fn save_ram(&self) -> Option<Vec<u8>>;
     fn load_save_ram(&mut self, data: &[u8]) -> Result<(), CoreError>;
     /// Optional libretro RETRO_MEMORY_RTC (Game Boy / Color battery clock).
