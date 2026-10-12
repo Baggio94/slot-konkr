@@ -98,6 +98,10 @@ pub trait RetroCore: Send {
     fn set_frame_skip(&mut self, _skip: bool) {}
     fn video_xrgb8888(&self) -> &[u8];
     fn take_audio(&mut self) -> Vec<i16>;
+    /// Read-only fingerprint of speculative PCM buffered for this frame.
+    /// Diagnostic only: no allocation, consumption or mutation of the audio
+    /// stream. None means the core does not expose this optional probe.
+    fn speculative_pcm_fingerprint(&self) -> Option<(usize, u64)> { None }
     /// Drop speculative audio without moving the core's output buffer.
     fn discard_audio(&mut self) { let _ = self.take_audio(); }
     /// Optional reusable audio storage for worker-wrapped libretro cores.
