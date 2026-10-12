@@ -40,6 +40,35 @@ class SharedGbaSavesTest {
             RetroArchStorage.chooseGbaSource(b, c, a))
     }
 
+    @Test fun firstSramMirrorCreatesAbsentOppositeCoreDirectories() {
+        val dir = java.nio.file.Files.createTempDirectory("slot-shared-gba").toFile()
+        try {
+            val mgba = java.io.File(dir, "Saves/mGBA/Game.srm")
+            val gpsp = java.io.File(dir, "Saves/gpSP/Game.srm")
+            RetroArchStorage.stage(mgba, a)
+            RetroArchStorage.stage(gpsp, mgba.readBytes())
+            org.junit.Assert.assertArrayEquals(a, mgba.readBytes())
+            org.junit.Assert.assertArrayEquals(a, gpsp.readBytes())
+            org.junit.Assert.assertFalse(java.io.File(gpsp.path + ".partial").exists())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test fun reverseSramMirrorAlsoCreatesAbsentMgbaFolder() {
+        val dir = java.nio.file.Files.createTempDirectory("slot-shared-gba-reverse").toFile()
+        try {
+            val gpsp = java.io.File(dir, "Saves/gpSP/Game.srm")
+            val mgba = java.io.File(dir, "Saves/mGBA/Game.srm")
+            RetroArchStorage.stage(gpsp, b)
+            RetroArchStorage.stage(mgba, gpsp.readBytes())
+            org.junit.Assert.assertArrayEquals(b, mgba.readBytes())
+            org.junit.Assert.assertFalse(java.io.File(mgba.path + ".partial").exists())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
     @Test fun noPreviousSaveIsSafe() {
         assertEquals(RetroArchStorage.SharedGbaSource.NONE,
             RetroArchStorage.chooseGbaSource(null, null, null))

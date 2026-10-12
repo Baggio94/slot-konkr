@@ -294,9 +294,35 @@ class CartStudioActivity : Activity() {
             w.evaluateJavascript("document.getElementById('fill-open')?.click()", null)
         }
         save.setOnClickListener {
+            if (!save.isEnabled) return@setOnClickListener
+            save.isEnabled = false
+            save.text = "Saving…"
             w.evaluateJavascript("document.getElementById('write')?.click()", null)
         }
         w.addJavascriptInterface(object {
+            @JavascriptInterface
+            fun progress(done: Int, total: Int) {
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        save.text = if (total > 0) "Saving ${done.coerceIn(0, total)}/$total"
+                                    else "Save to slot."
+                        save.isEnabled = total <= 0
+                    }
+                }
+            }
+
+            @JavascriptInterface
+            fun failed(failed: Int, details: String) {
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        val label = if (failed > 0) "$failed cart labels couldn't be saved."
+                                    else "Some cart changes couldn't be saved."
+                        SlotToast.makeText(this@CartStudioActivity, label,
+                            Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+
             @JavascriptInterface
             fun saved(written: Int, shells: Int, skipped: Int) {
                 runOnUiThread {

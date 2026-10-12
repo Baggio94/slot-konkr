@@ -147,7 +147,7 @@ def package(root: Path, built: Path):
 let lastNativeActionState = '';
 function syncNativeToolbar() {
   if (!window.AndroidToolbar || !session) return;
-  const save = !$('write-bar').hidden && !$('write').disabled;
+  const save = writing || (!$('write-bar').hidden && !$('write').disabled);
   const fill = !$('fill-open').hidden;
   const state = String(save) + ':' + String(fill);
   if (state === lastNativeActionState) return;
@@ -195,6 +195,11 @@ function observeAndroidCarts(s) {
     updateFillButton();
     return;
   }""")
+    # During a large automatic-fill save, reuse original per-cart progress
+    # instead of leaving the native Save to slot. button unresponsive.
+    js = checked_replace(js,
+        "  $('write').style.setProperty('--done', total > 0 ? String(done / total) : '0');",
+        "  $('write').style.setProperty('--done', total > 0 ? String(done / total) : '0');\n  if (window.AndroidToolbar) window.AndroidToolbar.progress(done, total);")
     js = checked_replace(js,
         "  $('write').textContent = session.source.direct ? 'Write to card' : 'Download ZIP';",
         "  $('write').textContent = session.source.direct ? 'Save to slot.' : 'Download ZIP';\n  syncNativeToolbar();")
@@ -212,6 +217,8 @@ function observeAndroidCarts(s) {
           // The Android bridge already showed the precise game + write error.
           // Do not overwrite it with a generic "1 label couldn't be written".
           if (!window.AndroidStudio || count.failed === 0) banner(problems.join(' '));
+          if (window.AndroidToolbar)
+            window.AndroidToolbar.failed(count.failed, shellNote);
         } else if (window.AndroidToolbar)
           window.AndroidToolbar.saved(count.written, shells.length, count.skipped);""")
     editorFile = target / "editor.js"

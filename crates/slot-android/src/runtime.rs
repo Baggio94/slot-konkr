@@ -371,6 +371,7 @@ struct Engine {
     menu_cursor_y: f32,
     menu_textures: Vec<(slot_gfx::TexId, u32, u32)>,
     menu_hints: [(slot_gfx::TexId, u32); 2],
+    first_run_hint: (slot_gfx::TexId, u32),
     game_menu_hints: [(slot_gfx::TexId, u32); 3],
     link_hints: [(slot_gfx::TexId, u32); 3],
     board_texture: Option<slot_gfx::TexId>,
@@ -494,6 +495,12 @@ impl Engine {
             let tex = gpu.create_texture(face.w, face.h, &face.rgba);
             (tex, face.w)
         });
+        // Authentic Slot raster/keycap for a clean library. Render it in the
+        // GL scene rather than above it in an Android TextView.
+        let first_run_hint = {
+            let face = hint_face("START", "Open menu to add ROMs");
+            (gpu.create_texture(face.w, face.h, &face.rgba), face.w)
+        };
         // Original Slot keycap typography also describes the actual in-game
         // shortcuts, so users need not guess physical controller buttons.
         let game_menu_hints = [
@@ -646,6 +653,7 @@ impl Engine {
             menu_cursor_y: 0.0,
             menu_textures,
             menu_hints,
+            first_run_hint,
             game_menu_hints,
             link_hints,
             board_texture: None,
@@ -2940,6 +2948,19 @@ impl Engine {
             }
             .draw(&mut commands);
         }
+        // The onboarding keycap belongs to Slot's own rendering lifecycle,
+        // never the Android overlay. No hint is drawn behind an open menu.
+        if self.progress == 0.0 && matches!(self.overlay, ShelfOverlay::None)
+            && self.shelves.iter().all(|s| s.carts.is_empty()) {
+            let (tex, w) = self.first_run_hint;
+            commands.push(Draw::Tex {
+                x: (OUT_W as f32 - w as f32) / 2.0,
+                y: 34.0,
+                w: w as f32,
+                h: HINT_H as f32,
+                tex, alpha: 1.0,
+            });
+        }
         self.draw_overlay(&mut commands);
         // Keep the upper indicators on the identical visibility lifecycle
         // as Slot's footer: only on an idle, menu-free cartridge carousel.
@@ -2966,6 +2987,23 @@ impl Engine {
 fn selected_prefetch_entry(shelves: &[Shelf], active: usize) -> Option<(usize, usize)> {
     let shelf = shelves.get(active)?;
     shelf.carts.get(shelf.index).map(|_| (active, shelf.index))
+}
+
+/// Preserve stable ROM identity and platform on a Cart Studio shelf rebuild.
+/// Missing/removed games safely fall back to the first available cartridge.
+fn restore_shelf_focus(shelves: &mut [Shelf], active: usize, uris: &[Option<PathBuf>]) -> usize {
+    for (shelf, wanted) in shelves.iter_mut().zip(uris.iter()) {
+        if let Some(path) = wanted {
+            if let Some(index) = shelf.carts.iter().position(|cart| cart.rom == *path) {
+                shelf.select(index);
+            }
+        }
+    }
+    if shelves.get(active).is_some_and(|shelf| !shelf.carts.is_empty()) {
+        active
+    } else {
+        next_nonempty_shelf(shelves, active.min(shelves.len().saturating_sub(1)), 1)
+    }
 }
 
 /// Slot. keeps the label timer alive even when fade-in alpha is initially zero.
@@ -3031,6 +3069,13 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 #[cfg(test)]
 mod ui_feedback_tests {
     use super::*;
+
+    #[test]
+    fn rebuilding_an_empty_library_keeps_selection_safe() {
+        let mut shelves: Vec<Shelf> = (0..3).map(|_| Shelf::new(Vec::new())).collect();
+        assert_eq!(restore_shelf_focus(&mut shelves, 0, &[]), 0);
+        assert_eq!(restore_shelf_focus(&mut shelves, 2, &[None, None, None]), 2);
+    }
 
     #[test]
     fn fresh_avd_without_roms_has_no_selected_artwork_to_prefetch() {
@@ -3288,12 +3333,23 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
             }
             PLAYING.store(false, Ordering::Release);
             SAMPLE_RATE.store(0, Ordering::Release);
+            // Preserve each system's selected URI before the Library update
+            // destroys the old shelf. Cart Studio changes artwork, not focus.
+            let selected_uris = holder.borrow().as_ref().map(|engine| (
+                engine.active,
+                engine.shelves.iter().map(|shelf|
+                    shelf.carts.get(shelf.index).map(|cart| cart.rom.clone())
+                ).collect::<Vec<_>>(),
+            ));
             // Destruct old GL resources on the GL thread before recreating them.
             let size = holder.borrow().as_ref().map(|engine| engine.size).unwrap_or((960, 640));
             *holder.borrow_mut() = None;
             match Engine::new(version, snapshot.as_deref()) {
                 Ok(mut engine) => {
                     engine.size = size;
+                    if let Some((active, uris)) = selected_uris {
+                        engine.active = restore_shelf_focus(&mut engine.shelves, active, &uris);
+                    }
                     *holder.borrow_mut() = Some(engine);
                 }
                 Err(error) => eprintln!("slot-konkr: could not reload library: {error}"),

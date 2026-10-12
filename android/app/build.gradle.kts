@@ -13,8 +13,8 @@ android {
         targetSdk = 32
         // First combined beta based on RC4. Incrementing versionCode allows
         // an install-over when signed with the same permanent certificate.
-        versionCode = 66
-        versionName = "0.1.0-rc5-beta2"
+        versionCode = 67
+        versionName = "0.1.0-rc5-beta3"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 

@@ -538,7 +538,7 @@ internal object RetroArchStorage {
             out.toByteArray()
         } ?: error("Cannot read RetroArch file")
 
-    private fun stage(local: File, bytes: ByteArray) {
+    internal fun stage(local: File, bytes: ByteArray) {
         // Opening the same game must not rewrite and fsync an unchanged SRAM
         // or automatic state every time. Read+compare is cheap for these
         // bounded files and preserves the exact externally supplied bytes.
@@ -549,6 +549,11 @@ internal object RetroArchStorage {
                 // Existing file cannot be read; replace it atomically below.
             }
         }
+        // An untouched installation may have only the currently used core's
+        // Saves directory. Create the other core's path before the SRAM mirror.
+        val parent = requireNotNull(local.parentFile) { "Save has no parent directory" }
+        check(parent.isDirectory || parent.mkdirs()) { "Cannot create save directory: $parent" }
+        check(parent.isDirectory) { "Save path is not a directory: $parent" }
         val pending = File(local.parentFile, local.name + ".partial")
         try {
             pending.outputStream().use { it.write(bytes); it.fd.sync() }

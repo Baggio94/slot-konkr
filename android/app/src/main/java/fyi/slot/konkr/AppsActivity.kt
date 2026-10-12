@@ -454,9 +454,10 @@ class AppsActivity : Activity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // Intercept *before* GridView gets first refusal. This applies to the
-        // KONKR controls and standard keyboard D-pad events.
-        when (event.keyCode) {
+        // Translate Mac AVD keyboard before GridView receives the character.
+        // Real KONKR key codes and system BACK are untouched.
+        val mapped = SlotEmulatorKeys.translate(event.keyCode) ?: event.keyCode
+        when (mapped) {
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
                 if (event.action == KeyEvent.ACTION_DOWN) navigate(event.keyCode)
