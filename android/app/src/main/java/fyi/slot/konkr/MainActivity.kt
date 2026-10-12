@@ -105,6 +105,7 @@ class MainActivity : Activity() {
     external fun nativeAudioSpeedPermille(): Int
     external fun nativeFastAudioSupported(supported: Boolean)
     external fun nativeReadAudio(): ShortArray
+    external fun nativeAudioCompareArm()
     external fun nativePollMessage(): String?
     external fun nativePollRaNotice(): String?
     external fun nativeRaStatus(): String?
