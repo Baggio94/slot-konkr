@@ -146,6 +146,13 @@ class MainActivity : Activity() {
     private lateinit var shelfStatus: SlotStatusIndicators
     private var lastPerfPoll = 0L
     private var displaySyncApplied = false
+    // RA cached game details can be ready before Slot's seating/CRT sequence
+    // has set PLAYING=true. Hold that notice, then reveal it on actual gameplay.
+    // Distinguish that legitimate startup from a stale notice after eject.
+    private var raLaunchPending = false
+    private var raLaunchRequestedAt = 0L
+    private var raWasPlaying = false
+    private var raPendingGameNotice: RaAchievementOverlay.Notice? = null
 
     // Only attach the Choreographer callback while DISPLAY SYNC is selected.
     // Normal RESPONSIVE and STANDARD add no extra work to every UI vsync.
@@ -234,7 +241,12 @@ class MainActivity : Activity() {
                 completed = nativePollSaveFlush()
             }
             val request = nativePollLaunchUri()
-            if (request != null) loadGameFromSaf(request)
+            if (request != null) {
+                raLaunchPending = true
+                raLaunchRequestedAt = SystemClock.elapsedRealtime()
+                raPendingGameNotice = null
+                loadGameFromSaf(request)
+            }
             when (nativePollUiAction()) {
                 1 -> openRomFolderPicker()
                 2 -> refreshLibrary()
@@ -294,6 +306,25 @@ class MainActivity : Activity() {
             // never a system Toast that Android may place at screen bottom.
             if (resumed) {
                 val gameActive = nativeIsPlaying()
+                // On a real game start, flush any cached early RA status.
+                // Only a PLAYING -> stopped edge means a game was ejected.
+                // Earlier Beta19 incorrectly treated loading as ejected.
+                if (gameActive && !raWasPlaying) {
+                    raLaunchPending = false
+                    raPendingGameNotice?.let { raAchievementOverlay.push(it) }
+                    raPendingGameNotice = null
+                } else if (!gameActive && raWasPlaying) {
+                    raLaunchPending = false
+                    raPendingGameNotice = null
+                    raAchievementOverlay.dismissGameLaunchNotices()
+                } else if (!gameActive && raLaunchPending &&
+                    SystemClock.elapsedRealtime() - raLaunchRequestedAt > 12_000L) {
+                    // Failed or cancelled launches must not preserve a stale
+                    // pre-launch notice indefinitely.
+                    raLaunchPending = false
+                    raPendingGameNotice = null
+                }
+                raWasPlaying = gameActive
                 repeat(4) {
                     val raw = nativePollRaNotice() ?: return@repeat
                     try {
@@ -307,23 +338,29 @@ class MainActivity : Activity() {
                             val isGameReady = !earned &&
                                 detail.startsWith("You have ") &&
                                 detail.contains(" achievements unlocked")
-                            // A one-frame launch can finish before the 100ms
-                            // Android poll. Never present its stale ready notice
-                            // after eject; earned achievements are unaffected.
-                            if (isGameReady && !gameActive) return@repeat
-                            raAchievementOverlay.push(RaAchievementOverlay.Notice(
+                            val uiNotice = RaAchievementOverlay.Notice(
                                 title = title,
                                 detail = detail,
                                 earned = earned,
                                 badge = notice.optString("badge", "").takeIf { it.isNotBlank() },
                                 onlineMode = if (isGameReady) hasValidatedInternet() else null
-                            ))
+                            )
+                            if (isGameReady && !gameActive) {
+                                // During the cartridge seating/CRT animation,
+                                // native RA's cached game can already be ready.
+                                // Don't discard that valid launch notification.
+                                // But never display an old status after ejection.
+                                if (raLaunchPending) raPendingGameNotice = uiNotice
+                            } else {
+                                raAchievementOverlay.push(uiNotice)
+                            }
                         }
                     } catch (_: Exception) {
                         Log.w(TAG, "Ignoring malformed RetroAchievements notice")
                     }
                 }
-                if (!gameActive) raAchievementOverlay.dismissGameLaunchNotices()
+                // Ejection cleanup is edge-triggered above, not performed
+                // every idle/loading poll (which suppressed RA in Beta19).
             }
             if (!isDestroyed) uiHandler.postDelayed(this, 100L)
         }
