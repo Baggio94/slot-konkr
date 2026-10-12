@@ -25,6 +25,7 @@ import java.util.Locale
 internal object RetroArchStorage {
     private const val TAG = "SlotKonkr"
     private const val MAX_SAVE = 2 * 1024 * 1024
+    class SaveConflict(message: String) : IllegalStateException(message)
     private const val MAX_STATE = 65 * 1024 * 1024
 
     data class Target(
@@ -247,8 +248,19 @@ internal object RetroArchStorage {
             // Two different first-run saves: no automatic migration,
             // and no mirror writes until both files are reconciled.
             stage(conflict, "Conflicting mGBA/gpSP GBA SRAM; keep both originals".toByteArray())
-            Log.w(TAG, "GBA SRAM conflict: the two source files were preserved")
-            return
+            if (ownExternal != null && !ownExternal.contentEquals(ownPrivate)) {
+                if (ownPrivate != null) {
+                    val backup = File(journal.path + ".${target.core}.before-share.srm")
+                    if (!backup.exists()) stage(backup, ownPrivate)
+                }
+                stage(target.saveLocal, ownExternal)
+            }
+            // Do not auto-resume a stale savestate over either differing save.
+            val lower = if (target.core == "mGBA") "mgba" else "gpsp"
+            stage(File(context.filesDir,
+                "Saves/${target.romIdentity}.$lower.skip-resume.once"), byteArrayOf(1))
+            target.stateImportLocal.delete()
+            throw SaveConflict("Different mGBA / gpSP saves found. Both are preserved; syncing paused.")
         }
         val source = if (decision == SharedGbaSource.OTHER) otherCore(target.core)
             else target.core
