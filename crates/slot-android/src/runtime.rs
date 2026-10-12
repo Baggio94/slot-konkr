@@ -2416,7 +2416,11 @@ impl Engine {
                             // Fail closed on link loss: pause the game instead
                             // of silently continuing a divergent solo timeline.
                             session.end_multiplayer();
-                            self.reset_time_controls();
+                            self.ff_held = false;
+                            self.ff_latched = false;
+                            self.rewind_held = false;
+                            self.hud.set_ff(FfState::Off);
+                            AUDIO_SPEED_PERMILLE.store(1000, Ordering::Release);
                             self.overlay = ShelfOverlay::GameMenu { row: 0 };
                             set_message(format!("Multiplayer paused: {fault:?}"));
                         }
