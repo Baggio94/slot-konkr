@@ -297,6 +297,12 @@ impl GameSession {
 
     pub fn linked(&self) -> bool { self.link.is_some() }
 
+    pub fn core_kind(&self) -> Core { self.core_kind }
+
+    pub fn wireless_capable(&self) -> bool {
+        self.core_kind == Core::Gpsp && self.core.supports_netpacket()
+    }
+
     pub fn end_multiplayer(&mut self) {
         if let Some(mut link) = self.link.take() {
             link.end(self.core.as_mut());
