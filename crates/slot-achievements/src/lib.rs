@@ -200,10 +200,15 @@ impl Service {
     /// Enqueue one uncompressed GBA ROM hash without touching the network or the UI.
     /// The HTTP worker deduplicates hashes and throttles all requests.
     pub fn prefetch_rom_hash(&self, hash: &str) -> bool {
-        if hash.len() != 32 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
+        self.prefetch_rom_hash_for_console(hash, 5)
+    }
+
+    pub fn prefetch_rom_hash_for_console(&self, hash: &str, console: u32) -> bool {
+        if !matches!(console, 4 | 5 | 6)
+            || hash.len() != 32 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
             return false;
         }
-        self.controls.send(Control::PrefetchHash(hash.to_ascii_lowercase(), 5)).is_ok()
+        self.controls.send(Control::PrefetchHash(hash.to_ascii_lowercase(), console)).is_ok()
     }
 
     /// Poll during power-off. The UI keeps rendering while the evaluator drains final
