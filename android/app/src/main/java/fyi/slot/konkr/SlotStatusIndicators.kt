@@ -82,7 +82,7 @@ internal class SlotStatusIndicators(
         "sleepmanager_running", "sleepmanager_stopped",
         "basicsync_running", "basicsync_stopped",
         "syncthing_running", "syncthing_stopped",
-        "raactive", "bluetooth_on"
+        "raonline", "raoffline", "bluetooth_on"
     )
     private val worker = Executors.newSingleThreadExecutor { task ->
         Thread(task, "slot-status-health").apply {
@@ -124,6 +124,9 @@ internal class SlotStatusIndicators(
     }
 
     init {
+        // VectorDrawable is an exact unbadged trace from the approved v6
+        // trophy. No online/offline sprite is selected at runtime.
+        ra.setImageResource(R.drawable.ic_slot_ra_trophy)
         add(left, sleep)
         add(left, basicsync)
         add(left, syncthing)
@@ -319,7 +322,7 @@ internal class SlotStatusIndicators(
                 "syncthing_running" else "syncthing_stopped", installedSyncthing)
             // Only the account's configured/unconfigured state matters here.
             // Display the SAME unbadged trophy online and offline.
-            show(ra, "raactive", raAccountConfigured)
+            ra.visibility = if (raAccountConfigured) View.VISIBLE else View.GONE
         } else {
             for (v in listOf(sleep, basicsync, syncthing, ra)) v.visibility = View.GONE
         }
