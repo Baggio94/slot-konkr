@@ -263,22 +263,32 @@ unsafe extern "C" fn netpacket_poll_receive() {
     }
 }
 
-unsafe fn begin_link(client_id: u16) {
+unsafe fn begin_link(client_id: u16) -> bool {
     let Some(start) = with_host(|h| h.netpacket.as_ref().and_then(|cb| cb.start)).flatten() else {
-        return;
+        return false;
     };
     start(client_id, netpacket_send, netpacket_poll_receive);
 
     let peer = 1u16.wrapping_sub(client_id);
     let connected = with_host(|h| {
-        h.net.set_active(true);
         h.net_peer = Some(peer);
         h.netpacket.as_ref().and_then(|cb| cb.connected)
-    })
-    .flatten();
-    if let Some(connected) = connected {
-        connected(peer);
+    }).flatten();
+    // gpSP returns false if the actual serial mode cannot accept a peer.
+    // Calling 'disconnected' here would decrement its client counter even
+    // though connected never incremented it; stop directly instead.
+    if connected.is_some_and(|callback| !callback(peer)) {
+        let stop = with_host(|h| {
+            h.net_peer = None;
+            h.net.set_active(false);
+            h.net.clear();
+            h.netpacket.as_ref().and_then(|cb| cb.stop)
+        }).flatten();
+        if let Some(stop) = stop { stop(); }
+        return false;
     }
+    with_host(|h| h.net.set_active(true));
+    true
 }
 
 unsafe fn halt_link() {
@@ -948,7 +958,12 @@ impl RetroCore for LibretroCore {
 
     fn start_link(&mut self, client_id: u16) {
         let _a = Active::bind(&mut self.host);
-        unsafe { begin_link(client_id) };
+        let _ = unsafe { begin_link(client_id) };
+    }
+
+    fn try_start_link(&mut self, client_id: u16) -> bool {
+        let _a = Active::bind(&mut self.host);
+        unsafe { begin_link(client_id) }
     }
 
     fn pump_link(&mut self) {
