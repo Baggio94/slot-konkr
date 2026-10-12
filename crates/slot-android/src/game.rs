@@ -276,6 +276,9 @@ impl GameSession {
         if matches!(mode, LinkKind::Wireless) && self.core_kind != Core::Gpsp {
             return Err("Wireless mode currently requires gpSP".into());
         }
+        if matches!(mode, LinkKind::Wireless) && !self.core.supports_netpacket() {
+            return Err("Installed gpSP core has no wireless netpacket interface".into());
+        }
         let link = LinkPlay::begin(self.core.as_mut(), role, mode, transport)?;
         self.link = Some(link);
         self.runahead_video.clear();
