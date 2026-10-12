@@ -15,6 +15,11 @@ use slot_retro::ButtonMask;
 use jni::{JNIEnv, objects::{JObject, JString}, sys::{jint, jboolean, jshortArray, jstring}};
 use std::sync::Mutex;
 use std::time::Instant;
+use std::net::Ipv4Addr;
+use crate::multiplayer::{LinkStarter, Progress as LinkProgress, Role as LinkRole};
+use crate::link_kind::{self, LinkKind};
+use crate::app::{GameMenu as LinkMenu, LinkRow, LinkFail, LinkStep};
+use crate::link_screen::{self, LinkSprites, Sprite};
 
 use slot_gfx::{Compositor, GfxError, Surface, OUT_H, OUT_W};
 use slot_store::{Cart, Platform, Core, stamp_now};
@@ -77,6 +82,9 @@ enum Input {
     // Never infer RA API authentication/reachability from Wi-Fi alone.
     RaNetworkAvailable,
     RaAccountConfigured,
+    // Kotlin acquires the multicast lock before returning a Wi-Fi IPv4.
+    LinkNetworkReady(String),
+    LinkNetworkError(String),
     RaPrefetchHash(String),
     ExternalReturn,
 }
@@ -154,6 +162,8 @@ static PERF_ACTIVE: AtomicBool = AtomicBool::new(false);
 // Read-only status bar snapshot for Android's upper shelf overlays.
 // Updated on the GL thread alongside the *existing* Slot footer gate.
 static SHELF_INDICATOR_FLAGS: AtomicI32 = AtomicI32::new(0);
+// Read-only lifecycle bit polled by Kotlin; never touch WifiManager on GL.
+static LINK_NEEDS_MULTICAST: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone)]
 struct SystemStatus {
@@ -210,10 +220,11 @@ enum ShelfOverlay {
     Achievements,
     Core,
     GameMenu { row: usize },
+    Multiplayer,
     States,
 }
 
-const MENU_TEXT: [&str; 66] = [
+const MENU_TEXT: [&str; 78] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -280,6 +291,18 @@ const MENU_TEXT: [&str; 66] = [
     "Show Wi-Fi icon",                  // 63
     "Show Bluetooth icon",             // 64
     "Show app status icons",            // 65
+    "Multiplayer",                      // 66
+    "End Link",                         // 67
+    "MULTIPLAYER",                      // 68
+    "Host",                             // 69
+    "Join",                             // 70
+    "Cable",                            // 71
+    "Wireless",                         // 72
+    "Searching for a player...",       // 73
+    "Connected!",                       // 74
+    "Connection failed",               // 75
+    "Choose the other console's role", // 76
+    "Press A to retry",                 // 77
 ];
 
 struct Engine {
@@ -305,6 +328,13 @@ struct Engine {
     cart_render: CartRender,
     game: Option<GameSession>,
     pending_game: Option<GameSession>,
+    link_identity: Option<crate::link_rom::GbaIdentity>,
+    link_role: LinkRow,
+    link_mode: LinkKind,
+    link_phase: LinkMenu,
+    link_worked_at: u64,
+    link_starter: Option<LinkStarter>,
+    link_art: LinkSprites,
     // A single account-scoped engine outlives individual games, allowing
     // queued offline awards to sync even after the cartridge is ejected.
     ra_service: Option<slot_achievements::Service>,
@@ -433,6 +463,24 @@ impl Engine {
             shelf.set_gb_shadow(GbShell::Rounded, gbc);
         }
 
+        // Exactly the four Slot upstream SVG parts, original link_screen
+        // positions/easing, pre-rasterised once on the GL thread.
+        let art = slot_ui::link_art();
+        let mut sprite = |face: slot_ui::CartFace| Sprite {
+            tex: gpu.create_texture(face.w, face.h, &face.rgba),
+            w: face.w, h: face.h,
+        };
+        let link_art = LinkSprites {
+            port: sprite(art.port),
+            plug_host: sprite(art.plug_host),
+            plug_join: sprite(art.plug_join),
+            adapter: sprite(art.adapter),
+            arcs_right: art.arcs_right.map(&mut sprite),
+            arcs_left: art.arcs_left.map(&mut sprite),
+            clicks: sprite(art.clicks),
+            arrow_left: sprite(art.arrow_left),
+            arrow_right: sprite(art.arrow_right),
+        };
         let menu_textures = MENU_TEXT.iter().map(|label| {
             let face = quick_value_face(label, true);
             let tex = gpu.create_texture(face.w, face.h, &face.rgba);
@@ -549,6 +597,13 @@ impl Engine {
             cart_render: CartRender::start()?,
             game: None,
             pending_game: None,
+            link_identity: None,
+            link_role: LinkRow::Host,
+            link_mode: LinkKind::Cable,
+            link_phase: LinkMenu::Pick(LinkRow::Host),
+            link_worked_at: 0,
+            link_starter: None,
+            link_art,
             ra_service: None,
             buttons: 0,
             ff_held: false,
