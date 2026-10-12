@@ -42,7 +42,14 @@ def main() -> None:
 /* Derived PSG channel samples are omitted by mGBA's normal savestate
  * serializer. On speculative rollback, preserve their *exact* values,
  * rather than leaving samples synthesized by the speculative frame.
- * In particular, channel 4 noise changes timbre without any dropout. */
+ * In particular, channel 4 noise changes timbre without any dropout.
+ *
+ * mGBA's GBAudioPSGSerialize() is for *persistent* and backward-compatible
+ * savestates: it intentionally does not roundtrip every derived PSG field
+ * (for example ch1.sweep.step). On per-frame run-ahead, we must restore the
+ * exact transient values of all four *plain value* channel structures.
+ * Never snapshot the parent GBAudio: it contains pointers and timing events.
+ */
 static struct GBAudio* slot_mgba_psg(void) {
     if (!core) {
         return NULL;
@@ -66,9 +73,10 @@ struct SlotMgbaAudioSnapshot {
     struct LibretroAudioConverter converter;
     int32_t lowPassLeft;
     int32_t lowPassRight;
-    int8_t channelSamples[4];
-    int noiseSamples;
-    int noiseNSamples;
+    struct GBAudioSquareChannel ch1;
+    struct GBAudioSquareChannel ch2;
+    struct GBAudioWaveChannel ch3;
+    struct GBAudioNoiseChannel ch4;
     size_t frames;
 };
 
@@ -111,12 +119,16 @@ bool slot_mgba_audio_sidecar(void* buffer, size_t size, bool restore) {
         audioConverter = snapshot.converter;
         audioLowPassLeftPrev = snapshot.lowPassLeft;
         audioLowPassRightPrev = snapshot.lowPassRight;
-        psg->ch1.sample = snapshot.channelSamples[0];
-        psg->ch2.sample = snapshot.channelSamples[1];
-        psg->ch3.sample = snapshot.channelSamples[2];
-        psg->ch4.sample = snapshot.channelSamples[3];
-        psg->ch4.samples = snapshot.noiseSamples;
-        psg->ch4.nSamples = snapshot.noiseNSamples;
+        /* Apply AFTER retro_unserialize, because normal PSG restore can
+         * normalize the hardware-visible channel fields as a savestate
+         * compatibility measure. The speculative timeline needs the exact
+         * pre-frame values (including sample and sweep countdown).
+         * These four structures are pure values, never heap pointers.
+         */
+        psg->ch1 = snapshot.ch1;
+        psg->ch2 = snapshot.ch2;
+        psg->ch3 = snapshot.ch3;
+        psg->ch4 = snapshot.ch4;
         mAudioBufferClear(queue);
         return mAudioBufferWrite(queue, pcm, snapshot.frames) == snapshot.frames;
     }
@@ -124,12 +136,10 @@ bool slot_mgba_audio_sidecar(void* buffer, size_t size, bool restore) {
     snapshot.converter = audioConverter;
     snapshot.lowPassLeft = audioLowPassLeftPrev;
     snapshot.lowPassRight = audioLowPassRightPrev;
-    snapshot.channelSamples[0] = psg->ch1.sample;
-    snapshot.channelSamples[1] = psg->ch2.sample;
-    snapshot.channelSamples[2] = psg->ch3.sample;
-    snapshot.channelSamples[3] = psg->ch4.sample;
-    snapshot.noiseSamples = psg->ch4.samples;
-    snapshot.noiseNSamples = psg->ch4.nSamples;
+    snapshot.ch1 = psg->ch1;
+    snapshot.ch2 = psg->ch2;
+    snapshot.ch3 = psg->ch3;
+    snapshot.ch4 = psg->ch4;
     snapshot.frames = mAudioBufferAvailable(queue);
     if (snapshot.frames > mAudioBufferCapacity(queue)) {
         return false;
