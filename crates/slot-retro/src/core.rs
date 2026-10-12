@@ -198,6 +198,14 @@ mod tests {
     }
 
     #[test]
+    fn pcm_fingerprint_is_stable_and_sample_sensitive() {
+        assert_eq!(pcm_fingerprint(&[0, 1, -1]), pcm_fingerprint(&[0, 1, -1]));
+        assert_ne!(pcm_fingerprint(&[0, 1, -1]), pcm_fingerprint(&[0, -1, 1]));
+        assert_ne!(pcm_fingerprint(&[0, 1]), pcm_fingerprint(&[0, 1, 0]));
+        assert_ne!(pcm_fingerprint(&[]), pcm_fingerprint(&[0]));
+    }
+
+    #[test]
     fn a_core_without_link_mode_runs_player_1_alone() {
         let mut core = Recorder::default();
         core.run_frame_linked(ButtonMask(ButtonMask::A), ButtonMask(ButtonMask::B));
