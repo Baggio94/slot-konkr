@@ -847,20 +847,24 @@ impl Engine {
             return;
         }
         let game = self.game.as_ref().expect("checked above");
-        self.link_mode = if game.core_kind() == Core::Gpsp {
-            LinkKind::Wireless
-        } else { LinkKind::Cable };
-        if self.link_mode == LinkKind::Wireless && !game.wireless_capable() {
-            set_message("This gpSP build has no supported Wireless link callbacks".into());
+        if game.core_kind() != Core::Gpsp {
+            set_message("GBA Multiplayer requires gpSP. Eject, select gpSP as core, then relaunch.".into());
             return;
         }
-        if self.link_mode == LinkKind::Wireless {
-            let identity = self.link_identity.as_ref().expect("checked above");
-            if !link_kind::link_carried(&identity.code, &identity.title) {
-                set_message("This game has no verified gpSP multiplayer mode; select mGBA for Cable".into());
-                return;
-            }
+        if !game.wireless_capable() {
+            set_message("This gpSP build did not register its GBA Link interface".into());
+            return;
         }
+        let identity = self.link_identity.as_ref().expect("checked above");
+        if !link_kind::link_carried(&identity.code, &identity.title) {
+            set_message("No verified gpSP serial/RFU mode for this GBA cartridge".into());
+            return;
+        }
+        // gpSP resolves gpsp_serial=auto at cartridge LOAD. Match the
+        // upstream game's actual expected auto mode, not the chosen core.
+        // Switching cables without reloading gpSP would be cosmetic only.
+        self.link_mode = link_kind::link_kind(&identity.code, &identity.title,
+            identity.clean_header);
         self.cancel_link_discovery();
         self.link_role = LinkRow::Host;
         self.link_phase = LinkMenu::Pick(self.link_role);
