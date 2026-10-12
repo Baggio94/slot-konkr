@@ -142,6 +142,13 @@ jobs:
             echo "::warning::No persistent signing key configured. Android updates between CI builds require reinstall."
           fi
           bash scripts/build-konkr-android.sh
+          if [[ "${GITHUB_REF:-}" == refs/heads/release/* ]]; then
+            if [ -z "$SLOT_KEYSTORE_BASE64" ]; then
+              echo "::error::Persistent signing key is required for release candidates."
+              exit 1
+            fi
+            (cd android && gradle --no-daemon :app:assembleRelease)
+          fi
       - name: Verify native dynamic exports survived metadata stripping
         run: |
           set -euo pipefail
@@ -161,4 +168,20 @@ jobs:
         with:
           name: slot-konkr-preview-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+      - name: Verify RC4 release APK is signed with permanent certificate
+        if: startsWith(github.ref, 'refs/heads/release/')
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          CERT="$("$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK")"
+          printf '%s\n' "$CERT"
+          echo "$CERT" | grep -Fi '4f42b8f0ac98f6a0102804ab51020ea0e7e2de7685c6ce09400a744de0b0fa2f'
+          shasum -a 256 "$APK"
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/heads/release/')
+        with:
+          name: slot-konkr-rc4-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
