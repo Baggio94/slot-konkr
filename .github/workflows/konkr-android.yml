@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     # Follow the current development families instead of maintaining dozens of stale branch names.
-    branches: [develop/konkr, 'feat/konkr-*', 'feat/kpa-*', 'fix/konkr-*', 'release/konkr-*']
+    branches: [develop/konkr, 'feat/konkr-*', 'feat/kpa-*', 'integration/konkr-*', 'fix/konkr-*', 'release/konkr-*']
     paths:
       - 'android/**'
       - 'crates/slot-android/**'

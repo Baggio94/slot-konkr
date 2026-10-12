@@ -164,9 +164,16 @@ impl RetroCore for Tracked {
     fn net(&self) -> Link {
         self.core.net()
     }
+    fn supports_netpacket(&self) -> bool {
+        self.core.supports_netpacket()
+    }
     fn start_link(&mut self, client_id: u16) {
         self.timeline += 1;
         self.core.start_link(client_id);
+    }
+    fn try_start_link(&mut self, client_id: u16) -> bool {
+        self.timeline += 1;
+        self.core.try_start_link(client_id)
     }
     fn pump_link(&mut self) {
         self.core.pump_link();

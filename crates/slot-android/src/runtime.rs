@@ -15,6 +15,11 @@ use slot_retro::ButtonMask;
 use jni::{JNIEnv, objects::{JObject, JString}, sys::{jint, jboolean, jshortArray, jstring}};
 use std::sync::Mutex;
 use std::time::Instant;
+use std::net::Ipv4Addr;
+use crate::multiplayer::{LinkStarter, Progress as LinkProgress, Role as LinkRole};
+use crate::link_kind::{self, LinkKind};
+use crate::app::{GameMenu as LinkMenu, LinkRow, LinkFail, LinkStep};
+use crate::link_screen::{self, LinkSprites, Sprite};
 
 use slot_gfx::{Compositor, GfxError, Surface, OUT_H, OUT_W};
 use slot_store::{Cart, Platform, Core, stamp_now};
@@ -77,6 +82,10 @@ enum Input {
     // Never infer RA API authentication/reachability from Wi-Fi alone.
     RaNetworkAvailable,
     RaAccountConfigured,
+    // Kotlin acquires the multicast lock before returning a Wi-Fi IPv4.
+    LinkNetworkReady(String),
+    LinkDirectHost(String),
+    LinkNetworkError(String),
     RaPrefetchHash(String),
     ExternalReturn,
 }
@@ -154,6 +163,8 @@ static PERF_ACTIVE: AtomicBool = AtomicBool::new(false);
 // Read-only status bar snapshot for Android's upper shelf overlays.
 // Updated on the GL thread alongside the *existing* Slot footer gate.
 static SHELF_INDICATOR_FLAGS: AtomicI32 = AtomicI32::new(0);
+// Read-only lifecycle bit polled by Kotlin; never touch WifiManager on GL.
+static LINK_NEEDS_MULTICAST: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone)]
 struct SystemStatus {
@@ -210,10 +221,11 @@ enum ShelfOverlay {
     Achievements,
     Core,
     GameMenu { row: usize },
+    Multiplayer,
     States,
 }
 
-const MENU_TEXT: [&str; 66] = [
+const MENU_TEXT: [&str; 79] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -280,6 +292,19 @@ const MENU_TEXT: [&str; 66] = [
     "Show Wi-Fi icon",                  // 63
     "Show Bluetooth icon",             // 64
     "Show app status icons",            // 65
+    "Multiplayer",                      // 66
+    "End Link",                         // 67
+    "MULTIPLAYER",                      // 68
+    "Host",                             // 69
+    "Join",                             // 70
+    "Cable",                            // 71
+    "Wireless",                         // 72
+    "Searching for a player...",       // 73
+    "Connected!",                       // 74
+    "Connection failed",               // 75
+    "Choose the other console's role", // 76
+    "Press A to retry",                 // 77
+    "Eject to play solo",               // 78
 ];
 
 struct Engine {
@@ -305,6 +330,13 @@ struct Engine {
     cart_render: CartRender,
     game: Option<GameSession>,
     pending_game: Option<GameSession>,
+    link_identity: Option<crate::link_rom::GbaIdentity>,
+    link_role: LinkRow,
+    link_mode: LinkKind,
+    link_phase: LinkMenu,
+    link_worked_at: u64,
+    link_starter: Option<LinkStarter>,
+    link_art: LinkSprites,
     // A single account-scoped engine outlives individual games, allowing
     // queued offline awards to sync even after the cartridge is ejected.
     ra_service: Option<slot_achievements::Service>,
@@ -340,6 +372,7 @@ struct Engine {
     menu_textures: Vec<(slot_gfx::TexId, u32, u32)>,
     menu_hints: [(slot_gfx::TexId, u32); 2],
     game_menu_hints: [(slot_gfx::TexId, u32); 3],
+    link_hints: [(slot_gfx::TexId, u32); 3],
     board_texture: Option<slot_gfx::TexId>,
     chip_texture: slot_gfx::TexId,
     picker: Option<CorePicker>,
@@ -433,6 +466,24 @@ impl Engine {
             shelf.set_gb_shadow(GbShell::Rounded, gbc);
         }
 
+        // Exactly the four Slot upstream SVG parts, original link_screen
+        // positions/easing, pre-rasterised once on the GL thread.
+        let art = slot_ui::link_art();
+        let mut sprite = |face: slot_ui::CartFace| Sprite {
+            tex: gpu.create_texture(face.w, face.h, &face.rgba),
+            w: face.w, h: face.h,
+        };
+        let link_art = LinkSprites {
+            port: sprite(art.port),
+            plug_host: sprite(art.plug_host),
+            plug_join: sprite(art.plug_join),
+            adapter: sprite(art.adapter),
+            arcs_right: art.arcs_right.map(&mut sprite),
+            arcs_left: art.arcs_left.map(&mut sprite),
+            clicks: sprite(art.clicks),
+            arrow_left: sprite(art.arrow_left),
+            arrow_right: sprite(art.arrow_right),
+        };
         let menu_textures = MENU_TEXT.iter().map(|label| {
             let face = quick_value_face(label, true);
             let tex = gpu.create_texture(face.w, face.h, &face.rgba);
@@ -447,6 +498,13 @@ impl Engine {
         // shortcuts, so users need not guess physical controller buttons.
         let game_menu_hints = [
             ("B", "Back"), ("SEL+R1", "Save"), ("SEL+L1", "Load"),
+        ].map(|(key, label)| {
+            let face = hint_face(key, label);
+            let tex = gpu.create_texture(face.w, face.h, &face.rgba);
+            (tex, face.w)
+        });
+        let link_hints = [
+            ("B", "Cancel"), ("LEFT/RIGHT", "Swap"), ("A", "Link"),
         ].map(|(key, label)| {
             let face = hint_face(key, label);
             let tex = gpu.create_texture(face.w, face.h, &face.rgba);
@@ -549,6 +607,13 @@ impl Engine {
             cart_render: CartRender::start()?,
             game: None,
             pending_game: None,
+            link_identity: None,
+            link_role: LinkRow::Host,
+            link_mode: LinkKind::Cable,
+            link_phase: LinkMenu::Pick(LinkRow::Host),
+            link_worked_at: 0,
+            link_starter: None,
+            link_art,
             ra_service: None,
             buttons: 0,
             ff_held: false,
@@ -582,6 +647,7 @@ impl Engine {
             menu_textures,
             menu_hints,
             game_menu_hints,
+            link_hints,
             board_texture: None,
             chip_texture,
             picker: None,
@@ -762,8 +828,179 @@ impl Engine {
         true
     }
 
+    fn link_millis(&self) -> u64 {
+        self.born.elapsed().as_millis() as u64
+    }
+
+    fn cancel_link_discovery(&mut self) {
+        if let Some(starter) = self.link_starter.take() { starter.cancel(); }
+        LINK_NEEDS_MULTICAST.store(false, Ordering::Release);
+    }
+
+    fn enter_multiplayer_menu(&mut self) {
+        if self.game.is_none() { return; }
+        if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
+            set_message("Eject and relaunch the cartridge before linking again".into());
+            return;
+        }
+        if self.link_identity.is_none() {
+            set_message("Multiplayer currently requires a valid GBA ROM".into());
+            return;
+        }
+        let game = self.game.as_ref().expect("checked above");
+        if game.core_kind() != Core::Gpsp {
+            set_message("GBA Multiplayer requires gpSP. Eject, select gpSP as core, then relaunch.".into());
+            return;
+        }
+        if !game.wireless_capable() {
+            set_message("This gpSP build did not register its GBA Link interface".into());
+            return;
+        }
+        let identity = self.link_identity.as_ref().expect("checked above");
+        if !link_kind::link_carried(&identity.code, &identity.title) {
+            set_message("No verified gpSP serial/RFU mode for this GBA cartridge".into());
+            return;
+        }
+        // gpSP resolves gpsp_serial=auto at cartridge LOAD. Match the
+        // upstream game's actual expected auto mode, not the chosen core.
+        // Switching cables without reloading gpSP would be cosmetic only.
+        self.link_mode = link_kind::link_kind(&identity.code, &identity.title,
+            identity.clean_header);
+        self.cancel_link_discovery();
+        self.link_role = LinkRow::Host;
+        self.link_phase = LinkMenu::Pick(self.link_role);
+        self.game_accum = 0.0;
+        self.buttons = 0;
+        self.overlay = ShelfOverlay::Multiplayer;
+    }
+
+    fn request_multiplayer_network(&mut self) {
+        if !matches!(self.overlay, ShelfOverlay::Multiplayer) { return; }
+        if matches!(self.link_phase, LinkMenu::Working {..} | LinkMenu::Linked {..}) { return; }
+        self.cancel_link_discovery();
+        let now = self.link_millis();
+        self.link_worked_at = now;
+        self.link_phase = LinkMenu::Working {
+            role: self.link_role, step: LinkStep::Radio, since: now,
+        };
+        LINK_NEEDS_MULTICAST.store(true, Ordering::Release);
+        UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(16);
+    }
+
+    fn fail_multiplayer(&mut self, reason: &str, failure: LinkFail) {
+        self.cancel_link_discovery();
+        self.link_phase = LinkMenu::Failed {
+            role: self.link_role, fail: failure,
+            worked: self.link_worked_at, since: self.link_millis(),
+        };
+        set_message(format!("Multiplayer: {reason}"));
+    }
+
+    fn poll_multiplayer(&mut self) {
+        if !matches!(self.overlay, ShelfOverlay::Multiplayer) { return; }
+        let event = self.link_starter.as_mut().and_then(LinkStarter::poll);
+        if let Some(event) = event {
+            match event {
+                LinkProgress::Looking => {
+                    self.link_phase = LinkMenu::Working {
+                        role: self.link_role, step: LinkStep::Waiting,
+                        since: self.link_worked_at,
+                    };
+                }
+                LinkProgress::Ready(wire) => {
+                    self.cancel_link_discovery();
+                    let role = if self.link_role == LinkRow::Host {
+                        LinkRole::Host
+                    } else { LinkRole::Join };
+                    let joined = self.game.as_mut().ok_or_else(|| "No game active".to_owned())
+                        .and_then(|game| game.begin_multiplayer(role, self.link_mode, Box::new(wire)));
+                    match joined {
+                        Ok(()) => {
+                            self.link_phase = LinkMenu::Linked {
+                                role: self.link_role,
+                                worked: self.link_worked_at,
+                                since: self.link_millis(), opened: false,
+                            };
+                        }
+                        Err(reason) => self.fail_multiplayer(&reason, LinkFail::PeerVanished),
+                    }
+                }
+                LinkProgress::Failed(reason) => {
+                    let fail = match reason {
+                        crate::multiplayer::Failure::NoNetwork => LinkFail::Radio,
+                        crate::multiplayer::Failure::NobodyCame => LinkFail::NobodyCame,
+                        crate::multiplayer::Failure::Cancelled => LinkFail::Cancelled,
+                        crate::multiplayer::Failure::PeerVanished => LinkFail::PeerVanished,
+                    };
+                    self.fail_multiplayer(&format!("{reason:?}"), fail);
+                }
+            }
+        }
+        if let LinkMenu::Linked { since, .. } = self.link_phase {
+            if self.link_millis().saturating_sub(since) >= 1000 {
+                self.overlay = ShelfOverlay::None;
+                self.game_accum = 0.0;
+                self.buttons = 0;
+            }
+        }
+    }
+
     fn handle(&mut self, input: Input) {
         match input {
+            Input::LinkNetworkReady(address) => {
+                if matches!(self.overlay, ShelfOverlay::Multiplayer) &&
+                    matches!(self.link_phase, LinkMenu::Working {..}) {
+                    let start = address.parse::<Ipv4Addr>()
+                        .map_err(|_| "Invalid Wi-Fi IPv4 address".to_string())
+                        .and_then(|ip| {
+                            let code = self.link_identity.as_ref()
+                                .ok_or_else(|| "Game identity missing".to_owned())?;
+                            let role = if self.link_role == LinkRow::Host {
+                                LinkRole::Host
+                            } else { LinkRole::Join };
+                            LinkStarter::spawn(role, ip, &code.code).map_err(|e| e.to_string())
+                        });
+                    match start {
+                        Ok(starter) => self.link_starter = Some(starter),
+                        Err(e) => self.fail_multiplayer(&e, LinkFail::Radio),
+                    }
+                } else {
+                    LINK_NEEDS_MULTICAST.store(false, Ordering::Release);
+                }
+            }
+            Input::LinkDirectHost(pair) => {
+                if matches!(self.overlay, ShelfOverlay::Multiplayer) &&
+                    matches!(self.link_phase, LinkMenu::Working {..}) {
+                    let result = (|| {
+                        if self.link_role != LinkRow::Join {
+                            return Err("Direct IP is supported for Join only".to_owned());
+                        }
+                        let (local, host) = pair.split_once(',')
+                            .ok_or_else(|| "Invalid direct IP address pair".to_owned())?;
+                        let local = local.parse::<Ipv4Addr>()
+                            .map_err(|_| "Invalid emulator local IPv4".to_owned())?;
+                        let host = host.parse::<Ipv4Addr>()
+                            .map_err(|_| "Invalid KONKR host IPv4".to_owned())?;
+                        let id = self.link_identity.as_ref()
+                            .ok_or_else(|| "No GBA game identity".to_owned())?;
+                        LinkStarter::spawn_direct_join(local, host, &id.code)
+                            .map_err(|e| e.to_string())
+                    })();
+                    match result {
+                        Ok(starter) => {
+                            self.link_starter = Some(starter);
+                            LINK_NEEDS_MULTICAST.store(false, Ordering::Release);
+                        }
+                        Err(error) => self.fail_multiplayer(&error, LinkFail::Radio),
+                    }
+                }
+            }
+            Input::LinkNetworkError(reason) => {
+                if matches!(self.overlay, ShelfOverlay::Multiplayer) &&
+                    matches!(self.link_phase, LinkMenu::Working {..}) {
+                    self.fail_multiplayer(&reason, LinkFail::Radio);
+                }
+            }
             Input::RaAccountConfigured => {
                 self.ensure_ra_service();
             }
@@ -832,13 +1069,22 @@ impl Engine {
                 // Android calls Reset onPause. Retain the *native menu* behind
                 // Apps/Studio while the new Activity animates in, otherwise
                 // the user briefly sees the cartridge carousel again.
-                if !self.external_pending { self.overlay = ShelfOverlay::None; }
+                if !self.external_pending {
+                    self.overlay = if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
+                        ShelfOverlay::GameMenu { row: 2 }
+                    } else { ShelfOverlay::None };
+                }
                 self.picker = None;
                 for shelf in &mut self.shelves {
                     shelf.release_hold();
                 }
             }
             Input::Suspend => {
+                self.cancel_link_discovery();
+                if let Some(session) = self.game.as_mut() { session.end_multiplayer(); }
+                if matches!(self.overlay, ShelfOverlay::Multiplayer) {
+                    self.overlay = ShelfOverlay::GameMenu { row: 0 };
+                }
                 if let Some(session) = self.game.as_mut() {
                     if session.save(true) {
                         if let Some(uri) = self.requested_uri.as_deref() {
@@ -855,6 +1101,8 @@ impl Engine {
                 AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
             }
             Input::Exit => {
+                self.cancel_link_discovery();
+                self.link_identity = None;
                 self.reset_time_controls();
                 self.pending_game = None;
                 // Preserve the final video texture for the original 160ms CRT
@@ -894,6 +1142,7 @@ impl Engine {
                 self.polaroids = None;
                 self.requested_uri = None;
                 self.prepared_rom = None;
+                self.link_identity = None;
                 self.game_emulation = None;
                 *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = None;
             }
@@ -920,6 +1169,13 @@ impl Engine {
                 }
             }
             Input::Key(code, pressed) => {
+                if code == 110 && matches!(self.overlay, ShelfOverlay::Multiplayer) {
+                    if !pressed {
+                        self.cancel_link_discovery();
+                        self.overlay = ShelfOverlay::GameMenu { row: 1 };
+                    }
+                    return;
+                }
                 // KONKR's top-round controller key emits Linux BTN_MODE. Android
                 // normally delivers that as KEYCODE_BUTTON_MODE (110); this is
                 // separate from the system HOME launcher key.
@@ -954,6 +1210,10 @@ impl Engine {
                         if since.elapsed().as_millis() >= 650 {
                             self.mode_last_tap = None;
                             if self.game.is_some() { self.handle(Input::Exit); }
+                        } else if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
+                            self.mode_last_tap = None;
+                            self.overlay = ShelfOverlay::GameMenu { row: 2 };
+                            set_message("Eject and relaunch to play solo".into());
                         } else if self.game.is_some() {
                             let is_double=self.mode_last_tap.take()
                                 .is_some_and(|t|t.elapsed().as_millis()<360);
@@ -974,6 +1234,26 @@ impl Engine {
                             }
                         }
                         // START remains the ONLY menu key on the carousel.
+                    }
+                    return;
+                }
+                if self.game.is_some() && matches!(self.overlay, ShelfOverlay::Multiplayer) {
+                    if pressed {
+                        match code {
+                            21 | 22 if matches!(self.link_phase, LinkMenu::Pick(_)
+                                | LinkMenu::Failed {..}) => {
+                                self.link_role = if self.link_role == LinkRow::Host {
+                                    LinkRow::Join
+                                } else { LinkRow::Host };
+                                self.link_phase = LinkMenu::Pick(self.link_role);
+                            }
+                            96 => self.request_multiplayer_network(),
+                            97 | 108 => {
+                                self.cancel_link_discovery();
+                                self.overlay = ShelfOverlay::GameMenu { row: 1 };
+                            }
+                            _ => {}
+                        }
                     }
                     return;
                 }
@@ -1032,17 +1312,37 @@ impl Engine {
                             ShelfOverlay::GameMenu { row } => match code {
                                 19 | 20 => {
                                     self.overlay = ShelfOverlay::GameMenu {
-                                        row: move_menu_row(row, code, 3),
+                                        row: move_menu_row(row, code, 4),
                                     };
                                 }
                                 96 => {
                                     match row {
-                                        1=>self.handle(Input::Exit),
-                                        2=>self.open_polaroids(),
-                                        _=>self.overlay=ShelfOverlay::None,
+                                        1 => {
+                                            if self.game.as_ref().is_some_and(GameSession::linked) {
+                                                if let Some(game) = self.game.as_mut() {
+                                                    game.end_multiplayer();
+                                                }
+                                                set_message("Multiplayer disconnected".into());
+                                            } else { self.enter_multiplayer_menu(); }
+                                        }
+                                        2 => self.handle(Input::Exit),
+                                        3 => {
+                                            if self.game.as_ref().is_some_and(|g| g.linked() || g.requires_relaunch()) {
+                                                set_message("Relaunch the cartridge before using Save States".into());
+                                            } else { self.open_polaroids(); }
+                                        }
+                                        _ => {
+                                            if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
+                                                set_message("Multiplayer ended. Eject to return to solo.".into());
+                                            } else { self.overlay = ShelfOverlay::None; }
+                                        }
                                     }
                                 }
-                                97 => self.overlay = ShelfOverlay::None,
+                                97 => {
+                                    if !self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
+                                        self.overlay = ShelfOverlay::None;
+                                    } else { set_message("Eject to return to solo.".into()); }
+                                },
                                 _ => {}
                             },
                             _ => {}
@@ -1079,6 +1379,10 @@ impl Engine {
                         self.select_forwarded = true;
                         self.buttons |= ButtonMask::SELECT;
                     }
+                    // Linked frames are ordered by both players. Never allow
+                    // local time travel or accelerated single-player frames.
+                    if self.game.as_ref().is_some_and(GameSession::linked)
+                        && (code == 104 || code == 105) { return; }
                     if code == 104 {
                         if !self.settings.rewind { return; }
                         if pressed {
@@ -1354,7 +1658,8 @@ impl Engine {
                                     }
                                 }
                             },
-                            ShelfOverlay::GameMenu { .. } | ShelfOverlay::States | ShelfOverlay::None => {}
+                            ShelfOverlay::GameMenu { .. } | ShelfOverlay::Multiplayer |
+                            ShelfOverlay::States | ShelfOverlay::None => {}
                         }
                     }
                     return;
@@ -1602,6 +1907,9 @@ impl Engine {
                 self.settings.colour_correction,
                 if platform == Platform::Gba { self.ra_service.as_ref() } else { None }) {
                 Ok(session) => {
+                    self.link_identity = if platform == Platform::Gba {
+                        crate::link_rom::identify(Path::new(local)).ok()
+                    } else { None };
                     // Create libretro on the same GL thread, but defer audio
                     // and CRT presentation until Slot's seated hold completes.
                     crate::game::log_launch_timing(&format!(
@@ -1911,6 +2219,40 @@ impl Engine {
         }
     }
 
+    /// The original Slot cable plug/wireless adapter and their exact motion
+    /// curves are reused without forking them. Only text and the KONKR
+    /// controller keycap legend are native additions.
+    fn draw_multiplayer(&self, out: &mut Vec<Draw>) {
+        out.push(Draw::Rect {
+            x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
+            colour: opening(),
+        });
+        let now = self.link_millis();
+        link_screen::draw_link_art(self.link_phase, self.link_mode,
+            now, &self.link_art, out);
+        self.text_fit(68, 30.0, 20.0, 610.0, 0.9, out);
+        self.text_fit(if self.link_mode == LinkKind::Cable { 71 } else { 72 },
+            30.0, 71.0, 140.0, 0.75, out);
+        self.text_fit(if self.link_role == LinkRow::Host { 69 } else { 70 },
+            300.0, 61.0, 110.0, 1.0, out);
+        let status = match self.link_phase {
+            LinkMenu::Pick(_) => 76,
+            LinkMenu::Working { .. } => 73,
+            LinkMenu::Linked { .. } => 74,
+            LinkMenu::Failed { .. } => 77,
+            LinkMenu::Unplug { .. } => 75,
+        };
+        self.text_fit(status, 178.0, 119.0, 465.0, 0.8, out);
+        out.push(Draw::Rect {
+            x: 0.0, y: 420.0, w: OUT_W as f32, h: 60.0,
+            colour: opening(),
+        });
+        for (tex, w, x) in centred_hints(&self.link_hints, 15.0) {
+            out.push(Draw::Tex { x, y: 427.0, w: w as f32,
+                h: HINT_H as f32, tex, alpha: 1.0 });
+        }
+    }
+
     fn draw_overlay(&self, out: &mut Vec<Draw>) {
         match self.overlay {
             ShelfOverlay::None => {}
@@ -1989,8 +2331,15 @@ impl Engine {
                 self.draw_menu_hints(141.0, 311.0, out);
             }
             ShelfOverlay::GameMenu { row } => {
-                self.draw_original_style_menu(19, &[20, 21, 22], row, out);
+                let first = if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
+                    78
+                } else { 20 };
+                let second = if self.game.as_ref().is_some_and(GameSession::linked) {
+                    67
+                } else { 66 };
+                self.draw_original_style_menu(19, &[first, second, 21, 22], row, out);
             }
+            ShelfOverlay::Multiplayer => self.draw_multiplayer(out),
             ShelfOverlay::Core => {
                 self.draw_original_core_picker(out);
             }
@@ -2211,6 +2560,7 @@ impl Engine {
         for event in events {
             self.handle(event);
         }
+        self.poll_multiplayer();
         if self.picker.is_some_and(|p| p.finished(self.born.elapsed().as_millis() as u64)) {
             self.picker = None;
             self.overlay = ShelfOverlay::None;
@@ -2220,7 +2570,8 @@ impl Engine {
         let (kind, selected, count) = match self.overlay {
             ShelfOverlay::Menu { row } => (1u8, row, 6usize),
             ShelfOverlay::Library { row } => (2u8, row, 5usize),
-            ShelfOverlay::GameMenu { row } => (3u8, row, 3usize),
+            ShelfOverlay::GameMenu { row } => (3u8, row, 4usize),
+            ShelfOverlay::Multiplayer => (11u8, 0, 0usize),
             ShelfOverlay::Settings { row } => (4u8, row, 4usize),
             ShelfOverlay::InterfaceSettings { row } => (10u8, row, if self.custom_wallpaper_present { 5 } else { 4 }),
             ShelfOverlay::EmulationSettings { row } => (8u8, row, 3usize),
@@ -2362,7 +2713,8 @@ impl Engine {
             self.gpu.end_frame(self.size);
             return;
         }
-        if self.game.is_some() && matches!(self.overlay, ShelfOverlay::GameMenu { .. }) {
+        if self.game.is_some() && matches!(self.overlay,
+            ShelfOverlay::GameMenu { .. } | ShelfOverlay::Multiplayer) {
             // Rendering the pause menu does not borrow an active libretro session
             // or advance the core, so input and audio stay frozen.
             self.game_accum = 0.0;
@@ -2433,7 +2785,26 @@ impl Engine {
                 let frame_limit = if fast { usize::from(self.settings.ff_speed) * 4 }
                     else if responsive { 1 } else { 4 };
                 while self.game_accum >= period && stepped < frame_limit {
-                    session.advance(self.buttons, self.settings.turbo, self.settings.rewind);
+                    // Cable lockstep must not consume emulation time while
+                    // the remote frame has not arrived. NEVER invent a solo
+                    // frame or perform speculative Run-Ahead on a held link.
+                    if !session.advance(self.buttons, self.settings.turbo,
+                        self.settings.rewind && !session.linked()) {
+                        self.game_accum = 0.0;
+                        if let Some(fault) = session.link_fault() {
+                            // Fail closed on link loss: pause the game instead
+                            // of silently continuing a divergent solo timeline.
+                            session.end_multiplayer();
+                            self.ff_held = false;
+                            self.ff_latched = false;
+                            self.rewind_held = false;
+                            self.hud.set_ff(FfState::Off);
+                            AUDIO_SPEED_PERMILLE.store(1000, Ordering::Release);
+                            self.overlay = ShelfOverlay::GameMenu { row: 0 };
+                            set_message(format!("Multiplayer paused: {fault:?}"));
+                        }
+                        break;
+                    }
                     self.perf_emulated = self.perf_emulated.saturating_add(1);
                     self.game_accum -= period;
                     stepped += 1;
@@ -2925,6 +3296,45 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeKey(
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
         .push_back(Input::Key(key, pressed != 0));
+}
+
+/// Kotlin resolves the connected Wi-Fi interface and takes a MulticastLock
+/// before handing its IPv4 address to the independent Rust discovery worker.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkNetworkReady(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, ipv4: JString<'_>,
+) {
+    if let Ok(value) = env.get_string(&ipv4) {
+        INPUT.lock().unwrap_or_else(|e| e.into_inner())
+            .push_back(Input::LinkNetworkReady(value.to_string_lossy().into_owned()));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkDirectHost(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, address_pair: JString<'_>,
+) {
+    if let Ok(value) = env.get_string(&address_pair) {
+        INPUT.lock().unwrap_or_else(|e| e.into_inner())
+            .push_back(Input::LinkDirectHost(value.to_string_lossy().into_owned()));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkNetworkError(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, reason: JString<'_>,
+) {
+    if let Ok(value) = env.get_string(&reason) {
+        INPUT.lock().unwrap_or_else(|e| e.into_inner())
+            .push_back(Input::LinkNetworkError(value.to_string_lossy().into_owned()));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkNeedsMulticast(
+    _env: *mut c_void, _this: *mut c_void,
+) -> jboolean {
+    LINK_NEEDS_MULTICAST.load(Ordering::Acquire) as jboolean
 }
 
 /// Called on the GL thread through GLSurfaceView.queueEvent before changing
