@@ -2190,13 +2190,12 @@ impl Engine {
             ShelfOverlay::Menu { row } => (1u8, row, 6usize),
             ShelfOverlay::Library { row } => (2u8, row, 5usize),
             ShelfOverlay::GameMenu { row } => (3u8, row, 3usize),
-            ShelfOverlay::Settings { row } => (4u8, row, 5usize),
-            ShelfOverlay::InterfaceSettings { row } => (10u8, row, 3usize),
+            ShelfOverlay::Settings { row } => (4u8, row, 4usize),
+            ShelfOverlay::InterfaceSettings { row } => (10u8, row, if self.custom_wallpaper_present { 5 } else { 4 }),
             ShelfOverlay::EmulationSettings { row } => (8u8, row, 3usize),
             ShelfOverlay::GameEmulationSettings { row } => (9u8, row, 4usize),
             ShelfOverlay::ScreenSettings { row } => (5u8, row, 4usize),
             ShelfOverlay::GameplaySettings { row } => (6u8, row, 6usize),
-            ShelfOverlay::Personalization { row } => (7u8, row, self.customize_items.len()),
             _ => (0, 0, 0),
         };
         if kind != self.menu_seen {
