@@ -108,6 +108,9 @@ impl RetroCore for Tracked {
     fn take_audio(&mut self) -> Vec<i16> {
         self.core.take_audio()
     }
+    fn speculative_pcm_fingerprint(&self) -> Option<(usize, u64)> {
+        self.core.speculative_pcm_fingerprint()
+    }
     fn discard_audio(&mut self) {
         self.core.discard_audio();
     }
