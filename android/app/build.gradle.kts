@@ -11,10 +11,10 @@ android {
         applicationId = "fyi.slot.konkr"
         minSdk = 31
         targetSdk = 32
-        // Clean RC4 consolidates the validated Beta19b state without changing
-        // applicationId, user data paths or the persistent signing certificate.
-        versionCode = 64
-        versionName = "0.1.0-rc4"
+        // First combined beta based on RC4. Incrementing versionCode allows
+        // an install-over when signed with the same permanent certificate.
+        versionCode = 65
+        versionName = "0.1.0-rc5-beta1"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
