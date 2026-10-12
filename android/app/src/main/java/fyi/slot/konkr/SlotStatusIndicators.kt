@@ -25,7 +25,6 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
-import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
@@ -83,8 +82,7 @@ internal class SlotStatusIndicators(
         "sleepmanager_running", "sleepmanager_stopped",
         "basicsync_running", "basicsync_stopped",
         "syncthing_running", "syncthing_stopped",
-        "raonline", "raoffline",
-        "bluetooth_on"
+        "raactive", "bluetooth_on"
     )
     private val worker = Executors.newSingleThreadExecutor { task ->
         Thread(task, "slot-status-health").apply {
@@ -106,6 +104,7 @@ internal class SlotStatusIndicators(
     private var lastHealthPoll = 0L
     private var lastBasicRequest = 0L
     private var lastBasicResponse = 0L
+    private var raAccountConfigured = false
     private var installedSleep = false
     private var observedSleepRunning = false
     private var installedBasic = false
@@ -191,6 +190,9 @@ internal class SlotStatusIndicators(
       catch (_: RuntimeException) { false }
 
     private fun refreshInstalled() {
+        // Presence means an account is registered. Network status only belongs
+        // in the actual game-launch notice, not on this top-shelf icon.
+        raAccountConfigured = RaAccount.configuredUser(host.filesDir) != null
         installedSleep = installed("com.med.sleepmanager")
         observedSleepRunning = sleepObservedRunning()
         installedBasic = installed("com.chiller3.basicsync")
@@ -279,7 +281,7 @@ internal class SlotStatusIndicators(
      * Bitmap generation, filesystem package scans and health probing are
      * throttled; a hidden indicator never triggers extra health traffic.
      */
-    fun refresh(flags: Int, raRaw: String?) {
+    fun refresh(flags: Int) {
         val visible = flags and 1 != 0
         if (!visible) {
             left.visibility = View.GONE
@@ -315,16 +317,9 @@ internal class SlotStatusIndicators(
                     now - lastBasicResponse < 45000L)
             show(syncthing, if (syncthingRunning && forkHealthAttributable)
                 "syncthing_running" else "syncthing_stopped", installedSyncthing)
-            val state = runCatching {
-                JSONObject(raRaw ?: "{}").optString("state", "Disabled")
-            }.getOrDefault("Disabled")
-            val raEnabled = state != "Disabled" && state != "null" && state.isNotEmpty()
-            // Mode must agree with the launch notification: require Android
-            // validated Internet, not merely enabled Wi-Fi or cached RA data.
-            val netCaps = connections.activeNetwork?.let(connections::getNetworkCapabilities)
-            val online = netCaps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
-                netCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-            show(ra, if (online) "raonline" else "raoffline", raEnabled)
+            // Only the account's configured/unconfigured state matters here.
+            // Display the SAME unbadged trophy online and offline.
+            show(ra, "raactive", raAccountConfigured)
         } else {
             for (v in listOf(sleep, basicsync, syncthing, ra)) v.visibility = View.GONE
         }
