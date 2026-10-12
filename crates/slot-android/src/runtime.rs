@@ -1940,9 +1940,16 @@ impl Engine {
                 // layout or existing keycap typography.
                 let index = if self.selected_emulation_core() == Core::Gpsp { 1 } else { 0 };
                 let (tex, w, h) = self.emulation_core_labels[index];
+                // Match text_fit's 0.79x header scale and exactly the heading
+                // baseline at y=33; right align to the same 32px inset.
+                // Core names are short enough to never overlap the left title.
+                let scale = 0.79f32;
+                let fade = slot_ui::ease(
+                    (self.menu_opened.elapsed().as_secs_f32() / 0.16).clamp(0.0, 1.0));
                 out.push(Draw::Tex {
-                    x: OUT_W as f32 - w as f32 - 32.0, y: 33.0,
-                    w: w as f32, h: h as f32, tex, alpha: 0.75,
+                    x: OUT_W as f32 - 32.0 - w as f32 * scale, y: 33.0,
+                    w: w as f32 * scale, h: h as f32 * scale,
+                    tex, alpha: 0.68 * fade,
                 });
                 self.draw_setting_values(row, &[10, 11, 12, usize::MAX], out);
             }
