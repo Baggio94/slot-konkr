@@ -1178,6 +1178,10 @@ impl Engine {
                         if since.elapsed().as_millis() >= 650 {
                             self.mode_last_tap = None;
                             if self.game.is_some() { self.handle(Input::Exit); }
+                        } else if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
+                            self.mode_last_tap = None;
+                            self.overlay = ShelfOverlay::GameMenu { row: 2 };
+                            set_message("Eject and relaunch to play solo".into());
                         } else if self.game.is_some() {
                             let is_double=self.mode_last_tap.take()
                                 .is_some_and(|t|t.elapsed().as_millis()<360);
