@@ -918,12 +918,12 @@ class MainActivity : Activity() {
                 filesDir, username,
                 onRulesReady = if (hasPrevious) null else { partial ->
                     runOnUiThread {
-                        if (!isDestroyed) panel.update(retroAchievementsStatus(), partial)
+                        if (!isDestroyed) panel.update(retroAchievementsStatus(), hasValidatedInternet(), partial)
                     }
                 }
             )
             runOnUiThread {
-                if (!isDestroyed) panel.update(retroAchievementsStatus(), snapshot)
+                if (!isDestroyed) panel.update(retroAchievementsStatus(), hasValidatedInternet(), snapshot)
             }
         }
     }
@@ -1029,7 +1029,7 @@ class MainActivity : Activity() {
             // Show last known values immediately when reopening the dashboard.
             // They are refreshed safely in the background on every opening.
             RaDiagnostics.lastSnapshot(existing)?.let {
-                panel.update(retroAchievementsStatus(), it)
+                panel.update(retroAchievementsStatus(), hasValidatedInternet(), it)
             }
             refreshRaPanel(panel, existing)
             // Badge downloads continue in the native HTTP worker; update this
