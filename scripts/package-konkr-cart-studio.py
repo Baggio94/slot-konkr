@@ -199,7 +199,7 @@ function observeAndroidCarts(s) {
     # instead of leaving the native Save to slot. button unresponsive.
     js = checked_replace(js,
         "  $('write').style.setProperty('--done', total > 0 ? String(done / total) : '0');",
-        "  $('write').style.setProperty('--done', total > 0 ? String(done / total) : '0');\\n  if (window.AndroidToolbar) window.AndroidToolbar.progress(done, total);")
+        "  $('write').style.setProperty('--done', total > 0 ? String(done / total) : '0');\n  if (window.AndroidToolbar) window.AndroidToolbar.progress(done, total);")
     js = checked_replace(js,
         "  $('write').textContent = session.source.direct ? 'Write to card' : 'Download ZIP';",
         "  $('write').textContent = session.source.direct ? 'Save to slot.' : 'Download ZIP';\n  syncNativeToolbar();")
