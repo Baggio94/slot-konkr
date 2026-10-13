@@ -1175,9 +1175,44 @@ impl Engine {
     fn begin_link_session(&mut self, role: LinkRole,
                           wire: crate::link_net::TcpLink) -> Result<(), String> {
         let game = self.game.as_ref().ok_or("No game active")?;
-        if game.core_kind() != Core::Mgba {
-            return self.game.as_mut().ok_or("No game active".to_owned())?
-                .begin_multiplayer(role, self.link_mode, Box::new(wire));
+        if game.core_kind() == Core::Gpsp {
+            if game.linked() || game.is_link_sandbox() {
+                return Err("gpSP Link requires a fresh private session".into());
+            }
+            let (storage, library) = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+                .clone().ok_or("Slot storage is not mounted")?;
+            let (rom, stem, serial) = (game.rom_path().to_path_buf(),
+                game.rom_stem().to_owned(), game.loaded_serial());
+            let core_file = library.join("libgpsp_libretro.so");
+            // Close solo only AFTER its exact state/SRAM/RTC are durable.
+            // A live gpSP core keeps the solo libretro GET_SAVE_DIRECTORY;
+            // redirecting Slot's own save paths is insufficient isolation.
+            let solo_snapshot = self.game.as_mut().ok_or("No game active")?
+                .preserve_solo_for_link()?;
+            drop(self.game.take());
+            let mut private = match GameSession::open_gpsp_linked(
+                &rom, &core_file, &storage, &stem,
+                self.settings.colour_correction, role, &solo_snapshot, serial) {
+                Ok(game) => game,
+                Err(error) => {
+                    self.restore_gpsp_solo_after_link_failure(
+                        &rom, &core_file, &storage, &stem, serial);
+                    return Err(format!("Cannot initialize private gpSP Link: {error}"));
+                }
+            };
+            if let Err(error) = private.begin_multiplayer(role, self.link_mode, Box::new(wire)) {
+                drop(private);
+                self.restore_gpsp_solo_after_link_failure(
+                    &rom, &core_file, &storage, &stem, serial);
+                return Err(format!("Cannot begin private gpSP Link: {error}"));
+            }
+            SAMPLE_RATE.store(private.sample_rate, Ordering::Release);
+            AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            RUMBLE_STRENGTH.store(0, Ordering::Release);
+            self.game_accum = 0.0;
+            self.buttons = 0;
+            self.game = Some(private);
+            return Ok(());
         }
         if self.link_mode != LinkKind::Cable || game.linked() || game.is_link_sandbox() {
             return Err("mGBA Link requires a fresh Cable session".into());
@@ -1215,6 +1250,26 @@ impl Engine {
         self.buttons = 0;
         self.game = Some(linked);
         Ok(())
+    }
+
+    fn restore_gpsp_solo_after_link_failure(&mut self, rom: &Path,
+                                             core_file: &Path, storage: &Path,
+                                             stem: &str, serial: &'static str) {
+        // Preserve the exact pre-Link solo state and reopen with its actual
+        // serial option. The one-shot private resume marker takes precedence
+        // over any stale RetroArch autosave. Never continue blank after error.
+        match GameSession::open_gpsp_serial(rom, core_file, storage, stem,
+            self.settings.colour_correction, self.ra_service.as_ref(), serial) {
+            Ok(game) => {
+                SAMPLE_RATE.store(game.sample_rate, Ordering::Release);
+                self.game = Some(game);
+            }
+            Err(error) => {
+                SAMPLE_RATE.store(0, Ordering::Release);
+                PLAYING.store(false, Ordering::Release);
+                set_message(format!("gpSP solo restore requires eject/reload: {error}"));
+            }
+        }
     }
 
     fn restore_solo_after_link_failure(&mut self, rom: &Path,
