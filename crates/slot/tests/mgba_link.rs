@@ -376,6 +376,69 @@ fn a_link_state_of_two_single_gba_states_restores_each_player_where_they_were() 
     }
 }
 
+/// A6 A1 feasibility gate: two players leave DISTINCT in-progress solo
+/// machines, exchange the actual Host-pair/Join-single snapshots used by
+/// Android LinkPlay, and continue at the same game frame on both screens.
+/// No commercial ROM or external save is needed (the test builds its ROM).
+#[test]
+fn live_solo_host_join_snapshots_resume_without_a_title_screen() {
+    let _g = common::core_lock();
+    let Some(dylib) = vendored() else { return };
+    let rom = rom("a6-live-solo-to-linked.gba", common::gba_rom());
+
+    let mut solo = single_core(&dylib);
+    solo.load(&rom).expect("load solo GBA");
+    let mut snapshots = Vec::new();
+    for extra_frames in [10, 40] {
+        for _ in 0..extra_frames {
+            solo.run_frame(ButtonMask::default());
+        }
+        snapshots.push(solo.serialize().expect("snapshot active solo GBA"));
+    }
+    drop(solo);
+    assert!(!snapshots[0].starts_with(b"SLK1"));
+    assert!(!snapshots[1].starts_with(b"SLK1"));
+    assert_ne!(snapshots[0], snapshots[1], "the two progress snapshots must differ");
+
+    // Android's LinkPlay protocol starts with Host's local double-core
+    // snapshot plus Join's own single-core snapshot. No Host-only
+    // authoritative state and no replacement of Join's progress.
+    let host_bootstrap = slot::link_state::pair(&snapshots[0]);
+    assert!(slot::link_state::same_bios(&host_bootstrap, &snapshots[1]));
+    let combined = slot::link_state::combine_players(&host_bootstrap, &snapshots[1])
+        .expect("Host/Join snapshots should compose into a valid SLK1 pair");
+    assert_eq!(slot::link_state::local(&combined, 0).as_deref(), Some(snapshots[0].as_slice()));
+    assert_eq!(slot::link_state::local(&combined, 1).as_deref(), Some(snapshots[1].as_slice()));
+
+    let mut expected = Vec::new();
+    for before in &snapshots {
+        let mut core = single_core(&dylib);
+        core.load(&rom).expect("load solo comparator");
+        core.unserialize(before).expect("restore solo comparator");
+        for _ in 0..8 {
+            core.run_frame(ButtonMask::default());
+        }
+        expected.push(core.video_xrgb8888().to_vec());
+    }
+    assert_ne!(expected[0], expected[1], "different snapshots must paint different frames");
+
+    let mut joined_hashes = Vec::new();
+    for role in [0u8, 1] {
+        let mut core = link_core(&dylib, role);
+        core.load(&rom).expect("load two-GBA engine");
+        core.unserialize(&combined)
+            .expect("two-GBA engine must load the two live solo snapshots");
+        for _ in 0..8 {
+            core.run_frame_linked(ButtonMask::default(), ButtonMask::default());
+        }
+        assert_eq!(core.video_xrgb8888(), expected[role as usize],
+            "linked player {role} returned to title / lost in-progress solo image");
+        joined_hashes.push(fnv1a(&core.serialize().expect("snapshot linked engine")));
+    }
+    assert_eq!(joined_hashes[0], joined_hashes[1],
+        "Host and Join must compute identical SLK1 states after linked frames");
+}
+
 #[test]
 fn link_mode_refuses_anything_but_a_whole_link_state() {
     let _g = common::core_lock();
