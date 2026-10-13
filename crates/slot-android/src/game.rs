@@ -30,6 +30,13 @@ pub(crate) fn log_launch_timing(message: &str) {
     eprintln!("SlotKONKR: {message}");
 }
 
+// A Link core must NEVER become a standalone emulator after End Link,
+// peer loss or Android sleep. The private GBA state is a multiplayer-only
+// timeline. Resume requires safe Eject followed by a new solo core launch.
+fn emulation_may_advance(link_touched: bool, link_active: bool) -> bool {
+    !link_touched || link_active
+}
+
 const SRAM_PERIOD: Duration = Duration::from_secs(30);
 const REWIND_CAPTURE_FRAMES: u8 = 6; // 10 states/second at the original GBA FPS
 const UNDO_WINDOW: Duration = Duration::from_secs(30);
@@ -422,6 +429,12 @@ impl GameSession {
     /// False while cable lockstep is awaiting the other player. The caller
     /// must not subtract an emulated-frame budget until this returns true.
     pub fn advance(&mut self, buttons: u16, turbo: bool, record_rewind: bool) -> bool {
+        // A suspended or ended Multiplayer session must not fall through
+        // to core.run_frame() merely because self.link became None. This
+        // also handles Android onPause outside the Multiplayer overlay.
+        if !emulation_may_advance(self.link_touched, self.link.is_some()) {
+            return false;
+        }
         self.runahead_video.clear();
         let pressed = ButtonMask(buttons);
         let mapped = xy_buttons(pressed, turbo, self.frame_count);
@@ -865,6 +878,14 @@ mod solo_recovery_tests {
 #[cfg(test)]
 mod xy_mapping_tests {
     use super::*;
+    #[test]
+    fn ended_link_never_falls_through_to_solo_frames_after_android_sleep() {
+        assert!(emulation_may_advance(false, false), "normal solo works");
+        assert!(emulation_may_advance(true, true), "active Cable/RFU link works");
+        assert!(!emulation_may_advance(true, false),
+            "End Link, Wi-Fi loss or onPause must freeze the linked core");
+    }
+
     #[test]
     fn classic_turbo_keeps_the_original_slot_x_y_behavior() {
         for frame in 0..12 {
