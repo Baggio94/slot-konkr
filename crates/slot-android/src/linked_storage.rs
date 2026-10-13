@@ -69,7 +69,9 @@ mod tests {
         assert!(validate_solo_snapshot(&vec![0u8; MAX_SOLO_SNAPSHOT]).is_ok());
         assert!(validate_solo_snapshot(&[0u8; 0x3ff]).is_err());
         assert!(validate_solo_snapshot(&vec![0u8; MAX_SOLO_SNAPSHOT + 1]).is_err());
-        assert!(validate_solo_snapshot(&[b"SLK1", &[0; 0x400]].concat()).is_err());
+        let mut paired = b"SLK1".to_vec();
+        paired.resize(0x404, 0);
+        assert!(validate_solo_snapshot(&paired).is_err());
     }
 
     #[test]
