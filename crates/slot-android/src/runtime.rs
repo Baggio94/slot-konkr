@@ -74,6 +74,8 @@ enum Input {
     // Dedicated Mac AVD keyboard events: a quick Z/X tap must survive until
     // the emulator core has actually sampled it for one frame.
     EmulatorKey(i32, bool),
+    // Predefined shelf UI states from Android: no untrusted or long text on GL.
+    ShelfStatus(u8),
     Reset,
     GameReady { uri: String, path: String },
     GameError { uri: String, message: String },
@@ -158,6 +160,12 @@ const EJECT_SOUND_DELAY_S: f32 = 0.040;
 const EJECT_SOUND_PROGRESS: f32 = 1.0 - EJECT_SOUND_DELAY_S / EJECT_S;
 const SELECT_CHORD_MS: u128 = 600;
 const SELECT_TAP_FRAMES: u8 = 3;
+const SHELF_STATUS_TEXT: [&str; 8] = [
+    "", "SCANNING CARTRIDGES...", "NO GAMES FOUND",
+    "LIBRARY IMPORT FAILED", "FOLDER ACCESS EXPIRED",
+    "CANNOT READ ROM FOLDER", "FOLDER PICKER UNAVAILABLE",
+    "FOLDER PERMISSION FAILED",
+];
 const REWIND_STEP_S: f32 = 0.10;  // Original Slot's time-travel HUD + ~10 Hz restoration.
 
 const FF_DOUBLE_TAP_MS: u128 = 320;
@@ -415,6 +423,9 @@ struct Engine {
     menu_textures: Vec<(slot_gfx::TexId, u32, u32)>,
     menu_hints: [(slot_gfx::TexId, u32); 2],
     first_run_hint: (slot_gfx::TexId, u32),
+    shelf_status: u8,
+    shelf_status_faces: [(slot_gfx::TexId, u32, u32); 8],
+    shelf_status_start: (slot_gfx::TexId, u32),
     game_menu_hints: [(slot_gfx::TexId, u32); 3],
     link_hints: [(slot_gfx::TexId, u32); 3],
     board_texture: Option<slot_gfx::TexId>,
@@ -542,6 +553,14 @@ impl Engine {
         // GL scene rather than above it in an Android TextView.
         let first_run_hint = {
             let face = hint_face("START", "Open menu to add ROMs");
+            (gpu.create_texture(face.w, face.h, &face.rgba), face.w)
+        };
+        let shelf_status_faces = SHELF_STATUS_TEXT.map(|label| {
+            let face = quick_value_face(label, true);
+            (gpu.create_texture(face.w, face.h, &face.rgba), face.w, face.h)
+        });
+        let shelf_status_start = {
+            let face = hint_face("START", "Open Library");
             (gpu.create_texture(face.w, face.h, &face.rgba), face.w)
         };
         // Original Slot keycap typography also describes the actual in-game
@@ -698,6 +717,9 @@ impl Engine {
             menu_textures,
             menu_hints,
             first_run_hint,
+            shelf_status: 0,
+            shelf_status_faces,
+            shelf_status_start,
             game_menu_hints,
             link_hints,
             board_texture: None,
@@ -1200,6 +1222,11 @@ impl Engine {
                 self.link_identity = None;
                 self.game_emulation = None;
                 *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            }
+            Input::ShelfStatus(code) => {
+                self.shelf_status = if usize::from(code) < SHELF_STATUS_TEXT.len() {
+                    code
+                } else { 0 };
             }
             Input::GameError { uri, message } => {
                 if !self.inserted || !self.awaiting_game
@@ -3027,16 +3054,37 @@ impl Engine {
         }
         // The onboarding keycap belongs to Slot's own rendering lifecycle,
         // never the Android overlay. No hint is drawn behind an open menu.
-        if self.progress == 0.0 && matches!(self.overlay, ShelfOverlay::None)
-            && self.shelves.iter().all(|s| s.carts.is_empty()) {
-            let (tex, w) = self.first_run_hint;
-            commands.push(Draw::Tex {
-                x: (OUT_W as f32 - w as f32) / 2.0,
-                y: 34.0,
-                w: w as f32,
-                h: HINT_H as f32,
-                tex, alpha: 1.0,
-            });
+        if self.progress == 0.0 && matches!(self.overlay, ShelfOverlay::None) {
+            if self.shelf_status > 0 {
+                let (tex, w, h) = self.shelf_status_faces[usize::from(self.shelf_status)];
+                commands.push(Draw::Tex {
+                    x: (OUT_W as f32 - w as f32) / 2.0,
+                    // Keep status text below the Android corner indicators.
+                    y: 74.0,
+                    w: w as f32, h: h as f32,
+                    tex, alpha: 1.0,
+                });
+                if self.shelf_status != 1 {
+                    // Exactly the upstream Slot START keycap; menus hide both
+                    // messages and keycaps rather than leaving Android overlays.
+                    let (tex, w) = self.shelf_status_start;
+                    commands.push(Draw::Tex {
+                        x: (OUT_W as f32 - w as f32) / 2.0,
+                        y: 110.0,
+                        w: w as f32, h: HINT_H as f32,
+                        tex, alpha: 1.0,
+                    });
+                }
+            } else if self.shelves.iter().all(|s| s.carts.is_empty()) {
+                let (tex, w) = self.first_run_hint;
+                commands.push(Draw::Tex {
+                    x: (OUT_W as f32 - w as f32) / 2.0,
+                    y: 34.0,
+                    w: w as f32,
+                    h: HINT_H as f32,
+                    tex, alpha: 1.0,
+                });
+            }
         }
         self.draw_overlay(&mut commands);
         // Keep the upper indicators on the identical visibility lifecycle
@@ -3492,6 +3540,19 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeKey(
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
         .push_back(Input::Key(key, pressed != 0));
+}
+
+/// Kotlin reports a compact, predefined library status. The renderer alone
+/// owns the typography and START keycap; no Android TextView is overlaid.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetShelfStatus(
+    _env: *mut c_void, _activity: *mut c_void, status: i32,
+) {
+    let safe = if (0..SHELF_STATUS_TEXT.len() as i32).contains(&status) {
+        status as u8
+    } else { 0 };
+    INPUT.lock().unwrap_or_else(|poison| poison.into_inner())
+        .push_back(Input::ShelfStatus(safe));
 }
 
 /// Kotlin resolves the connected Wi-Fi interface and takes a MulticastLock

@@ -1,6 +1,7 @@
 package fyi.slot.konkr
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -9,6 +10,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.TextView
 import java.util.Locale
 
@@ -94,6 +96,39 @@ internal object SlotUi {
             }
             addView(name)
         }
+
+    /** The same upstream-rastered keycaps used by the native Slot renderer.
+     * Assets are generated at APK build-time by export_apps_legend.rs.
+     * Retain the label-font approximation only as a safe asset fallback.
+     */
+    fun nativeHint(context: Context, key: String, action: String): View {
+        val assetName = when (key.uppercase(Locale.ROOT) to action.uppercase(Locale.ROOT)) {
+            "A" to "SELECT" -> "select.png"
+            "B" to "BACK" -> "back.png"
+            "START" to "REFRESH" -> "refresh.png"
+            "X" to "SIGN OUT" -> "sign-out.png"
+            else -> return hint(context, key, action)
+        }
+        val image = runCatching {
+            context.assets.open("apps_controls/$assetName").use { BitmapFactory.decodeStream(it) }
+        }.getOrNull() ?: return hint(context, key, action)
+        val scale = (context.resources.displayMetrics.widthPixels / 720f)
+            .coerceIn(1f, 2f)
+        // A centered container allows weighted RA footer cells and larger
+        // Cart Studio bars without stretching upstream's exact 24px raster.
+        return android.widget.FrameLayout(context).apply {
+            contentDescription = "$key $action"
+            addView(ImageView(context).apply {
+                setImageBitmap(image)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                isClickable = false
+            }, android.widget.FrameLayout.LayoutParams(
+                (image.width * scale).toInt().coerceAtLeast(1),
+                (image.height * scale).toInt().coerceAtLeast(1),
+                Gravity.CENTER
+            ))
+        }
+    }
 
     fun field(context: Context, hint: String, password: Boolean = false): EditText =
         EditText(context).apply {
