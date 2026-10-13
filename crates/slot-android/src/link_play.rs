@@ -462,19 +462,20 @@ mod tests {
         assert_eq!(link_state::local(&host.state, 1).unwrap()[12], 0x22);
         assert_eq!(host.state, guest.state);
 
-        let before = host.steps;
         g.end(&mut guest);
+        // TCP END is delivered asynchronously. Wait for the reader worker to
+        // observe it *before* asserting the no-more-frames invariant: valid
+        // frames already in flight before End are not unsynchronised solo.
         let stop = Instant::now() + Duration::from_secs(3);
-        let mut stopped = false;
-        while Instant::now() < stop {
-            if matches!(h.frame(&mut host, ButtonMask(0)), Frame::Failed(
-                LinkError::PeerEnded | LinkError::Disconnected)) {
-                stopped = true;
-                break;
-            }
+        while Instant::now() < stop &&
+            !h.wire.peer_ended() && !h.wire.is_closed() {
             thread::sleep(Duration::from_millis(5));
         }
-        assert!(stopped, "TCP End must terminate the Host link");
+        assert!(h.wire.peer_ended() || h.wire.is_closed(),
+            "TCP End must reach the Host reader");
+        let before = host.steps;
+        assert!(matches!(h.frame(&mut host, ButtonMask(0)),
+            Frame::Failed(LinkError::PeerEnded | LinkError::Disconnected)));
         assert_eq!(host.steps, before, "Host must not run a solo frame after End");
     }
 
