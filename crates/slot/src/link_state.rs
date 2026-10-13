@@ -26,6 +26,31 @@ pub fn pair(state: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Build the *first* linked snapshot with player 0's in-progress Host
+/// cartridge and player 1's own Join cartridge. It is never a solo/RA state.
+/// Neither player's save is overwritten: the transport supplies the guest's
+/// personal single-GBA state before the host broadcasts the combined pair.
+pub fn combine_players(host_pair: &[u8], join_single: &[u8]) -> Option<Vec<u8>> {
+    const MAX_LINK_STATE: usize = 16 * 1024 * 1024;
+    let host_single = local(host_pair, 0)?;
+    // mGBA's ordinary GBA state contains a 0x400-byte header at minimum.
+    // Reject another SLK1 pair, truncated packets, overflow and huge payloads.
+    if host_single.len() < 0x400 || join_single.len() < 0x400
+        || join_single.starts_with(MAGIC)
+    {
+        return None;
+    }
+    let total = 12usize.checked_add(host_single.len())?.checked_add(join_single.len())?;
+    if total > MAX_LINK_STATE { return None; }
+    let mut combined = Vec::with_capacity(total);
+    combined.extend_from_slice(MAGIC);
+    for part in [&host_single[..], join_single] {
+        combined.extend_from_slice(&u32::try_from(part.len()).ok()?.to_le_bytes());
+        combined.extend_from_slice(part);
+    }
+    Some(combined)
+}
+
 fn bios(state: &[u8]) -> Option<u32> {
     let gba = if is_pair(state) {
         local(state, 0)?
@@ -72,6 +97,25 @@ mod tests {
         assert_eq!(local(&whole[..whole.len() - 1], 0), None);
         assert_eq!(local(&[whole.as_slice(), b"x"].concat(), 0), None);
         assert_eq!(local(&whole, 2), None);
+    }
+
+    #[test]
+    fn combined_link_begins_with_each_players_own_progress() {
+        let host = vec![0x11u8; 0x1400];
+        let join = vec![0x22u8; 0x1400];
+        let result = combine_players(&pair(&host), &join).unwrap();
+        assert_eq!(local(&result, 0).unwrap(), host);
+        assert_eq!(local(&result, 1).unwrap(), join);
+        assert_ne!(local(&result, 0), local(&result, 1));
+    }
+
+    #[test]
+    fn combined_link_rejects_corrupt_and_oversized_inputs() {
+        let host = pair(&vec![0x11u8; 0x400]);
+        assert!(combine_players(&host, &[0; 3]).is_none());
+        assert!(combine_players(&host, &pair(&vec![0u8; 0x400])).is_none());
+        assert!(combine_players(&host, &vec![0; 16 * 1024 * 1024]).is_none());
+        assert!(combine_players(b"not a pair", &vec![0; 0x400]).is_none());
     }
 
     fn gba(bios: u32) -> Vec<u8> {
