@@ -301,26 +301,23 @@ impl TcpLink {
             }
         });
 
+        let writer_closed = closed.clone();
         std::thread::spawn(move || {
             for out in wrx.iter() {
-                match out {
-                    Out::Packet(buf) => {
-                        let Ok(len) = u16::try_from(buf.len()) else {
-                            continue;
-                        };
-                        if writer.write_all(&len.to_be_bytes()).is_err() {
-                            return;
-                        }
-                        if writer.write_all(&buf).is_err() {
-                            return;
-                        }
-                    }
+                let sent = match out {
+                    Out::Packet(buf) => write_packet_frame(&mut writer, &buf),
                     Out::Control(op, ack) => {
-                        if writer.write_all(&[0, 0, 0, 1, op]).is_err() {
-                            return;
-                        }
-                        let _ = ack.send(());
+                        let result = writer.write_all(&[0, 0, 0, 1, op]);
+                        if result.is_ok() { let _ = ack.send(()); }
+                        result
                     }
+                };
+                if sent.is_err() {
+                    // A broken write side is a dead Link even when the reader
+                    // has not yet observed EOF. Never keep advancing gpSP
+                    // serial/RFU frames after a local TCP write failure.
+                    writer_closed.store(true, Ordering::Release);
+                    return;
                 }
             }
         });
@@ -345,6 +342,16 @@ impl TcpLink {
     pub fn nodelay(&self) -> std::io::Result<bool> {
         self.stream.nodelay()
     }
+}
+
+/// Every outbound frame must be lossless and fit the fork's u16 wire
+/// length. Silently dropping one (or a partial write) would desynchronize
+/// the linked emulators, so the writer treats either as a terminal error.
+fn write_packet_frame(writer: &mut impl Write, buf: &[u8]) -> std::io::Result<()> {
+    let len = u16::try_from(buf.len()).map_err(|_| std::io::Error::new(
+        std::io::ErrorKind::InvalidData, "Multiplayer packet exceeds TCP frame limit"))?;
+    writer.write_all(&len.to_be_bytes())?;
+    writer.write_all(buf)
 }
 
 impl Drop for TcpLink {
@@ -393,6 +400,30 @@ mod lab_negotiation_tests {
         assert_ne!(&identity().bytes()[..9], &greeting("BPRE"));
         assert_eq!(&identity().bytes()[..4], b"KMLB");
     }
+    #[test]
+    fn tcp_packet_framing_is_exact_and_never_silently_truncates_or_drops() {
+        let mut out = Vec::new();
+        write_packet_frame(&mut out, b"gba").unwrap();
+        assert_eq!(out, b"\\x00\\x03gba");
+        let oversized = vec![7u8; (u16::MAX as usize) + 1];
+        assert_eq!(write_packet_frame(&mut out, &oversized).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData);
+        assert_eq!(out, b"\\x00\\x03gba");
+    }
+
+    #[test]
+    fn broken_tcp_write_reports_error_before_link_can_assume_delivery() {
+        struct Broken;
+        impl Write for Broken {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "peer gone"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        assert_eq!(write_packet_frame(&mut Broken, b"frame").unwrap_err().kind(),
+            std::io::ErrorKind::BrokenPipe);
+    }
+
     #[test]
     fn all_critical_parameters_are_in_negotiation() {
         let base = identity().bytes();
