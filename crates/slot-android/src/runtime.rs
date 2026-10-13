@@ -2731,14 +2731,15 @@ impl Engine {
                 tex, alpha: 1.0,
             });
         }
-        let hints: &[(slot_gfx::TexId, u32)] = match self.link_phase {
-            LinkMenu::Pick(_) if self.link_mode_switchable() => &self.link_switch_hints,
-            LinkMenu::Pick(_) => &self.link_hints,
-            LinkMenu::Working { .. } => &self.link_hints[..1],
-            LinkMenu::Linked { opened: true, .. } => &self.link_connected_hints,
-            LinkMenu::Linked { opened: false, .. } | LinkMenu::Unplug { .. } => &[],
-            LinkMenu::Failed { .. } => &self.link_failed_hints,
-        };
+        let hints: &[(slot_gfx::TexId, u32)] =
+            match link_legend_profile(self.link_phase, self.link_mode_switchable()) {
+                LinkLegendProfile::PickerWithMode => &self.link_switch_hints,
+                LinkLegendProfile::Picker => &self.link_hints,
+                LinkLegendProfile::Searching => &self.link_hints[..1],
+                LinkLegendProfile::ConnectedMenu => &self.link_connected_hints,
+                LinkLegendProfile::Failed => &self.link_failed_hints,
+                LinkLegendProfile::None => &[],
+            };
         let seen = |w: u32| w.saturating_sub(HINT_EDGE) as f32;
         let total: f32 = hints.iter().map(|(_, w)| seen(*w)).sum::<f32>()
             + LINK_LEGEND_GAP * hints.len().saturating_sub(1) as f32;
@@ -3510,6 +3511,32 @@ impl Engine {
     }
 }
 
+/// Original Slot / fork draw_game_menu() picks exactly these groups of
+/// bottom keycaps. Keep selection separate from the GL scene so changes
+/// cannot accidentally show A Link while searching/linked or conceal
+/// SELECT Mode on a real gpSP RFU/Cable switchable title.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum LinkLegendProfile {
+    PickerWithMode, // B CANCEL | SELECT MODE | arrows SWAP | A LINK
+    Picker,         // B CANCEL | arrows SWAP | A LINK
+    Searching,      // B CANCEL
+    ConnectedMenu,  // B BACK | A END LINK (only reopened overlay)
+    Failed,         // A OK
+    None,           // initial LINKED / animated Unplug
+}
+
+fn link_legend_profile(menu: LinkMenu, selectable_mode: bool) -> LinkLegendProfile {
+    match menu {
+        LinkMenu::Pick(_) if selectable_mode => LinkLegendProfile::PickerWithMode,
+        LinkMenu::Pick(_) => LinkLegendProfile::Picker,
+        LinkMenu::Working { .. } => LinkLegendProfile::Searching,
+        LinkMenu::Linked { opened: true, .. } => LinkLegendProfile::ConnectedMenu,
+        LinkMenu::Linked { opened: false, .. } | LinkMenu::Unplug { .. } =>
+            LinkLegendProfile::None,
+        LinkMenu::Failed { .. } => LinkLegendProfile::Failed,
+    }
+}
+
 /// A Link Mode toggle must never lie about actual physical/serial support.
 fn link_mode_can_switch(core: Core, chosen: LinkKind, code: &str,
                         title: &str, clean: bool) -> bool {
@@ -3649,6 +3676,33 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 #[cfg(test)]
 mod ui_feedback_tests {
     use super::*;
+
+    #[test]
+    fn multiplayer_bottom_legends_match_all_original_slot_screen_states() {
+        use LinkLegendProfile as H;
+        assert_eq!(link_legend_profile(LinkMenu::Pick(LinkRow::Host), true),
+            H::PickerWithMode);
+        assert_eq!(link_legend_profile(LinkMenu::Pick(LinkRow::Join), true),
+            H::PickerWithMode);
+        assert_eq!(link_legend_profile(LinkMenu::Pick(LinkRow::Host), false),
+            H::Picker);
+        assert_eq!(link_legend_profile(LinkMenu::Working {
+            role: LinkRow::Host, step: LinkStep::Waiting, since: 100,
+        }, true), H::Searching);
+        assert_eq!(link_legend_profile(LinkMenu::Linked {
+            role: LinkRow::Host, worked: 100, since: 500, opened: false,
+        }, true), H::None);
+        assert_eq!(link_legend_profile(LinkMenu::Linked {
+            role: LinkRow::Join, worked: 100, since: 500, opened: true,
+        }, true), H::ConnectedMenu);
+        assert_eq!(link_legend_profile(LinkMenu::Failed {
+            role: LinkRow::Join, fail: LinkFail::PeerVanished,
+            worked: 100, since: 500,
+        }, true), H::Failed);
+        assert_eq!(link_legend_profile(LinkMenu::Unplug {
+            role: LinkRow::Join, since: 500,
+        }, true), H::None);
+    }
 
     #[test]
     fn eject_to_play_solo_is_an_action_not_a_noop() {
