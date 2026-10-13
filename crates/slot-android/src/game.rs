@@ -288,9 +288,27 @@ impl GameSession {
                     Err(err)
                 }
             }).ok();
-            if let Some(bytes) = external.or_else(local) {
-                if let Err(error) = core.unserialize(&bytes) {
-                    eprintln!("slot-konkr: {} state resume skipped: {error}", which.text());
+            // Re-entering solo after mGBA Link must resume the *fresh*
+            // solo snapshot preserved before switching cores. Older
+            // RetroArch imports must not silently roll back that timeline.
+            let marker = state.with_extension("prefer-solo-after-link.once");
+            let prefer_private = marker.is_file();
+            let (chosen, used_private) = if prefer_private {
+                match local() {
+                    Some(bytes) => (Some(bytes), true),
+                    None => (external, false),
+                }
+            } else { (external.or_else(local), false) };
+            if let Some(bytes) = chosen {
+                match core.unserialize(&bytes) {
+                    Ok(()) if used_private => {
+                        std::fs::remove_file(&marker).map_err(|e|
+                            format!("Cannot clear one-shot solo-state guard: {e}"))?;
+                    }
+                    Ok(()) => {}
+                    Err(error) => {
+                        eprintln!("slot-konkr: {} state resume skipped: {error}", which.text());
+                    }
                 }
             }
         }
@@ -421,6 +439,10 @@ impl GameSession {
         if let Some(data) = self.core.save_rtc() {
             atomic_write(&self.rtc, &data).map_err(|e| format!("Cannot preserve solo RTC: {e}"))?;
         }
+        // One-time recovery preference. It leaves the RetroArch import file
+        // intact and is cleared only after successful private state restore.
+        atomic_write(&self.state.with_extension("prefer-solo-after-link.once"), b"1")
+            .map_err(|e| format!("Cannot record solo recovery guard: {e}"))?;
         Ok(())
     }
 
