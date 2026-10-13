@@ -81,6 +81,18 @@ pub struct GameSession {
     pub fps: f64,
 }
 
+/// Testable strict recovery used by both mGBA and gpSP after a Link
+/// boot failure. Opening the core does not prove its solo save-state loaded.
+fn restore_solo_checkpoint_to_core(core: &mut dyn RetroCore,
+                                    saved: &[u8]) -> Result<(), String> {
+    crate::linked_storage::validate_solo_snapshot(saved)?;
+    core.unserialize(saved).map_err(|e|
+        format!("Refusing unsafe solo recovery: saved state rejected by core: {e}"))?;
+    let verified = core.serialize().map_err(|e|
+        format!("Cannot verify restored solo state: {e}"))?;
+    crate::linked_storage::validate_solo_snapshot(&verified)
+}
+
 /// Preserve original Slot turbo in TURBO mode; in A/B mode Y acts as A
 /// and X as B, *in addition to* both original buttons. Applied equally to
 /// real and speculative Run-Ahead frames so input prediction never diverges.
@@ -511,12 +523,7 @@ impl GameSession {
         if self.linked_boot.is_some() || self.link_touched {
             return Err("Cannot restore a solo checkpoint inside a Link session".into());
         }
-        crate::linked_storage::validate_solo_snapshot(saved)?;
-        self.core.unserialize(saved).map_err(|e|
-            format!("Refusing unsafe solo recovery: saved state rejected by core: {e}"))?;
-        let verified = self.core.serialize().map_err(|e|
-            format!("Cannot verify restored solo state: {e}"))?;
-        crate::linked_storage::validate_solo_snapshot(&verified)?;
+        restore_solo_checkpoint_to_core(self.core.as_mut(), saved)?;
         // Clear presentation/input time travel from any pre-recovery state.
         self.runahead_video.clear();
         self.rewind_frames = 0;
@@ -788,6 +795,70 @@ impl Drop for GameSession {
         // Ejection, Android lifecycle teardown and failed launches must tell
         // the remote console the link ended, not leave an orphaned TCP session.
         self.end_multiplayer();
+    }
+}
+
+#[cfg(test)]
+mod solo_recovery_tests {
+    use super::*;
+    use slot_retro::{AvInfo, CoreError};
+
+    struct CheckpointCore {
+        state: Vec<u8>,
+        reject_restore: bool,
+        corrupt_verification: bool,
+    }
+    impl RetroCore for CheckpointCore {
+        fn load(&mut self, _: &Path) -> Result<(), CoreError> { Ok(()) }
+        fn run_frame(&mut self, _: ButtonMask) {}
+        fn video_xrgb8888(&self) -> &[u8] { &[] }
+        fn take_audio(&mut self) -> Vec<i16> { vec![] }
+        fn serialize(&mut self) -> Result<Vec<u8>, CoreError> {
+            if self.corrupt_verification { Ok(vec![0; 8]) }
+            else { Ok(self.state.clone()) }
+        }
+        fn unserialize(&mut self, data: &[u8]) -> Result<(), CoreError> {
+            if self.reject_restore {
+                return Err(CoreError::State("wrong core state".into()));
+            }
+            self.state = data.to_vec();
+            Ok(())
+        }
+        fn save_ram(&self) -> Option<Vec<u8>> { None }
+        fn load_save_ram(&mut self, _: &[u8]) -> Result<(), CoreError> { Ok(()) }
+        fn av_info(&self) -> AvInfo {
+            AvInfo { fps: 59.7275, sample_rate: 32768.0 }
+        }
+    }
+
+    #[test]
+    fn failed_link_reopens_exact_solo_checkpoint_never_empty_title_state() {
+        let mut core = CheckpointCore {
+            state: vec![0xA1; 0x800], reject_restore: false,
+            corrupt_verification: false,
+        };
+        let original = vec![0xB2; 0x800];
+        restore_solo_checkpoint_to_core(&mut core, &original).unwrap();
+        assert_eq!(core.state, original);
+        let mut paired = original.clone();
+        paired[..4].copy_from_slice(b"SLK1");
+        assert!(restore_solo_checkpoint_to_core(&mut core, &paired).is_err());
+        assert_eq!(core.state, original);
+    }
+
+    #[test]
+    fn rejected_or_invalidly_serialized_checkpoint_must_report_failure() {
+        let saved = vec![0xBA; 0x800];
+        let mut core = CheckpointCore {
+            state: vec![0x11; 0x800], reject_restore: true,
+            corrupt_verification: false,
+        };
+        assert!(restore_solo_checkpoint_to_core(&mut core, &saved).is_err());
+        assert_eq!(core.state, vec![0x11; 0x800]);
+        core.reject_restore = false;
+        core.corrupt_verification = true;
+        assert!(restore_solo_checkpoint_to_core(&mut core, &saved).is_err(),
+            "successful unserialize without valid serialization is not recovery");
     }
 }
 
