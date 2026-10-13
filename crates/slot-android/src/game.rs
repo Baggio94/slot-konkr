@@ -363,7 +363,7 @@ impl GameSession {
             // Host snapshot must contain both GBAs. A solo state cannot be
             // exchanged or restored into this linked engine.
             let state = self.core.serialize().map_err(|e| e.to_string())?;
-            if !slot::link_state::is_pair(&state) {
+            if !crate::link_state::is_pair(&state) {
                 return Err("mGBA Link core did not initialize an SLK1 two-GBA state".into());
             }
         } else {
