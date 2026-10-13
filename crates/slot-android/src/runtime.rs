@@ -960,6 +960,29 @@ impl Engine {
         UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(16);
     }
 
+    /// A Lab session must negotiate exact backend, mode, ROM revision,
+    /// compiled core and BIOS before touching the current solo timeline.
+    /// The worker hashes all files; the GL/render thread only passes paths.
+    fn link_config(&self) -> Result<crate::multiplayer::LinkConfig, String> {
+        let session = self.game.as_ref().ok_or("No running game")?;
+        let identity = self.link_identity.as_ref().ok_or("No GBA Link identity")?;
+        let (storage, library) = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .clone().ok_or("Slot storage not mounted")?;
+        let kind = session.core_kind();
+        let backend = match kind {
+            Core::Mgba => crate::multiplayer::Backend::MgbaSlotCable,
+            Core::Gpsp => crate::multiplayer::Backend::GpspNetpacket,
+        };
+        Ok(crate::multiplayer::LinkConfig {
+            game: identity.code.clone(),
+            rom: session.rom_path().to_path_buf(),
+            core_file: library.join(format!("lib{}_libretro.so", kind.as_str())),
+            bios_file: storage.join("BIOS/gba_bios.bin"),
+            backend,
+            mode: self.link_mode,
+        })
+    }
+
     fn fail_multiplayer(&mut self, reason: &str, failure: LinkFail) {
         self.cancel_link_discovery();
         self.link_phase = LinkMenu::Failed {
@@ -1083,12 +1106,11 @@ impl Engine {
                     let start = address.parse::<Ipv4Addr>()
                         .map_err(|_| "Invalid Wi-Fi IPv4 address".to_string())
                         .and_then(|ip| {
-                            let code = self.link_identity.as_ref()
-                                .ok_or_else(|| "Game identity missing".to_owned())?;
+                            let config = self.link_config()?;
                             let role = if self.link_role == LinkRow::Host {
                                 LinkRole::Host
                             } else { LinkRole::Join };
-                            LinkStarter::spawn(role, ip, &code.code).map_err(|e| e.to_string())
+                            LinkStarter::spawn(role, ip, config).map_err(|e| e.to_string())
                         });
                     match start {
                         Ok(starter) => self.link_starter = Some(starter),
@@ -1111,9 +1133,8 @@ impl Engine {
                             .map_err(|_| "Invalid emulator local IPv4".to_owned())?;
                         let host = host.parse::<Ipv4Addr>()
                             .map_err(|_| "Invalid KONKR host IPv4".to_owned())?;
-                        let id = self.link_identity.as_ref()
-                            .ok_or_else(|| "No GBA game identity".to_owned())?;
-                        LinkStarter::spawn_direct_join(local, host, &id.code)
+                        let config = self.link_config()?;
+                        LinkStarter::spawn_direct_join(local, host, config)
                             .map_err(|e| e.to_string())
                     })();
                     match result {
