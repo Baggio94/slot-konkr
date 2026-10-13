@@ -50,6 +50,10 @@ pub struct GameSession {
     link_touched: bool,
     // Isolated GBA Link sessions never share SRAM, RTC or states with solo/RetroArch.
     linked_boot: Option<Role>,
+    // Upstream gpSP serial hardware mode selected before retro_load_game.
+    // Changing auto/rfu/mul_poke requires reloading the core, never a
+    // cosmetic LinkKind flip after the existing serial port was initialized.
+    gpsp_serial: &'static str,
     rom_path: PathBuf,
     rom_stem: String,
     save: PathBuf,
@@ -93,7 +97,21 @@ impl GameSession {
                 colour_correction: bool,
                 achievements: Option<&slot_achievements::Service>) -> Result<Self, String> {
         Self::open_internal(rom, core_file, storage, which, platform, resume_state,
-            rom_stem, gb_palette, colour_correction, achievements, None)
+            rom_stem, gb_palette, colour_correction, achievements, None, "auto")
+    }
+
+    /// Slot upstream treats GBA Cable/Wireless as a gpSP core option fixed
+    /// at ROM load. For link-mode switches, reload the core with the selected
+    /// official gpsp_serial option and restore the saved solo timeline.
+    pub fn open_gpsp_serial(rom: &Path, core_file: &Path, storage: &Path,
+                            rom_stem: &str, colour_correction: bool,
+                            achievements: Option<&slot_achievements::Service>,
+                            serial: &'static str) -> Result<Self, String> {
+        if !matches!(serial, "auto" | "rfu" | "mul_poke" | "mul_aw1" | "mul_aw2") {
+            return Err("Unsupported gpSP GBA serial mode".into());
+        }
+        Self::open_internal(rom, core_file, storage, Core::Gpsp, Platform::Gba,
+            true, rom_stem, None, colour_correction, achievements, None, serial)
     }
 
     /// Reopen a *fresh* two-GBA mGBA instance. The libretro link options
@@ -103,7 +121,7 @@ impl GameSession {
                             rom_stem: &str, colour_correction: bool,
                             role: Role) -> Result<Self, String> {
         Self::open_internal(rom, core_file, storage, Core::Mgba, Platform::Gba,
-            false, rom_stem, None, colour_correction, None, Some(role))
+            false, rom_stem, None, colour_correction, None, Some(role), "auto")
     }
 
     fn open_internal(rom: &Path, core_file: &Path, storage: &Path,
@@ -111,7 +129,8 @@ impl GameSession {
                      rom_stem: &str, gb_palette: Option<&str>,
                      colour_correction: bool,
                      achievements: Option<&slot_achievements::Service>,
-                     linked_boot: Option<Role>) -> Result<Self, String> {
+                     linked_boot: Option<Role>,
+                     gpsp_serial: &'static str) -> Result<Self, String> {
         let opening_at = Instant::now();
         if linked_boot.is_some() && (which != Core::Mgba || platform != Platform::Gba || resume_state || achievements.is_some()) {
             return Err("Invalid mGBA Multiplayer boot configuration".into());
@@ -211,6 +230,9 @@ impl GameSession {
                     if colour_correction { "Auto" } else { "OFF" });
             }
             Core::Gpsp => {
+                // Replicate official Slot/fork's core.rs: this option must
+                // precede core.load(), and reloading is necessary to switch.
+                core.set_option("gpsp_serial", gpsp_serial);
                 core.set_option("gpsp_bios", "auto");
                 core.set_option("gpsp_boot_mode", "bios");
                 core.set_option("gpsp_color_correction",
@@ -319,7 +341,7 @@ impl GameSession {
         let sample_rate = core.av_info().sample_rate.round() as i32;
         let fps = core.av_info().fps.clamp(30.0, 120.0);
         Ok(Self {
-            core, link: None, link_touched: false, linked_boot,
+            core, link: None, link_touched: false, linked_boot, gpsp_serial,
             rom_path: rom.to_path_buf(), rom_stem: rom_stem.to_owned(),
             save, rtc, manual_export_prefix, state, retroarch_export, retroarch_import, ring,
             rewind: RewindThread::spawn(REWIND_BYTES), rewind_frames: 0,
@@ -417,6 +439,7 @@ impl GameSession {
     }
 
     pub fn core_kind(&self) -> Core { self.core_kind }
+    pub fn loaded_serial(&self) -> &'static str { self.gpsp_serial }
     pub fn rom_path(&self) -> &Path { &self.rom_path }
     pub fn rom_stem(&self) -> &str { &self.rom_stem }
     pub fn is_link_sandbox(&self) -> bool { self.linked_boot.is_some() }
