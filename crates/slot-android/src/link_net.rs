@@ -404,11 +404,11 @@ mod lab_negotiation_tests {
     fn tcp_packet_framing_is_exact_and_never_silently_truncates_or_drops() {
         let mut out = Vec::new();
         write_packet_frame(&mut out, b"gba").unwrap();
-        assert_eq!(out, b"\\x00\\x03gba");
+        assert_eq!(out, vec![0, 3, b'g', b'b', b'a']);
         let oversized = vec![7u8; (u16::MAX as usize) + 1];
         assert_eq!(write_packet_frame(&mut out, &oversized).unwrap_err().kind(),
             std::io::ErrorKind::InvalidData);
-        assert_eq!(out, b"\\x00\\x03gba");
+        assert_eq!(out, vec![0, 3, b'g', b'b', b'a']);
     }
 
     #[test]
