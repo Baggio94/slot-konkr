@@ -108,6 +108,48 @@ fn sha256_file(path: &Path, max_size: u64) -> io::Result<[u8; 32]> {
     Ok(hash)
 }
 
+/// The SHA256 of the compiled .so cannot be the network identity: macOS
+/// AVD uses x86_64 while KONKR uses arm64. Even with identical pinned source
+/// and Link behavior, the ELF bytes are necessarily different. KMLB/2
+/// authenticates the exact upstream source pin + Slot patch recipe instead,
+/// still distinguishing mGBA and gpSP and failing closed on mismatched ROM,
+/// BIOS, backend and Cable/RFU mode.
+///
+/// The source recipe is embedded at compile time from the repository files
+/// actually used by CI's pinned core builders. Any change to these patches,
+/// build scripts or audio-sidecar logic changes the negotiated identity.
+/// This is a compatibility fingerprint, not a cryptographic attestation of
+/// the .so binary (which must still be verified when packaging the APK).
+fn portable_core_recipe(backend: Backend) -> [u8; 32] {
+    let mut digest = Context::new(&SHA256);
+    digest.update(b"slot-konkr-KMLB2-cross-ABI-core-recipe-v1");
+    let files: &[&[u8]] = match backend {
+        Backend::MgbaSlotCable => &[
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/build-mgba-android.sh")),
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/mgba/build.sh")),
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/mgba/685023e05-fifo-dma-source-offset.patch")),
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/mgba/gb-audio-capacitor.patch")),
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/mgba/gb-audio-stopped-channel.patch")),
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/mgba/link-mode.patch")),
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/mgba/zz-gb-link-mode.patch")),
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/mgba/zz-link-peer-frameskip.patch")),
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/mgba/zz-link-peer-silence.patch")),
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/patch-mgba-speculative-audio.py")),
+        ],
+        Backend::GpspNetpacket => &[
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/build-gpsp-android.sh")),
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/patch-gpsp-speculative-audio.py")),
+        ],
+    };
+    for bytes in files {
+        digest.update(&(bytes.len() as u64).to_be_bytes());
+        digest.update(bytes);
+    }
+    let mut hash = [0; 32];
+    hash.copy_from_slice(digest.finish().as_ref());
+    hash
+}
+
 impl LinkConfig {
     fn fingerprint(&self) -> io::Result<LabGreeting> {
         let code = game_code(&self.game).ok_or_else(||
@@ -121,6 +163,14 @@ impl LinkConfig {
         let bios_sha256 = if self.bios_file.is_file() {
             sha256_file(&self.bios_file, 1024 * 1024)?
         } else { [0u8; 32] };
+        // Refuse a missing/empty/unreasonably sized native core. Its ELF
+        // digest is deliberately NOT compared across CPU architectures.
+        // The pinned source + Slot patches supply a portable identity.
+        let metadata = std::fs::metadata(&self.core_file)?;
+        if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 64 * 1024 * 1024 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData,
+                "Invalid Multiplayer native core file"));
+        }
         Ok(LabGreeting {
             game,
             backend: match self.backend {
@@ -130,7 +180,7 @@ impl LinkConfig {
                 LinkKind::Cable => 1, LinkKind::Wireless => 2,
             },
             rom_sha256: sha256_file(&self.rom, 128 * 1024 * 1024)?,
-            core_sha256: sha256_file(&self.core_file, 64 * 1024 * 1024)?,
+            core_sha256: portable_core_recipe(self.backend),
             bios_sha256,
         })
     }
@@ -168,6 +218,53 @@ fn connect(role: Role, local: Ipv4Addr, config: &LinkConfig,
                 TcpLink::join_lab_greeted(addr.into(), &fingerprint)
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod cross_abi_fingerprint_tests {
+    use super::*;
+
+    #[test]
+    fn mac_x86_and_konkr_arm64_match_source_recipe_but_not_unrelated_cores() {
+        let root = std::env::temp_dir().join(format!(
+            "slot-a6-portable-link-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&root).unwrap();
+        let rom = root.join("game.gba");
+        let bios = root.join("gba_bios.bin");
+        let mac = root.join("mac-x86_64.so");
+        let konkr = root.join("konkr-arm64.so");
+        std::fs::write(&rom, b"exact same cartridge").unwrap();
+        std::fs::write(&bios, b"exact same BIOS").unwrap();
+        std::fs::write(&mac, b"ELF-for-x86_64").unwrap();
+        std::fs::write(&konkr, b"ELF-for-arm64-different-bytes").unwrap();
+        let mut left = LinkConfig {
+            game: "BPRE".into(), rom: rom.clone(), core_file: mac,
+            bios_file: bios.clone(), backend: Backend::MgbaSlotCable,
+            mode: LinkKind::Cable,
+        };
+        let mut right = left.clone();
+        right.core_file = konkr;
+        let host = left.fingerprint().unwrap();
+        let join = right.fingerprint().unwrap();
+        assert_eq!(host, join, "different Android ABIs must negotiate one pinned core source");
+        assert_ne!(portable_core_recipe(Backend::MgbaSlotCable),
+            portable_core_recipe(Backend::GpspNetpacket));
+        right.backend = Backend::GpspNetpacket;
+        assert_ne!(host, right.fingerprint().unwrap());
+        right.backend = Backend::MgbaSlotCable;
+        right.mode = LinkKind::Wireless;
+        assert!(right.fingerprint().is_err(), "mGBA cannot advertise unsupported RFU");
+        right.mode = LinkKind::Cable;
+        std::fs::write(&rom, b"modified or hacked ROM").unwrap();
+        assert_ne!(host.rom_sha256, left.fingerprint().unwrap().rom_sha256);
+        std::fs::write(&rom, b"exact same cartridge").unwrap();
+        std::fs::write(&bios, b"wrong BIOS").unwrap();
+        assert_ne!(host.bios_sha256, left.fingerprint().unwrap().bios_sha256);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
 
