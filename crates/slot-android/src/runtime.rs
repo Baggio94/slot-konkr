@@ -1709,6 +1709,10 @@ impl Engine {
                                         game.end_multiplayer();
                                     }
                                     self.hud.set_link(LinkBadge::Off);
+                                    let now = self.link_millis();
+                                    // Upstream Slot uses its existing HUD toast on
+                                    // explicit End Link, not a fabricated Link SFX.
+                                    self.hud.toast(Toast::LinkEnded, now);
                                     set_message("Multiplayer ended. Eject to return to solo.".into());
                                     self.link_phase = LinkMenu::Unplug {
                                         role, since: self.link_millis(),
@@ -1799,6 +1803,8 @@ impl Engine {
                                                     game.end_multiplayer();
                                                 }
                                                 self.hud.set_link(LinkBadge::Off);
+                                                let now = self.link_millis();
+                                                self.hud.toast(Toast::LinkEnded, now);
                                                 set_message("Multiplayer disconnected".into());
                                             } else { self.enter_multiplayer_menu(); }
                                         }
@@ -3290,6 +3296,10 @@ impl Engine {
                             // of silently continuing a divergent solo timeline.
                             session.end_multiplayer();
                             self.hud.set_link(link_badge_for(self.link_role, true));
+                            // Preserve the broken Link badge and show the
+                            // original Slot reason-specific HUD toast.
+                            let now = self.born.elapsed().as_millis() as u64;
+                            self.hud.toast(link_fault_toast(fault), now);
                             self.ff_held = false;
                             self.ff_latched = false;
                             self.rewind_held = false;
@@ -3508,6 +3518,17 @@ fn game_menu_ejects(row: usize, requires_relaunch: bool) -> bool {
     row == 2 || (row == 0 && requires_relaunch)
 }
 
+/// The original Slot HUD distinguishes a remote end and a BIOS mismatch.
+fn link_fault_toast(fault: crate::link_play::LinkError) -> Toast {
+    match fault {
+        crate::link_play::LinkError::BiosMismatch => Toast::BiosMismatch,
+        crate::link_play::LinkError::PeerEnded
+        | crate::link_play::LinkError::Disconnected
+        | crate::link_play::LinkError::InvalidState
+        | crate::link_play::LinkError::Timeout => Toast::PeerEnded,
+    }
+}
+
 /// Map the negotiated on-wire role to upstream Slot Link icon variants.
 fn link_badge_for(role: LinkRow, disconnected: bool) -> LinkBadge {
     match (role, disconnected) {
@@ -3651,6 +3672,17 @@ mod ui_feedback_tests {
             "BPRE", "POKEMON FIRE", true));
         assert!(!link_mode_can_switch(Core::Gpsp, LinkKind::Cable,
             "NONE", "UNKNOWN", false));
+    }
+
+    #[test]
+    fn link_failures_use_upstream_toasts_not_invented_link_sounds() {
+        use crate::link_play::LinkError;
+        assert_eq!(link_fault_toast(LinkError::BiosMismatch), Toast::BiosMismatch);
+        for fault in [LinkError::PeerEnded, LinkError::Disconnected,
+                      LinkError::InvalidState, LinkError::Timeout] {
+            assert_eq!(link_fault_toast(fault), Toast::PeerEnded);
+        }
+        assert_eq!(Toast::LinkEnded.text(), "Link ended");
     }
 
     #[test]
