@@ -48,6 +48,10 @@ pub struct GameSession {
     // A linked mGBA state may contain TWO cores, incompatible with solo
     // RetroArch .state files. Never overwrite solo timeline after link use.
     link_touched: bool,
+    // Isolated GBA Link sessions never share SRAM, RTC or states with solo/RetroArch.
+    linked_boot: Option<Role>,
+    rom_path: PathBuf,
+    rom_stem: String,
     save: PathBuf,
     rtc: PathBuf,
     manual_export_prefix: PathBuf,
@@ -88,7 +92,30 @@ impl GameSession {
                 rom_stem: &str, gb_palette: Option<&str>,
                 colour_correction: bool,
                 achievements: Option<&slot_achievements::Service>) -> Result<Self, String> {
+        Self::open_internal(rom, core_file, storage, which, platform, resume_state,
+            rom_stem, gb_palette, colour_correction, achievements, None)
+    }
+
+    /// Reopen a *fresh* two-GBA mGBA instance. The libretro link options
+    /// must be set BEFORE retro_load_game; an existing solo core cannot switch.
+    /// Never pass RetroAchievements to this experimental dual-instance session.
+    pub fn open_mgba_linked(rom: &Path, core_file: &Path, storage: &Path,
+                            rom_stem: &str, colour_correction: bool,
+                            role: Role) -> Result<Self, String> {
+        Self::open_internal(rom, core_file, storage, Core::Mgba, Platform::Gba,
+            false, rom_stem, None, colour_correction, None, Some(role))
+    }
+
+    fn open_internal(rom: &Path, core_file: &Path, storage: &Path,
+                     which: Core, platform: Platform, resume_state: bool,
+                     rom_stem: &str, gb_palette: Option<&str>,
+                     colour_correction: bool,
+                     achievements: Option<&slot_achievements::Service>,
+                     linked_boot: Option<Role>) -> Result<Self, String> {
         let opening_at = Instant::now();
+        if linked_boot.is_some() && (which != Core::Mgba || platform != Platform::Gba || resume_state || achievements.is_some()) {
+            return Err("Invalid mGBA Multiplayer boot configuration".into());
+        }
         if !rom.exists() || !core_file.exists() {
             return Err(format!("ROM cache or {} core missing", which.text()));
         }
@@ -104,20 +131,44 @@ impl GameSession {
             rom_stem.chars().any(|c| c == '/' || c == '\\' || c.is_control()) {
             return Err("Unsafe ROM save filename".into());
         }
-        let core_root = root.join(which.text());
+        let solo_core_root = root.join(which.text());
+        // A linked session has a *different* private save timeline for
+        // each ROM and role. Never sync either player to RetroArch/SharedGBA.
+        let core_root = if let Some(role) = linked_boot {
+            root.join("Multiplayer").join("mGBA").join(id)
+                .join(if role == Role::Host { "host" } else { "join" })
+        } else { solo_core_root.clone() };
         std::fs::create_dir_all(&core_root).map_err(|e| e.to_string())?;
         let save = core_root.join(format!("{rom_stem}.srm"));
         let rtc = core_root.join(format!("{rom_stem}.rtc"));
+        if linked_boot.is_some() {
+            // The first multiplayer visit starts from a COPY of the player's
+            // in-game solo progress. A subsequent visit continues its private
+            // link copy; never overwrite it from a newer solo save.
+            for (ext, target) in [("srm", &save), ("rtc", &rtc)] {
+                let source = solo_core_root.join(format!("{rom_stem}.{ext}"));
+                if !target.exists() && source.is_file() {
+                    let data = std::fs::read(&source).map_err(|e| e.to_string())?;
+                    if data.len() > 1024 * 1024 {
+                        return Err(format!("Refusing oversized Multiplayer {ext} seed"));
+                    }
+                    atomic_write(target, &data).map_err(|e| e.to_string())?;
+                }
+            }
+        }
         // Save states belong to their specific emulator core. Incompatible
         // mGBA/gpSP states must never be deserialized in the other core.
         // Legacy single-core .state files are still readable by mGBA only.
-        let state = root.join(format!("{id}.{}.state", which.as_str()));
-        let retroarch_export = root.join(format!("{id}.{}.retroarch-export.state.auto", which.as_str()));
-        let retroarch_import = root.join(format!("{id}.{}.retroarch-import.state.auto", which.as_str()));
-        let manual_dir = root.join("ManualExports");
+        let state_root = if linked_boot.is_some() { &core_root } else { &root };
+        let state = state_root.join(format!("{id}.{}.state", which.as_str()));
+        let retroarch_export = state_root.join(format!("{id}.{}.retroarch-export.state.auto", which.as_str()));
+        let retroarch_import = state_root.join(format!("{id}.{}.retroarch-import.state.auto", which.as_str()));
+        let manual_dir = state_root.join("ManualExports");
         std::fs::create_dir_all(&manual_dir).map_err(|e| e.to_string())?;
         let manual_export_prefix = manual_dir.join(format!("{id}.{}", which.as_str()));
-        let ring = StateRing::new(storage, platform, which, id);
+        let ring = StateRing::new(
+            if linked_boot.is_some() { core_root.as_path() } else { storage },
+            platform, which, id);
         // mGBA's libretro core looks for gba_bios.bin / gb_bios.bin /
         // gbc_bios.bin in RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY.
         // Keep the user-selected SAF folder external and read-only: Android
@@ -137,6 +188,12 @@ impl GameSession {
         let palette_live = dmg_only && gb_palette.is_some();
         match which {
             Core::Mgba => {
+                if let Some(role) = linked_boot {
+                    core.set_option("mgba_link", "on");
+                    core.set_option("mgba_link_player", if role == Role::Host { "0" } else { "1" });
+                } else {
+                    core.set_option("mgba_link", "off");
+                }
                 core.set_option("mgba_use_bios", "ON");
                 core.set_option("mgba_skip_bios", "OFF");
                 core.set_option("mgba_sgb_borders", "OFF");
@@ -212,7 +269,7 @@ impl GameSession {
             }
             eprintln!("slot-konkr: cross-core SRAM selected; old savestate auto-resume suppressed");
         }
-        if resume_state && !cross_core_import {
+        if resume_state && linked_boot.is_none() && !cross_core_import {
             // Prefer a successfully decoded RetroArch auto state, then the
             // Slot private state. A compressed/unrecognized external file is
             // kept intact and is NEVER interpreted as raw emulator memory.
@@ -244,7 +301,9 @@ impl GameSession {
         let sample_rate = core.av_info().sample_rate.round() as i32;
         let fps = core.av_info().fps.clamp(30.0, 120.0);
         Ok(Self {
-            core, link: None, link_touched: false, save, rtc, manual_export_prefix, state, retroarch_export, retroarch_import, ring,
+            core, link: None, link_touched: false, linked_boot,
+            rom_path: rom.to_path_buf(), rom_stem: rom_stem.to_owned(),
+            save, rtc, manual_export_prefix, state, retroarch_export, retroarch_import, ring,
             rewind: RewindThread::spawn(REWIND_BYTES), rewind_frames: 0,
             frame_count: 0, palette_live, core_kind: which,
             runahead_video: Vec::new(), runahead_state: Vec::new(),
@@ -297,11 +356,23 @@ impl GameSession {
         if self.link_touched {
             return Err("Relaunch cartridge before another link".into());
         }
-        if self.core_kind != Core::Gpsp {
-            return Err("Multiplayer requires gpSP: this mGBA libretro build has no GBA Link interface".into());
-        }
-        if !self.core.supports_netpacket() {
-            return Err("gpSP did not register GBA serial/RFU netpacket callbacks".into());
+        if let Some(boot_role) = self.linked_boot {
+            if self.core_kind != Core::Mgba || boot_role != role || mode != LinkKind::Cable || self.core.supports_netpacket() {
+                return Err("mGBA Link session requires the matching role, Cable mode, and local lockstep".into());
+            }
+            // Host snapshot must contain both GBAs. A solo state cannot be
+            // exchanged or restored into this linked engine.
+            let state = self.core.serialize().map_err(|e| e.to_string())?;
+            if !slot::link_state::is_pair(&state) {
+                return Err("mGBA Link core did not initialize an SLK1 two-GBA state".into());
+            }
+        } else {
+            if self.core_kind != Core::Gpsp {
+                return Err("Solo mGBA cannot enter Link; reopen with mGBA Link enabled".into());
+            }
+            if !self.core.supports_netpacket() {
+                return Err("gpSP did not register GBA serial/RFU netpacket callbacks".into());
+            }
         }
         // The auto-detected serial mode must be decided when the cartridge is
         // loaded. Never attempt to switch RFU to Cable on a running gpSP core.
@@ -328,6 +399,30 @@ impl GameSession {
     }
 
     pub fn core_kind(&self) -> Core { self.core_kind }
+    pub fn rom_path(&self) -> &Path { &self.rom_path }
+    pub fn rom_stem(&self) -> &str { &self.rom_stem }
+    pub fn is_link_sandbox(&self) -> bool { self.linked_boot.is_some() }
+
+    /// Save the solo state before replacing the entire libretro core with
+    /// the linked dual-GBA engine. Abort rather than discard solo progress.
+    pub fn preserve_solo_for_link(&mut self) -> Result<(), String> {
+        if self.linked_boot.is_some() || self.link_touched {
+            return Err("Only a clean solo game can start mGBA Link".into());
+        }
+        let bytes = self.core.serialize().map_err(|e| e.to_string())?;
+        if bytes.starts_with(b"SLK1") {
+            return Err("Refusing to save a linked state over solo progress".into());
+        }
+        atomic_write(&self.state, &bytes).map_err(|e| format!("Cannot preserve solo state: {e}"))?;
+        let ram = self.core.save_ram();
+        if let Some(data) = ram {
+            atomic_write(&self.save, &data).map_err(|e| format!("Cannot preserve solo SRAM: {e}"))?;
+        }
+        if let Some(data) = self.core.save_rtc() {
+            atomic_write(&self.rtc, &data).map_err(|e| format!("Cannot preserve solo RTC: {e}"))?;
+        }
+        Ok(())
+    }
 
     pub fn wireless_capable(&self) -> bool {
         self.core_kind == Core::Gpsp && self.core.supports_netpacket()
@@ -342,14 +437,14 @@ impl GameSession {
     }
 
     pub fn runahead_supported(&self) -> bool {
-        !self.link_touched && self.link.is_none() && !self.runahead_unavailable && self.core.speculative_audio_supported()
+        self.linked_boot.is_none() && !self.link_touched && self.link.is_none() && !self.runahead_unavailable && self.core.speculative_audio_supported()
     }
 
     /// Roll back both standard libretro state and core-specific transient
     /// audio: gpSP's sound ring, or mGBA's converter/filter/queue sidecar.
     pub fn prepare_runahead(&mut self, buttons: u16, turbo: bool, frames: u8) {
         self.runahead_video.clear();
-        if frames == 0 || frames > 2 || self.runahead_unavailable || self.link_touched { return; }
+        if frames == 0 || frames > 2 || self.runahead_unavailable || self.link_touched || self.linked_boot.is_some() { return; }
         if !self.core.speculative_audio_supported() {
             self.runahead_unavailable = true;
             log_launch_timing("Run-Ahead disabled: core has no safe speculative audio support");
@@ -386,7 +481,7 @@ impl GameSession {
     }
 
     pub fn rewind_step(&mut self) -> bool {
-        if self.link_touched { return false; }
+        if self.link_touched || self.linked_boot.is_some() { return false; }
         self.runahead_video.clear();
         let Some(previous) = self.rewind.pop() else { return false; };
         if self.core.unserialize(&previous).is_err() { return false; }
@@ -465,7 +560,7 @@ impl GameSession {
         let mut state_written = false;
         // Exporting a single-core state during linked play would silently
         // corrupt the shared timeline. SRAM/RTC can still be saved safely.
-        if with_state && !self.link_touched {
+        if with_state && !self.link_touched && self.linked_boot.is_none() {
             if let Ok(data) = self.core.serialize() {
                 if let Err(err) = atomic_write(&self.state, &data) {
                     eprintln!("slot-konkr: state save failed: {err}");
@@ -484,7 +579,7 @@ impl GameSession {
     /// Original Slot ring: 10 timestamped states per ROM/core, each with
     /// a 240×160 PNG thumbnail. Independent from RetroArch's manual slots.
     pub fn save_manual(&mut self) -> Result<String, String> {
-        if self.link_touched { return Err("Save States unavailable after linked play; relaunch cartridge".into()); }
+        if self.link_touched || self.linked_boot.is_some() { return Err("Save States unavailable for Multiplayer sessions".into()); }
         let state = self.core.serialize().map_err(|e|e.to_string())?;
         let preview = thumb::png(self.core.video_xrgb8888()).unwrap_or_default();
         let entries = self.ring.list().map_err(|e|e.to_string())?;
@@ -519,7 +614,7 @@ impl GameSession {
     }
 
     pub fn load_manual(&mut self, stamp:&str) -> Result<(), String> {
-        if self.link.is_some() { return Err("Load State unavailable during Multiplayer".into()); }
+        if self.link.is_some() || self.linked_boot.is_some() { return Err("Load State unavailable during Multiplayer".into()); }
         let (bytes, _) = self.ring.read(stamp).map_err(|e|e.to_string())?;
         let prior = self.core.serialize().map_err(|e|e.to_string())?;
         self.core.unserialize(&bytes).map_err(|e|e.to_string())?;
@@ -534,11 +629,12 @@ impl GameSession {
     }
 
     pub fn delete_manual(&mut self, stamp:&str)->Result<(),String> {
+        if self.linked_boot.is_some() { return Err("Save States unavailable during Multiplayer".into()); }
         self.ring.remove(stamp).map_err(|e|e.to_string())
     }
 
     pub fn undo_manual(&mut self)->Result<(),String> {
-        if self.link.is_some() { return Err("Undo unavailable during Multiplayer".into()); }
+        if self.link.is_some() || self.linked_boot.is_some() { return Err("Undo unavailable during Multiplayer".into()); }
         let Some((since,_))=&self.pending_undo else { return Err("Nothing to undo".into())};
         if since.elapsed()>UNDO_WINDOW {
             self.pending_undo=None;
@@ -559,7 +655,7 @@ impl GameSession {
     }
 
     pub fn undo_available(&self)->bool {
-        self.pending_undo.as_ref().is_some_and(|(at,_)|at.elapsed()<=UNDO_WINDOW)
+        self.linked_boot.is_none() && self.pending_undo.as_ref().is_some_and(|(at,_)|at.elapsed()<=UNDO_WINDOW)
     }
 
 }
