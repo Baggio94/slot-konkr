@@ -39,6 +39,10 @@ pub struct LinkPlay {
     net: Link,
     error: Option<LinkError>,
     state_bytes: usize,
+    // On linked mGBA, Host must import Join's own battery-backed GBA
+    // before sending the authoritative paired state. Never seed a guest
+    // with Host's blank peer cartridge.
+    awaiting_join_seed: bool,
     started: Instant,
     // The cable protocol deliberately has a 3-frame input delay, as upstream.
     // Wireless passes bytes through the core's registered netpacket ABI.
@@ -62,15 +66,37 @@ impl LinkPlay {
         // its Cable and Wireless paths must BOTH use netpacket, not lockstep.
         // Keep the original Cable simulation only for upstream mock tests;
         // GameSession rejects any unsupported real core before reaching here.
+        let mut awaiting_join_seed = false;
         let cable = match mode {
             LinkKind::Cable if !core.supports_netpacket() => {
                 let player = if role == Role::Host { 0 } else { 1 };
                 let c = Cable::new(player);
-                if role == Role::Host {
-                    let state = core.serialize().map_err(|e| e.to_string())?;
-                    if state.len() > MAX_INITIAL_STATE {
-                        return Err("Link state exceeds the safe transport limit".into());
+                // Both devices start with their *own* cartridge progress.
+                // mGBA's private SLK1 pair contains a blank remote GBA;
+                // exchange Join's local half first, then Host combines
+                // player 0 + player 1. Upstream single-state mocks retain
+                // the old authoritative Host-only protocol.
+                let state = core.serialize().map_err(|e| e.to_string())?;
+                if state.len() > MAX_INITIAL_STATE {
+                    return Err("Link state exceeds the safe transport limit".into());
+                }
+                if link_state::is_pair(&state) {
+                    if role == Role::Host {
+                        if link_state::local(&state, 0).is_none() {
+                            return Err("Invalid mGBA Host SLK1 state".into());
+                        }
+                        awaiting_join_seed = true;
+                    } else {
+                        let own = link_state::local(&state, 1)
+                            .ok_or("Invalid mGBA Join SLK1 state")?;
+                        if own.len() < 0x400 || own.len() > MAX_INITIAL_STATE / 2 {
+                            return Err("Unsafe mGBA Join state size".into());
+                        }
+                        for packet in cable::state_packets(&own) {
+                            wire.send(NETPACKET_RELIABLE, &packet);
+                        }
                     }
+                } else if role == Role::Host {
                     for packet in cable::state_packets(&state) {
                         wire.send(NETPACKET_RELIABLE, &packet);
                     }
@@ -87,7 +113,7 @@ impl LinkPlay {
         };
         Ok(Self {
             wire, cable, mode, net, error: None, state_bytes: 0,
-            started: Instant::now(),
+            awaiting_join_seed, started: Instant::now(),
         })
     }
 
@@ -122,6 +148,37 @@ impl LinkPlay {
             }
         }
         if let Some(cable) = self.cable.as_mut() {
+            if self.awaiting_join_seed {
+                if let Some(join_state) = cable.take_state() {
+                    self.state_bytes = 0;
+                    let host_state = match core.serialize() {
+                        Ok(state) => state,
+                        Err(_) => return self.fail(LinkError::InvalidState),
+                    };
+                    if !link_state::same_bios(&host_state, &join_state) {
+                        return self.fail(LinkError::BiosMismatch);
+                    }
+                    let combined = match link_state::combine_players(&host_state, &join_state) {
+                        Some(state) => state,
+                        None => return self.fail(LinkError::InvalidState),
+                    };
+                    // On a failed restore the patched core rolls BOTH
+                    // GBAs back. Never send a potentially invalid pair.
+                    if core.unserialize(&combined).is_err() {
+                        return self.fail(LinkError::InvalidState);
+                    }
+                    for packet in cable::state_packets(&combined) {
+                        self.wire.send(NETPACKET_RELIABLE, &packet);
+                    }
+                    self.awaiting_join_seed = false;
+                }
+                if self.awaiting_join_seed {
+                    if self.started.elapsed() >= INITIAL_STATE_TIMEOUT {
+                        return self.fail(LinkError::Timeout);
+                    }
+                    return Frame::Waiting;
+                }
+            }
             if let Some(state) = cable.take_state() {
                 let local = match core.serialize() {
                     Ok(local) => local,
@@ -136,7 +193,9 @@ impl LinkPlay {
                 cable.prime();
                 self.wire.send(NETPACKET_RELIABLE, &cable::ready_packet());
             }
-            if !cable.primed() {
+            // Host is primed at construction but MUST NOT advance until
+            // Join acknowledges the final combined SLK1 restore.
+            if !cable.armed() {
                 if self.started.elapsed() >= INITIAL_STATE_TIMEOUT {
                     return self.fail(LinkError::Timeout);
                 }
