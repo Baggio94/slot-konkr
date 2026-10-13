@@ -110,7 +110,7 @@ internal object SlotUi {
             else -> return hint(context, key, action)
         }
         val image = runCatching {
-            context.assets.open("apps_controls/$assetName").use(BitmapFactory::decodeStream)
+            context.assets.open("apps_controls/$assetName").use { BitmapFactory.decodeStream(it) }
         }.getOrNull() ?: return hint(context, key, action)
         return ImageView(context).apply {
             setImageBitmap(image)
