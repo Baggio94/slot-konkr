@@ -442,8 +442,17 @@ class MainActivity : Activity() {
                 }
             }
             nativePollMessage()?.let { message ->
+                // Keep the complete diagnostic in Logcat. Actionable failures
+                // receive a longer on-screen warning rather than vanishing
+                // after the same interval as a simple confirmation.
                 Log.w(TAG, message)
-                SlotToast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
+                val concise = SlotToast.userMessage(message)
+                val needsAction = listOf(
+                    "can't", "cannot", "couldn't", "failed", "unavailable",
+                    "paused", "mismatch", "needs", "check", "retry"
+                ).any { concise.contains(it, ignoreCase = true) }
+                SlotToast.makeText(this@MainActivity, concise,
+                    if (needsAction) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).show()
             }
             // RetroArch-like achievement widget: cached official badge and
             // original Slot label font. Foreground-only, in our Activity frame,
