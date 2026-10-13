@@ -1761,6 +1761,15 @@ impl Engine {
                                         row: move_menu_row(row, code, 4),
                                     };
                                 }
+                                // Both "Save & Eject" (row 2) and the
+                                // post-link "Eject to play solo" (row 0)
+                                // must use the SAME save/eject lifecycle.
+                                // Never render an action which only prints
+                                // an error and leaves the user trapped.
+                                96 if game_menu_ejects(row, self.game.as_ref()
+                                    .is_some_and(GameSession::requires_relaunch)) => {
+                                    self.handle(Input::Exit);
+                                }
                                 96 => {
                                     match row {
                                         1 => {
@@ -1772,17 +1781,12 @@ impl Engine {
                                                 set_message("Multiplayer disconnected".into());
                                             } else { self.enter_multiplayer_menu(); }
                                         }
-                                        2 => self.handle(Input::Exit),
                                         3 => {
                                             if self.game.as_ref().is_some_and(|g| g.linked() || g.requires_relaunch()) {
                                                 set_message("Relaunch the cartridge before using Save States".into());
                                             } else { self.open_polaroids(); }
                                         }
-                                        _ => {
-                                            if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
-                                                set_message("Multiplayer ended. Eject to return to solo.".into());
-                                            } else { self.overlay = ShelfOverlay::None; }
-                                        }
+                                        _ => self.overlay = ShelfOverlay::None,
                                     }
                                 }
                                 97 => {
@@ -3477,6 +3481,12 @@ fn link_mode_can_switch(core: Core, chosen: LinkKind, code: &str,
     selected_serial != opposite_serial
 }
 
+/// Route the post-link primary label to the same Input::Exit path as
+/// Save & Eject. In active solo play the primary menu item stays Resume.
+fn game_menu_ejects(row: usize, requires_relaunch: bool) -> bool {
+    row == 2 || (row == 0 && requires_relaunch)
+}
+
 /// Map the negotiated on-wire role to upstream Slot Link icon variants.
 fn link_badge_for(role: LinkRow, disconnected: bool) -> LinkBadge {
     match (role, disconnected) {
@@ -3589,6 +3599,20 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 #[cfg(test)]
 mod ui_feedback_tests {
     use super::*;
+
+    #[test]
+    fn eject_to_play_solo_is_an_action_not_a_noop() {
+        assert!(game_menu_ejects(0, true),
+            "post-multiplayer row 0 must perform the same ejection as row 2");
+        assert!(game_menu_ejects(2, true));
+        assert!(game_menu_ejects(2, false));
+        assert!(!game_menu_ejects(0, false),
+            "active solo row 0 must resume without ejecting");
+        assert!(!game_menu_ejects(1, true),
+            "end link action must not accidentally eject");
+        assert!(!game_menu_ejects(3, true),
+            "states action must not accidentally eject");
+    }
 
     #[test]
     fn slot_select_mode_only_allows_real_gpsp_serial_hardware_changes() {
