@@ -277,8 +277,11 @@ impl GameSession {
                 // Never continue with blank RAM and subsequently export it
                 // over a verified shared save from the OTHER emulator.
                 let marker = root.join(format!("{id}.{}.skip-resume.once", which.as_str()));
-                if marker.is_file() {
-                    return Err(format!("Core rejected shared GBA SRAM; originals preserved: {error}"));
+                if linked_boot.is_some() || marker.is_file() {
+                    // A fresh Link session must never continue with blank
+                    // battery data when the exact solo SRAM copy was refused.
+                    // Abandon this isolated attempt and restore the solo core.
+                    return Err(format!("Core rejected required GBA SRAM; originals preserved: {error}"));
                 }
                 eprintln!("slot-konkr: SRAM restore skipped: {error}");
             }
