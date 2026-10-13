@@ -1503,8 +1503,16 @@ impl Engine {
                 self.cancel_link_discovery();
                 if let Some(session) = self.game.as_mut() { session.end_multiplayer(); }
                 self.hud.set_link(LinkBadge::Off);
-                if matches!(self.overlay, ShelfOverlay::Multiplayer) {
+                // Android can go to sleep while a linked game is fullscreen,
+                // not just while its Multiplayer menu is visible. The peer
+                // has now been disconnected and continuing in-game would
+                // accidentally run a private Link core as SOLO. Always
+                // resume through the safe Eject-to-solo menu in this case.
+                if suspend_returns_to_eject_menu(
+                    self.game.as_ref().is_some_and(GameSession::requires_relaunch),
+                    matches!(self.overlay, ShelfOverlay::Multiplayer)) {
                     self.overlay = ShelfOverlay::GameMenu { row: 0 };
+                    self.game_accum = 0.0;
                 }
                 if let Some(session) = self.game.as_mut() {
                     if session.save(true) && !session.is_link_sandbox() {
@@ -3574,6 +3582,14 @@ impl Engine {
 /// Do not report an unsuccessful core reopen as "solo restored".
 /// Always surface the genuine checkpoint error to the user: the durable
 /// solo state and battery files remain on disk for safe cartridge relaunch.
+/// Match the upstream Eject-first rule even if Android onPause occurs
+/// outside the Multiplayer menu. Pure so its fullscreen branch cannot
+/// silently regress when editing the lifecycle handling.
+fn suspend_returns_to_eject_menu(requires_relaunch: bool,
+                                 menu_is_multiplayer: bool) -> bool {
+    requires_relaunch || menu_is_multiplayer
+}
+
 fn link_boot_failure(context: &str, error: &str,
                      recovery: Result<(), String>) -> String {
     match recovery {
@@ -3794,6 +3810,17 @@ mod ui_feedback_tests {
         // this rule always centres both translated role title glyph widths.
         assert_eq!(link_heading_x(120), 300.0);
         assert_eq!(link_heading_x(216), 252.0);
+    }
+
+    #[test]
+    fn android_suspend_forces_eject_menu_when_a_live_link_ended_fullscreen() {
+        assert!(!suspend_returns_to_eject_menu(false, false),
+            "an ordinary solo game can resume without a modal");
+        assert!(suspend_returns_to_eject_menu(false, true),
+            "discovery interrupted onPause must leave Multiplayer");
+        assert!(suspend_returns_to_eject_menu(true, false),
+            "linked gameplay interrupted fullscreen must require Eject");
+        assert!(suspend_returns_to_eject_menu(true, true));
     }
 
     #[test]
