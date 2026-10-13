@@ -39,6 +39,8 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import java.net.Inet4Address
+import java.net.InetSocketAddress
+import java.net.Socket
 import org.json.JSONObject
 import org.json.JSONArray
 import java.util.concurrent.ConcurrentHashMap
@@ -131,6 +133,7 @@ class MainActivity : Activity() {
     // touches WifiManager, Android UI or permissions from the GL thread.
     external fun nativeLinkNetworkReady(ipv4: String)
     external fun nativeLinkDirectHost(addressPair: String)
+    external fun nativeLinkDiscoveryGame(): String?
     external fun nativeLinkNetworkError(reason: String)
     external fun nativeLinkNeedsMulticast(): Boolean
 
@@ -144,6 +147,9 @@ class MainActivity : Activity() {
     }
     private val raSmartRunning = AtomicBoolean(false)
     private val gameLoader = Executors.newSingleThreadExecutor()
+    // AVD-only; querying the Mac Bonjour bridge must never block GL/UI,
+    // Android AudioTrack, normal ROM loading or real KONKR Wi-Fi discovery.
+    private val linkBridgeWorker = Executors.newSingleThreadExecutor()
     // Independent physical QA package. It may read the same ROM and BIOS
     // folders, but MUST NOT import from or write to a selected RetroArch
     // Saves/States SAF folder belonging to the user's daily Slot installation.
@@ -239,6 +245,85 @@ class MainActivity : Activity() {
         catch (error: RuntimeException) { Log.w(TAG, "Link multicast release failed", error) }
     }
 
+    /** The AVD cannot receive the KONKR's LAN multicast. A Mac-side bridge
+     *  discovers the original Slot mDNS advertisement and exposes its IPv4
+     *  only through adb reverse tcp:7222 -> 127.0.0.1:7222. Host game/core
+     *  SHA-256, BIOS, backend and serial mode are STILL checked by native
+     *  Slot's strict KMLB v2 TCP handshake before any core state changes.
+     *
+     *  If the bridge is absent/times out, retain the original manual-IP
+     *  dialog. No new Android permission or public socket is required.
+     */
+    private fun tryLinkMacBridge(local: String, game: String) {
+        linkBridgeWorker.execute {
+            val host = try {
+                Socket().use { socket ->
+                    socket.connect(InetSocketAddress("127.0.0.1", 7222), 500)
+                    socket.soTimeout = 9000
+                    val out = socket.getOutputStream()
+                    out.write("FIND $game\n".toByteArray(Charsets.US_ASCII))
+                    out.flush()
+                    socket.getInputStream().bufferedReader(Charsets.US_ASCII).readLine()?.trim()
+                }
+            } catch (_: Exception) { null }
+            runOnUiThread {
+                if (isDestroyed || !resumed || nativeLinkDiscoveryGame() != game) {
+                    return@runOnUiThread // Cancelled or a different cartridge
+                }
+                if (host != null && validLinkIpv4(host)) {
+                    Log.i(TAG, "Mac bridge found Slot Link host for $game")
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                        .putString("slot_link_host_ipv4", host).apply()
+                    nativeLinkDirectHost("$local,$host")
+                } else {
+                    // Typical absence: Mac helper not running, host not yet
+                    // advertising, firewall, or emulator not ADB-reversed.
+                    promptManualLinkJoin(local)
+                }
+            }
+        }
+    }
+
+    private fun validLinkIpv4(host: String): Boolean {
+        val octets = host.split('.')
+        return octets.size == 4 && octets.all { part ->
+            part.isNotEmpty() && part.length <= 3 &&
+                part.all(Char::isDigit) && (part.toIntOrNull() ?: -1) in 0..255
+        } && host != "0.0.0.0" && !host.startsWith("127.") &&
+            !host.startsWith("169.254.") && !host.startsWith("224.")
+    }
+
+    private fun promptManualLinkJoin(local: String) {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        var joined = false
+        val dialog = SlotModalDialog(
+            this,
+            "MULTIPLAYER — DIRECT JOIN",
+            "Mac LAN discovery unavailable. Enter the KONKR HOST Wi-Fi IPv4 address.",
+            onDismiss = {
+                if (!joined) nativeLinkNetworkError("Direct Join cancelled")
+            }
+        )
+        val field = dialog.addInput("KONKR IP ADDRESS", "192.168.1.20").apply {
+            inputType = android.text.InputType.TYPE_CLASS_PHONE
+            typeface = SlotUi.font(this@MainActivity)
+            setText(prefs.getString("slot_link_host_ipv4", ""))
+        }
+        dialog.addButton("CANCEL") { dialog.dismiss() }
+        dialog.addButton("JOIN") {
+            val host = field.text.toString().trim()
+            if (!validLinkIpv4(host)) {
+                dialog.setError("Enter a valid LAN IPv4 address, such as 192.168.68.79.")
+            } else {
+                joined = true
+                prefs.edit().putString("slot_link_host_ipv4", host).apply()
+                dialog.dismiss()
+                nativeLinkDirectHost("$local,$host")
+            }
+        }
+        dialog.show()
+    }
+
     private fun requestLinkWifi() {
         if (!resumed) {
             nativeLinkNetworkError("Return to Slot before starting Multiplayer")
@@ -257,38 +342,12 @@ class MainActivity : Activity() {
         if (fingerprint.startsWith("generic") || fingerprint.contains("sdk_gphone") ||
             hardware.contains("ranchu") || hardware.contains("goldfish")) {
             releaseLinkMulticast()
-            val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-            var joined = false
-            val dialog = SlotModalDialog(
-                this,
-                "MULTIPLAYER — DIRECT JOIN",
-                "Start HOST on the physical KONKR. Enter its Wi-Fi IPv4 address.",
-                onDismiss = {
-                    if (!joined) nativeLinkNetworkError("Direct Join cancelled")
-                }
-            )
-            val field = dialog.addInput("KONKR IP ADDRESS", "192.168.1.20").apply {
-                inputType = android.text.InputType.TYPE_CLASS_PHONE
-                typeface = SlotUi.font(this@MainActivity)
-                setText(prefs.getString("slot_link_host_ipv4", ""))
+            val game = nativeLinkDiscoveryGame()
+            if (game != null && game.matches(Regex("[A-Z0-9]{4}"))) {
+                tryLinkMacBridge(address, game)
+            } else {
+                promptManualLinkJoin(address)
             }
-            dialog.addButton("CANCEL") { dialog.dismiss() }
-            dialog.addButton("JOIN") {
-                val host = field.text.toString().trim()
-                val octets = host.split('.')
-                if (octets.size != 4 || octets.any { octet ->
-                        octet.isEmpty() || octet.any { !it.isDigit() } ||
-                            octet.length > 3 || (octet.toIntOrNull() ?: -1) !in 0..255
-                    }) {
-                    dialog.setError("Enter a valid IPv4 address, such as 192.168.1.20.")
-                } else {
-                    joined = true
-                    prefs.edit().putString("slot_link_host_ipv4", host).apply()
-                    dialog.dismiss()
-                    nativeLinkDirectHost("$address,$host")
-                }
-            }
-            dialog.show()
             return
         }
         try {
@@ -1795,6 +1854,7 @@ class MainActivity : Activity() {
         raLoginWorker.shutdownNow()
         raSmartWorker.shutdownNow()
         gameLoader.shutdownNow()
+        linkBridgeWorker.shutdownNow()
         uiHandler.removeCallbacks(pulse)
         if (::raAchievementOverlay.isInitialized) raAchievementOverlay.destroy()
         if (::shelfStatus.isInitialized) shelfStatus.close()
