@@ -23,7 +23,7 @@ const BOUND: Duration = Duration::from_secs(30);
 pub enum Role { Host, Join }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum Failure { NoNetwork, NobodyCame, PeerVanished, Cancelled }
+pub enum Failure { NoNetwork, NobodyCame, IncompatiblePeer, PeerVanished, Cancelled }
 
 pub enum Progress {
     Looking,
@@ -35,7 +35,34 @@ fn classify(err: &io::Error) -> Failure {
     match err.kind() {
         io::ErrorKind::Interrupted => Failure::Cancelled,
         io::ErrorKind::TimedOut => Failure::NobodyCame,
+        // During the strict KMLB/2 welcome, the Host closes the socket
+        // without ACK when ROM/core/BIOS/backend/link mode differs. This
+        // arrives on Join as EOF. Never mislabel it as a link that was
+        // successfully established and subsequently lost.
+        io::ErrorKind::UnexpectedEof | io::ErrorKind::InvalidData =>
+            Failure::IncompatiblePeer,
+        _ if err.to_string().contains("did not accept the greeting") =>
+            Failure::IncompatiblePeer,
         _ => Failure::PeerVanished,
+    }
+}
+
+#[cfg(test)]
+mod failure_classification_tests {
+    use super::*;
+
+    #[test]
+    fn strict_handshake_refusal_is_reported_as_incompatible_not_peer_lost() {
+        for kind in [io::ErrorKind::UnexpectedEof, io::ErrorKind::InvalidData] {
+            assert_eq!(classify(&io::Error::new(kind, "host refused greeting")),
+                Failure::IncompatiblePeer);
+        }
+        assert_eq!(classify(&io::Error::other("host did not accept the greeting")),
+            Failure::IncompatiblePeer);
+        assert_eq!(classify(&io::Error::new(io::ErrorKind::TimedOut, "wait")),
+            Failure::NobodyCame);
+        assert_eq!(classify(&io::Error::new(io::ErrorKind::ConnectionReset, "later")),
+            Failure::PeerVanished);
     }
 }
 
