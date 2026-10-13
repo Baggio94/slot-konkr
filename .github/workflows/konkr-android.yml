@@ -146,6 +146,11 @@ jobs:
             echo "::warning::No persistent signing key configured. Android updates between CI builds require reinstall."
           fi
           bash scripts/build-konkr-android.sh
+          # Physical QA uses a *different* Android application ID. Building
+          # under the same signing environment keeps its own updates stable.
+          if [[ "${GITHUB_REF:-}" == "refs/heads/feat/konkr-multiplayer-lab" ]]; then
+            (cd android && gradle --no-daemon :app:assembleMultiplayerLab)
+          fi
           if [[ "${GITHUB_REF:-}" == refs/heads/release/* || "${GITHUB_REF:-}" == refs/heads/integration/konkr-rc4-next ]]; then
             if [ -z "$SLOT_KEYSTORE_BASE64" ]; then
               echo "::error::Persistent signing key is required for release candidates."
@@ -173,6 +178,30 @@ jobs:
           name: slot-konkr-preview-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+      - name: Verify isolated Multiplayer Lab APK cannot replace physical Slot
+        if: github.ref == 'refs/heads/feat/konkr-multiplayer-lab'
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/multiplayerLab/app-multiplayerLab.apk
+          test -s "$APK"
+          AAPT="$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt"
+          "$AAPT" dump badging "$APK" | tee "$RUNNER_TEMP/mlab-badging.txt"
+          grep -F "package: name='fyi.slot.konkr.lab'" "$RUNNER_TEMP/mlab-badging.txt"
+          grep -F "application-label:'slot. Multiplayer Lab'" "$RUNNER_TEMP/mlab-badging.txt"
+          "$AAPT" dump xmltree "$APK" AndroidManifest.xml > "$RUNNER_TEMP/mlab-manifest.txt"
+          if grep -F 'android.intent.category.HOME' "$RUNNER_TEMP/mlab-manifest.txt"; then
+            echo "::error::Sidecar app must not register as an Android HOME candidate."
+            exit 1
+          fi
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK"
+          shasum -a 256 "$APK"
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/feat/konkr-multiplayer-lab'
+        with:
+          name: slot-konkr-mlab-physical-isolated-apk
+          path: android/app/build/outputs/apk/multiplayerLab/app-multiplayerLab.apk
+          if-no-files-found: error
+
       - name: Verify RC4 release APK is signed with permanent certificate
         if: startsWith(github.ref, 'refs/heads/release/')
         run: |
