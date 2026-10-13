@@ -932,7 +932,7 @@ impl Engine {
         }
         let identity = self.link_identity.as_ref().expect("checked above");
         if !link_kind::link_carried(&identity.code, &identity.title) {
-            log_launch_timing(&format!(
+            crate::game::log_launch_timing(&format!(
                 "Multiplayer unsupported protocol: game_code={}, title={}, clean_header={}",
                 identity.code, identity.title, identity.clean_header
             ));
