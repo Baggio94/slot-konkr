@@ -1269,10 +1269,21 @@ impl Engine {
                     let fail = match reason {
                         crate::multiplayer::Failure::NoNetwork => LinkFail::Radio,
                         crate::multiplayer::Failure::NobodyCame => LinkFail::NobodyCame,
+                        crate::multiplayer::Failure::IncompatiblePeer => LinkFail::PeerVanished,
                         crate::multiplayer::Failure::Cancelled => LinkFail::Cancelled,
                         crate::multiplayer::Failure::PeerVanished => LinkFail::PeerVanished,
                     };
-                    self.fail_multiplayer(&format!("{reason:?}"), fail);
+                    let details = if reason == crate::multiplayer::Failure::IncompatiblePeer {
+                        "Peer rejected the connection. Verify identical GBA ROM, mGBA/gpSP core, BIOS and Cable/Wireless mode."
+                    } else {
+                        match reason {
+                            crate::multiplayer::Failure::NobodyCame => "No compatible Host found. Ensure Host is waiting on the same LAN.",
+                            crate::multiplayer::Failure::NoNetwork => "A usable Wi-Fi or emulator bridge network is required.",
+                            crate::multiplayer::Failure::Cancelled => "Connection cancelled.",
+                            _ => "Multiplayer peer disappeared or connection failed.",
+                        }
+                    };
+                    self.fail_multiplayer(details, fail);
                 }
             }
         }
