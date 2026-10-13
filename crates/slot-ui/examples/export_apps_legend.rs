@@ -23,6 +23,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("move.png", arrows_hint_face("Move")),
         ("open.png", hint_face("A", "Open")),
         ("back.png", hint_face("B", "Back")),
+        // Shared authentic keycaps for Android dialogs / Studio / RA panel.
+        ("select.png", hint_face("A", "Select")),
+        ("refresh.png", hint_face("START", "Refresh")),
+        ("sign-out.png", hint_face("X", "Sign Out")),
     ] {
         assert!(face.w > 20 && face.h == 24, "Slot legend generation failed");
         assert_eq!(face.rgba.len(), (face.w * face.h * 4) as usize);
