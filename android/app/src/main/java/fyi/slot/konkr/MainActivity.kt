@@ -144,6 +144,12 @@ class MainActivity : Activity() {
     }
     private val raSmartRunning = AtomicBoolean(false)
     private val gameLoader = Executors.newSingleThreadExecutor()
+    // Independent physical QA package. It may read the same ROM and BIOS
+    // folders, but MUST NOT import from or write to a selected RetroArch
+    // Saves/States SAF folder belonging to the user's daily Slot installation.
+    private val isIsolatedMultiplayerLab: Boolean
+        get() = packageName == "fyi.slot.konkr.lab"
+
     private val activeTargets = ConcurrentHashMap<String, RetroArchStorage.Target>()
     private val uiHandler = Handler(Looper.getMainLooper())
     private val audioRunning = AtomicBoolean(false)
@@ -856,8 +862,13 @@ class MainActivity : Activity() {
                 val savedCore = nativeCoreForUri(rawUri)
                 val core = if (savedCore == "gpsp" && ext == "gba") "gpSP" else "mGBA"
                 val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-                val saves = prefs.getString(SAVE_ROOT, null)?.let(Uri::parse)
-                val states = prefs.getString(STATE_ROOT, null)?.let(Uri::parse)
+                // Side-by-side Multiplayer QA always uses its private
+                // fyi.slot.konkr.lab/files/Saves and States. Never mirror,
+                // overwrite or import the production RetroArch SAF folders.
+                val saves = if (isIsolatedMultiplayerLab) null
+                    else prefs.getString(SAVE_ROOT, null)?.let(Uri::parse)
+                val states = if (isIsolatedMultiplayerLab) null
+                    else prefs.getString(STATE_ROOT, null)?.let(Uri::parse)
                 val shared = RetroArchStorage.target(this, rawUri, core, saves, states)
                 try {
                     RetroArchStorage.importBeforeLaunch(this@MainActivity, shared)
@@ -1337,6 +1348,12 @@ class MainActivity : Activity() {
 
     private fun openSharedFolderPicker(requestCode: Int) {
         check(requestCode == SAVE_REQUEST || requestCode == STATE_REQUEST)
+        if (isIsolatedMultiplayerLab) {
+            SlotToast.makeText(this,
+                "Multiplayer Lab: external save folders disabled to protect Slot saves.",
+                Toast.LENGTH_LONG).show()
+            return
+        }
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or
                 Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
