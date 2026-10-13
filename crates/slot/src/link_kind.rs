@@ -64,3 +64,46 @@ fn pokemon(code: &str, title: &str) -> bool {
             .iter()
             .any(|p| code.starts_with(p))
 }
+
+#[cfg(test)]
+mod a6_serial_regressions {
+    use super::*;
+
+    #[test]
+    fn retail_pokemon_rfu_and_hacked_or_older_cable_stay_distinct() {
+        // Preserve upstream original/fork semantics: clean retail FireRed,
+        // LeafGreen and Emerald default to RFU. A modified ROM with the
+        // same four-letter code must not silently inherit that assumption.
+        for (code, title) in [
+            ("BPRE", "POKEMON FIRE"),
+            ("BPGE", "POKEMON LEAF"),
+            ("BPEE", "POKEMON EMER"),
+        ] {
+            assert_eq!(link_kind(code, title, true), LinkKind::Wireless);
+            assert_eq!(serial_option(LinkKind::Wireless, LinkKind::Wireless, code, title), "auto");
+            assert_eq!(serial_option(LinkKind::Cable, LinkKind::Wireless, code, title), "mul_poke");
+            assert_eq!(link_kind(code, title, false), LinkKind::Cable);
+            assert_eq!(serial_option(LinkKind::Wireless, LinkKind::Cable, code, title), "rfu");
+            assert!(link_carried(code, title));
+        }
+        assert_eq!(link_kind("AXVE", "POKEMON RUBY", true), LinkKind::Cable);
+        assert_eq!(serial_option(LinkKind::Cable, LinkKind::Cable,
+            "AXVE", "POKEMON RUBY"), "auto");
+    }
+
+    #[test]
+    fn game_specific_cable_modes_are_not_confused_with_lan_transport() {
+        assert_eq!(serial_option(LinkKind::Cable, LinkKind::Wireless,
+            "AWRE", "ADVANCE WARS"), "mul_aw1");
+        assert_eq!(serial_option(LinkKind::Cable, LinkKind::Wireless,
+            "AW2E", "ADVANCE WARS 2"), "mul_aw2");
+        assert_eq!(serial_option(LinkKind::Wireless, LinkKind::Cable,
+            "AWRE", "ADVANCE WARS"), "rfu");
+        assert_eq!(serial_option(LinkKind::Cable, LinkKind::Cable,
+            "AWRE", "ADVANCE WARS"), "auto");
+        assert!(link_carried("AWRE", "ADVANCE WARS"));
+        assert!(link_carried("AW2E", "ADVANCE WARS 2"));
+        assert!(!link_carried("NONE", "UNSUPPORTED"));
+        assert_eq!(link_kind("NONE", "UNSUPPORTED", true), LinkKind::Cable);
+    }
+}
