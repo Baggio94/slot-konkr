@@ -424,6 +424,109 @@ mod lab_negotiation_tests {
             std::io::ErrorKind::BrokenPipe);
     }
 
+    /// A real loopback listener exercises the actual TCP handshake and the
+    /// reader/writer worker threads, not only serialised greeting bytes.
+    /// No device/emulator, BIOS or ROM is needed.
+    #[test]
+    fn strict_kmlb2_host_rejects_wrong_peers_then_transfers_packets_and_end() {
+        use std::net::{SocketAddr, TcpListener};
+        use std::thread;
+
+        // Reserve an OS-assigned TCP port for this test instead of a fixed
+        // 7211; tests can run simultaneously in GitHub Actions.
+        let reserve = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr: SocketAddr = reserve.local_addr().unwrap();
+        drop(reserve);
+        let (started, listening) = channel();
+        let expected = identity();
+        let wanted = expected.clone();
+        let host = thread::spawn(move || {
+            TcpLink::host_lab_greeted_until(
+                "127.0.0.1", addr.port(), Duration::from_secs(8),
+                &Cancel::new(), &wanted,
+                || { let _ = started.send(()); },
+            ).expect("a compatible peer must still be accepted")
+        });
+        listening.recv_timeout(Duration::from_secs(3)).unwrap();
+
+        // Every mismatch MUST be rejected without consuming the one live
+        // Host session or implicitly falling back to legacy SLOT/1.
+        let mut variants = Vec::new();
+        let mut wrong = expected.clone();
+        wrong.game = *b"AMAE";
+        variants.push(wrong);
+        let mut wrong = expected.clone();
+        wrong.rom_sha256[0] ^= 1;
+        variants.push(wrong);
+        let mut wrong = expected.clone();
+        wrong.core_sha256[0] ^= 1;
+        variants.push(wrong);
+        let mut wrong = expected.clone();
+        wrong.bios_sha256[0] ^= 1;
+        variants.push(wrong);
+        let mut wrong = expected.clone();
+        wrong.backend ^= 1;
+        variants.push(wrong);
+        let mut wrong = expected.clone();
+        wrong.mode ^= 1;
+        variants.push(wrong);
+        for wrong in variants {
+            assert!(TcpLink::join_lab_greeted(addr, &wrong).is_err(),
+                "KMLB/2 must refuse a mismatched peer");
+        }
+
+        let mut guest = TcpLink::join_lab_greeted(addr, &expected).unwrap();
+        let mut server = host.join().unwrap();
+        assert!(guest.nodelay().unwrap());
+        assert!(server.nodelay().unwrap());
+
+        <TcpLink as LinkChannel>::send(&mut guest, NETPACKET_RELIABLE, b"guest-to-host");
+        <TcpLink as LinkChannel>::send(&mut server, NETPACKET_RELIABLE, b"host-to-guest");
+        let incoming = |side: &mut TcpLink, expected: &[u8]| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                if let Some(packet) = <TcpLink as LinkChannel>::try_recv(side) {
+                    assert_eq!(packet, expected);
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            panic!("linked peer packet not delivered");
+        };
+        incoming(&mut server, b"guest-to-host");
+        incoming(&mut guest, b"host-to-guest");
+
+        guest.send_end();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline && !server.peer_ended() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(server.peer_ended(),
+            "the original five-byte END control must reach the Host");
+    }
+
+    #[test]
+    fn cancelled_listener_does_not_mark_a_peer_ready() {
+        use std::net::TcpListener;
+        let reserve = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = reserve.local_addr().unwrap().port();
+        drop(reserve);
+        let cancel = Cancel::new();
+        let stop = cancel.clone();
+        let (started, listening) = channel();
+        let host = std::thread::spawn(move || TcpLink::host_lab_greeted_until(
+            "127.0.0.1", port, Duration::from_secs(5), &stop,
+            &identity(), || { let _ = started.send(()); },
+        ));
+        listening.recv_timeout(Duration::from_secs(3)).unwrap();
+        cancel.cancel();
+        let error = match host.join().unwrap() {
+            Ok(_) => panic!("cancelled Host must not become Ready"),
+            Err(e) => e,
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    }
+
     #[test]
     fn all_critical_parameters_are_in_negotiation() {
         let base = identity().bytes();
