@@ -1022,9 +1022,85 @@ impl Engine {
         self.overlay = ShelfOverlay::Multiplayer;
     }
 
+    /// Upstream SELECT Mode is only offered if its two values produce
+    /// genuinely different gpSP serial hardware configurations. mGBA is
+    /// intentionally Cable-only with this Android dual-GBA Lab backend.
+    fn link_mode_switchable(&self) -> bool {
+        let Some(identity) = self.link_identity.as_ref() else { return false };
+        let Some(game) = self.game.as_ref() else { return false };
+        link_mode_can_switch(game.core_kind(), self.link_mode,
+            &identity.code, &identity.title, identity.clean_header)
+    }
+
+    /// Original Slot/fork reload the gpSP core when SELECT changes the
+    /// serial hardware. Never begin a connection with a cosmetic mode that
+    /// differs from the live libretro serial implementation.
+    fn ensure_gpsp_link_serial(&mut self) -> Result<(), String> {
+        let game = self.game.as_ref().ok_or("No running GBA game")?;
+        if game.core_kind() != Core::Gpsp { return Ok(()); }
+        let identity = self.link_identity.as_ref().ok_or("No valid GBA ROM identity")?;
+        let automatic = link_kind::link_kind(&identity.code, &identity.title,
+            identity.clean_header);
+        let wanted = link_kind::serial_option(self.link_mode, automatic,
+            &identity.code, &identity.title);
+        let previous = game.loaded_serial();
+        if wanted == previous { return Ok(()); }
+
+        let (storage, library) = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .clone().ok_or("Slot storage not mounted")?;
+        let (rom, stem) = (game.rom_path().to_path_buf(), game.rom_stem().to_owned());
+        let core_file = library.join("libgpsp_libretro.so");
+        // An atomic private state+SRAM+RTC snapshot is required BEFORE the
+        // existing core is dropped. The one-shot marker makes the reloaded
+        // core prefer this state over a stale RetroArch auto-save.
+        self.game.as_mut().ok_or("Game disappeared before serial switch")?
+            .preserve_solo_for_link()?;
+        drop(self.game.take());
+        let resume = |serial| GameSession::open_gpsp_serial(
+            &rom, &core_file, &storage, &stem, self.settings.colour_correction,
+            self.ra_service.as_ref(), serial);
+        let replacement = match resume(wanted) {
+            Ok(game) => game,
+            Err(error) => {
+                // Reopen the last known working mode if the requested one
+                // fails, retaining the pre-switch state and battery data.
+                match resume(previous) {
+                    Ok(original) => {
+                        SAMPLE_RATE.store(original.sample_rate, Ordering::Release);
+                        self.game = Some(original);
+                        return Err(format!("Cannot activate gpSP {wanted}: {error}; previous mode restored"));
+                    }
+                    Err(recovery) => {
+                        SAMPLE_RATE.store(0, Ordering::Release);
+                        PLAYING.store(false, Ordering::Release);
+                        self.handle(Input::Exit);
+                        return Err(format!("gpSP Link mode failed: {error}; recovery requires cartridge relaunch ({recovery})"));
+                    }
+                }
+            }
+        };
+        SAMPLE_RATE.store(replacement.sample_rate, Ordering::Release);
+        AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        RUMBLE_STRENGTH.store(0, Ordering::Release);
+        self.game_accum = 0.0;
+        self.buttons = 0;
+        self.game = Some(replacement);
+        crate::game::log_launch_timing(&format!(
+            "gpSP serial reload: {previous} -> {wanted} (upstream Link hardware selection)"));
+        Ok(())
+    }
+
     fn request_multiplayer_network(&mut self) {
         if !matches!(self.overlay, ShelfOverlay::Multiplayer) { return; }
         if matches!(self.link_phase, LinkMenu::Working {..} | LinkMenu::Linked {..}) { return; }
+        if let Err(error) = self.ensure_gpsp_link_serial() {
+            if self.game.is_some() {
+                self.fail_multiplayer(&error, LinkFail::Radio);
+            } else {
+                set_message(error);
+            }
+            return;
+        }
         self.cancel_link_discovery();
         let now = self.link_millis();
         self.link_worked_at = now;
@@ -1553,6 +1629,12 @@ impl Engine {
                     if pressed {
                         match self.link_phase {
                             LinkMenu::Pick(_) => match code {
+                                109 if self.link_mode_switchable() => {
+                                    self.link_mode = self.link_mode.other();
+                                    self.link_mode_override = Some(self.link_mode);
+                                    // The actual gpSP option is applied by an
+                                    // atomic core reload before linking.
+                                }
                                 21 | 22 => {
                                     self.link_role = if self.link_role == LinkRow::Host {
                                         LinkRow::Join
@@ -3358,6 +3440,16 @@ impl Engine {
     }
 }
 
+/// A Link Mode toggle must never lie about actual physical/serial support.
+fn link_mode_can_switch(core: Core, chosen: LinkKind, code: &str,
+                        title: &str, clean: bool) -> bool {
+    if core != Core::Gpsp || !link_kind::link_carried(code, title) { return false; }
+    let automatic = link_kind::link_kind(code, title, clean);
+    let selected_serial = link_kind::serial_option(chosen, automatic, code, title);
+    let opposite_serial = link_kind::serial_option(chosen.other(), automatic, code, title);
+    selected_serial != opposite_serial
+}
+
 /// Map the negotiated on-wire role to upstream Slot Link icon variants.
 fn link_badge_for(role: LinkRow, disconnected: bool) -> LinkBadge {
     match (role, disconnected) {
@@ -3468,6 +3560,24 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 #[cfg(test)]
 mod ui_feedback_tests {
     use super::*;
+
+    #[test]
+    fn slot_select_mode_only_allows_real_gpsp_serial_hardware_changes() {
+        // Retail FireRed defaults to RFU. SELECT switches to real Cable
+        // serial mode, which triggers a fresh gpSP boot before Join/Host.
+        assert!(link_mode_can_switch(Core::Gpsp, LinkKind::Wireless,
+            "BPRE", "POKEMON FIRE", true));
+        assert!(link_mode_can_switch(Core::Gpsp, LinkKind::Cable,
+            "BPRE", "POKEMON FIRE", true));
+        assert_eq!(link_kind::serial_option(LinkKind::Wireless,
+            LinkKind::Wireless, "BPRE", "POKEMON FIRE"), "auto");
+        assert_eq!(link_kind::serial_option(LinkKind::Cable,
+            LinkKind::Wireless, "BPRE", "POKEMON FIRE"), "mul_poke");
+        assert!(!link_mode_can_switch(Core::Mgba, LinkKind::Cable,
+            "BPRE", "POKEMON FIRE", true));
+        assert!(!link_mode_can_switch(Core::Gpsp, LinkKind::Cable,
+            "NONE", "UNKNOWN", false));
+    }
 
     #[test]
     fn multiplayer_badges_match_original_host_join_broken_and_off() {
