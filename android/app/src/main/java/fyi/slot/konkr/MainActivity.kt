@@ -251,27 +251,37 @@ class MainActivity : Activity() {
             hardware.contains("ranchu") || hardware.contains("goldfish")) {
             releaseLinkMulticast()
             val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-            val field = EditText(this).apply {
-                hint = "192.168.1.20"
-                setSingleLine(true)
-                setText(prefs.getString("slot_link_host_ipv4", ""))
+            var joined = false
+            val dialog = SlotModalDialog(
+                this,
+                "MULTIPLAYER — DIRECT JOIN",
+                "Start HOST on the physical KONKR. Enter its Wi-Fi IPv4 address.",
+                onDismiss = {
+                    if (!joined) nativeLinkNetworkError("Direct Join cancelled")
+                }
+            )
+            val field = dialog.addInput("KONKR IP ADDRESS", "192.168.1.20").apply {
                 inputType = android.text.InputType.TYPE_CLASS_PHONE
-                setPadding(28, 16, 28, 16)
+                typeface = SlotUi.font(this@MainActivity)
+                setText(prefs.getString("slot_link_host_ipv4", ""))
             }
-            AlertDialog.Builder(this)
-                .setTitle("Join physical KONKR")
-                .setMessage("Enter the KONKR Wi-Fi IPv4 address. Start Host on KONKR first.")
-                .setView(field)
-                .setPositiveButton("Join") { _, _ ->
-                    val host = field.text.toString().trim()
+            dialog.addButton("CANCEL") { dialog.dismiss() }
+            dialog.addButton("JOIN") {
+                val host = field.text.toString().trim()
+                val octets = host.split('.')
+                if (octets.size != 4 || octets.any { octet ->
+                        octet.isEmpty() || octet.any { !it.isDigit() } ||
+                            octet.length > 3 || (octet.toIntOrNull() ?: -1) !in 0..255
+                    }) {
+                    dialog.setError("Enter a valid IPv4 address, such as 192.168.1.20.")
+                } else {
+                    joined = true
                     prefs.edit().putString("slot_link_host_ipv4", host).apply()
+                    dialog.dismiss()
                     nativeLinkDirectHost("$address,$host")
                 }
-                .setNegativeButton("Cancel") { _, _ ->
-                    nativeLinkNetworkError("Direct Join cancelled")
-                }
-                .setOnCancelListener { nativeLinkNetworkError("Direct Join cancelled") }
-                .show()
+            }
+            dialog.show()
             return
         }
         try {
