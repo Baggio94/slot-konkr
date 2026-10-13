@@ -7,6 +7,24 @@
 - Fork : `pvaibhav/slot` branche `pvaibhav-improvements`, mêmes fichiers.
 - Android : `Baggio94/slot-konkr` branche `feat/konkr-multiplayer-lab`, `crates/slot-android/src/runtime.rs`, `crates/slot/src/link_screen.rs`, `crates/slot-ui/src/{link_art,plate,hud}.rs`.
 
+## 0. Ancienne capture KONKR/AVD reçue — origine des écarts identifiée
+
+La capture « HOST » envoyée le 13 octobre vers 22 h 18 correspond **ligne pour ligne** à `integration/konkr-rc4-next` dans `crates/slot-android/src/runtime.rs`, fonction `draw_multiplayer()` (ancienne version).
+
+| Déviation visible | Cause exacte dans l'ancienne branche | Correction vérifiée dans les sources de la PR #29 |
+|---|---|---|
+| Titre parasite `MULTIPLAYER` | `self.text_fit(68, 30, 20, 610, ...)` | Instruction totalement absente de la nouvelle fonction `draw_multiplayer` |
+| Étiquette `CABLE` à gauche | `self.text_fit(71/72, 30, 71, 140, ...)` | Ligne supprimée ; seul le sprite du mode choisi subsiste |
+| `HOST` éloigné du vrai centre | `text_fit(69/70, 300, 61, 110, ...)` avec abscisse fixe | Rendu `menu_face(LinkRow::text())` centré selon la **largeur effective** : `round((720-w)/2)`, y=44 |
+| « CHOOSE THE OTHER CONSOLE'S ROLE » | `self.text_fit(76, 178, 119, 465, ...)` | Aucun texte explicatif injecté par-dessus l'illustration |
+| Bandeau noir artificiel sous le port | Deuxième `Draw::Rect { x:0, y:420, w:720, h:60, colour:opening() }` | Rectangle supprimé ; fond et port d'origine, keycaps directement sur le fond d'origine |
+| Mauvaises touches/texte `LEFT/RI` | `hint_face("LEFT/RIGHT", "Swap")` et affichage permanent des trois keycaps | `arrows_hint_face("Swap")` **original**, groupes propres à l'état, `SELECT MODE` si commutable, `LINK_LEGEND_Y=422` |
+| Badge de liaison absent sur `LINKED` | HUD pas dessiné après la page Multiplayer | `8273c2c` rétablit l'ordre original `draw_game_menu` → `hud.draw` |
+
+**Non-régression ajoutée** par `3b0c90f` : anciennes entrées de menu n°68 à 77 retirées (indices réservés/vidés sans décaler `MENU_TEXT`) ; fonctions de géométrie centrées explicitement testées ; les libellés de navigation légitimes `Multiplayer`, `End Link`, `Eject to play solo` sont conservés. Cela supprime les chaînes parasites et empêche de les réintroduire via `MENU_TEXT`.
+
+**Niveau de certitude :** origine prouvée par comparaison des fichiers du dépôt, corrections présentes sur HEAD ; comparatif photo de la **nouvelle APK exécutée** non encore disponible. Les différences non mesurées (antialiasing, dimension effective sur l'AVD ou KONKR, moment de l'animation) restent à tester à la fin du lot A.
+
 ## 1. Comparaison écran par écran
 
 | Capture originale | Spécification exacte | État dans le code Android a6 | Contrôle restant |
