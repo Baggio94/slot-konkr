@@ -1183,11 +1183,15 @@ impl Engine {
         let core_file = library.join("libmgba_libretro.so");
         // Save the current solo state/ram/RTC atomically BEFORE replacing
         // the core. Failure stops link without losing the solo instance.
-        self.game.as_mut().ok_or("No game active".to_owned())?
+        let solo_snapshot = self.game.as_mut()
+            .ok_or("No game active".to_owned())?
             .preserve_solo_for_link()?;
+        // The exact private solo snapshot is passed in-memory; the linked
+        // engine loads it as both GBA halves before Host/Join state exchange.
+        // The existing solo core remains alive until its checkpoint is durable.
         drop(self.game.take());
         let mut linked = match GameSession::open_mgba_linked(&rom, &core_file,
-            &storage, &stem, self.settings.colour_correction, role) {
+            &storage, &stem, self.settings.colour_correction, role, &solo_snapshot) {
             Ok(session) => session,
             Err(error) => {
                 self.restore_solo_after_link_failure(&rom, &core_file, &storage, &stem);
