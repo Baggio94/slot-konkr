@@ -203,6 +203,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: github.ref == 'refs/heads/integration/konkr-rc4-next'
         with:
-          name: slot-konkr-rc5-beta5-signed-release
+          name: slot-konkr-rc5-beta6-signed-release
           path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
