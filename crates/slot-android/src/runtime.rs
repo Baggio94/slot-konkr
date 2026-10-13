@@ -454,6 +454,8 @@ struct Engine {
     shelf_status_start: (slot_gfx::TexId, u32),
     game_menu_hints: [(slot_gfx::TexId, u32); 3],
     link_hints: [(slot_gfx::TexId, u32); 3],
+    link_connected_hints: [(slot_gfx::TexId, u32); 2],
+    link_failed_hints: [(slot_gfx::TexId, u32); 2],
     board_texture: Option<slot_gfx::TexId>,
     chip_texture: slot_gfx::TexId,
     picker: Option<CorePicker>,
@@ -605,6 +607,18 @@ impl Engine {
             let tex = gpu.create_texture(face.w, face.h, &face.rgba);
             (tex, face.w)
         });
+        // State-specific original Slot legends; never advertise an active
+        // Connect button when already linked or after a failed handshake.
+        let link_connected_hints = [("B", "Back"), ("A", "End Link")]
+            .map(|(key, label)| {
+                let face = hint_face(key, label);
+                (gpu.create_texture(face.w, face.h, &face.rgba), face.w)
+            });
+        let link_failed_hints = [("A", "OK"), ("B", "Back")]
+            .map(|(key, label)| {
+                let face = hint_face(key, label);
+                (gpu.create_texture(face.w, face.h, &face.rgba), face.w)
+            });
         let setting_values = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
@@ -749,6 +763,8 @@ impl Engine {
             shelf_status_start,
             game_menu_hints,
             link_hints,
+            link_connected_hints,
+            link_failed_hints,
             board_texture: None,
             chip_texture,
             picker: None,
@@ -1121,11 +1137,18 @@ impl Engine {
                 }
             }
         }
-        if let LinkMenu::Linked { since, .. } = self.link_phase {
+        if let LinkMenu::Linked { since, opened: false, .. } = self.link_phase {
             if self.link_millis().saturating_sub(since) >= 1000 {
                 self.overlay = ShelfOverlay::None;
                 self.game_accum = 0.0;
                 self.buttons = 0;
+            }
+        }
+        if let LinkMenu::Unplug { since, .. } = self.link_phase {
+            // Original Slot unplug travel is 260ms; the linked cartridge
+            // then requires a safe eject/relaunch rather than solo play.
+            if self.link_millis().saturating_sub(since) >= 260 {
+                self.overlay = ShelfOverlay::GameMenu { row: 2 };
             }
         }
     }
@@ -1406,9 +1429,15 @@ impl Engine {
                             self.mode_last_tap = None;
                             self.game_accum = 0.0;
                             if self.game.as_ref().is_some_and(GameSession::linked) {
-                                // Exactly like upstream: a live link opens its
-                                // existing disconnect controls, not a new Host.
-                                self.overlay = ShelfOverlay::GameMenu { row: 1 };
+                                // Upstream SELECT+MENU reopens the animated
+                                // linked adapter and A=End Link / B=Back.
+                                self.link_phase = LinkMenu::Linked {
+                                    role: self.link_role,
+                                    worked: self.link_worked_at,
+                                    since: self.link_millis(),
+                                    opened: true,
+                                };
+                                self.overlay = ShelfOverlay::Multiplayer;
                             } else {
                                 self.enter_multiplayer_menu();
                             }
@@ -1419,8 +1448,12 @@ impl Engine {
                 }
                 if code == 110 && matches!(self.overlay, ShelfOverlay::Multiplayer) {
                     if !pressed {
-                        self.cancel_link_discovery();
-                        self.overlay = ShelfOverlay::GameMenu { row: 1 };
+                        if matches!(self.link_phase, LinkMenu::Linked { opened: true, .. }) {
+                            self.overlay = ShelfOverlay::None;
+                        } else if !matches!(self.link_phase, LinkMenu::Unplug { .. }) {
+                            self.cancel_link_discovery();
+                            self.overlay = ShelfOverlay::GameMenu { row: 1 };
+                        }
                     }
                     return;
                 }
@@ -1487,20 +1520,50 @@ impl Engine {
                 }
                 if self.game.is_some() && matches!(self.overlay, ShelfOverlay::Multiplayer) {
                     if pressed {
-                        match code {
-                            21 | 22 if matches!(self.link_phase, LinkMenu::Pick(_)
-                                | LinkMenu::Failed {..}) => {
-                                self.link_role = if self.link_role == LinkRow::Host {
-                                    LinkRow::Join
-                                } else { LinkRow::Host };
-                                self.link_phase = LinkMenu::Pick(self.link_role);
+                        match self.link_phase {
+                            LinkMenu::Pick(_) => match code {
+                                21 | 22 => {
+                                    self.link_role = if self.link_role == LinkRow::Host {
+                                        LinkRow::Join
+                                    } else { LinkRow::Host };
+                                    self.link_phase = LinkMenu::Pick(self.link_role);
+                                }
+                                96 => self.request_multiplayer_network(),
+                                97 | 108 => {
+                                    self.cancel_link_discovery();
+                                    self.overlay = ShelfOverlay::GameMenu { row: 1 };
+                                }
+                                _ => {}
+                            },
+                            LinkMenu::Working { .. } => {
+                                if code == 97 || code == 108 {
+                                    self.cancel_link_discovery();
+                                    self.overlay = ShelfOverlay::GameMenu { row: 1 };
+                                }
                             }
-                            96 => self.request_multiplayer_network(),
-                            97 | 108 => {
-                                self.cancel_link_discovery();
-                                self.overlay = ShelfOverlay::GameMenu { row: 1 };
+                            LinkMenu::Failed { .. } => {
+                                if code == 96 || code == 97 || code == 108 {
+                                    self.overlay = ShelfOverlay::GameMenu { row: 1 };
+                                }
                             }
-                            _ => {}
+                            LinkMenu::Linked { opened: true, role, .. } => match code {
+                                96 => {
+                                    // Never import a linked state into solo.
+                                    // Original Slot A ends link with unplug motion.
+                                    if let Some(game) = self.game.as_mut() {
+                                        game.end_multiplayer();
+                                    }
+                                    set_message("Multiplayer ended. Eject to return to solo.".into());
+                                    self.link_phase = LinkMenu::Unplug {
+                                        role, since: self.link_millis(),
+                                    };
+                                    self.game_accum = 0.0;
+                                    self.buttons = 0;
+                                }
+                                97 | 108 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
+                            LinkMenu::Linked { opened: false, .. } | LinkMenu::Unplug { .. } => {}
                         }
                     }
                     return;
@@ -2500,7 +2563,16 @@ impl Engine {
             x: 0.0, y: 420.0, w: OUT_W as f32, h: 60.0,
             colour: opening(),
         });
-        for (tex, w, x) in centred_hints(&self.link_hints, 15.0) {
+        // The footer follows original Slot Link phase transitions: only
+        // Pick offers A Link / role swap, only a reopened link offers End.
+        let hints: &[(slot_gfx::TexId, u32)] = match self.link_phase {
+            LinkMenu::Pick(_) => &self.link_hints,
+            LinkMenu::Working { .. } => &self.link_hints[..1],
+            LinkMenu::Linked { opened: true, .. } => &self.link_connected_hints,
+            LinkMenu::Linked { opened: false, .. } | LinkMenu::Unplug { .. } => &[],
+            LinkMenu::Failed { .. } => &self.link_failed_hints,
+        };
+        for (tex, w, x) in centred_hints(hints, 15.0) {
             out.push(Draw::Tex { x, y: 427.0, w: w as f32,
                 h: HINT_H as f32, tex, alpha: 1.0 });
         }
