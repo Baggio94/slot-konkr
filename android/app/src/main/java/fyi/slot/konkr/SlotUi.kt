@@ -112,11 +112,21 @@ internal object SlotUi {
         val image = runCatching {
             context.assets.open("apps_controls/$assetName").use { BitmapFactory.decodeStream(it) }
         }.getOrNull() ?: return hint(context, key, action)
-        return ImageView(context).apply {
-            setImageBitmap(image)
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            adjustViewBounds = true
+        val scale = (context.resources.displayMetrics.widthPixels / 720f)
+            .coerceIn(1f, 2f)
+        // A centered container allows weighted RA footer cells and larger
+        // Cart Studio bars without stretching upstream's exact 24px raster.
+        return android.widget.FrameLayout(context).apply {
             contentDescription = "$key $action"
+            addView(ImageView(context).apply {
+                setImageBitmap(image)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                isClickable = false
+            }, android.widget.FrameLayout.LayoutParams(
+                (image.width * scale).toInt().coerceAtLeast(1),
+                (image.height * scale).toInt().coerceAtLeast(1),
+                Gravity.CENTER
+            ))
         }
     }
 
