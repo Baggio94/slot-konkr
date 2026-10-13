@@ -54,7 +54,22 @@ jobs:
           # setup-android@v3 currently tries to install removed "tools" package.
           MANAGER="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -maxdepth 3 -type f -name sdkmanager | sort -V | tail -1)"
           if [ -z "$MANAGER" ]; then echo "Android sdkmanager not installed" >&2; exit 1; fi
-          "$MANAGER" --sdk_root="$ANDROID_SDK_ROOT" --install "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+          # Google SDK's CDN occasionally returns a corrupt/truncated NDK ZIP.
+          # A fresh hosted runner cannot reuse a partial download, so retry
+          # the pinned NDK instead of failing a healthy source checkout.
+          for attempt in 1 2 3 4; do
+            if "$MANAGER" --sdk_root="$ANDROID_SDK_ROOT" --install "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" \
+              && test -s "$ANDROID_SDK_ROOT/ndk/27.2.12479018/source.properties"; then
+              echo "Verified Android NDK r27c installed (attempt $attempt)"
+              break
+            fi
+            if [ "$attempt" -eq 4 ]; then
+              echo "::error::Android NDK 27.2 download failed after four attempts"
+              exit 1
+            fi
+            echo "::warning::Transient SDK/NDK download error, retry $attempt of 4"
+            sleep $((attempt * 5))
+          done
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: '1.96.0'
