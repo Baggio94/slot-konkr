@@ -359,6 +359,13 @@ internal object RetroArchStorage {
         // save followed ONLY by 0xFF. Never truncate other bytes.
         val otherLocal = otherPrivate(context, target)
         val otherOld = otherLocal.takeIf { it.isFile }?.readBytes()
+        if (otherOld != null && !validGbaRam(otherOld)) {
+            error("Other core private save has an unsupported SRAM size; no mirrors overwritten")
+        }
+        if (otherOld != null && !sameGbaRam(otherOld, current) &&
+            !sameGbaRam(otherOld, baseline) && !sameGbaRam(otherOld, atLaunch)) {
+            error("Other core private SRAM changed independently; no mirrors overwritten")
+        }
         val peerSize = otherOld?.size ?: if (otherCore(target.core) == "gpSP") 131072 else current.size
         val peerData = gbaRamAtSize(current, peerSize)
             ?: error("Other core has a different active SRAM capacity; no mirrors overwritten")
