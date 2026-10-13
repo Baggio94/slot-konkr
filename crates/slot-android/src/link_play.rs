@@ -252,6 +252,7 @@ mod tests {
     use super::*;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use slot_retro::MockCore;
 
     struct Wire {
@@ -271,6 +272,31 @@ mod tests {
         let b = Arc::new(Mutex::new(VecDeque::new()));
         (Box::new(Wire { recv: a.clone(), send: b.clone() }),
          Box::new(Wire { recv: b, send: a }))
+    }
+
+    // Simulated transport controls let us prove a lost peer NEVER advances
+    // either core after failure, even when its socket worker lags a frame.
+    struct FaultWire {
+        disconnected: Arc<AtomicBool>,
+        peer_ended: Arc<AtomicBool>,
+        sent_end: Arc<AtomicBool>,
+    }
+    impl LinkChannel for FaultWire {
+        fn send(&mut self, _flags: i32, _buf: &[u8]) {}
+        fn try_recv(&mut self) -> Option<Vec<u8>> { None }
+        fn is_closed(&self) -> bool { self.disconnected.load(Ordering::SeqCst) }
+        fn peer_ended(&self) -> bool { self.peer_ended.load(Ordering::SeqCst) }
+        fn send_end(&mut self) { self.sent_end.store(true, Ordering::SeqCst); }
+    }
+    fn fault_wire() -> (Box<dyn LinkChannel>, Arc<AtomicBool>, Arc<AtomicBool>, Arc<AtomicBool>) {
+        let disconnected = Arc::new(AtomicBool::new(false));
+        let peer_ended = Arc::new(AtomicBool::new(false));
+        let sent_end = Arc::new(AtomicBool::new(false));
+        (Box::new(FaultWire {
+            disconnected: disconnected.clone(),
+            peer_ended: peer_ended.clone(),
+            sent_end: sent_end.clone(),
+        }), disconnected, peer_ended, sent_end)
     }
 
     // Exercises the actual gpSP path, not the original mGBA single-core
@@ -439,6 +465,47 @@ mod tests {
         assert_eq!(host.serialize().unwrap(), guest.serialize().unwrap());
         h.end(&mut host);
         g.end(&mut guest);
+    }
+
+    #[test]
+    fn lost_gpsp_peer_never_advances_after_disconnect_in_either_serial_mode() {
+        for mode in [LinkKind::Cable, LinkKind::Wireless] {
+            let (wire, closed, _peer_ended, sent_end) = fault_wire();
+            let mut core = NetworkCore::new();
+            let mut link = LinkPlay::begin(&mut core, Role::Join, mode, wire).unwrap();
+            assert!(core.channel.is_active());
+            assert_eq!(link.frame(&mut core, ButtonMask(1)), Frame::Advanced);
+            let before = core.serialize().unwrap();
+            closed.store(true, Ordering::SeqCst);
+            for _ in 0..3 {
+                assert_eq!(link.frame(&mut core, ButtonMask(2)),
+                    Frame::Failed(LinkError::Disconnected));
+                assert_eq!(core.serialize().unwrap(), before,
+                    "a disconnected gpSP {mode:?} core must not emulate a solo frame");
+            }
+            link.end(&mut core);
+            assert!(core.ended);
+            assert!(sent_end.load(Ordering::SeqCst));
+            assert!(!core.channel.is_active());
+        }
+    }
+
+    #[test]
+    fn ended_mgba_peer_keeps_both_cartridges_unchanged_until_safe_eject() {
+        let (wire, _closed, peer_ended, sent_end) = fault_wire();
+        let mut core = PairedCore::new(0x42, 0xBAAE187F);
+        let mut link = LinkPlay::begin(&mut core, Role::Host, LinkKind::Cable, wire).unwrap();
+        let before = core.serialize().unwrap();
+        assert_eq!(link.frame(&mut core, ButtonMask(1)), Frame::Waiting);
+        peer_ended.store(true, Ordering::SeqCst);
+        assert_eq!(link.frame(&mut core, ButtonMask(1)),
+            Frame::Failed(LinkError::PeerEnded));
+        assert_eq!(link.frame(&mut core, ButtonMask(1)),
+            Frame::Failed(LinkError::PeerEnded));
+        assert_eq!(core.serialize().unwrap(), before);
+        assert_eq!(core.steps, 0);
+        link.end(&mut core);
+        assert!(sent_end.load(Ordering::SeqCst));
     }
 
     #[test]
