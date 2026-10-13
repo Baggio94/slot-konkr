@@ -27,11 +27,21 @@ pub fn validate_solo_snapshot(bytes: &[u8]) -> Result<(), String> {
 /// independent namespace, including if a previous connection failed or
 /// exited without saving. No rename/delete of historical session data.
 pub fn fresh_session(root: &Path, game_id: &str, role: &str) -> io::Result<PathBuf> {
+    fresh_session_for_core(root, "mGBA", game_id, role)
+}
+
+/// gpSP netpacket links also need per-connection SRAM/RTC isolation. Accept
+/// only known core namespaces so no caller can manufacture a save path.
+pub fn fresh_session_for_core(root: &Path, core: &str, game_id: &str,
+                              role: &str) -> io::Result<PathBuf> {
+    if !matches!(core, "mGBA" | "gpSP") {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid Link core"));
+    }
     if game_id.is_empty() || !game_id.bytes().all(|b| b.is_ascii_hexdigit()) ||
         !matches!(role, "host" | "join") {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid Link session identity"));
     }
-    let role_root = root.join("Multiplayer").join("mGBA").join(game_id).join(role);
+    let role_root = root.join("Multiplayer").join(core).join(game_id).join(role);
     let session_root = role_root.join("sessions");
     fs::create_dir_all(&session_root)?;
     let epoch = SystemTime::now().duration_since(UNIX_EPOCH)
@@ -92,6 +102,13 @@ mod tests {
         assert_ne!(two, guest);
         assert!(fresh_session(&base, "../bad", "host").is_err());
         assert!(fresh_session(&base, "abcdef0", "other").is_err());
+        let gpsp_host = fresh_session_for_core(&base, "gpSP", "abcdef0", "host").unwrap();
+        let gpsp_join = fresh_session_for_core(&base, "gpSP", "abcdef0", "join").unwrap();
+        assert!(gpsp_host.starts_with(base.join("Multiplayer/gpSP/abcdef0/host/sessions")));
+        assert!(gpsp_join.starts_with(base.join("Multiplayer/gpSP/abcdef0/join/sessions")));
+        assert_ne!(gpsp_host, gpsp_join);
+        assert!(fresh_session_for_core(&base, "../escape", "abcdef0", "host").is_err());
+        assert!(fresh_session_for_core(&base, "gpSP", "../escape", "host").is_err());
         fs::remove_dir_all(base).unwrap();
     }
 }
