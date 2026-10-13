@@ -39,6 +39,10 @@ pub struct LinkPlay {
     net: Link,
     error: Option<LinkError>,
     state_bytes: usize,
+    // Exactly ONE initial state transfer is legal for each TCP Link role.
+    // Later state packets could overwrite a running peer or grow unbounded
+    // if repeated KIND_STATE_END resets the per-transfer byte counter.
+    state_final_received: bool,
     // On linked mGBA, Host must import Join's own battery-backed GBA
     // before sending the authoritative paired state. Never seed a guest
     // with Host's blank peer cartridge.
@@ -113,7 +117,7 @@ impl LinkPlay {
         };
         Ok(Self {
             wire, cable, mode, net, error: None, state_bytes: 0,
-            awaiting_join_seed, started: Instant::now(),
+            state_final_received: false, awaiting_join_seed, started: Instant::now(),
         })
     }
 
@@ -132,6 +136,13 @@ impl LinkPlay {
             let Some(packet) = self.wire.try_recv() else { break };
             if let Some(cable) = self.cable.as_mut() {
                 if matches!(packet.first(), Some(1 | 2)) {
+                    // A second state stream, or any state packet after the
+                    // first END, is not part of Cable lockstep. Reject even
+                    // when the peer keeps the TCP connection alive.
+                    if self.state_final_received ||
+                        (cable.primed() && !self.awaiting_join_seed) {
+                        return self.fail(LinkError::InvalidState);
+                    }
                     self.state_bytes = self.state_bytes.saturating_add(packet.len().saturating_sub(1));
                     if self.state_bytes > MAX_INITIAL_STATE { return self.fail(LinkError::InvalidState); }
                 }
@@ -142,7 +153,10 @@ impl LinkPlay {
                     }
                 }
                 cable.accept(&packet);
-                if completed { self.state_bytes = 0; }
+                if completed {
+                    self.state_final_received = true;
+                    self.state_bytes = 0;
+                }
             } else {
                 self.net.push_inbound(packet);
             }
@@ -477,6 +491,33 @@ mod tests {
         assert!(matches!(h.frame(&mut host, ButtonMask(0)),
             Frame::Failed(LinkError::PeerEnded | LinkError::Disconnected)));
         assert_eq!(host.steps, before, "Host must not run a solo frame after End");
+    }
+
+    #[test]
+    fn duplicate_initial_state_end_is_rejected_without_replacing_live_cartridges() {
+        let inbound = Arc::new(Mutex::new(VecDeque::<Vec<u8>>::new()));
+        let outbound = Arc::new(Mutex::new(VecDeque::<Vec<u8>>::new()));
+        let wire: Box<dyn LinkChannel> = Box::new(Wire {
+            recv: inbound.clone(), send: outbound,
+        });
+        let mut host = PairedCore::new(0x11, 0xBAAE187F);
+        let before = host.state.clone();
+        let mut link = LinkPlay::begin(&mut host, Role::Host, LinkKind::Cable, wire).unwrap();
+        let guest = PairedCore::new(0x22, 0xBAAE187F);
+        let guest_state = link_state::local(&guest.state, 1).unwrap();
+        let initial = cable::state_packets(&guest_state);
+        assert_eq!(initial.len(), 1, "fixture must use one final packet");
+        let mut queue = inbound.lock().unwrap();
+        queue.push_back(initial[0].clone());
+        queue.push_back(initial[0].clone());
+        drop(queue);
+        assert_eq!(link.frame(&mut host, ButtonMask(0)),
+            Frame::Failed(LinkError::InvalidState));
+        assert_eq!(host.steps, 0);
+        assert_eq!(host.state, before,
+            "a repeated initial STATE_END cannot rewrite both GBAs");
+        assert_eq!(link.frame(&mut host, ButtonMask(0)),
+            Frame::Failed(LinkError::InvalidState));
     }
 
     #[test]
