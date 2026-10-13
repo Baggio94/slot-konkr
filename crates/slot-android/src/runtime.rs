@@ -456,10 +456,15 @@ struct Engine {
     shelf_status_faces: [(slot_gfx::TexId, u32, u32); 8],
     shelf_status_start: (slot_gfx::TexId, u32),
     game_menu_hints: [(slot_gfx::TexId, u32); 3],
+    // Same centered role, progress and failure faces as original slot.
+    link_role_faces: [(slot_gfx::TexId, u32, u32); 2],
+    link_step_faces: [(slot_gfx::TexId, u32, u32); 2],
+    link_fail_faces: [(slot_gfx::TexId, u32, u32); 3],
+    link_connected_face: (slot_gfx::TexId, u32, u32),
     link_hints: [(slot_gfx::TexId, u32); 3],
     link_switch_hints: [(slot_gfx::TexId, u32); 4],
     link_connected_hints: [(slot_gfx::TexId, u32); 2],
-    link_failed_hints: [(slot_gfx::TexId, u32); 2],
+    link_failed_hints: [(slot_gfx::TexId, u32); 1],
     board_texture: Option<slot_gfx::TexId>,
     chip_texture: slot_gfx::TexId,
     picker: Option<CorePicker>,
@@ -604,12 +609,23 @@ impl Engine {
             let tex = gpu.create_texture(face.w, face.h, &face.rgba);
             (tex, face.w)
         });
+        let make_link_text = |gpu: &mut Compositor, label: &str| {
+            let face = quick_value_face(label, true);
+            (gpu.create_texture(face.w, face.h, &face.rgba), face.w, face.h)
+        };
+        let link_role_faces = LinkRow::ALL
+            .map(|role| make_link_text(&mut gpu, role.text()));
+        let link_step_faces = LinkStep::ALL
+            .map(|step| make_link_text(&mut gpu, step.line()));
+        let link_fail_faces = LinkFail::SHOWN
+            .map(|failure| make_link_text(&mut gpu, failure.line()));
+        let link_connected_face = make_link_text(&mut gpu, "Linked");
         let link_hints = [
-            ("B", "Cancel"), ("LEFT/RIGHT", "Swap"), ("A", "Link"),
-        ].map(|(key, label)| {
-            let face = hint_face(key, label);
-            let tex = gpu.create_texture(face.w, face.h, &face.rgba);
-            (tex, face.w)
+            hint_face("B", "Cancel"),
+            arrows_hint_face("Swap"),
+            hint_face("A", "Link"),
+        ].map(|face| {
+            (gpu.create_texture(face.w, face.h, &face.rgba), face.w)
         });
         // State-specific original Slot legends; never advertise an active
         // Connect button when already linked or after a failed handshake.
@@ -618,11 +634,9 @@ impl Engine {
                 let face = hint_face(key, label);
                 (gpu.create_texture(face.w, face.h, &face.rgba), face.w)
             });
-        let link_failed_hints = [("A", "OK"), ("B", "Back")]
-            .map(|(key, label)| {
-                let face = hint_face(key, label);
-                (gpu.create_texture(face.w, face.h, &face.rgba), face.w)
-            });
+        let link_failed_hints = [hint_face("A", "OK")].map(|face| {
+            (gpu.create_texture(face.w, face.h, &face.rgba), face.w)
+        });
         // Upstream has SELECT Mode in the picker when Cable/RFU is truly
         // switchable. Reuse exactly its hint and arrow primitives.
         let link_switch_hints = [
@@ -787,6 +801,10 @@ impl Engine {
             shelf_status_faces,
             shelf_status_start,
             game_menu_hints,
+            link_role_faces,
+            link_step_faces,
+            link_fail_faces,
+            link_connected_face,
             link_hints,
             link_switch_hints,
             link_connected_hints,
@@ -2651,36 +2669,34 @@ impl Engine {
         }
     }
 
-    /// The original Slot cable plug/wireless adapter and their exact motion
-    /// curves are reused without forking them. Only text and the KONKR
-    /// controller keycap legend are native additions.
+    /// Exact upstream Slot Link menu composition: no additional Android
+    /// title, mode label or bottom bar. Cable plug and wireless adapter sprites
+    /// are identical to original and fork, as are progress/failure messages.
     fn draw_multiplayer(&self, out: &mut Vec<Draw>) {
+        const LINK_TEXT_Y: f32 = 44.0;
+        const LINK_LEGEND_Y: f32 = 422.0;
+        const LINK_LEGEND_GAP: f32 = 40.0;
         out.push(Draw::Rect {
             x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
             colour: opening(),
         });
-        let now = self.link_millis();
         link_screen::draw_link_art(self.link_phase, self.link_mode,
-            now, &self.link_art, out);
-        self.text_fit(68, 30.0, 20.0, 610.0, 0.9, out);
-        self.text_fit(if self.link_mode == LinkKind::Cable { 71 } else { 72 },
-            30.0, 71.0, 140.0, 0.75, out);
-        self.text_fit(if self.link_role == LinkRow::Host { 69 } else { 70 },
-            300.0, 61.0, 110.0, 1.0, out);
-        let status = match self.link_phase {
-            LinkMenu::Pick(_) => 76,
-            LinkMenu::Working { .. } => 73,
-            LinkMenu::Linked { .. } => 74,
-            LinkMenu::Failed { .. } => 77,
-            LinkMenu::Unplug { .. } => 75,
+            self.link_millis(), &self.link_art, out);
+        let text = match self.link_phase {
+            LinkMenu::Pick(role) => Some(self.link_role_faces[role.index()]),
+            LinkMenu::Working { step, .. } => Some(self.link_step_faces[step.index()]),
+            LinkMenu::Linked { .. } => Some(self.link_connected_face),
+            LinkMenu::Failed { fail, .. } => fail.shown()
+                .and_then(|i| self.link_fail_faces.get(i).copied()),
+            LinkMenu::Unplug { .. } => None,
         };
-        self.text_fit(status, 178.0, 119.0, 465.0, 0.8, out);
-        out.push(Draw::Rect {
-            x: 0.0, y: 420.0, w: OUT_W as f32, h: 60.0,
-            colour: opening(),
-        });
-        // The footer follows original Slot Link phase transitions: only
-        // Pick offers A Link / role swap, only a reopened link offers End.
+        if let Some((tex, w, h)) = text {
+            out.push(Draw::Tex {
+                x: ((OUT_W as f32 - w as f32) / 2.0).round(),
+                y: LINK_TEXT_Y, w: w as f32, h: h as f32,
+                tex, alpha: 1.0,
+            });
+        }
         let hints: &[(slot_gfx::TexId, u32)] = match self.link_phase {
             LinkMenu::Pick(_) if self.link_mode_switchable() => &self.link_switch_hints,
             LinkMenu::Pick(_) => &self.link_hints,
@@ -2689,9 +2705,17 @@ impl Engine {
             LinkMenu::Linked { opened: false, .. } | LinkMenu::Unplug { .. } => &[],
             LinkMenu::Failed { .. } => &self.link_failed_hints,
         };
-        for (tex, w, x) in centred_hints(hints, 15.0) {
-            out.push(Draw::Tex { x, y: 427.0, w: w as f32,
-                h: HINT_H as f32, tex, alpha: 1.0 });
+        let seen = |w: u32| w.saturating_sub(HINT_EDGE) as f32;
+        let total: f32 = hints.iter().map(|(_, w)| seen(*w)).sum::<f32>()
+            + LINK_LEGEND_GAP * hints.len().saturating_sub(1) as f32;
+        let mut x = ((OUT_W as f32 - total) / 2.0).round();
+        for &(tex, w) in hints {
+            out.push(Draw::Tex {
+                x, y: LINK_LEGEND_Y,
+                w: w as f32, h: HINT_H as f32,
+                tex, alpha: 1.0,
+            });
+            x += (seen(w) + LINK_LEGEND_GAP).round();
         }
     }
 
@@ -3469,8 +3493,10 @@ fn link_menu_auto_closes(phase: LinkMenu, now: u64) -> bool {
 
 /// Use the exact 260ms Slot link adapter unplug animation.
 fn link_unplug_complete(phase: LinkMenu, now: u64) -> bool {
+    // Upstream: the hardware withdraws in 260ms, then holds the screen
+    // another 160ms before exiting the Link menu (420ms total).
     matches!(phase, LinkMenu::Unplug { since, .. }
-        if now.saturating_sub(since) >= 260)
+        if now.saturating_sub(since) >= 420)
 }
 
 /// A clean install has three shelves but zero cartridges. Never enqueue
@@ -3606,8 +3632,8 @@ mod ui_feedback_tests {
         assert!(link_menu_auto_closes(first, 1200));
         assert!(!link_menu_auto_closes(reopened, 20000));
         let unplug = LinkMenu::Unplug { role: LinkRow::Join, since: 500 };
-        assert!(!link_unplug_complete(unplug, 759));
-        assert!(link_unplug_complete(unplug, 760));
+        assert!(!link_unplug_complete(unplug, 919));
+        assert!(link_unplug_complete(unplug, 920));
         assert!(!link_unplug_complete(first, 10000));
     }
 
@@ -3615,8 +3641,7 @@ mod ui_feedback_tests {
     fn connected_link_keycaps_fit_konkr_screen() {
         let linked_width = slot_ui::hint_width("B", "Back")
             + slot_ui::hint_width("A", "End Link");
-        let failed_width = slot_ui::hint_width("A", "OK")
-            + slot_ui::hint_width("B", "Back");
+        let failed_width = slot_ui::hint_width("A", "OK");
         for width in [linked_width, failed_width] {
             assert!((width as f32) + 15.0 < OUT_W as f32 - 60.0);
         }
