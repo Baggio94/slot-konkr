@@ -1195,16 +1195,18 @@ impl Engine {
                 self.settings.colour_correction, role, &solo_snapshot, serial) {
                 Ok(game) => game,
                 Err(error) => {
-                    self.restore_gpsp_solo_after_link_failure(
-                        &rom, &core_file, &storage, &stem, serial);
-                    return Err(format!("Cannot initialize private gpSP Link: {error}"));
+                    let recovery = self.restore_gpsp_solo_after_link_failure(
+                        &rom, &core_file, &storage, &stem, serial, &solo_snapshot);
+                    return Err(link_boot_failure("Cannot initialize private gpSP Link",
+                        &error, recovery));
                 }
             };
             if let Err(error) = private.begin_multiplayer(role, self.link_mode, Box::new(wire)) {
                 drop(private);
-                self.restore_gpsp_solo_after_link_failure(
-                    &rom, &core_file, &storage, &stem, serial);
-                return Err(format!("Cannot begin private gpSP Link: {error}"));
+                let recovery = self.restore_gpsp_solo_after_link_failure(
+                    &rom, &core_file, &storage, &stem, serial, &solo_snapshot);
+                return Err(link_boot_failure("Cannot begin private gpSP Link",
+                    &error, recovery));
             }
             SAMPLE_RATE.store(private.sample_rate, Ordering::Release);
             AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -1235,14 +1237,18 @@ impl Engine {
             &storage, &stem, self.settings.colour_correction, role, &solo_snapshot) {
             Ok(session) => session,
             Err(error) => {
-                self.restore_solo_after_link_failure(&rom, &core_file, &storage, &stem);
-                return Err(format!("Cannot initialize mGBA Link: {error}"));
+                let recovery = self.restore_solo_after_link_failure(
+                    &rom, &core_file, &storage, &stem, &solo_snapshot);
+                return Err(link_boot_failure("Cannot initialize mGBA Link",
+                    &error, recovery));
             }
         };
         if let Err(error) = linked.begin_multiplayer(role, LinkKind::Cable, Box::new(wire)) {
             drop(linked);
-            self.restore_solo_after_link_failure(&rom, &core_file, &storage, &stem);
-            return Err(format!("Cannot begin mGBA Link: {error}"));
+            let recovery = self.restore_solo_after_link_failure(
+                &rom, &core_file, &storage, &stem, &solo_snapshot);
+            return Err(link_boot_failure("Cannot begin mGBA Link",
+                &error, recovery));
         }
         SAMPLE_RATE.store(linked.sample_rate, Ordering::Release);
         AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -1254,39 +1260,43 @@ impl Engine {
 
     fn restore_gpsp_solo_after_link_failure(&mut self, rom: &Path,
                                              core_file: &Path, storage: &Path,
-                                             stem: &str, serial: &'static str) {
-        // Preserve the exact pre-Link solo state and reopen with its actual
-        // serial option. The one-shot private resume marker takes precedence
-        // over any stale RetroArch autosave. Never continue blank after error.
-        match GameSession::open_gpsp_serial(rom, core_file, storage, stem,
-            self.settings.colour_correction, self.ra_service.as_ref(), serial) {
-            Ok(game) => {
-                SAMPLE_RATE.store(game.sample_rate, Ordering::Release);
-                self.game = Some(game);
-            }
-            Err(error) => {
-                SAMPLE_RATE.store(0, Ordering::Release);
-                PLAYING.store(false, Ordering::Release);
-                set_message(format!("gpSP solo restore requires eject/reload: {error}"));
-            }
+                                             stem: &str, serial: &'static str,
+                                             snapshot: &[u8]) -> Result<(), String> {
+        // A successful core open is NOT evidence of a successful state
+        // resume: libretro can reject the saved state and start at the title.
+        // Re-apply the in-memory checkpoint and fail closed if it is rejected.
+        let result = (|| {
+            let mut game = GameSession::open_gpsp_serial(rom, core_file, storage, stem,
+                self.settings.colour_correction, self.ra_service.as_ref(), serial)?;
+            game.restore_checkpoint_after_link_failure(snapshot)?;
+            SAMPLE_RATE.store(game.sample_rate, Ordering::Release);
+            self.game = Some(game);
+            Ok(())
+        })();
+        if result.is_err() {
+            SAMPLE_RATE.store(0, Ordering::Release);
+            PLAYING.store(false, Ordering::Release);
         }
+        result
     }
 
     fn restore_solo_after_link_failure(&mut self, rom: &Path,
-                                       core_file: &Path, storage: &Path, stem: &str) {
-        // Restore the preserved solo state on failures; do not continue a
-        // partially loaded pair or silently switch to an empty game.
-        match GameSession::open(rom, core_file, storage, Core::Mgba, Platform::Gba,
-            true, stem, None, self.settings.colour_correction, self.ra_service.as_ref()) {
-            Ok(game) => {
-                SAMPLE_RATE.store(game.sample_rate, Ordering::Release);
-                self.game = Some(game);
-            }
-            Err(error) => {
-                SAMPLE_RATE.store(0, Ordering::Release);
-                set_message(format!("Solo restore requires eject/reload: {error}"));
-            }
+                                       core_file: &Path, storage: &Path,
+                                       stem: &str, snapshot: &[u8]) -> Result<(), String> {
+        let result = (|| {
+            let mut game = GameSession::open(rom, core_file, storage,
+                Core::Mgba, Platform::Gba, true, stem, None,
+                self.settings.colour_correction, self.ra_service.as_ref())?;
+            game.restore_checkpoint_after_link_failure(snapshot)?;
+            SAMPLE_RATE.store(game.sample_rate, Ordering::Release);
+            self.game = Some(game);
+            Ok(())
+        })();
+        if result.is_err() {
+            SAMPLE_RATE.store(0, Ordering::Release);
+            PLAYING.store(false, Ordering::Release);
         }
+        result
     }
 
     fn poll_multiplayer(&mut self) {
@@ -3561,6 +3571,17 @@ impl Engine {
     }
 }
 
+/// Do not report an unsuccessful core reopen as "solo restored".
+/// Always surface the genuine checkpoint error to the user: the durable
+/// solo state and battery files remain on disk for safe cartridge relaunch.
+fn link_boot_failure(context: &str, error: &str,
+                     recovery: Result<(), String>) -> String {
+    match recovery {
+        Ok(()) => format!("{context}: {error}; original solo progress restored"),
+        Err(cause) => format!("{context}: {error}; solo recovery failed: {cause}. Eject/relaunch the cartridge; saved progress remains on disk"),
+    }
+}
+
 // The source-of-truth coordinates and width accounting from upstream
 // BrandonKowalski/slot app.rs: draw_game_menu(). Do not replace the
 // original 720x480 centred keycaps with the Android Settings footer or
@@ -3773,6 +3794,18 @@ mod ui_feedback_tests {
         // this rule always centres both translated role title glyph widths.
         assert_eq!(link_heading_x(120), 300.0);
         assert_eq!(link_heading_x(216), 252.0);
+    }
+
+    #[test]
+    fn link_boot_failures_never_pretend_solo_recovery_succeeded() {
+        let ok = link_boot_failure("gpSP Link", "cannot connect", Ok(()));
+        assert!(ok.contains("original solo progress restored"));
+        let unsafe_state = link_boot_failure("mGBA Link", "invalid peer",
+            Err("saved state was rejected".into()));
+        assert!(unsafe_state.contains("solo recovery failed"));
+        assert!(unsafe_state.contains("saved state was rejected"));
+        assert!(unsafe_state.contains("Eject/relaunch"));
+        assert!(!unsafe_state.contains("progress restored"));
     }
 
     #[test]
