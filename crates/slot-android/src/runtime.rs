@@ -3059,7 +3059,8 @@ impl Engine {
                 let (tex, w, h) = self.shelf_status_faces[usize::from(self.shelf_status)];
                 commands.push(Draw::Tex {
                     x: (OUT_W as f32 - w as f32) / 2.0,
-                    y: 26.0,
+                    // Keep status text below the Android corner indicators.
+                    y: 74.0,
                     w: w as f32, h: h as f32,
                     tex, alpha: 1.0,
                 });
@@ -3069,7 +3070,7 @@ impl Engine {
                     let (tex, w) = self.shelf_status_start;
                     commands.push(Draw::Tex {
                         x: (OUT_W as f32 - w as f32) / 2.0,
-                        y: 62.0,
+                        y: 110.0,
                         w: w as f32, h: HINT_H as f32,
                         tex, alpha: 1.0,
                     });
