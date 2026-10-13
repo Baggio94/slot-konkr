@@ -175,13 +175,8 @@ impl GameSession {
             // NEVER shadow these fresh live progress bytes.
             for (ext, target) in [("srm", &save), ("rtc", &rtc)] {
                 let source = solo_core_root.join(format!("{rom_stem}.{ext}"));
-                if !target.exists() && source.is_file() {
-                    let data = std::fs::read(&source).map_err(|e| e.to_string())?;
-                    if data.len() > 1024 * 1024 {
-                        return Err(format!("Refusing oversized Multiplayer {ext} seed"));
-                    }
-                    atomic_write(target, &data).map_err(|e| e.to_string())?;
-                }
+                crate::linked_storage::copy_solo_battery(&source, target)
+                    .map_err(|e| format!("Cannot seed mGBA Link {ext}: {e}"))?;
             }
         }
         // Save states belong to their specific emulator core. Incompatible
@@ -466,15 +461,8 @@ impl GameSession {
             let private_rtc = private.join(
                 self.rtc.file_name().ok_or("Invalid solo RTC path")?);
             for (source, target) in [(&self.save, &private_save), (&self.rtc, &private_rtc)] {
-                if source.is_file() {
-                    let bytes = std::fs::read(source).map_err(|e|
-                        format!("Cannot read solo battery seed: {e}"))?;
-                    if bytes.len() > 1024 * 1024 {
-                        return Err("Refusing oversized gpSP Link battery seed".into());
-                    }
-                    atomic_write(target, &bytes).map_err(|e|
-                        format!("Cannot seed private gpSP Link battery: {e}"))?;
-                }
+                crate::linked_storage::copy_solo_battery(source, target)
+                    .map_err(|e| format!("Cannot seed private gpSP Link battery: {e}"))?;
             }
             Some((private_save, private_rtc))
         } else { None };
