@@ -205,7 +205,11 @@ jobs:
               unzip -Z -1 "$APK" | grep -Fx "lib/$abi/lib${lib}.so"
             done
             "$NM" -D --defined-only "android/app/src/main/jniLibs/$abi/libslot_android.so" | grep -F 'Java_fyi_slot_konkr_MainActivity_nativeDrawFrame'
-            "$NM" -D --defined-only "android/app/src/main/jniLibs/$abi/libmgba_libretro.so" | grep -E ' retro_run
+            "$NM" -D --defined-only "android/app/src/main/jniLibs/$abi/libmgba_libretro.so" | grep -E ' retro_run$'
+            "$NM" -D --defined-only "android/app/src/main/jniLibs/$abi/libgpsp_libretro.so" | grep -E ' retro_run$'
+          done
+          echo 'Universal debug APK: native mGBA, gpSP and Slot JNI for ARM64 and x86_64'
+      - name: Verify APK signature and print certificate fingerprint
         run: |
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs \
             android/app/build/outputs/apk/debug/app-debug.apk
