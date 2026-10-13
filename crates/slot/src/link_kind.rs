@@ -56,6 +56,9 @@ pub fn link_carried(code: &str, title: &str) -> bool {
         || pokemon(code, title)
         || code.starts_with("AWR")
         || code.starts_with("AW2")
+        || ["A3XE","A6BE","B4WE","B4BE","B4WP","B4BP",
+            "BRBE","BRKE","BRBP","BRKP","BR5E","BR6E","BR5P","BR6P",
+            "A8BE","A9BE","AK8E","AK9E","AGSE","AGFE"].contains(&code)
 }
 
 fn pokemon(code: &str, title: &str) -> bool {

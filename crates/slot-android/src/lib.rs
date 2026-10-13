@@ -33,6 +33,7 @@ mod link_mdns;
 mod link_lan;
 mod multiplayer;
 mod link_rom;
+mod link_compat;
 // Every mGBA Link attempt gets a fresh session namespace, preserving historical
 // Host/Join progress and never writing into the solo/RetroArch save root.
 mod linked_storage;

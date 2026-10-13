@@ -83,7 +83,7 @@ impl LabGreeting {
     fn bytes(&self) -> [u8; LAB_GREETING_LEN] {
         let mut bytes = [0u8; LAB_GREETING_LEN];
         bytes[..4].copy_from_slice(b"KMLB");
-        bytes[4] = 2; // Lab protocol revision; no implicit downgrade to SLOT/1.
+        bytes[4] = 3; // Mutual-auth KMLB/3, no KMLB/2 or SLOT/1 downgrade.
         bytes[5..9].copy_from_slice(&self.game);
         bytes[9] = self.backend;
         bytes[10] = self.mode;
@@ -92,6 +92,33 @@ impl LabGreeting {
         bytes[75..107].copy_from_slice(&self.bios_sha256);
         bytes
     }
+    fn decode(bytes:&[u8])->Option<Self>{
+        if bytes.len()!=LAB_GREETING_LEN || &bytes[0..4]!=b"KMLB" || bytes[4]!=3{return None;}
+        let mut game=[0;4]; game.copy_from_slice(&bytes[5..9]);
+        let mut rom_sha256=[0;32];rom_sha256.copy_from_slice(&bytes[11..43]);
+        let mut core_sha256=[0;32];core_sha256.copy_from_slice(&bytes[43..75]);
+        let mut bios_sha256=[0;32];bios_sha256.copy_from_slice(&bytes[75..107]);
+        Some(Self{game,backend:bytes[9],mode:bytes[10],rom_sha256,core_sha256,bios_sha256})
+    }
+    fn accepts(&self,other:&Self)->bool{
+        if self.backend!=other.backend || self.mode!=other.mode ||
+            self.core_sha256!=other.core_sha256 || self.bios_sha256!=other.bios_sha256{return false;}
+        if self.game==other.game{return self.rom_sha256==other.rom_sha256;}
+        let mode=match self.mode{1=>crate::link_kind::LinkKind::Cable,
+            2=>crate::link_kind::LinkKind::Wireless,_=>return false};
+        self.backend==2 && crate::link_compat::compatible_cross_title(self.game,other.game,mode)
+    }
+}
+fn vet_lab(stream:&mut TcpStream,local:&LabGreeting)->bool{
+    let mut bytes=[0u8;LAB_GREETING_LEN];
+    if stream.set_read_timeout(Some(GREET_WAIT)).is_err() ||
+        stream.set_write_timeout(Some(GREET_WAIT)).is_err() ||
+        stream.read_exact(&mut bytes).is_err(){return false;}
+    let Some(peer)=LabGreeting::decode(&bytes) else{return false;};
+    if !local.accepts(&peer){return false;}
+    if stream.write_all(&[GREETING_ACK]).is_err() ||
+        stream.write_all(&local.bytes()).is_err(){return false;}
+    stream.set_read_timeout(None).is_ok() && stream.set_write_timeout(None).is_ok()
 }
 
 const CONTROL_ENDED: u8 = 0x00;
@@ -123,7 +150,7 @@ impl TcpLink {
         bound: Duration,
         cancel: &Cancel,
     ) -> std::io::Result<TcpLink> {
-        TcpLink::host_inner(addr, port, bound, cancel, None, || {})
+        TcpLink::host_inner(addr, port, bound, cancel, None, None, || {})
     }
 
     /// `host_until` for a shared network, where anything on it can reach the listener. Only a
@@ -139,7 +166,7 @@ impl TcpLink {
         game: &str,
         listening: impl FnOnce(),
     ) -> std::io::Result<TcpLink> {
-        TcpLink::host_inner(addr, port, bound, cancel, Some(greeting(game).to_vec()), listening)
+        TcpLink::host_inner(addr, port, bound, cancel, Some(greeting(game).to_vec()), None, listening)
     }
 
     /// Lab-only strict negotiation: backend, Cable/Wireless mode, exact ROM,
@@ -149,7 +176,7 @@ impl TcpLink {
         identity: &LabGreeting, listening: impl FnOnce(),
     ) -> std::io::Result<TcpLink> {
         TcpLink::host_inner(addr, port, bound, cancel,
-            Some(identity.bytes().to_vec()), listening)
+            None, Some(identity.clone()), listening)
     }
 
     fn host_inner(
@@ -158,6 +185,7 @@ impl TcpLink {
         bound: Duration,
         cancel: &Cancel,
         expect: Option<Vec<u8>>,
+        lab: Option<LabGreeting>,
         listening: impl FnOnce(),
     ) -> std::io::Result<TcpLink> {
         let listener = TcpListener::bind((addr, port))?;
@@ -174,6 +202,9 @@ impl TcpLink {
             match listener.accept() {
                 Ok((mut stream, _peer)) => {
                     stream.set_nonblocking(false)?;
+                    if let Some(ref local) = lab {
+                        if !vet_lab(&mut stream, local) { continue; }
+                    }
                     if let Some(ref want) = expect {
                         // Vetted before it is anyone's session: a stranger, a scanner or the
                         // wrong game gets dropped here and the host keeps waiting for the
@@ -242,7 +273,22 @@ impl TcpLink {
 
     pub fn join_lab_greeted(addr: std::net::SocketAddr,
                             identity: &LabGreeting) -> std::io::Result<TcpLink> {
-        TcpLink::join_with_greeting(addr, &identity.bytes())
+        {
+            let mut stream=TcpStream::connect_timeout(&addr,GREET_WAIT)?;
+            stream.set_write_timeout(Some(GREET_WAIT))?;
+            stream.write_all(&identity.bytes())?;
+            stream.set_read_timeout(Some(GREET_WAIT))?;
+            let mut ack=[0u8;1];stream.read_exact(&mut ack)?;
+            if ack[0]!=GREETING_ACK {return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,"host refused KMLB/3 greeting"));}
+            let mut bytes=[0u8;LAB_GREETING_LEN];stream.read_exact(&mut bytes)?;
+            let host=LabGreeting::decode(&bytes).ok_or_else(||
+                std::io::Error::new(std::io::ErrorKind::InvalidData,"invalid KMLB/3 host identity"))?;
+            if !identity.accepts(&host){return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,"incompatible KMLB/3 host identity"));}
+            stream.set_read_timeout(None)?;stream.set_write_timeout(None)?;
+            TcpLink::wrap(stream)
+        }
     }
 
     fn join_with_greeting(addr: std::net::SocketAddr, bytes: &[u8]) -> std::io::Result<TcpLink> {

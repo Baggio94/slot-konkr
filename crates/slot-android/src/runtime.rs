@@ -1128,7 +1128,7 @@ impl Engine {
         }
         self.cancel_link_discovery();
         *LINK_DISCOVERY_GAME.lock().unwrap_or_else(|e| e.into_inner()) =
-            self.link_identity.as_ref().map(|identity| identity.code.clone());
+            self.link_identity.as_ref().map(|identity| crate::link_compat::discovery_key(&identity.code).to_owned());
         let now = self.link_millis();
         self.link_worked_at = now;
         self.link_phase = LinkMenu::Working {
@@ -1339,7 +1339,7 @@ impl Engine {
                         crate::multiplayer::Failure::PeerVanished => LinkFail::PeerVanished,
                     };
                     let details = if reason == crate::multiplayer::Failure::IncompatiblePeer {
-                        "Peer rejected the connection. Verify identical GBA ROM, mGBA/gpSP core, BIOS and Cable/Wireless mode."
+                        "Peer rejected KMLB/3. Verify a compatible game pair, core, BIOS and Cable/Wireless mode."
                     } else {
                         match reason {
                             crate::multiplayer::Failure::NobodyCame => "No compatible Host found. Ensure Host is waiting on the same LAN.",

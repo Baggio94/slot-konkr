@@ -200,7 +200,7 @@ fn connect(role: Role, local: Ipv4Addr, config: &LinkConfig,
             let wire = Multicast::open(local)?;
             let info = HostInfo {
                 instance: link_lan::instance_name(),
-                addr: local, port: PORT, game: config.game.clone(),
+                addr: local, port: PORT, game: crate::link_compat::discovery_key(&config.game).to_owned(),
             };
             let mut advert: Option<Advertiser> = None;
             // Bind TCP before publishing mDNS, so discovery never races the listener.
@@ -214,7 +214,7 @@ fn connect(role: Role, local: Ipv4Addr, config: &LinkConfig,
         }
         Role::Join => {
             let mut wire = Multicast::open(local)?;
-            link_lan::find(&mut wire, &config.game, cancel, BOUND, |addr| {
+            link_lan::find(&mut wire, crate::link_compat::discovery_key(&config.game), cancel, BOUND, |addr| {
                 TcpLink::join_lab_greeted(addr.into(), &fingerprint)
             })
         }
