@@ -215,6 +215,9 @@ static PERF_ACTIVE: AtomicBool = AtomicBool::new(false);
 static SHELF_INDICATOR_FLAGS: AtomicI32 = AtomicI32::new(0);
 // Read-only lifecycle bit polled by Kotlin; never touch WifiManager on GL.
 static LINK_NEEDS_MULTICAST: AtomicBool = AtomicBool::new(false);
+// Read-only four-character game code for the optional Mac AVD DNS-SD bridge.
+// The actual Lab/2 peer handshake still validates SHA-256 of ROM, core, BIOS.
+static LINK_DISCOVERY_GAME: Mutex<Option<String>> = Mutex::new(None);
 
 #[derive(Clone)]
 struct SystemStatus {
@@ -1000,6 +1003,7 @@ impl Engine {
     fn cancel_link_discovery(&mut self) {
         if let Some(starter) = self.link_starter.take() { starter.cancel(); }
         LINK_NEEDS_MULTICAST.store(false, Ordering::Release);
+        *LINK_DISCOVERY_GAME.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     fn enter_multiplayer_menu(&mut self) {
@@ -1123,6 +1127,8 @@ impl Engine {
             return;
         }
         self.cancel_link_discovery();
+        *LINK_DISCOVERY_GAME.lock().unwrap_or_else(|e| e.into_inner()) =
+            self.link_identity.as_ref().map(|identity| identity.code.clone());
         let now = self.link_millis();
         self.link_worked_at = now;
         self.link_phase = LinkMenu::Working {
@@ -4076,6 +4082,18 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetShelfStatus(
     } else { 0 };
     INPUT.lock().unwrap_or_else(|poison| poison.into_inner())
         .push_back(Input::ShelfStatus(safe));
+}
+
+/// AVD Mac bridge receives only the four-character ROM header code. It
+/// never handles gameplay, filenames, save data or the peer's fingerprints.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkDiscoveryGame(
+    env: JNIEnv<'_>, _activity: JObject<'_>,
+) -> jstring {
+    let code = LINK_DISCOVERY_GAME.lock()
+        .unwrap_or_else(|e| e.into_inner()).clone();
+    code.and_then(|value| env.new_string(value).ok())
+        .map_or(std::ptr::null_mut(), |value| value.into_raw())
 }
 
 /// Kotlin resolves the connected Wi-Fi interface and takes a MulticastLock
