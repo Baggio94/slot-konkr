@@ -1,6 +1,9 @@
 //! Native libretro mGBA / gpSP game session. All core calls occur on GLSurfaceView's GL thread.
 //! Android's SAF bridge materializes a **bounded private cache** copy of each selected ROM.
-use slot_retro::{ButtonMask, LibretroCore, RetroCore};
+use slot_retro::{ButtonMask, LibretroCore, RetroCore, LinkChannel};
+use crate::link_kind::LinkKind;
+use crate::link_play::{Frame as LinkFrame, LinkError, LinkPlay};
+use crate::multiplayer::Role;
 use slot_store::{atomic_write, Core, Platform, StateEntry, StateRing, stamp_now, parse_stamp, format_stamp, RING_MAX};
 use crate::thumb;
 use crate::retroarch_state;
@@ -40,6 +43,11 @@ enum PendingUndo {
 pub struct GameSession {
     // Wrapped with the native softcore evaluator for opted-in GBA sessions.
     core: Box<dyn RetroCore>,
+    // Optional: only used after the real network handshake, never in solo play.
+    link: Option<LinkPlay>,
+    // A linked mGBA state may contain TWO cores, incompatible with solo
+    // RetroArch .state files. Never overwrite solo timeline after link use.
+    link_touched: bool,
     save: PathBuf,
     rtc: PathBuf,
     manual_export_prefix: PathBuf,
@@ -152,13 +160,15 @@ impl GameSession {
                     if colour_correction { "enabled" } else { "disabled" });
             }
         }
-        // Apply libretro core options BEFORE wrapping. The native rcheevos
-        // worker observes Load/Frame/Unload but never holds emulator pointers.
-        // GB/GBC need their own verified RA hash and RAM maps, so they are
-        // explicitly excluded from this initial GBA-only milestone.
-        let mut core: Box<dyn RetroCore> = match (platform, achievements) {
-            (Platform::Gba, Some(service)) => service.wrap(Box::new(core)),
-            _ => Box::new(core),
+        // rcheevos shares ONE evaluator, protected against cross-console
+        // memory reads. GB=4 / GBA=5 / GBC=6 use their own libretro maps.
+        // Speculative frames never reach it (including GB/GBC Run-Ahead).
+        let console = match platform {
+            Platform::Gb => 4, Platform::Gba => 5, Platform::Gbc => 6,
+        };
+        let mut core: Box<dyn RetroCore> = match achievements {
+            Some(service) => service.wrap_for_console(Box::new(core), console),
+            None => Box::new(core),
         };
         core.load(rom).map_err(|e| e.to_string())?;
         let load_ms = opening_at.elapsed().as_millis();
@@ -176,6 +186,12 @@ impl GameSession {
         });
         if let Ok(ram) = ram {
             if let Err(error) = core.load_save_ram(&ram) {
+                // Never continue with blank RAM and subsequently export it
+                // over a verified shared save from the OTHER emulator.
+                let marker = root.join(format!("{id}.{}.skip-resume.once", which.as_str()));
+                if marker.is_file() {
+                    return Err(format!("Core rejected shared GBA SRAM; originals preserved: {error}"));
+                }
                 eprintln!("slot-konkr: SRAM restore skipped: {error}");
             }
         }
@@ -184,7 +200,19 @@ impl GameSession {
                 eprintln!("slot-konkr: RTC restore skipped: {error}");
             }
         }
-        if resume_state {
+        // Switching GBA emulation cores can import a newer battery save from
+        // the other core. A stale same-core .state.auto would roll progress
+        // backwards despite correct SRAM syncing. Kotlin stages a one-shot
+        // marker ONLY when the imported save comes from the other core.
+        let skip_resume_marker = root.join(format!("{id}.{}.skip-resume.once", which.as_str()));
+        let cross_core_import = skip_resume_marker.exists();
+        if cross_core_import {
+            if let Err(error) = std::fs::remove_file(&skip_resume_marker) {
+                return Err(format!("Cannot clear cross-core resume guard: {error}"));
+            }
+            eprintln!("slot-konkr: cross-core SRAM selected; old savestate auto-resume suppressed");
+        }
+        if resume_state && !cross_core_import {
             // Prefer a successfully decoded RetroArch auto state, then the
             // Slot private state. A compressed/unrecognized external file is
             // kept intact and is NEVER interpreted as raw emulator memory.
@@ -216,7 +244,7 @@ impl GameSession {
         let sample_rate = core.av_info().sample_rate.round() as i32;
         let fps = core.av_info().fps.clamp(30.0, 120.0);
         Ok(Self {
-            core, save, rtc, manual_export_prefix, state, retroarch_export, retroarch_import, ring,
+            core, link: None, link_touched: false, save, rtc, manual_export_prefix, state, retroarch_export, retroarch_import, ring,
             rewind: RewindThread::spawn(REWIND_BYTES), rewind_frames: 0,
             frame_count: 0, palette_live, core_kind: which,
             runahead_video: Vec::new(), runahead_state: Vec::new(),
@@ -227,14 +255,22 @@ impl GameSession {
         })
     }
 
-    pub fn advance(&mut self, buttons: u16, turbo: bool, record_rewind: bool) {
+    /// False while cable lockstep is awaiting the other player. The caller
+    /// must not subtract an emulated-frame budget until this returns true.
+    pub fn advance(&mut self, buttons: u16, turbo: bool, record_rewind: bool) -> bool {
         self.runahead_video.clear();
-        // Reuse Slot's actual 3-on/3-off X/Y to A/B turbo algorithm.
         let pressed = ButtonMask(buttons);
         let mapped = xy_buttons(pressed, turbo, self.frame_count);
-        self.core.run_frame(mapped);
+        if let Some(link) = self.link.as_mut() {
+            match link.frame(self.core.as_mut(), mapped) {
+                LinkFrame::Advanced => {},
+                LinkFrame::Waiting | LinkFrame::Failed(_) => return false,
+            }
+        } else {
+            self.core.run_frame(mapped);
+        }
         self.frame_count = self.frame_count.wrapping_add(1);
-        if record_rewind {
+        if record_rewind && !self.link_touched {
             self.rewind_frames += 1;
             if self.rewind_frames >= REWIND_CAPTURE_FRAMES {
                 self.rewind_frames = 0;
@@ -247,17 +283,73 @@ impl GameSession {
         if self.last_sram.elapsed() >= SRAM_PERIOD {
             self.save_sram();
         }
+        true
+    }
+
+    /// The pinned mGBA libretro core is SINGLE-PLAYER (it ignores controller
+    /// port 1 and never registers a netpacket interface). gpSP is the ONLY
+    /// installed core with genuine GBA serial/RFU netpacket callbacks. Both
+    /// Cable and Wireless therefore use gpSP's network interface, never the
+    /// simulated two-input single-core path used by original Slot tests.
+    pub fn begin_multiplayer(&mut self, role: Role, mode: LinkKind,
+                             transport: Box<dyn LinkChannel>) -> Result<(), String> {
+        if self.link.is_some() { return Err("Already linked".into()); }
+        if self.link_touched {
+            return Err("Relaunch cartridge before another link".into());
+        }
+        if self.core_kind != Core::Gpsp {
+            return Err("Multiplayer requires gpSP: this mGBA libretro build has no GBA Link interface".into());
+        }
+        if !self.core.supports_netpacket() {
+            return Err("gpSP did not register GBA serial/RFU netpacket callbacks".into());
+        }
+        // The auto-detected serial mode must be decided when the cartridge is
+        // loaded. Never attempt to switch RFU to Cable on a running gpSP core.
+        let _ = mode;
+        let link = LinkPlay::begin(self.core.as_mut(), role, mode, transport)?;
+        self.link = Some(link);
+        self.link_touched = true;
+        self.runahead_video.clear();
+        self.rewind_frames = 0;
+        self.pending_undo = None;
+        Ok(())
+    }
+
+    pub fn link_fault(&self) -> Option<LinkError> {
+        self.link.as_ref().and_then(|link| link.fault())
+    }
+
+    pub fn linked(&self) -> bool { self.link.is_some() }
+
+    /// An ended link must never become a local solo timeline. Eject and
+    /// reopen the ROM to reinitialize both save and emulation state safely.
+    pub fn requires_relaunch(&self) -> bool {
+        self.link_touched && self.link.is_none()
+    }
+
+    pub fn core_kind(&self) -> Core { self.core_kind }
+
+    pub fn wireless_capable(&self) -> bool {
+        self.core_kind == Core::Gpsp && self.core.supports_netpacket()
+    }
+
+    pub fn end_multiplayer(&mut self) {
+        if let Some(mut link) = self.link.take() {
+            link.end(self.core.as_mut());
+        }
+        self.runahead_video.clear();
+        self.rewind_frames = 0;
     }
 
     pub fn runahead_supported(&self) -> bool {
-        !self.runahead_unavailable && self.core.speculative_audio_supported()
+        !self.link_touched && self.link.is_none() && !self.runahead_unavailable && self.core.speculative_audio_supported()
     }
 
     /// Roll back both standard libretro state and core-specific transient
     /// audio: gpSP's sound ring, or mGBA's converter/filter/queue sidecar.
     pub fn prepare_runahead(&mut self, buttons: u16, turbo: bool, frames: u8) {
         self.runahead_video.clear();
-        if frames == 0 || frames > 2 || self.runahead_unavailable { return; }
+        if frames == 0 || frames > 2 || self.runahead_unavailable || self.link_touched { return; }
         if !self.core.speculative_audio_supported() {
             self.runahead_unavailable = true;
             log_launch_timing("Run-Ahead disabled: core has no safe speculative audio support");
@@ -294,6 +386,7 @@ impl GameSession {
     }
 
     pub fn rewind_step(&mut self) -> bool {
+        if self.link_touched { return false; }
         self.runahead_video.clear();
         let Some(previous) = self.rewind.pop() else { return false; };
         if self.core.unserialize(&previous).is_err() { return false; }
@@ -370,7 +463,9 @@ impl GameSession {
     pub fn save(&mut self, with_state: bool) -> bool {
         let saved_sram = self.save_sram();
         let mut state_written = false;
-        if with_state {
+        // Exporting a single-core state during linked play would silently
+        // corrupt the shared timeline. SRAM/RTC can still be saved safely.
+        if with_state && !self.link_touched {
             if let Ok(data) = self.core.serialize() {
                 if let Err(err) = atomic_write(&self.state, &data) {
                     eprintln!("slot-konkr: state save failed: {err}");
@@ -389,6 +484,7 @@ impl GameSession {
     /// Original Slot ring: 10 timestamped states per ROM/core, each with
     /// a 240×160 PNG thumbnail. Independent from RetroArch's manual slots.
     pub fn save_manual(&mut self) -> Result<String, String> {
+        if self.link_touched { return Err("Save States unavailable after linked play; relaunch cartridge".into()); }
         let state = self.core.serialize().map_err(|e|e.to_string())?;
         let preview = thumb::png(self.core.video_xrgb8888()).unwrap_or_default();
         let entries = self.ring.list().map_err(|e|e.to_string())?;
@@ -423,6 +519,7 @@ impl GameSession {
     }
 
     pub fn load_manual(&mut self, stamp:&str) -> Result<(), String> {
+        if self.link.is_some() { return Err("Load State unavailable during Multiplayer".into()); }
         let (bytes, _) = self.ring.read(stamp).map_err(|e|e.to_string())?;
         let prior = self.core.serialize().map_err(|e|e.to_string())?;
         self.core.unserialize(&bytes).map_err(|e|e.to_string())?;
@@ -441,6 +538,7 @@ impl GameSession {
     }
 
     pub fn undo_manual(&mut self)->Result<(),String> {
+        if self.link.is_some() { return Err("Undo unavailable during Multiplayer".into()); }
         let Some((since,_))=&self.pending_undo else { return Err("Nothing to undo".into())};
         if since.elapsed()>UNDO_WINDOW {
             self.pending_undo=None;
@@ -464,6 +562,14 @@ impl GameSession {
         self.pending_undo.as_ref().is_some_and(|(at,_)|at.elapsed()<=UNDO_WINDOW)
     }
 
+}
+
+impl Drop for GameSession {
+    fn drop(&mut self) {
+        // Ejection, Android lifecycle teardown and failed launches must tell
+        // the remote console the link ended, not leave an orphaned TCP session.
+        self.end_multiplayer();
+    }
 }
 
 #[cfg(test)]

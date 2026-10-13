@@ -227,6 +227,12 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
     }
 }
 
+// gpSP 5819380c deliberately sets poll=NULL. In libretro's ABI it is an
+// OPTIONAL host poll callback; start/receive/stop are what actual games need.
+fn netpacket_ready(cb: &NetpacketCallback) -> bool {
+    cb.start.is_some() && cb.receive.is_some() && cb.stop.is_some()
+}
+
 unsafe extern "C" fn netpacket_send(
     _flags: c_int,
     buf: *const c_void,
@@ -257,22 +263,32 @@ unsafe extern "C" fn netpacket_poll_receive() {
     }
 }
 
-unsafe fn begin_link(client_id: u16) {
+unsafe fn begin_link(client_id: u16) -> bool {
     let Some(start) = with_host(|h| h.netpacket.as_ref().and_then(|cb| cb.start)).flatten() else {
-        return;
+        return false;
     };
     start(client_id, netpacket_send, netpacket_poll_receive);
 
     let peer = 1u16.wrapping_sub(client_id);
     let connected = with_host(|h| {
-        h.net.set_active(true);
         h.net_peer = Some(peer);
         h.netpacket.as_ref().and_then(|cb| cb.connected)
-    })
-    .flatten();
-    if let Some(connected) = connected {
-        connected(peer);
+    }).flatten();
+    // gpSP returns false if the actual serial mode cannot accept a peer.
+    // Calling 'disconnected' here would decrement its client counter even
+    // though connected never incremented it; stop directly instead.
+    if connected.is_some_and(|callback| !callback(peer)) {
+        let stop = with_host(|h| {
+            h.net_peer = None;
+            h.net.set_active(false);
+            h.net.clear();
+            h.netpacket.as_ref().and_then(|cb| cb.stop)
+        }).flatten();
+        if let Some(stop) = stop { stop(); }
+        return false;
     }
+    with_host(|h| h.net.set_active(true));
+    true
 }
 
 unsafe fn halt_link() {
@@ -677,7 +693,55 @@ fn copy_gba_achievement_map(descriptors: &[MemoryDescriptor], ram: &mut [u8]) ->
     valid
 }
 
+/// mGBA's GB/GBC libretro memory descriptors use actual GB CPU addresses:
+/// ROM 0000-7fff, VRAM 8000-9fff, battery A000-bfff, WRAM C000-dfff,
+/// IO ff00-ff7f and HRAM ff80-ffff. GBC extended banks occupy 10000+.
+/// Assemble the address space without inventing values for unmapped windows.
+fn copy_gb_achievement_map(
+    descriptors: &[MemoryDescriptor], ram: &mut [u8], coverage: &mut [u8],
+) -> usize {
+    const LIMIT: usize = 0x17000;
+    if ram.len() < LIMIT || coverage.len() < LIMIT { return 0; }
+    coverage[..LIMIT].fill(0);
+    let mut filled = 0usize;
+    for desc in descriptors {
+        if desc.ptr.is_null() || desc.disconnect != 0 { continue; }
+        let start = desc.start;
+        if start >= LIMIT { continue; }
+        let len = desc.len.min(LIMIT - start);
+        if len == 0 { continue; }
+        if desc.offset.checked_add(len).is_none_or(|end| end > isize::MAX as usize) {
+            continue;
+        }
+        // mGBA descriptors can carry select masks for OAM/HRAM. These
+        // windows still expose a contiguous, explicitly sized span.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                (desc.ptr as *const u8).add(desc.offset),
+                ram[start..start + len].as_mut_ptr(), len,
+            );
+        }
+        for flag in &mut coverage[start..start + len] {
+            if *flag == 0 { filled += 1; }
+            *flag = 1;
+        }
+    }
+    filled
+}
+
 impl RetroCore for LibretroCore {
+    fn achievement_memory_for_console(
+        &self, ram: &mut [u8], coverage: &mut [u8], console: u32
+    ) -> [usize; 3] {
+        if !self.loaded { return [0; 3]; }
+        if console == 4 || console == 6 {
+            let filled = copy_gb_achievement_map(&self.host.memory, ram, coverage);
+            // An actual mapped WRAM window is required, not merely ROM/VRAM.
+            return [if filled > 0 && coverage.get(0xc000) == Some(&1) { filled } else { 0 }, 0, 0];
+        }
+        self.achievement_memory(ram)
+    }
+
     fn achievement_memory(&self, ram: &mut [u8]) -> [usize; 3] {
         if ram.len() < 0x58000 || !self.loaded {
             return [0; 3];
@@ -936,9 +1000,18 @@ impl RetroCore for LibretroCore {
         self.host.net.clone()
     }
 
+    fn supports_netpacket(&self) -> bool {
+        self.host.netpacket.as_ref().is_some_and(netpacket_ready)
+    }
+
     fn start_link(&mut self, client_id: u16) {
         let _a = Active::bind(&mut self.host);
-        unsafe { begin_link(client_id) };
+        let _ = unsafe { begin_link(client_id) };
+    }
+
+    fn try_start_link(&mut self, client_id: u16) -> bool {
+        let _a = Active::bind(&mut self.host);
+        unsafe { begin_link(client_id) }
     }
 
     fn pump_link(&mut self) {
@@ -1008,6 +1081,32 @@ mod tests {
             len,
             addrspace: ptr::null(),
         }
+    }
+
+    #[test]
+    fn gb_and_gbc_memory_descriptor_windows_respect_validity_and_extended_wram() {
+        let mut wram = vec![0x15u8; 0x8000];
+        let mut hram = vec![0x87u8; 0x80];
+        let mut oam = vec![0x55u8; 0xa0];
+        let mut regions = vec![
+            test_ra_descriptor(&mut wram, 0xc000, 0, 0x1000),
+            test_ra_descriptor(&mut wram, 0xd000, 0x1000, 0x1000),
+            test_ra_descriptor(&mut wram, 0x10000, 0x2000, 0x6000),
+            test_ra_descriptor(&mut hram, 0xff80, 0, 0x7f),
+            test_ra_descriptor(&mut oam, 0xfe00, 0, 0xa0),
+        ];
+        regions[3].select = 0xFFFFFF80;
+        let mut ram = vec![0xCC; 0x58000];
+        let mut coverage = vec![0; 0x17000];
+        assert!(copy_gb_achievement_map(&regions, &mut ram, &mut coverage) > 0);
+        assert_eq!(ram[0xc000], 0x15);
+        assert_eq!(ram[0x10000], 0x15);
+        assert_eq!(ram[0xff80], 0x87);
+        assert_eq!(coverage[0xc000], 1);
+        assert_eq!(coverage[0xe000], 0, "echo RAM must never imply valid gameplay RAM");
+        assert_eq!(coverage[0xff7f], 0);
+        assert_eq!(coverage[0xff80], 1);
+        assert_eq!(coverage[0x16fff], 0);
     }
 
     #[test]
@@ -1398,6 +1497,42 @@ mod tests {
             disconnected: None,
             protocol_version: ptr::null(),
         }
+    }
+
+    unsafe extern "C" fn test_reject_link(_client_id: u16) -> bool { false }
+
+    #[test]
+    fn gp_sp_refusing_serial_peer_never_activates_fake_link() {
+        let mut host = host_with(HashMap::new(), false);
+        let mut cb = test_netpacket_callback();
+        cb.connected = Some(test_reject_link);
+        cb.stop = Some(test_stop);
+        host.netpacket = Some(cb);
+        let accepted = {
+            let _active = Active::bind(&mut host);
+            unsafe { begin_link(0) }
+        };
+        assert!(!accepted, "Rejected serial peer cannot be marked connected");
+        assert!(!host.net.is_active());
+        assert!(host.net_peer.is_none());
+    }
+
+    #[test]
+    fn gpsp_null_poll_is_valid_for_real_netpacket_mode() {
+        // Pinned gpSP (5819380c) registers start/receive/stop and
+        // deliberately sets poll=NULL. The emulator supplies its own
+        // netpacket_poll_receive callback to the frontend during start().
+        let mut callback = test_netpacket_callback();
+        callback.stop = Some(test_stop);
+        callback.poll = None;
+        assert!(netpacket_ready(&callback));
+        callback.start = None;
+        assert!(!netpacket_ready(&callback));
+        callback.start = Some(test_start);
+        // A NULL callback is optional; this must never disable gpSP Wireless.
+        let mut host = host_with(HashMap::new(), false);
+        host.netpacket = Some(callback);
+        assert!(host.netpacket.as_ref().is_some_and(netpacket_ready));
     }
 
     #[test]

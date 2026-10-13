@@ -161,7 +161,7 @@ internal class RaPanelDialog(
             Triple("X", "SIGN OUT", onSignOut),
             Triple("B", "BACK", { dialog.dismiss() })
         )) {
-            val hint = SlotUi.hint(activity, key, action).apply {
+            val hint = SlotUi.nativeHint(activity, key, action).apply {
                 isFocusable = false
                 isClickable = true
                 setOnClickListener { callback() }
@@ -187,20 +187,32 @@ internal class RaPanelDialog(
         // No highlighted footer selection; button hints describe direct keys.
     }
 
-    fun update(engine: String, snapshot: RaDiagnostics.Snapshot) {
+    fun update(engine: String, internet: Boolean, snapshot: RaDiagnostics.Snapshot) {
         if (!dialog.isShowing) return
         val previousScroll = scroll.scrollY
         content.removeAllViews()
         section("ACCOUNT")
         row("Player", username)
-        row("Connection", "Direct to RA")
-        row("Engine", engine)
+        row("Engine", if (engine == "Inactive") "Inactive" else "Active")
+        // Android's validated Internet is not proof of a successful RA HTTPS
+        // handshake. Sync status is derived separately from the native worker.
+        row("Connection", if (internet) "Internet available" else "Offline")
+        row("Sync", when {
+            !internet -> "Waiting for connection"
+            engine == "Online" -> "Up to date"
+            engine == "Preparing" -> "Preparing"
+            engine == "Needs attention" -> "Needs attention"
+            engine == "Offline" -> "Waiting for RA service"
+            else -> engine
+        })
         row("Mode", "Casual")
         section("GAME CACHE")
         row("GBA ROMs", snapshot.libraryGba?.toString() ?: "Not indexed")
         val cached = snapshot.cachedGba?.toString() ?: "Unknown"
         val indexed = snapshot.indexedGba?.toString() ?: "?"
         row("GBA prepared", "$cached / $indexed indexed")
+        row("GB prepared", "${snapshot.cachedGb ?: "?"} / ${snapshot.indexedGb ?: "?"} indexed")
+        row("GBC prepared", "${snapshot.cachedGbc ?: "?"} / ${snapshot.indexedGbc ?: "?"} indexed")
         row("Game icons cached", if (snapshot.gameIconsTotal != null &&
             snapshot.gameIconsCached != null)
             "${snapshot.gameIconsCached} / ${snapshot.gameIconsTotal}"
@@ -223,9 +235,9 @@ internal class RaPanelDialog(
         }
         row("Awards to sync", snapshot.pendingAwards?.toString() ?: "Unknown")
         row("Awards saved", snapshot.recordedAwards?.toString() ?: "Unknown")
-        row("GB / GBC", "Not supported yet")
+        row("GB / GBC", "Online + offline (mGBA)")
         val note = snapshot.warning ?:
-            "Image percentage covers unique badges of GBA games already prepared. " +
+            "Image percentage covers unique badges of GB/GBC/GBA games already prepared. " +
                 "New games can increase the total. Local awards remain after sign out."
         content.addView(text(note, 11f, muted).apply {
             setPadding(0, dp(15), 0, dp(2))

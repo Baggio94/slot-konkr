@@ -216,11 +216,7 @@ class CartStudioActivity : Activity() {
             setBackgroundColor(Color.rgb(27, 27, 33))
         }
         frame.addView(toolbar, FrameLayout.LayoutParams(-1, barHeight, Gravity.TOP))
-        val title = TextView(this).apply {
-            text = "Cart Studio"
-            typeface = SlotUi.font(this@CartStudioActivity)
-            letterSpacing = .09f
-            textSize = 17f
+        val title = SlotUi.label(this, "Cart Studio", 17f, upper = false).apply {
             setTextColor(SlotUi.ink)
             gravity = Gravity.CENTER
         }
@@ -237,13 +233,7 @@ class CartStudioActivity : Activity() {
         toolbar.addView(title, FrameLayout.LayoutParams(
             titleWidth, -1, Gravity.CENTER
         ))
-        val close = TextView(this).apply {
-            text = "‹  slot."
-            typeface = SlotUi.font(this@CartStudioActivity)
-            letterSpacing = .09f
-            textSize = 15f
-            setTextColor(SlotUi.ink)
-            gravity = Gravity.CENTER
+        val close = SlotUi.nativeHint(this, "B", "BACK").apply {
             setOnClickListener { finish() }
             isFocusable = true
             contentDescription = "Close Cart Studio and return to Slot"
@@ -260,18 +250,20 @@ class CartStudioActivity : Activity() {
             setPadding(0, 0, (10 * density).toInt(), 0)
         }
         fun action(label: String, pale: Boolean): TextView {
-            return TextView(this).apply {
-                text = label
-                typeface = SlotUi.font(this@CartStudioActivity)
-                letterSpacing = .09f
-                textSize = 12f
-                isAllCaps = false
+            return SlotUi.label(this, label, 12f, upper = false).apply {
                 gravity = Gravity.CENTER
                 setTextColor(if (pale) SlotUi.background else SlotUi.ink)
                 setPadding((12 * density).toInt(), 0, (12 * density).toInt(), 0)
-                background = GradientDrawable().apply {
-                    setColor(if (pale) SlotUi.ink else SlotUi.surface)
-                    cornerRadius = 4 * density
+                val fillColor = if (pale) SlotUi.ink else SlotUi.surface
+                background = SlotUi.plate(this@CartStudioActivity, fillColor)
+                setOnFocusChangeListener { view, focused ->
+                    view.background = SlotUi.plate(
+                        this@CartStudioActivity,
+                        if (focused) SlotUi.selected else fillColor, focused
+                    )
+                    setTextColor(
+                        if (focused || !pale) SlotUi.ink else SlotUi.background
+                    )
                 }
                 // Keep measured widths even when hidden; prevent action jumps.
                 visibility = View.INVISIBLE
@@ -294,20 +286,41 @@ class CartStudioActivity : Activity() {
             w.evaluateJavascript("document.getElementById('fill-open')?.click()", null)
         }
         save.setOnClickListener {
+            if (!save.isEnabled) return@setOnClickListener
+            save.isEnabled = false
+            save.text = "Saving…"
             w.evaluateJavascript("document.getElementById('write')?.click()", null)
         }
         w.addJavascriptInterface(object {
             @JavascriptInterface
-            fun saved(written: Int, shells: Int, skipped: Int) {
+            fun progress(done: Int, total: Int) {
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) {
-                        val message = when {
-                            written + shells > 0 -> "Saved! $written labels and $shells shell changes."
-                            skipped > 0 -> "All cart labels are already saved."
-                            else -> "No changes to save."
-                        }
-                        SlotToast.makeText(this@CartStudioActivity, message, Toast.LENGTH_SHORT).show()
+                        save.text = if (total > 0) "Saving ${done.coerceIn(0, total)}/$total"
+                                    else "Save to slot."
+                        save.isEnabled = total <= 0
                     }
+                }
+            }
+
+            @JavascriptInterface
+            fun summary(written: Int, skipped: Int, failed: Int, shells: Int, shellNote: String) {
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    val saved = written.coerceAtLeast(0)
+                    val skippedSafe = skipped.coerceAtLeast(0)
+                    val failedSafe = failed.coerceAtLeast(0)
+                    val shellsSafe = shells.coerceAtLeast(0)
+                    val parts = mutableListOf<String>()
+                    if (saved > 0) parts.add("$saved labels saved")
+                    if (shellsSafe > 0) parts.add("$shellsSafe shell changes saved")
+                    if (skippedSafe > 0) parts.add("$skippedSafe skipped")
+                    if (failedSafe > 0) parts.add("$failedSafe failed")
+                    if (shellNote.isNotBlank()) parts.add("shell save failed")
+                    val message = parts.joinToString(" · ").ifBlank { "Nothing to save." }
+                    val hasWarning = skippedSafe > 0 || failedSafe > 0 || shellNote.isNotBlank()
+                    SlotToast.makeText(this@CartStudioActivity, message,
+                        if (hasWarning) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).show()
                 }
             }
 

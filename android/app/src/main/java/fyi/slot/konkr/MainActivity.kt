@@ -31,10 +31,14 @@ import android.view.Gravity
 import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
+import android.widget.EditText
+import android.app.AlertDialog
 import android.net.Uri
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.wifi.WifiManager
+import java.net.Inet4Address
 import org.json.JSONObject
 import org.json.JSONArray
 import java.util.concurrent.ConcurrentHashMap
@@ -88,10 +92,12 @@ class MainActivity : Activity() {
     external fun nativeSurfaceChanged(width: Int, height: Int)
     external fun nativeDrawFrame()
     external fun nativeKey(code: Int, pressed: Boolean)
+    external fun nativeEmulatorKey(code: Int, pressed: Boolean)
     external fun nativeResetInput()
     external fun nativeExternalReturn()
     external fun nativePerformanceStats(): String?
     external fun nativeShelfIndicatorFlags(): Int
+    external fun nativeSetShelfStatus(code: Int)
     external fun nativeSetLibrary(json: String): Int
     external fun nativeConfigure(dataDir: String, libraryDir: String)
     external fun nativePollLaunchUri(): String?
@@ -110,7 +116,7 @@ class MainActivity : Activity() {
     external fun nativeRaStatus(): String?
     external fun nativeRaNetworkAvailable()
     external fun nativeRaAccountConfigured()
-    external fun nativeRaPrefetchHash(hash: String)
+    external fun nativeRaPrefetchHash(hash: String, console: Int)
     external fun nativeRaFlushReady(): Boolean
     external fun nativeSystemStatus(clock: String, batteryPercent: Int, charging: Boolean)
     external fun nativePollUiAction(): Int
@@ -121,6 +127,12 @@ class MainActivity : Activity() {
     external fun nativePollRumbleStrength(): Int
     external fun nativeCoreForUri(uri: String): String
     external fun nativePollSaveFlush(): String?
+    // The renderer requests LAN only when Host/Join is selected. It never
+    // touches WifiManager, Android UI or permissions from the GL thread.
+    external fun nativeLinkNetworkReady(ipv4: String)
+    external fun nativeLinkDirectHost(addressPair: String)
+    external fun nativeLinkNetworkError(reason: String)
+    external fun nativeLinkNeedsMulticast(): Boolean
 
     private var pendingCartLabelUri: String? = null
     private var pendingCartStudioUri: String? = null
@@ -179,18 +191,134 @@ class MainActivity : Activity() {
 
     private var audioThread: Thread? = null
     private var raConnectivity: ConnectivityManager? = null
+    private var activeRaPanel: Pair<RaPanelDialog, String>? = null
+    private fun refreshRaConnectivityOnScreen() {
+        // ConnectivityManager may call us from a binder thread: touch views
+        // only on main, and reuse the already scanned account snapshot.
+        runOnUiThread {
+            val (panel, user) = activeRaPanel ?: return@runOnUiThread
+            if (panel.isShowing()) {
+                RaDiagnostics.lastSnapshot(user)?.let { snapshot ->
+                    panel.update(retroAchievementsStatus(), hasValidatedInternet(), snapshot)
+                }
+            }
+        }
+    }
+    private var linkMulticastLock: WifiManager.MulticastLock? = null
+
+    /** The LAN need not have Internet: the two handhelds only need the same Wi-Fi.
+     *  Resolve the actual interface's IPv4 address, never use the default
+     *  network's mobile/VPN address or a hardcoded 10.42.0.1 Linux radio. */
+    private fun linkWifiAddress(): String? {
+        val cm = getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return null
+        for (network in cm.allNetworks) {
+            val capabilities = cm.getNetworkCapabilities(network) ?: continue
+            if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue
+            val links = cm.getLinkProperties(network) ?: continue
+            for (address in links.linkAddresses) {
+                val ip = address.address
+                if (ip is Inet4Address && !ip.isLoopbackAddress &&
+                    !ip.isLinkLocalAddress && !ip.isMulticastAddress && !ip.isAnyLocalAddress) {
+                    return ip.hostAddress
+                }
+            }
+        }
+        return null
+    }
+
+    private fun releaseLinkMulticast() {
+        val current = linkMulticastLock
+        linkMulticastLock = null
+        try { if (current?.isHeld == true) current.release() }
+        catch (error: RuntimeException) { Log.w(TAG, "Link multicast release failed", error) }
+    }
+
+    private fun requestLinkWifi() {
+        if (!resumed) {
+            nativeLinkNetworkError("Return to Slot before starting Multiplayer")
+            return
+        }
+        val address = linkWifiAddress()
+        if (address == null) {
+            nativeLinkNetworkError("Connect both consoles to the same Wi-Fi network")
+            return
+        }
+        // Android emulator's NAT does not support IGMP/mDNS reliably.
+        // For virtual KONKR testing, Join directly to the physical KONKR
+        // Host's LAN IP; DO NOT request an unusable Android MulticastLock.
+        val fingerprint = android.os.Build.FINGERPRINT.lowercase()
+        val hardware = android.os.Build.HARDWARE.lowercase()
+        if (fingerprint.startsWith("generic") || fingerprint.contains("sdk_gphone") ||
+            hardware.contains("ranchu") || hardware.contains("goldfish")) {
+            releaseLinkMulticast()
+            val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+            var joined = false
+            val dialog = SlotModalDialog(
+                this,
+                "MULTIPLAYER — DIRECT JOIN",
+                "Start HOST on the physical KONKR. Enter its Wi-Fi IPv4 address.",
+                onDismiss = {
+                    if (!joined) nativeLinkNetworkError("Direct Join cancelled")
+                }
+            )
+            val field = dialog.addInput("KONKR IP ADDRESS", "192.168.1.20").apply {
+                inputType = android.text.InputType.TYPE_CLASS_PHONE
+                typeface = SlotUi.font(this@MainActivity)
+                setText(prefs.getString("slot_link_host_ipv4", ""))
+            }
+            dialog.addButton("CANCEL") { dialog.dismiss() }
+            dialog.addButton("JOIN") {
+                val host = field.text.toString().trim()
+                val octets = host.split('.')
+                if (octets.size != 4 || octets.any { octet ->
+                        octet.isEmpty() || octet.any { !it.isDigit() } ||
+                            octet.length > 3 || (octet.toIntOrNull() ?: -1) !in 0..255
+                    }) {
+                    dialog.setError("Enter a valid IPv4 address, such as 192.168.1.20.")
+                } else {
+                    joined = true
+                    prefs.edit().putString("slot_link_host_ipv4", host).apply()
+                    dialog.dismiss()
+                    nativeLinkDirectHost("$address,$host")
+                }
+            }
+            dialog.show()
+            return
+        }
+        try {
+            releaseLinkMulticast()
+            val manager = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
+            val lock = manager.createMulticastLock("slot-konkr-multiplayer")
+            lock.setReferenceCounted(false)
+            lock.acquire()
+            linkMulticastLock = lock
+            // Lock must be held before the Rust discovery worker starts.
+            nativeLinkNetworkReady(address)
+        } catch (error: Exception) {
+            releaseLinkMulticast()
+            Log.w(TAG, "Unable to acquire LAN discovery lock", error)
+            nativeLinkNetworkError("Wi-Fi multicast unavailable on this device")
+        }
+    }
     private val raConnectivityCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             // Signals only that a network appeared. Rust still verifies RA HTTPS.
             if (!isDestroyed) {
                 nativeRaNetworkAvailable()
                 startRaSmartCache()
+                refreshRaConnectivityOnScreen()
             }
         }
         override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-            if (!isDestroyed && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
-                startRaSmartCache()
+            if (!isDestroyed) {
+                if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                    startRaSmartCache()
+                }
+                refreshRaConnectivityOnScreen()
             }
+        }
+        override fun onLost(network: Network) {
+            if (!isDestroyed) refreshRaConnectivityOnScreen()
         }
     }
     private val pulse = object : Runnable {
@@ -199,6 +327,8 @@ class MainActivity : Activity() {
             if (::shelfStatus.isInitialized) {
                 val flags = nativeShelfIndicatorFlags()
                 shelfStatus.refresh(flags)
+                // Library feedback and START are rendered inside Slot's
+                // GL carousel, not overlaid by an Android TextView.
             }
             pollRumble()
             updateDisplaySyncMode()
@@ -229,8 +359,16 @@ class MainActivity : Activity() {
                             }
                             if (failures.isNotEmpty()) {
                                 runOnUiThread {
-                                    if (!isDestroyed) SlotToast.makeText(this@MainActivity,
-                                        "Some saves couldn't be copied. Check your Save and Save State folders.", Toast.LENGTH_LONG).show()
+                                    if (!isDestroyed) {
+                                        Log.w(TAG, "Save export warnings: " + failures.joinToString(" | "))
+                                        val onlyMirrors = failures.all {
+                                            it.startsWith("Shared GBA save sync deferred")
+                                        }
+                                        val notice = if (onlyMirrors)
+                                            "Game saved locally. mGBA/gpSP copy deferred."
+                                        else "Game saved locally; some external/state exports need attention."
+                                        SlotToast.makeText(this@MainActivity, notice, Toast.LENGTH_LONG).show()
+                                    }
                                 }
                             }
                         }
@@ -287,6 +425,12 @@ class MainActivity : Activity() {
                             Toast.LENGTH_SHORT).show()
                     }
                 }
+                16 -> requestLinkWifi()
+            }
+            // Multicast is required during discovery, not for ongoing TCP
+            // emulation. Release on success, cancellation and timeout.
+            if (linkMulticastLock != null && !nativeLinkNeedsMulticast()) {
+                releaseLinkMulticast()
             }
             val nowPerf = android.os.SystemClock.uptimeMillis()
             if (resumed && nowPerf - lastPerfPoll >= 250) {
@@ -298,8 +442,17 @@ class MainActivity : Activity() {
                 }
             }
             nativePollMessage()?.let { message ->
+                // Keep the complete diagnostic in Logcat. Actionable failures
+                // receive a longer on-screen warning rather than vanishing
+                // after the same interval as a simple confirmation.
                 Log.w(TAG, message)
-                SlotToast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
+                val concise = SlotToast.userMessage(message)
+                val needsAction = listOf(
+                    "can't", "cannot", "couldn't", "failed", "unavailable",
+                    "paused", "mismatch", "needs", "check", "retry"
+                ).any { concise.contains(it, ignoreCase = true) }
+                SlotToast.makeText(this@MainActivity, concise,
+                    if (needsAction) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).show()
             }
             // RetroArch-like achievement widget: cached official badge and
             // original Slot label font. Foreground-only, in our Activity frame,
@@ -367,7 +520,15 @@ class MainActivity : Activity() {
     }
     private val scanSerial = AtomicInteger()
     private var lastStatusPoll: Long = -15000L
-    private lateinit var status: TextView
+    // Fixed native shelf states mirror SHELF_STATUS_TEXT in runtime.rs.
+    private val shelfNone = 0
+    private val shelfScanning = 1
+    private val shelfEmpty = 2
+    private val shelfImportError = 3
+    private val shelfPermissionExpired = 4
+    private val shelfReadError = 5
+    private val shelfPickerError = 6
+    private val shelfPermissionError = 7
 
     private lateinit var view: GLSurfaceView
     private var startupSplash: View? = null
@@ -427,19 +588,8 @@ class MainActivity : Activity() {
         val frame = FrameLayout(this)
         frame.addView(view, FrameLayout.LayoutParams(-1, -1))
         shelfStatus = SlotStatusIndicators(this, frame)
-        status = TextView(this).apply {
-            typeface = SlotUi.font(this@MainActivity)
-            letterSpacing = .09f
-            setTextColor(SlotUi.ink)
-            setBackgroundColor(Color.TRANSPARENT)
-            textSize = 15f
-            gravity = Gravity.CENTER
-            setPadding(12, 12, 12, 12)
-        }
-        frame.addView(
-            status,
-            FrameLayout.LayoutParams(-1, -2, Gravity.TOP)
-        )
+        // There is no Android status view: the native Slot renderer owns all
+        // shelf messages and controller hints, even during ROM rescanning.
         performanceHud = TextView(this).apply {
             typeface = SlotUi.font(this@MainActivity)
             textSize = 10.5f
@@ -492,10 +642,11 @@ class MainActivity : Activity() {
                 }) {
                 if (!restoreCachedLibrary(uri)) scanFolder(uri)
             } else {
-                status.text = "Games folder access expired. Choose it again. — START to choose again"
+                nativeSetShelfStatus(shelfPermissionExpired)
             }
         } else {
-            status.text = "Press START to open the menu and add your ROMs."
+            // The native first-run keycap appears on an empty shelf.
+            nativeSetShelfStatus(shelfNone)
         }
     }
 
@@ -582,6 +733,33 @@ class MainActivity : Activity() {
             (splash.parent as? FrameLayout)?.removeView(splash)
             startupSplash = null
         }.start()
+    }
+
+    // Intercept before GLSurfaceView consumes character keys. Android keyevent
+    // 96/97 reached libretro, but keyevent 54/52 (Z/X) did not reach
+    // Activity.onKeyDown on the AVD. Physical KONKR receives no remapping.
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val button = SlotEmulatorKeys.translate(event.keyCode)
+        if (button != null) {
+            // Only Z/X on the Android emulator need an emulated-frame latch.
+            // Normal keys, actual controller buttons and the KONKR itself are
+            // kept on the unmodified input path.
+            val isGameplayTap = button == KeyEvent.KEYCODE_BUTTON_A ||
+                button == KeyEvent.KEYCODE_BUTTON_B
+            val sendKey: (Boolean) -> Unit = { down ->
+                if (isGameplayTap) nativeEmulatorKey(button, down)
+                else nativeKey(button, down)
+            }
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> {
+                    if (event.repeatCount == 0) sendKey(true)
+                    if (event.repeatCount == 0) Log.d(TAG, "AVD keyboard: ${event.keyCode} -> $button down")
+                }
+                KeyEvent.ACTION_UP -> sendKey(false)
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -687,7 +865,9 @@ class MainActivity : Activity() {
                     Log.w(TAG, "RetroArch SAF import skipped, keeping private saves", error)
                     runOnUiThread {
                         if (!isDestroyed) SlotToast.makeText(this@MainActivity,
-                            "Couldn't load existing saves. Check your Saves and Save States folders.",
+                            if (error is RetroArchStorage.SaveConflict) error.message
+                                ?: "Different core saves preserved; sharing paused."
+                            else "Couldn't load existing saves. Check your Saves and Save State folders.",
                             Toast.LENGTH_LONG).show()
                     }
                 }
@@ -859,7 +1039,7 @@ class MainActivity : Activity() {
                         return@execute
                     RaSmartCache.indexAndPrefetch(applicationContext, filesDir,
                         isPlaying = { nativeIsPlaying() || !resumed },
-                        submit = { hash -> nativeRaPrefetchHash(hash) })
+                        submit = { hash, console -> nativeRaPrefetchHash(hash, console) })
                 } catch (_: Exception) {
                     Log.w(TAG, "RA Smart Cache indexing postponed")
                 } finally {
@@ -918,12 +1098,12 @@ class MainActivity : Activity() {
                 filesDir, username,
                 onRulesReady = if (hasPrevious) null else { partial ->
                     runOnUiThread {
-                        if (!isDestroyed) panel.update(retroAchievementsStatus(), partial)
+                        if (!isDestroyed) panel.update(retroAchievementsStatus(), hasValidatedInternet(), partial)
                     }
                 }
             )
             runOnUiThread {
-                if (!isDestroyed) panel.update(retroAchievementsStatus(), snapshot)
+                if (!isDestroyed) panel.update(retroAchievementsStatus(), hasValidatedInternet(), snapshot)
             }
         }
     }
@@ -1023,13 +1203,17 @@ class MainActivity : Activity() {
                 activity = this, username = existing,
                 onRefresh = { refreshRaPanel(panel, existing) },
                 onSignOut = { confirmRaSignOut(panel, existing) },
-                onDismiss = { nativeExternalReturn() }
+                onDismiss = {
+                    activeRaPanel = null
+                    nativeExternalReturn()
+                }
             )
+            activeRaPanel = panel to existing
             panel.show()
             // Show last known values immediately when reopening the dashboard.
             // They are refreshed safely in the background on every opening.
             RaDiagnostics.lastSnapshot(existing)?.let {
-                panel.update(retroAchievementsStatus(), it)
+                panel.update(retroAchievementsStatus(), hasValidatedInternet(), it)
             }
             refreshRaPanel(panel, existing)
             // Badge downloads continue in the native HTTP worker; update this
@@ -1076,7 +1260,7 @@ class MainActivity : Activity() {
                                 startRaSmartCache()
                                 SlotToast.makeText(this,
                                     "RA connected as " + result.username +
-                                        ". Preparing GBA achievements in background.",
+                                        ". Preparing GB/GBC/GBA achievements in background.",
                                     Toast.LENGTH_LONG).show()
                             }
                             is RaAccount.Result.Failed -> {
@@ -1207,7 +1391,8 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             startActivityForResult(intent, FOLDER_REQUEST)
         } catch (error: ActivityNotFoundException) {
-            status.text = "Can't open the folder picker: " + error.message
+            nativeSetShelfStatus(shelfPickerError)
+            Log.w(TAG, "Android folder picker unavailable", error)
         }
     }
 
@@ -1462,7 +1647,7 @@ class MainActivity : Activity() {
             }
         } catch (error: SecurityException) {
             if (requestCode == FOLDER_REQUEST) {
-                status.text = "Cannot keep ROM folder permission — choose another folder"
+                nativeSetShelfStatus(shelfPermissionError)
             } else {
                 SlotToast.makeText(this, "This folder needs storage access. Please select it again.", Toast.LENGTH_LONG).show()
             }
@@ -1485,10 +1670,9 @@ class MainActivity : Activity() {
             val count = setStudioOverrides(games.toString())
             if (count < 0) return false
             if (count == 0) {
-                status.visibility = View.VISIBLE
-                status.text = "No .gb/.gbc/.gba games found — START choose another folder"
+                nativeSetShelfStatus(shelfEmpty)
             } else {
-                status.visibility = View.GONE
+                nativeSetShelfStatus(shelfNone)
             }
             Log.i(TAG, "Restored $count cached ROMs without a SAF rescan")
             true
@@ -1524,8 +1708,7 @@ class MainActivity : Activity() {
 
     private fun scanFolder(uri: Uri) {
         val serial = scanSerial.incrementAndGet()
-        status.visibility = View.VISIBLE
-        status.text = "Scanning GB / GBC / GBA cartridges…"
+        nativeSetShelfStatus(shelfScanning)
         scanner.execute {
             try {
                 val result = RomLibrary.scan(this, uri)
@@ -1542,11 +1725,11 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
                     if (count < 0) {
-                        status.text = "Library import failed — START to retry"
+                        nativeSetShelfStatus(shelfImportError)
                     } else if (count == 0) {
-                        status.text = "No .gb/.gbc/.gba games found — START choose another folder"
+                        nativeSetShelfStatus(shelfEmpty)
                     } else {
-                        status.visibility = View.GONE
+                        nativeSetShelfStatus(shelfNone)
                         val note = if (result.truncated) " (limited to 5000)" else ""
                         SlotToast.makeText(this, "Library ready: " + count + " carts" + note, Toast.LENGTH_LONG).show()
                     }
@@ -1555,8 +1738,7 @@ class MainActivity : Activity() {
                 Log.e(TAG, "SAF cartridge scan failed", error)
                 runOnUiThread {
                     if (!isDestroyed && scanSerial.get() == serial) {
-                        status.visibility = View.VISIBLE
-                        status.text = "Cannot read ROM folder — START to choose again"
+                        nativeSetShelfStatus(shelfReadError)
                     }
                 }
             }
@@ -1564,6 +1746,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        releaseLinkMulticast()
         Choreographer.getInstance().removeFrameCallback(vsyncCallback)
         raConnectivity?.let { manager ->
             try { manager.unregisterNetworkCallback(raConnectivityCallback) }
@@ -1585,6 +1768,9 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         resumed = false
+        // Rust nativeSuspend aborts discovery/linked play; never keep a
+        // multicast lock across Android background sleep.
+        releaseLinkMulticast()
         if (::shelfStatus.isInitialized) shelfStatus.onPause()
         Choreographer.getInstance().removeFrameCallback(vsyncCallback)
         if (displaySyncApplied) {

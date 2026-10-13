@@ -15,6 +15,7 @@ const VERSION: &str = "12.2.1";
 pub(crate) struct Load {
     pub generation: u64,
     pub path: PathBuf,
+    pub console: u32,
 }
 
 pub(crate) struct Prepared {
@@ -240,6 +241,7 @@ fn unlocked(response: &Value) -> Result<BTreeSet<u32>, Failure> {
 struct Active {
     generation: u64,
     hash: String,
+    console: u32,
     ready: bool,
     online: bool,
     last_ping: Instant,
@@ -250,6 +252,7 @@ fn prefetch(
     auth: &Auth,
     dir: &std::path::Path,
     hash: &str,
+    console: u32,
 ) -> Result<Game, Failure> {
     let resolved = call(http, auth, "gameid", &[("m", hash.into())])?;
     let id = resolved["GameID"].as_u64().ok_or(Failure::Invalid)?;
@@ -258,7 +261,7 @@ fn prefetch(
             Game {
                 presence: String::new(),
                 id: 0,
-                console: 5,
+                console,
                 title: "No achievements for this ROM".into(),
                 image_icon: String::new(),
                 achievements: vec![],
@@ -269,7 +272,7 @@ fn prefetch(
         let patch = call(http, auth, "patch", &[("g", id.to_string())])?;
         let game: Game =
             serde_json::from_value(patch["PatchData"].clone()).map_err(|_| Failure::Invalid)?;
-        if game.console != 5 || u64::from(game.id) != id {
+        if game.console != console || u64::from(game.id) != id {
             return Err(Failure::Invalid);
         }
         let unlocks = call(
@@ -313,9 +316,9 @@ impl PrefetchBudget {
     }
 }
 
-fn already_prepared(dir: &std::path::Path, hash: &str) -> bool {
+fn already_prepared(dir: &std::path::Path, hash: &str, console: u32) -> bool {
     storage::read::<(Game, BTreeSet<u32>)>(&dir.join(format!("{hash}.json")))
-        .is_ok_and(|(game, _)| game.console == 5)
+        .is_ok_and(|(game, _)| game.console == console)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -324,7 +327,7 @@ pub(crate) fn run(
     config: Config,
     store: Arc<Mutex<Store>>,
     loads: mpsc::Receiver<Option<Load>>,
-    smart_hashes: mpsc::Receiver<String>,
+    smart_hashes: mpsc::Receiver<(String, u32)>,
     prepared: mpsc::Sender<Prepared>,
     notices: mpsc::Sender<Notice>,
     status: Arc<Status>,
@@ -343,7 +346,7 @@ pub(crate) fn run(
     let mut library_failed = false;
     let mut rescanned = Instant::now();
     let mut badges = crate::badges::Queue::new(&dir);
-    let mut smart_queue: VecDeque<String> = VecDeque::new();
+    let mut smart_queue: VecDeque<(String, u32)> = VecDeque::new();
     let mut queued_hashes: BTreeSet<String> = BTreeSet::new();
     let quota_file = dir.join("smart-prefetch-budget.json");
     let mut budget: PrefetchBudget = if quota_file.exists() {
@@ -356,19 +359,20 @@ pub(crate) fn run(
     loop {
         // Android SAF fingerprints arrive independently of opening a game.
         // Keep the HTTP queue small and deduplicated, with no ROM bytes retained.
-        for hash in smart_hashes.try_iter().take(32) {
-            if hash.len() != 32 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        for (hash, console) in smart_hashes.try_iter().take(32) {
+            if !matches!(console, 4 | 5 | 6) || hash.len() != 32 ||
+                !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
                 continue;
             }
             let hash = hash.to_ascii_lowercase();
-            if already_prepared(&dir, &hash)
+            if already_prepared(&dir, &hash, console)
                 || queued_hashes.contains(&hash)
                 || smart_queue.len() >= 5000
             {
                 continue;
             }
             queued_hashes.insert(hash.clone());
-            smart_queue.push_back(hash);
+            smart_queue.push_back((hash, console));
         }
         match loads.recv_timeout(Duration::from_millis(200)) {
             Ok(mut load) => {
@@ -382,6 +386,7 @@ pub(crate) fn run(
                     let mut game = Active {
                         generation: load.generation,
                         hash,
+                        console: load.console,
                         ready: false,
                         online: false,
                         last_ping: Instant::now(),
@@ -389,7 +394,7 @@ pub(crate) fn run(
                     if auth.is_some() {
                         let cache = dir.join(format!("{}.json", game.hash));
                         if let Ok((data, ids)) = storage::read::<(Game, BTreeSet<u32>)>(&cache) {
-                            if data.console == 5 {
+                            if data.console == game.console {
                                 badges.enqueue(&data);
                                 let _ = prepared.send(Prepared {
                                     generation: game.generation,
@@ -516,7 +521,7 @@ pub(crate) fn run(
                         let patch = call(&mut http, auth, "patch", &[("g", id.to_string())])?;
                         let data: Game = serde_json::from_value(patch["PatchData"].clone())
                             .map_err(|_| Failure::Invalid)?;
-                        if data.console != 5 || u64::from(data.id) != id {
+                        if data.console != game.console || u64::from(data.id) != id {
                             return Err(Failure::Invalid);
                         }
                         let session = call(
@@ -558,15 +563,15 @@ pub(crate) fn run(
             // Preparing a hash uses gameid/patch/unlocks, never starts a session.
             if active.is_none() {
                 if let Some(hash) = smart_queue.front() {
-                    if already_prepared(&dir, hash) {
+                    if already_prepared(&dir, &hash.0, hash.1) {
                         let done = smart_queue.pop_front().unwrap();
-                        queued_hashes.remove(&done);
+                        queued_hashes.remove(&done.0);
                     } else if budget.reserve(&dir, now())? {
-                        match prefetch(&mut http, auth, &dir, hash) {
+                        match prefetch(&mut http, auth, &dir, &hash.0, hash.1) {
                             Ok(game) => {
                                 badges.enqueue(&game);
                                 let done = smart_queue.pop_front().unwrap();
-                                queued_hashes.remove(&done);
+                                queued_hashes.remove(&done.0);
                             }
                             Err(Failure::Network) => return Err(Failure::Network),
                             Err(error) => {
@@ -574,7 +579,7 @@ pub(crate) fn run(
                                 // retrying a single rejected/bad ROM each second.
                                 // The SAF index will offer it again on a later run.
                                 let failed = smart_queue.pop_front().unwrap();
-                                queued_hashes.remove(&failed);
+                                queued_hashes.remove(&failed.0);
                                 deferred_error = Some(error);
                             }
                         }
@@ -585,7 +590,7 @@ pub(crate) fn run(
             // `startsession`, so preparing a library doesn't claim the user played it.
             if let Some(path) = library.front() {
                 if let Ok(hash) = crate::library::hash(&dir, path) {
-                    match prefetch(&mut http, auth, &dir, &hash) {
+                    match prefetch(&mut http, auth, &dir, &hash, 5) {
                         Ok(game) => {
                             crate::library::checked(&dir, path, now());
                             badges.enqueue(&game);
@@ -708,7 +713,7 @@ mod tests {
     fn smart_cache_only_skips_valid_prepared_gba_patches() {
         let root = tempfile::tempdir().unwrap();
         let hash = "0123456789abcdef0123456789abcdef";
-        assert!(!already_prepared(root.path(), hash));
+        assert!(!already_prepared(root.path(), hash, 5));
         storage::write(&root.path().join(format!("{hash}.json")),
             &(Game {
                 presence: String::new(),
@@ -718,9 +723,9 @@ mod tests {
                 image_icon: String::new(),
                 achievements: Vec::new(),
             }, BTreeSet::<u32>::new())).unwrap();
-        assert!(already_prepared(root.path(), hash));
+        assert!(already_prepared(root.path(), hash, 5));
         std::fs::write(root.path().join(format!("{hash}.json")), b"broken").unwrap();
-        assert!(!already_prepared(root.path(), hash));
+        assert!(!already_prepared(root.path(), hash, 5));
     }
 
     #[test]
@@ -846,6 +851,7 @@ mod presence_tests {
         let active = Active {
             generation: 2,
             hash: "rom-hash".into(),
+            console: 5,
             ready: true,
             online: true,
             last_ping: Instant::now(),

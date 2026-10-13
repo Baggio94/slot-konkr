@@ -66,13 +66,8 @@ class AppsActivity : Activity() {
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density + .5f).toInt()
 
-    private fun text(label: String, size: Float, bright: Boolean = true) = TextView(this).apply {
-        this.text = label
-        textSize = size
-        typeface = SlotUi.font(this@AppsActivity)
-        setTextColor(if (bright) SlotUi.ink else SlotUi.muted)
-        gravity = Gravity.CENTER_VERTICAL
-    }
+    private fun text(label: String, size: Float, bright: Boolean = true) =
+        SlotUi.label(this, label, size, if (bright) SlotUi.ink else SlotUi.muted, upper = false)
 
     private fun plate(color: Int, selected: Boolean = false) = GradientDrawable().apply {
         setColor(color)
@@ -121,9 +116,10 @@ class AppsActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         header.addView(text("APPS", 19f), LinearLayout.LayoutParams(0, dp(48), 1f))
-        homeButton = text("Set as Home", 13f).apply {
+        homeButton = SlotUi.label(this, "Set as Home", 13f).apply {
             gravity = Gravity.CENTER
             setPadding(dp(15), dp(7), dp(15), dp(7))
+            isFocusable = true
             isClickable = true
             contentDescription = "Choose the default home launcher"
             setOnClickListener { chooseHome() }
@@ -454,9 +450,10 @@ class AppsActivity : Activity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // Intercept *before* GridView gets first refusal. This applies to the
-        // KONKR controls and standard keyboard D-pad events.
-        when (event.keyCode) {
+        // Translate Mac AVD keyboard before GridView receives the character.
+        // Real KONKR key codes and system BACK are untouched.
+        val mapped = SlotEmulatorKeys.translate(event.keyCode) ?: event.keyCode
+        when (mapped) {
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
                 if (event.action == KeyEvent.ACTION_DOWN) navigate(event.keyCode)

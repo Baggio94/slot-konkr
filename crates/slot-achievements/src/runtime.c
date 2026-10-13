@@ -6,6 +6,8 @@
 typedef struct {
     const uint8_t *ram;
     const size_t *valid;
+    const uint8_t *coverage;
+    uint32_t console;
     uint32_t *earned;
     size_t capacity, count;
     int invalid;
@@ -15,6 +17,10 @@ typedef struct {
 static _Thread_local slot_frame *current;
 
 static int valid_address(uint32_t address) {
+    if (current->console == 4 || current->console == 6) {
+        return address < 0x17000 && current->coverage != NULL &&
+            current->coverage[address] != 0;
+    }
     size_t start;
     unsigned region;
     if (address < 0x8000) { start = 0; region = 0; }
@@ -42,8 +48,9 @@ static void event(const rc_runtime_event_t *ev) {
 }
 
 size_t slot_ra_frame(rc_runtime_t *runtime, const uint8_t *ram, const size_t *valid,
+                     const uint8_t *coverage, uint32_t console,
                      uint32_t *earned, size_t capacity, char *presence, size_t presence_size) {
-    slot_frame frame = { ram, valid, earned, capacity, 0, 0 };
+    slot_frame frame = { ram, valid, coverage, console, earned, capacity, 0, 0 };
     current = &frame;
     rc_runtime_validate_addresses(runtime, event, valid_address);
     rc_runtime_do_frame(runtime, event, peek, NULL, NULL);

@@ -147,7 +147,7 @@ def package(root: Path, built: Path):
 let lastNativeActionState = '';
 function syncNativeToolbar() {
   if (!window.AndroidToolbar || !session) return;
-  const save = !$('write-bar').hidden && !$('write').disabled;
+  const save = writing || (!$('write-bar').hidden && !$('write').disabled);
   const fill = !$('fill-open').hidden;
   const state = String(save) + ':' + String(fill);
   if (state === lastNativeActionState) return;
@@ -195,6 +195,11 @@ function observeAndroidCarts(s) {
     updateFillButton();
     return;
   }""")
+    # During a large automatic-fill save, reuse original per-cart progress
+    # instead of leaving the native Save to slot. button unresponsive.
+    js = checked_replace(js,
+        "  $('write').style.setProperty('--done', total > 0 ? String(done / total) : '0');",
+        "  $('write').style.setProperty('--done', total > 0 ? String(done / total) : '0');\n  if (window.AndroidToolbar) window.AndroidToolbar.progress(done, total);")
     js = checked_replace(js,
         "  $('write').textContent = session.source.direct ? 'Write to card' : 'Download ZIP';",
         "  $('write').textContent = session.source.direct ? 'Save to slot.' : 'Download ZIP';\n  syncNativeToolbar();")
@@ -206,14 +211,27 @@ function observeAndroidCarts(s) {
         """          logError(c.stem, e);
           if (window.AndroidStudio) banner(c.stem + ': ' + e.message);
           c.result = 'failed';""")
+    # Shell configuration writes are part of the same total. A final
+    # progress callback is required even when only shells were edited.
+    js = checked_replace(js,
+        "      // A write that went through says nothing; one that didn't, all of it, says so. Not over a card",
+        """      writeProgress(carts.length + shells.length, carts.length + shells.length);
+      // A write that went through says nothing; one that didn't, all of it, says so. Not over a card""")
     js = checked_replace(js,
         "        if (problems.length) banner(problems.join(' '));",
         """        if (problems.length) {
           // The Android bridge already showed the precise game + write error.
           // Do not overwrite it with a generic "1 label couldn't be written".
           if (!window.AndroidStudio || count.failed === 0) banner(problems.join(' '));
-        } else if (window.AndroidToolbar)
-          window.AndroidToolbar.saved(count.written, shells.length, count.skipped);""")
+        }
+        if (window.AndroidToolbar) {
+          // Exactly one result. Include shell-only saves and skipped/failed
+          // labels; keep per-cart technical details in the Studio banner/log.
+          window.AndroidToolbar.summary(
+            count.written, count.skipped, count.failed,
+            shellNote ? 0 : shells.length, shellNote
+          );
+        }""")
     editorFile = target / "editor.js"
     ed = editorFile.read_text("utf-8")
     ed = checked_replace(ed, "    $('ed-query').value = api.name(cart);",

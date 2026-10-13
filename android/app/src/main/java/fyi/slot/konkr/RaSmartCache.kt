@@ -9,7 +9,7 @@ import java.io.File
 import java.security.MessageDigest
 
 /**
- * Background SAF index for GBA RetroAchievements prefetch.
+ * Background SAF index for GBA, GB, and GBC RetroAchievements prefetch.
  *
  * This never duplicates ROM files, stores credentials, or changes saves/states.
  * Full uncompressed ROM MD5s match the existing native rcheevos GBA contract.
@@ -97,7 +97,7 @@ internal object RaSmartCache {
         context: Context,
         root: File,
         isPlaying: () -> Boolean,
-        submit: (String) -> Unit,
+        submit: (String, Int) -> Unit,
     ) {
         val shelf = File(root, "rom-library-cache-v1.json")
         if (!shelf.isFile || shelf.length() !in 1L..MAX_LIBRARY_BYTES) return
@@ -112,7 +112,12 @@ internal object RaSmartCache {
         for (i in 0 until entries.length().coerceAtMost(MAX_ROMS)) {
             if (Thread.currentThread().isInterrupted) break
             val item = entries.optJSONObject(i) ?: continue
-            if (item.optString("platform") != "GBA") continue
+            val console = when (item.optString("platform")) {
+                "GB" -> 4
+                "GBA" -> 5
+                "GBC" -> 6
+                else -> continue
+            }
             val uriText = item.optString("uri")
             if (!uriText.startsWith("content://")) continue
             val size = item.optLong("size", -1)
@@ -131,7 +136,7 @@ internal object RaSmartCache {
                         if (Thread.currentThread().isInterrupted) return
                         Thread.sleep(1200)
                     }
-                    submit(hash)
+                    submit(hash, console)
                     Thread.sleep(60) // prevent filling GL input during a 5k-game scan
                 }
                 if (fresh > 0 && fresh % 25 == 0) {

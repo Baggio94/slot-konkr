@@ -96,6 +96,10 @@ internal class RaAchievementOverlay(
     }
     private val badgeFallback = TextView(activity).apply {
         text = "★"
+        // Keep the approved star, but render its backing label consistently.
+        typeface = face
+        letterSpacing = .09f
+        includeFontPadding = false
         textSize = 24f
         gravity = Gravity.CENTER
         setTextColor(accent)

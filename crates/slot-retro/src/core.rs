@@ -84,6 +84,14 @@ pub trait RetroCore: Send {
     fn achievement_memory(&self, _ram: &mut [u8]) -> [usize; 3] {
         [0; 3]
     }
+    /// Game Boy consoles use their own memory-space, not the GBA layout.
+    /// The coverage mask prevents unwritten or unmapped addresses from being
+    /// incorrectly evaluated as zero-valued achievement conditions.
+    fn achievement_memory_for_console(
+        &self, ram: &mut [u8], _coverage: &mut [u8], _console: u32
+    ) -> [usize; 3] {
+        self.achievement_memory(ram)
+    }
     fn load(&mut self, rom: &Path) -> Result<(), CoreError>;
     fn run_frame(&mut self, input: ButtonMask);
     /// A speculative video-only frame. Wrappers must not dispatch gameplay events,
@@ -134,7 +142,16 @@ pub trait RetroCore: Send {
     fn net(&self) -> Link {
         Link::default()
     }
+    /// Core must have registered libretro netpacket callbacks; the default
+    /// mock/foreign core cannot silently pretend to support wireless linking.
+    fn supports_netpacket(&self) -> bool { false }
     fn start_link(&mut self, _client_id: u16) {}
+    /// Reject sessions when the core refuses a peer (e.g. serial mode
+    /// disabled), rather than displaying a false "Connected" message.
+    fn try_start_link(&mut self, client_id: u16) -> bool {
+        self.start_link(client_id);
+        self.net().is_active()
+    }
     fn pump_link(&mut self) {}
     fn stop_link(&mut self) {}
 }

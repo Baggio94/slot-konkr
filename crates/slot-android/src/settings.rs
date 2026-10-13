@@ -39,9 +39,12 @@ pub struct Settings {
     // frame maximum per callback and fractional frame time carryover.
     pub display_sync_pacing: bool,
     pub run_ahead_frames: u8,
-    // Carousel-only status indicators: default ON for both groups.
+    // Opt-in only. Old builds enabled these by default; the migration
+    // below must not interpret those historical booleans as explicit consent.
     pub show_wifi: bool, pub show_bluetooth: bool,
     pub show_integrations: bool,
+    #[serde(default)]
+    pub status_opt_in_v2: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -53,7 +56,8 @@ impl Default for Settings {
             show_fps: false, responsive_pacing: false,
             display_sync_pacing: false,
             run_ahead_frames: 0,
-            show_wifi: true, show_bluetooth: true, show_integrations: true }
+            show_wifi: false, show_bluetooth: false, show_integrations: false,
+            status_opt_in_v2: true }
     }
 }
 impl Settings {
@@ -67,6 +71,16 @@ impl Settings {
                 if s.gb_palette >= 48 { s.gb_palette = 1; }
                 if !s.responsive_pacing { s.display_sync_pacing = false; }
                 if s.run_ahead_frames > 2 { s.run_ahead_frames = 0; }
+                // Before this version all three toggles defaulted ON.
+                // A previously written settings file therefore isn't proof
+                // that the user chose to permit status probing. One-time
+                // safe migration, without touching any other preference.
+                if !s.status_opt_in_v2 {
+                    s.show_wifi = false;
+                    s.show_bluetooth = false;
+                    s.show_integrations = false;
+                    s.status_opt_in_v2 = true;
+                }
                 s
             }).unwrap_or_default()
     }
@@ -291,16 +305,32 @@ mod tests {
         }
     }
     #[test]
-    fn interface_indicators_default_on_and_survive_legacy_json() {
-        let legacy: Settings = serde_json::from_str(r#"{"ff_speed":3}"#).unwrap();
-        assert!(legacy.show_wifi && legacy.show_bluetooth && legacy.show_integrations);
-        let mut s = legacy;
-        assert!(s.change(13, true) && !s.show_wifi);
-        assert!(s.change(14, true) && !s.show_bluetooth);
-        assert!(s.change(15, true) && !s.show_integrations);
+    fn interface_status_indicators_are_opt_in_only() {
+        let mut s = Settings::default();
+        assert!(!s.show_wifi && !s.show_bluetooth && !s.show_integrations);
+        assert!(s.status_opt_in_v2);
+        assert!(s.change(13, true) && s.show_wifi);
+        assert!(s.change(14, true) && s.show_bluetooth);
+        assert!(s.change(15, true) && s.show_integrations);
         let json = serde_json::to_string(&s).unwrap();
         let restored: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, s);
+    }
+    #[test]
+    fn old_status_defaults_are_migrated_without_resurrecting_permission_prompts() {
+        let legacy = r#"{"ff_speed":3,"show_wifi":true,"show_bluetooth":true,"show_integrations":true}"#;
+        let dir = std::env::temp_dir().join(format!("kpa-status-opt-in-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(NAME), legacy).unwrap();
+        let mut migrated = Settings::load(&dir);
+        assert_eq!(migrated.ff_speed, 3);
+        assert!(!migrated.show_wifi && !migrated.show_bluetooth && !migrated.show_integrations);
+        assert!(migrated.status_opt_in_v2);
+        migrated.change(14, true);
+        migrated.save(&dir).unwrap();
+        let restored = Settings::load(&dir);
+        assert!(!restored.show_wifi && restored.show_bluetooth && !restored.show_integrations);
+        let _ = std::fs::remove_dir_all(dir);
     }
     #[test]
     fn roundtrip_and_invalid_values() {

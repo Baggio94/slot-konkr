@@ -99,8 +99,8 @@ internal class SlotModalDialog(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        legend.addView(SlotUi.hint(activity, "A", "SELECT"))
-        legend.addView(SlotUi.hint(activity, "B", "BACK"),
+        legend.addView(SlotUi.nativeHint(activity, "A", "SELECT"))
+        legend.addView(SlotUi.nativeHint(activity, "B", "BACK"),
             LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(35) })
         root.addView(legend, LinearLayout.LayoutParams(-1, dp(27)))
         // Request no Android title/decorations BEFORE setContentView; the
