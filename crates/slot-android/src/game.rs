@@ -97,7 +97,7 @@ impl GameSession {
                 colour_correction: bool,
                 achievements: Option<&slot_achievements::Service>) -> Result<Self, String> {
         Self::open_internal(rom, core_file, storage, which, platform, resume_state,
-            rom_stem, gb_palette, colour_correction, achievements, None, "auto")
+            rom_stem, gb_palette, colour_correction, achievements, None, "auto", None)
     }
 
     /// Slot upstream treats GBA Cable/Wireless as a gpSP core option fixed
@@ -111,7 +111,7 @@ impl GameSession {
             return Err("Unsupported gpSP GBA serial mode".into());
         }
         Self::open_internal(rom, core_file, storage, Core::Gpsp, Platform::Gba,
-            true, rom_stem, None, colour_correction, achievements, None, serial)
+            true, rom_stem, None, colour_correction, achievements, None, serial, None)
     }
 
     /// Reopen a *fresh* two-GBA mGBA instance. The libretro link options
@@ -119,9 +119,13 @@ impl GameSession {
     /// Never pass RetroAchievements to this experimental dual-instance session.
     pub fn open_mgba_linked(rom: &Path, core_file: &Path, storage: &Path,
                             rom_stem: &str, colour_correction: bool,
-                            role: Role) -> Result<Self, String> {
+                            role: Role, solo_state: &[u8]) -> Result<Self, String> {
+        // Fail BEFORE any filesystem writes or a dropped solo core if the
+        // source state cannot fit as a valid single-GBA Link seed.
+        crate::linked_storage::validate_solo_snapshot(solo_state)?;
         Self::open_internal(rom, core_file, storage, Core::Mgba, Platform::Gba,
-            false, rom_stem, None, colour_correction, None, Some(role), "auto")
+            false, rom_stem, None, colour_correction, None, Some(role), "auto",
+            Some(solo_state))
     }
 
     fn open_internal(rom: &Path, core_file: &Path, storage: &Path,
@@ -130,9 +134,12 @@ impl GameSession {
                      colour_correction: bool,
                      achievements: Option<&slot_achievements::Service>,
                      linked_boot: Option<Role>,
-                     gpsp_serial: &'static str) -> Result<Self, String> {
+                     gpsp_serial: &'static str,
+                     linked_resume: Option<&[u8]>) -> Result<Self, String> {
         let opening_at = Instant::now();
-        if linked_boot.is_some() && (which != Core::Mgba || platform != Platform::Gba || resume_state || achievements.is_some()) {
+        if linked_boot.is_some() && (which != Core::Mgba || platform != Platform::Gba ||
+            resume_state || achievements.is_some()) ||
+            (linked_boot.is_some() != linked_resume.is_some()) {
             return Err("Invalid mGBA Multiplayer boot configuration".into());
         }
         if !rom.exists() || !core_file.exists() {
@@ -151,19 +158,21 @@ impl GameSession {
             return Err("Unsafe ROM save filename".into());
         }
         let solo_core_root = root.join(which.text());
-        // A linked session has a *different* private save timeline for
-        // each ROM and role. Never sync either player to RetroArch/SharedGBA.
+        // Every Link attempt starts from live SOLO progress and gets a
+        // unique private save timeline. Existing pre-a6 Multiplayer
+        // Host/Join files and every earlier session remain untouched.
         let core_root = if let Some(role) = linked_boot {
-            root.join("Multiplayer").join("mGBA").join(id)
-                .join(if role == Role::Host { "host" } else { "join" })
+            let name = if role == Role::Host { "host" } else { "join" };
+            crate::linked_storage::fresh_session(&root, id, name)
+                .map_err(|e| format!("Cannot allocate private Link session: {e}"))?
         } else { solo_core_root.clone() };
         std::fs::create_dir_all(&core_root).map_err(|e| e.to_string())?;
         let save = core_root.join(format!("{rom_stem}.srm"));
         let rtc = core_root.join(format!("{rom_stem}.rtc"));
         if linked_boot.is_some() {
-            // The first multiplayer visit starts from a COPY of the player's
-            // in-game solo progress. A subsequent visit continues its private
-            // link copy; never overwrite it from a newer solo save.
+            // Every new session starts from a COPY of this player's
+            // immediate solo SRAM/RTC. A previous session's files must
+            // NEVER shadow these fresh live progress bytes.
             for (ext, target) in [("srm", &save), ("rtc", &rtc)] {
                 let source = solo_core_root.join(format!("{rom_stem}.{ext}"));
                 if !target.exists() && source.is_file() {
@@ -253,7 +262,7 @@ impl GameSession {
         let load_ms = opening_at.elapsed().as_millis();
         let restore_started = Instant::now();
         let ram = std::fs::read(&save).or_else(|err| {
-            if err.kind() == std::io::ErrorKind::NotFound {
+            if linked_boot.is_none() && err.kind() == std::io::ErrorKind::NotFound {
                 // Migrate the pre-0.0.7 hashed cache non-destructively.
                 std::fs::read(root.join(format!("{id}.{}.srm", which.as_str())))
                     .or_else(|_| {
@@ -279,12 +288,30 @@ impl GameSession {
                 eprintln!("slot-konkr: RTC restore skipped: {error}");
             }
         }
+        // Restore the two-GBA engine from the exact live solo snapshot:
+        // original Slot's Worker::for_core wraps this state as SLK1.
+        // mGBA accepts two independent states and the subsequent
+        // network exchange replaces the peer half with their real state.
+        // NEVER fall back to a fresh title-screen pair on a failed restore.
+        if let Some(solo) = linked_resume {
+            let combined = crate::link_state::pair(solo);
+            core.unserialize(&combined).map_err(|error|
+                format!("Cannot restore live solo game into Link engine: {error}"))?;
+            let verified = core.serialize().map_err(|error|
+                format!("Cannot verify new SLK1 link session: {error}"))?;
+            if !crate::link_state::is_pair(&verified) {
+                return Err("mGBA Link restored without two-GBA SLK1 state".into());
+            }
+            log_launch_timing("mGBA Link: loaded live solo progress into isolated SLK1 pair");
+        }
         // Switching GBA emulation cores can import a newer battery save from
         // the other core. A stale same-core .state.auto would roll progress
         // backwards despite correct SRAM syncing. Kotlin stages a one-shot
         // marker ONLY when the imported save comes from the other core.
         let skip_resume_marker = root.join(format!("{id}.{}.skip-resume.once", which.as_str()));
-        let cross_core_import = skip_resume_marker.exists();
+        // Link sessions never consume a pending solo mGBA/gpSP
+        // cross-core guard; it belongs exclusively to solo resume.
+        let cross_core_import = linked_boot.is_none() && skip_resume_marker.exists();
         if cross_core_import {
             if let Err(error) = std::fs::remove_file(&skip_resume_marker) {
                 return Err(format!("Cannot clear cross-core resume guard: {error}"));
@@ -446,14 +473,12 @@ impl GameSession {
 
     /// Save the solo state before replacing the entire libretro core with
     /// the linked dual-GBA engine. Abort rather than discard solo progress.
-    pub fn preserve_solo_for_link(&mut self) -> Result<(), String> {
+    pub fn preserve_solo_for_link(&mut self) -> Result<Vec<u8>, String> {
         if self.linked_boot.is_some() || self.link_touched {
             return Err("Only a clean solo game can start mGBA Link".into());
         }
         let bytes = self.core.serialize().map_err(|e| e.to_string())?;
-        if bytes.starts_with(b"SLK1") {
-            return Err("Refusing to save a linked state over solo progress".into());
-        }
+        crate::linked_storage::validate_solo_snapshot(&bytes)?;
         atomic_write(&self.state, &bytes).map_err(|e| format!("Cannot preserve solo state: {e}"))?;
         let ram = self.core.save_ram();
         if let Some(data) = ram {
@@ -466,7 +491,7 @@ impl GameSession {
         // intact and is cleared only after successful private state restore.
         atomic_write(&self.state.with_extension("prefer-solo-after-link.once"), b"1")
             .map_err(|e| format!("Cannot record solo recovery guard: {e}"))?;
-        Ok(())
+        Ok(bytes)
     }
 
     pub fn wireless_capable(&self) -> bool {
