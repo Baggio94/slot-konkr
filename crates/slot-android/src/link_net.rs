@@ -56,15 +56,42 @@ fn greeting(game: &str) -> [u8; GREETING_LEN] {
 
 /// Read a stranger's greeting and answer it, or say it was not the right one. Never waits
 /// longer than `GREET_WAIT`, so one connection that says nothing cannot hold the host up.
-fn vet(stream: &mut TcpStream, want: &[u8; GREETING_LEN]) -> bool {
-    let mut got = [0u8; GREETING_LEN];
+fn vet(stream: &mut TcpStream, want: &[u8]) -> bool {
+    let mut got = vec![0u8; want.len()];
     stream.set_read_timeout(Some(GREET_WAIT)).is_ok()
         && stream.set_write_timeout(Some(GREET_WAIT)).is_ok()
         && stream.read_exact(&mut got).is_ok()
-        && &got == want
+        && got == want
         && stream.write_all(&[GREETING_ACK]).is_ok()
         && stream.set_read_timeout(None).is_ok()
         && stream.set_write_timeout(None).is_ok()
+}
+
+/// Lab wire protocol is intentionally NOT compatible with legacy SLOT/1.
+/// A legacy physical Beta5 must never reach Ready or change its emulation core.
+const LAB_GREETING_LEN: usize = 4 + 1 + 4 + 1 + 1 + 32 + 32 + 32;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LabGreeting {
+    pub game: [u8; 4],
+    pub backend: u8,
+    pub mode: u8,
+    pub rom_sha256: [u8; 32],
+    pub core_sha256: [u8; 32],
+    pub bios_sha256: [u8; 32],
+}
+impl LabGreeting {
+    fn bytes(&self) -> [u8; LAB_GREETING_LEN] {
+        let mut bytes = [0u8; LAB_GREETING_LEN];
+        bytes[..4].copy_from_slice(b"KMLB");
+        bytes[4] = 2; // Lab protocol revision; no implicit downgrade to SLOT/1.
+        bytes[5..9].copy_from_slice(&self.game);
+        bytes[9] = self.backend;
+        bytes[10] = self.mode;
+        bytes[11..43].copy_from_slice(&self.rom_sha256);
+        bytes[43..75].copy_from_slice(&self.core_sha256);
+        bytes[75..107].copy_from_slice(&self.bios_sha256);
+        bytes
+    }
 }
 
 const CONTROL_ENDED: u8 = 0x00;
@@ -112,7 +139,17 @@ impl TcpLink {
         game: &str,
         listening: impl FnOnce(),
     ) -> std::io::Result<TcpLink> {
-        TcpLink::host_inner(addr, port, bound, cancel, Some(greeting(game)), listening)
+        TcpLink::host_inner(addr, port, bound, cancel, Some(greeting(game).to_vec()), listening)
+    }
+
+    /// Lab-only strict negotiation: backend, Cable/Wireless mode, exact ROM,
+    /// compiled libretro core and active GBA BIOS must all match BEFORE Ready.
+    pub fn host_lab_greeted_until(
+        addr: &str, port: u16, bound: Duration, cancel: &Cancel,
+        identity: &LabGreeting, listening: impl FnOnce(),
+    ) -> std::io::Result<TcpLink> {
+        TcpLink::host_inner(addr, port, bound, cancel,
+            Some(identity.bytes().to_vec()), listening)
     }
 
     fn host_inner(
@@ -120,7 +157,7 @@ impl TcpLink {
         port: u16,
         bound: Duration,
         cancel: &Cancel,
-        expect: Option<[u8; GREETING_LEN]>,
+        expect: Option<Vec<u8>>,
         listening: impl FnOnce(),
     ) -> std::io::Result<TcpLink> {
         let listener = TcpListener::bind((addr, port))?;
@@ -137,11 +174,11 @@ impl TcpLink {
             match listener.accept() {
                 Ok((mut stream, _peer)) => {
                     stream.set_nonblocking(false)?;
-                    if let Some(want) = expect {
+                    if let Some(ref want) = expect {
                         // Vetted before it is anyone's session: a stranger, a scanner or the
                         // wrong game gets dropped here and the host keeps waiting for the
                         // right one.
-                        if !vet(&mut stream, &want) {
+                        if !vet(&mut stream, want) {
                             continue;
                         }
                     }
@@ -200,9 +237,18 @@ impl TcpLink {
     /// because the caller is walking a list of hosts that answered and the next one is the
     /// retry. A host that turns it away closes the socket, which reads here as an error.
     pub fn join_greeted(addr: std::net::SocketAddr, game: &str) -> std::io::Result<TcpLink> {
+        TcpLink::join_with_greeting(addr, &greeting(game))
+    }
+
+    pub fn join_lab_greeted(addr: std::net::SocketAddr,
+                            identity: &LabGreeting) -> std::io::Result<TcpLink> {
+        TcpLink::join_with_greeting(addr, &identity.bytes())
+    }
+
+    fn join_with_greeting(addr: std::net::SocketAddr, bytes: &[u8]) -> std::io::Result<TcpLink> {
         let mut stream = TcpStream::connect_timeout(&addr, GREET_WAIT)?;
         stream.set_write_timeout(Some(GREET_WAIT))?;
-        stream.write_all(&greeting(game))?;
+        stream.write_all(bytes)?;
         stream.set_read_timeout(Some(GREET_WAIT))?;
         let mut ack = [0u8; 1];
         stream.read_exact(&mut ack)?;
@@ -332,5 +378,33 @@ impl LinkChannel for TcpLink {
 
     fn peer_ended(&self) -> bool {
         self.ended.load(Ordering::Acquire)
+    }
+}
+
+#[cfg(test)]
+mod lab_negotiation_tests {
+    use super::*;
+    fn identity() -> LabGreeting {
+        LabGreeting { game: *b"BPRE", backend: 1, mode: 1,
+            rom_sha256: [3;32], core_sha256: [4;32], bios_sha256: [5;32] }
+    }
+    #[test]
+    fn lab_greeting_is_not_legacy_slot_one() {
+        assert_ne!(&identity().bytes()[..9], &greeting("BPRE"));
+        assert_eq!(&identity().bytes()[..4], b"KMLB");
+    }
+    #[test]
+    fn all_critical_parameters_are_in_negotiation() {
+        let base = identity().bytes();
+        let mut another = identity(); another.backend = 2;
+        assert_ne!(base, another.bytes());
+        let mut another = identity(); another.mode = 2;
+        assert_ne!(base, another.bytes());
+        let mut another = identity(); another.rom_sha256[2] ^= 1;
+        assert_ne!(base, another.bytes());
+        let mut another = identity(); another.core_sha256[2] ^= 1;
+        assert_ne!(base, another.bytes());
+        let mut another = identity(); another.bios_sha256[2] ^= 1;
+        assert_ne!(base, another.bytes());
     }
 }
