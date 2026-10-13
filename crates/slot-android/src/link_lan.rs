@@ -228,6 +228,11 @@ pub fn find<T>(
     let deadline = Instant::now() + bound;
     let mut next_ask = Instant::now();
     let mut tried: HashMap<SocketAddrV4, Instant> = HashMap::new();
+    // Preserve an explicit Lab v2 greeting rejection while continuing to
+    // look for OTHER compatible hosts advertising the same game code.
+    // Otherwise a genuine ROM/core/BIOS mismatch falsely becomes "Nobody
+    // Came" when the mDNS lookup times out.
+    let mut greeting_refused = false;
     loop {
         if cancel.is_cancelled() {
             return Err(io::Error::new(
@@ -237,10 +242,13 @@ pub fn find<T>(
         }
         let now = Instant::now();
         if now >= deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "no host answered on this network",
-            ));
+            return if greeting_refused {
+                Err(io::Error::new(io::ErrorKind::InvalidData,
+                    "an advertised host rejected the KMLB/2 game/core/BIOS identity"))
+            } else {
+                Err(io::Error::new(io::ErrorKind::TimedOut,
+                    "no host answered on this network"))
+            };
         }
         if now >= next_ask {
             wire.send(&link_mdns::query());
@@ -261,8 +269,15 @@ pub fn find<T>(
                 continue;
             }
             tried.insert(host.addr, now);
-            if let Ok(t) = connect(host.addr) {
-                return Ok(t);
+            match connect(host.addr) {
+                Ok(t) => return Ok(t),
+                Err(error) => {
+                    if matches!(error.kind(),
+                        io::ErrorKind::UnexpectedEof | io::ErrorKind::InvalidData)
+                        || error.to_string().contains("did not accept the greeting") {
+                        greeting_refused = true;
+                    }
+                }
             }
             if cancel.is_cancelled() {
                 break;
@@ -369,6 +384,35 @@ mod tests {
         .unwrap();
         assert_eq!(got.ip().octets()[3], 7);
         assert_eq!(order, vec![5, 6, 7]);
+    }
+
+    #[test]
+    fn strict_lab_greeting_refusal_survives_mdns_timeout() {
+        let (mut wire, _) = fake(vec![host(7211, 5, "AMAE")]);
+        let err = find(
+            &mut wire, "AMAE", &Cancel::new(), Duration::from_millis(90),
+            |_| -> io::Result<()> {
+                Err(io::Error::new(io::ErrorKind::UnexpectedEof,
+                    "mismatched KMLB/2 identity"))
+            },
+        ).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn rejected_peer_does_not_block_next_compatible_host() {
+        let (mut wire, _) = fake(vec![
+            host(7211, 5, "AMAE"), host(7211, 6, "AMAE")
+        ]);
+        let peer = find(
+            &mut wire, "AMAE", &Cancel::new(), Duration::from_secs(1),
+            |addr| {
+                if addr.ip().octets()[3] == 5 {
+                    Err(io::Error::other("host did not accept the greeting"))
+                } else { Ok(addr) }
+            },
+        ).unwrap();
+        assert_eq!(peer.ip().octets()[3], 6);
     }
 
     #[test]
