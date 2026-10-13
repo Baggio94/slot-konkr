@@ -34,6 +34,9 @@ LINK_PORT = 7211
 BRIDGE_PORT = 7222
 CACHE_SECONDS = 20
 FIND_SECONDS = 7
+# Wait briefly after the first advertisement for other hosts on the same game.
+# Otherwise the first packet can win before another console is discovered.
+SETTLE_SECONDS = 0.7
 MAX_PACKET = 1500
 
 
@@ -164,19 +167,50 @@ def parse_mdns_hosts(packet: bytes) -> list[tuple[str, str]]:
 class Browser:
     def __init__(self):
         self.lock = threading.Lock()
-        self.hosts: dict[str, tuple[str, float]] = {}
+        # A game code is not a unique peer identity. Never silently choose
+        # the most recently advertised IP when two consoles host that game.
+        self.hosts: dict[str, dict[str, float]] = {}
         self.running = True
         self.sock: socket.socket | None = None
 
+    def remember(self, game: str, ip: str, when: float | None = None):
+        if not valid_host_ip(ip):
+            return
+        now = time.monotonic() if when is None else when
+        with self.lock:
+            self.hosts.setdefault(game, {})[ip] = now
+
+    def candidates(self, game: str, when: float | None = None) -> list[str]:
+        now = time.monotonic() if when is None else when
+        with self.lock:
+            entries = self.hosts.get(game, {})
+            for ip, seen in list(entries.items()):
+                if now - seen > CACHE_SECONDS:
+                    del entries[ip]
+            if not entries:
+                self.hosts.pop(game, None)
+            return sorted(entries)
+
     def find(self, game: str, seconds: float = FIND_SECONDS) -> str | None:
         deadline = time.monotonic() + seconds
+        first_seen: float | None = None
+        chosen: str | None = None
         while time.monotonic() < deadline and self.running:
-            with self.lock:
-                pair = self.hosts.get(game)
-                if pair and time.monotonic() - pair[1] <= CACHE_SECONDS:
-                    return pair[0]
+            hosts = self.candidates(game)
+            if len(hosts) > 1:
+                # Fail closed: the existing manual-IP dialog lets the user
+                # choose the correct KONKR instead of a random same-game host.
+                print(f"Multiple Slot hosts for {game}; use Direct Join", flush=True)
+                return None
+            if hosts:
+                if chosen != hosts[0]:
+                    chosen, first_seen = hosts[0], time.monotonic()
+                elif first_seen is not None and time.monotonic() - first_seen >= SETTLE_SECONDS:
+                    return chosen
+            else:
+                chosen, first_seen = None, None
             self.ask()
-            time.sleep(0.35)
+            time.sleep(0.15)
         return None
 
     def ask(self):
@@ -205,8 +239,7 @@ class Browser:
                 except socket.timeout:
                     continue
                 for game, ip in parse_mdns_hosts(packet):
-                    with self.lock:
-                        self.hosts[game] = (ip, time.monotonic())
+                    self.remember(game, ip)
         except OSError as error:
             print(f"mDNS unavailable: {error}; manual Join remains available", file=sys.stderr)
         finally:
@@ -256,14 +289,28 @@ def self_test():
     assert parse_mdns_hosts(packet.replace(b"v=1", b"v=9")) == []
     assert parse_mdns_hosts(packet.replace(b"\x00\x00\x00\x78", b"\x00\x00\x00\x00")) == []
     browser = Browser()
-    with browser.lock:
-        browser.hosts["BPRE"] = ("192.168.68.79", time.monotonic())
+    now = time.monotonic()
+    browser.remember("BPRE", "192.168.68.79", now)
+    assert browser.candidates("BPRE", now) == ["192.168.68.79"]
+    browser.remember("BPRE", "192.168.68.80", now)
+    assert browser.candidates("BPRE", now) == ["192.168.68.79", "192.168.68.80"]
+    # Multiple discoverable hosts with the same four-letter game code MUST
+    # fall back to explicit IP; no last-write-wins and no arbitrary choice.
+    assert browser.find("BPRE", seconds=0.01) is None
+    browser.remember("BPRE", "192.168.68.80", now - CACHE_SECONDS - 1)
+    assert browser.candidates("BPRE", now) == ["192.168.68.79"]
+    assert browser.candidates("BPRE", now + CACHE_SECONDS + 1) == []
+    browser.remember("BPRE", "192.168.68.79")
     with Bridge(browser, 0) as srv:
         t = threading.Thread(target=srv.serve_forever, daemon=True)
         t.start()
         with socket.create_connection(srv.server_address, timeout=2) as conn:
             conn.sendall(b"FIND BPRE\n")
             assert conn.recv(64) == b"192.168.68.79\n"
+        browser.remember("BPRE", "192.168.68.80")
+        with socket.create_connection(srv.server_address, timeout=2) as conn:
+            conn.sendall(b"FIND BPRE\n")
+            assert conn.recv(64) == b"NONE\n"
         srv.shutdown()
     browser.running = False
     print("Mac Link bridge protocol + mDNS self-test: PASS")
