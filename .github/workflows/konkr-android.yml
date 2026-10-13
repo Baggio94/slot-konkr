@@ -9,6 +9,8 @@ on:
       - 'android/**'
       - 'crates/slot-android/**'
       - 'crates/slot/src/**'  # Android imports pinned upstream rewind, wallpaper, thumb and core picker
+      - 'crates/slot/tests/mgba_link.rs'  # A6 A1: executable solo-to-pair continuity proof
+      - 'cores/mgba/**'  # A6 A1: pinned mGBA state/core patches
       - 'crates/slot-gfx/**'
       - 'crates/slot-ui/**'
       - 'crates/slot-store/**'
@@ -235,3 +237,41 @@ jobs:
           name: slot-konkr-rc5-beta5-signed-release
           path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
+
+  # A6 A1 must exercise the REAL patched mGBA libretro library on a runnable
+  # Linux host, not pass a test that silently skips when vendor/ is empty.
+  # The Android arm64 core is separately built in debug-apk above.
+  a6-a1-mgba-continuity:
+    if: github.ref == 'refs/heads/feat/konkr-multiplayer-lab'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native libretro test prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config \
+            libasound2-dev libudev-dev \
+            libx11-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+      - name: Build exact pinned patched mGBA for native execution
+        run: |
+          mkdir -p vendor
+          bash cores/mgba/build.sh build \
+            7a12d6d4b9acb14c0ae62c9166b6a2f3d08007f6 \
+            "$RUNNER_TEMP/a6-mgba-host" "$PWD/vendor/mgba_libretro.so"
+          test -s vendor/mgba_libretro.so
+          file vendor/mgba_libretro.so
+          sha256sum vendor/mgba_libretro.so
+      - name: Prove original single-state to paired-GBA transition
+        run: |
+          cargo test -p slot --test mgba_link \
+            a_link_state_of_two_single_gba_states_restores_each_player_where_they_were \
+            -- --exact --nocapture
+      - name: Prove live Host/Join progress and lockstep after a6 state exchange
+        run: |
+          cargo test -p slot --test mgba_link \
+            live_solo_host_join_snapshots_resume_without_a_title_screen \
+            -- --exact --nocapture
