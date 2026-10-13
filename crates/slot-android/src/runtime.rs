@@ -371,16 +371,16 @@ const MENU_TEXT: [&str; 79] = [
     "Show app status icons",            // 65
     "Multiplayer",                      // 66
     "End Link",                         // 67
-    "MULTIPLAYER",                      // 68
-    "Host",                             // 69
-    "Join",                             // 70
-    "Cable",                            // 71
-    "Wireless",                         // 72
-    "Searching for a player...",       // 73
-    "Connected!",                       // 74
-    "Connection failed",               // 75
-    "Choose the other console's role", // 76
-    "Press A to retry",                 // 77
+    "",                                 // 68 retired: old non-Slot Multiplayer title
+    "",                                 // 69 retired: LinkRow::text() is upstream
+    "",                                 // 70 retired: LinkRow::text() is upstream
+    "",                                 // 71 retired: no extraneous mode heading
+    "",                                 // 72 retired: no extraneous mode heading
+    "",                                 // 73 retired: LinkStep::line() is upstream
+    "",                                 // 74 retired: upstream says Linked
+    "",                                 // 75 retired: LinkFail::line() is upstream
+    "",                                 // 76 retired: no middle-page helper text
+    "",                                 // 77 retired: upstream shows A OK
     "Eject to play solo",               // 78
 ];
 
@@ -2707,9 +2707,6 @@ impl Engine {
     /// title, mode label or bottom bar. Cable plug and wireless adapter sprites
     /// are identical to original and fork, as are progress/failure messages.
     fn draw_multiplayer(&self, out: &mut Vec<Draw>) {
-        const LINK_TEXT_Y: f32 = 44.0;
-        const LINK_LEGEND_Y: f32 = 422.0;
-        const LINK_LEGEND_GAP: f32 = 40.0;
         out.push(Draw::Rect {
             x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
             colour: opening(),
@@ -2726,7 +2723,7 @@ impl Engine {
         };
         if let Some((tex, w, h)) = text {
             out.push(Draw::Tex {
-                x: ((OUT_W as f32 - w as f32) / 2.0).round(),
+                x: link_heading_x(w),
                 y: LINK_TEXT_Y, w: w as f32, h: h as f32,
                 tex, alpha: 1.0,
             });
@@ -2741,9 +2738,7 @@ impl Engine {
                 LinkLegendProfile::None => &[],
             };
         let seen = |w: u32| w.saturating_sub(HINT_EDGE) as f32;
-        let total: f32 = hints.iter().map(|(_, w)| seen(*w)).sum::<f32>()
-            + LINK_LEGEND_GAP * hints.len().saturating_sub(1) as f32;
-        let mut x = ((OUT_W as f32 - total) / 2.0).round();
+        let mut x = link_legend_start(hints);
         for &(tex, w) in hints {
             out.push(Draw::Tex {
                 x, y: LINK_LEGEND_Y,
@@ -3511,6 +3506,24 @@ impl Engine {
     }
 }
 
+// The source-of-truth coordinates and width accounting from upstream
+// BrandonKowalski/slot app.rs: draw_game_menu(). Do not replace the
+// original 720x480 centred keycaps with the Android Settings footer or
+// a second full-width black rectangle at y=420.
+const LINK_TEXT_Y: f32 = 44.0;
+const LINK_LEGEND_Y: f32 = 422.0;
+const LINK_LEGEND_GAP: f32 = 40.0;
+
+fn link_heading_x(width: u32) -> f32 {
+    ((OUT_W as f32 - width as f32) / 2.0).round()
+}
+
+fn link_legend_start(hints: &[(slot_gfx::TexId, u32)]) -> f32 {
+    let total = hints.iter().map(|(_, w)| w.saturating_sub(HINT_EDGE) as f32)
+        .sum::<f32>() + LINK_LEGEND_GAP * hints.len().saturating_sub(1) as f32;
+    ((OUT_W as f32 - total) / 2.0).round()
+}
+
 /// Original Slot / fork draw_game_menu() picks exactly these groups of
 /// bottom keycaps. Keep selection separate from the GL scene so changes
 /// cannot accidentally show A Link while searching/linked or conceal
@@ -3676,6 +3689,36 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 #[cfg(test)]
 mod ui_feedback_tests {
     use super::*;
+
+    #[test]
+    fn legacy_multiplayer_heading_helper_mode_and_footer_text_cannot_come_back() {
+        // Our previous integration/konkr-rc4-next rendered indices 68..77
+        // as extra MULTIPLAYER/CABLE/CHOOSE... overlays, together with an
+        // arbitrary 60px black footer and LEFT/RIGHT text keycap.
+        // They remain reserved index slots so unrelated menus are stable,
+        // but no legacy Multiplayer string can be rendered from MENU_TEXT.
+        assert!(MENU_TEXT[68..=77].iter().all(|label| label.is_empty()));
+        assert_eq!(MENU_TEXT[66], "Multiplayer"); // still a game menu action
+        assert_eq!(MENU_TEXT[67], "End Link");
+        assert_eq!(MENU_TEXT[78], "Eject to play solo");
+    }
+
+    #[test]
+    fn original_slot_link_title_and_bottom_keycaps_use_exact_canvas_geometry() {
+        assert_eq!(OUT_W, 720);
+        assert_eq!(OUT_H, 480);
+        assert_eq!(LINK_TEXT_Y, 44.0);
+        assert_eq!(LINK_LEGEND_Y, 422.0);
+        assert_eq!(LINK_LEGEND_GAP, 40.0);
+        for width in [88, 100, 120, 216, 300] {
+            let x = link_heading_x(width);
+            assert!(((x + width as f32 * 0.5) - 360.0).abs() <= 0.5);
+        }
+        // The old HOST was hard-coded to x=300 regardless of typography;
+        // this rule always centres both translated role title glyph widths.
+        assert_eq!(link_heading_x(120), 300.0);
+        assert_eq!(link_heading_x(216), 252.0);
+    }
 
     #[test]
     fn multiplayer_bottom_legends_match_all_original_slot_screen_states() {
