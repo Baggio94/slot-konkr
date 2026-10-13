@@ -446,8 +446,43 @@ impl GameSession {
         }
         // The auto-detected serial mode must be decided when the cartridge is
         // loaded. Never attempt to switch RFU to Cable on a running gpSP core.
-        let _ = mode;
+        //
+        // gpSP is still a live SOLO instance at this point. Checkpoint its
+        // state/SRAM/RTC BEFORE attaching the wire, then redirect every
+        // subsequent battery write to a NEW private session. Otherwise an
+        // in-game SRAM flush, Suspend or Save & Eject overwrites solo progress
+        // with multiplayer data, unlike the isolated dual-mGBA boot.
+        let gpsp_battery = if self.linked_boot.is_none() {
+            self.preserve_solo_for_link()?;
+            let root = self.state.parent().ok_or("Missing solo saves directory")?;
+            let game_id = self.rom_path.file_stem().and_then(|id| id.to_str())
+                .ok_or("Missing cached ROM identity")?;
+            let role_name = if role == Role::Host { "host" } else { "join" };
+            let private = crate::linked_storage::fresh_session_for_core(
+                root, "gpSP", game_id, role_name)
+                .map_err(|e| format!("Cannot allocate private gpSP Link session: {e}"))?;
+            let private_save = private.join(
+                self.save.file_name().ok_or("Invalid solo SRAM path")?);
+            let private_rtc = private.join(
+                self.rtc.file_name().ok_or("Invalid solo RTC path")?);
+            for (source, target) in [(&self.save, &private_save), (&self.rtc, &private_rtc)] {
+                if source.is_file() {
+                    let bytes = std::fs::read(source).map_err(|e|
+                        format!("Cannot read solo battery seed: {e}"))?;
+                    if bytes.len() > 1024 * 1024 {
+                        return Err("Refusing oversized gpSP Link battery seed".into());
+                    }
+                    atomic_write(target, &bytes).map_err(|e|
+                        format!("Cannot seed private gpSP Link battery: {e}"))?;
+                }
+            }
+            Some((private_save, private_rtc))
+        } else { None };
         let link = LinkPlay::begin(self.core.as_mut(), role, mode, transport)?;
+        if let Some((private_save, private_rtc)) = gpsp_battery {
+            self.save = private_save;
+            self.rtc = private_rtc;
+        }
         self.link = Some(link);
         self.link_touched = true;
         self.runahead_video.clear();
@@ -472,7 +507,7 @@ impl GameSession {
     pub fn loaded_serial(&self) -> &'static str { self.gpsp_serial }
     pub fn rom_path(&self) -> &Path { &self.rom_path }
     pub fn rom_stem(&self) -> &str { &self.rom_stem }
-    pub fn is_link_sandbox(&self) -> bool { self.linked_boot.is_some() }
+    pub fn is_link_sandbox(&self) -> bool { self.linked_boot.is_some() || self.link_touched }
 
     /// Save the solo state before replacing the entire libretro core with
     /// the linked dual-GBA engine. Abort rather than discard solo progress.
@@ -687,7 +722,7 @@ impl GameSession {
     }
 
     pub fn load_manual(&mut self, stamp:&str) -> Result<(), String> {
-        if self.link.is_some() || self.linked_boot.is_some() { return Err("Load State unavailable during Multiplayer".into()); }
+        if self.link_touched || self.linked_boot.is_some() { return Err("Load State unavailable during Multiplayer".into()); }
         let (bytes, _) = self.ring.read(stamp).map_err(|e|e.to_string())?;
         let prior = self.core.serialize().map_err(|e|e.to_string())?;
         self.core.unserialize(&bytes).map_err(|e|e.to_string())?;
@@ -702,12 +737,12 @@ impl GameSession {
     }
 
     pub fn delete_manual(&mut self, stamp:&str)->Result<(),String> {
-        if self.linked_boot.is_some() { return Err("Save States unavailable during Multiplayer".into()); }
+        if self.link_touched || self.linked_boot.is_some() { return Err("Save States unavailable during Multiplayer".into()); }
         self.ring.remove(stamp).map_err(|e|e.to_string())
     }
 
     pub fn undo_manual(&mut self)->Result<(),String> {
-        if self.link.is_some() || self.linked_boot.is_some() { return Err("Undo unavailable during Multiplayer".into()); }
+        if self.link_touched || self.linked_boot.is_some() { return Err("Undo unavailable during Multiplayer".into()); }
         let Some((since,_))=&self.pending_undo else { return Err("Nothing to undo".into())};
         if since.elapsed()>UNDO_WINDOW {
             self.pending_undo=None;
@@ -728,7 +763,7 @@ impl GameSession {
     }
 
     pub fn undo_available(&self)->bool {
-        self.linked_boot.is_none() && self.pending_undo.as_ref().is_some_and(|(at,_)|at.elapsed()<=UNDO_WINDOW)
+        self.linked_boot.is_none() && !self.link_touched && self.pending_undo.as_ref().is_some_and(|(at,_)|at.elapsed()<=UNDO_WINDOW)
     }
 
 }
