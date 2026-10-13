@@ -25,6 +25,18 @@ android {
         disable += "ExpiredTargetSdkVersion"
     }
 
+    // An install-alongside standalone QA app. This NEVER replaces the
+    // physical console's fyi.slot.konkr beta or reads its app-private saves.
+    // Its own package is fyi.slot.konkr.lab, with a separate HOME-free manifest.
+    buildTypes {
+        create("multiplayerLab") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".lab"
+            versionNameSuffix = "-sidecar"
+            matchingFallbacks += listOf("debug")
+        }
+    }
+
     // A stable signing key can be provided by GitHub Actions secrets or a
     // local development environment. Never commit the keystore or credentials.
     // Without these variables Gradle falls back to its ephemeral debug key.
@@ -43,6 +55,11 @@ android {
         }
         buildTypes {
             getByName("debug") {
+                signingConfig = signingConfigs.getByName("slotPersistent")
+            }
+            getByName("multiplayerLab") {
+                // Same update-stable certificate when secrets are available,
+                // but a distinct app ID even if those secrets are absent.
                 signingConfig = signingConfigs.getByName("slotPersistent")
             }
             getByName("release") {
