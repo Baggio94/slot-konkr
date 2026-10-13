@@ -325,6 +325,81 @@ mod tests {
         fn stop_link(&mut self) { self.ended = true; }
     }
 
+    // Minimal dual-GBA adapter: snapshots are real SLK1 containers with
+    // distinct player bytes, but no native mGBA is needed for protocol tests.
+    struct PairedCore {
+        state: Vec<u8>,
+        steps: usize,
+    }
+    impl PairedCore {
+        fn new(progress: u8, bios: u32) -> Self {
+            let mut single = vec![progress; 0x800];
+            single[4..8].copy_from_slice(&bios.to_le_bytes());
+            Self { state: link_state::pair(&single), steps: 0 }
+        }
+    }
+    impl RetroCore for PairedCore {
+        fn load(&mut self, _: &std::path::Path) -> Result<(), slot_retro::CoreError> { Ok(()) }
+        fn run_frame(&mut self, _: ButtonMask) { self.steps += 1; }
+        fn run_frame_linked(&mut self, _: ButtonMask, _: ButtonMask) { self.steps += 1; }
+        fn video_xrgb8888(&self) -> &[u8] { &[] }
+        fn take_audio(&mut self) -> Vec<i16> { Vec::new() }
+        fn serialize(&mut self) -> Result<Vec<u8>, slot_retro::CoreError> {
+            Ok(self.state.clone())
+        }
+        fn unserialize(&mut self, state: &[u8]) -> Result<(), slot_retro::CoreError> {
+            if link_state::local(state, 0).is_none()
+                || link_state::local(state, 1).is_none() {
+                return Err(slot_retro::CoreError::State("not a pair".into()));
+            }
+            self.state = state.to_vec();
+            Ok(())
+        }
+        fn save_ram(&self) -> Option<Vec<u8>> { None }
+        fn load_save_ram(&mut self, _: &[u8]) -> Result<(), slot_retro::CoreError> { Ok(()) }
+        fn av_info(&self) -> slot_retro::AvInfo {
+            slot_retro::AvInfo { fps: 60.0, sample_rate: 32768.0 }
+        }
+    }
+
+    #[test]
+    fn mga_link_merges_distinct_host_and_join_saves_before_first_frame() {
+        let (host_wire, guest_wire) = pair();
+        let (mut host, mut guest) = (PairedCore::new(0x11, 0xBAAE187F),
+                                      PairedCore::new(0x22, 0xBAAE187F));
+        let mut h = LinkPlay::begin(&mut host, Role::Host, LinkKind::Cable, host_wire).unwrap();
+        // Never advance Host's blank peer before Join supplies its GBA.
+        assert_eq!(h.frame(&mut host, ButtonMask(1)), Frame::Waiting);
+        assert_eq!(host.steps, 0);
+        let mut g = LinkPlay::begin(&mut guest, Role::Join, LinkKind::Cable, guest_wire).unwrap();
+        assert_eq!(h.frame(&mut host, ButtonMask(2)), Frame::Waiting);
+        assert_eq!(host.steps, 0);
+        let host_local = link_state::local(&host.state, 0).unwrap();
+        let guest_local = link_state::local(&host.state, 1).unwrap();
+        assert_eq!(host_local[12], 0x11);
+        assert_eq!(guest_local[12], 0x22);
+        // Join must restore the combined pair before receiving any frame.
+        assert_eq!(g.frame(&mut guest, ButtonMask(3)), Frame::Advanced);
+        assert_eq!(g.state_bytes, 0);
+        assert_eq!(h.frame(&mut host, ButtonMask(4)), Frame::Advanced);
+        assert_eq!(host.state, guest.state);
+        assert_eq!(host.steps, 1);
+        assert_eq!(guest.steps, 1);
+    }
+
+    #[test]
+    fn mga_link_rejects_guest_with_different_bios_without_replacing_host() {
+        let (host_wire, guest_wire) = pair();
+        let (mut host, mut guest) = (PairedCore::new(0x11, 0xBAAE187F),
+                                      PairedCore::new(0x22, 0xA6473709));
+        let before = host.state.clone();
+        let mut h = LinkPlay::begin(&mut host, Role::Host, LinkKind::Cable, host_wire).unwrap();
+        let _g = LinkPlay::begin(&mut guest, Role::Join, LinkKind::Cable, guest_wire).unwrap();
+        assert_eq!(h.frame(&mut host, ButtonMask(0)), Frame::Failed(LinkError::BiosMismatch));
+        assert_eq!(host.state, before);
+        assert_eq!(host.steps, 0);
+    }
+
     #[test]
     fn gpsp_netpacket_carries_both_cable_and_wireless_without_input_replay() {
         for mode in [LinkKind::Cable, LinkKind::Wireless] {
