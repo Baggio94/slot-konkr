@@ -429,6 +429,7 @@ mod lab_negotiation_tests {
     /// No device/emulator, BIOS or ROM is needed.
     #[test]
     fn strict_kmlb2_host_rejects_wrong_peers_then_transfers_packets_and_end() {
+        use slot_retro::NETPACKET_RELIABLE;
         use std::net::{SocketAddr, TcpListener};
         use std::thread;
 
