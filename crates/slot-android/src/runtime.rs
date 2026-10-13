@@ -33,7 +33,7 @@ use slot_ui::{
     CHIP_U, CHIP_V, CHIP_W, CHIP_H, HOP_LIFT, TURN_PAD, SHADOW_W, SHADOW_H,
     CART_W, hint_face, arrows_hint_face, title_face, photo_face, Polaroids, Printed, HINT_H, HINT_EDGE,
     draw_footer, draw_slot_name, draw_platform_name, word_face, platform_name_face,
-    icon_face, badge_face, Icon, LinkBadge, BOLT_PX, HUD_INK,
+    icon_face, badge_face, menu_face, Icon, LinkBadge, BOLT_PX, HUD_INK,
     Hud, HudKind, FfState, Toast, toast_face, QUICK_PITCH, opening, edge, centred_hints, LEGEND_GAP,
     sticker_face_konkr, StickerFields, STICKER_W, STICKER_H, quick_caret_face,
 };
@@ -610,7 +610,10 @@ impl Engine {
             (tex, face.w)
         });
         let make_link_text = |gpu: &mut Compositor, label: &str| {
-            let face = quick_value_face(label, true);
+            // Identical font, 30px scale, ink, centering and side padding
+            // to original slot/src/frontend.rs menu_faces(), not our
+            // Android Settings quick_value_face fallback.
+            let face = menu_face(label);
             (gpu.create_texture(face.w, face.h, &face.rgba), face.w, face.h)
         };
         let link_role_faces = LinkRow::ALL
