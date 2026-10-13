@@ -501,6 +501,29 @@ impl GameSession {
     pub fn rom_stem(&self) -> &str { &self.rom_stem }
     pub fn is_link_sandbox(&self) -> bool { self.linked_boot.is_some() || self.link_touched }
 
+    /// After an attempted Link boot fails, the newly loaded solo core may
+    /// have silently ignored an old/unreadable state during open_internal().
+    /// Require an explicit successful deserialize of the live pre-Link bytes
+    /// before calling the solo timeline recovered. No ROM title reset, no
+    /// fallback to an arbitrary external RetroArch auto-state.
+    pub fn restore_checkpoint_after_link_failure(&mut self,
+                                                  saved: &[u8]) -> Result<(), String> {
+        if self.linked_boot.is_some() || self.link_touched {
+            return Err("Cannot restore a solo checkpoint inside a Link session".into());
+        }
+        crate::linked_storage::validate_solo_snapshot(saved)?;
+        self.core.unserialize(saved).map_err(|e|
+            format!("Refusing unsafe solo recovery: saved state rejected by core: {e}"))?;
+        let verified = self.core.serialize().map_err(|e|
+            format!("Cannot verify restored solo state: {e}"))?;
+        crate::linked_storage::validate_solo_snapshot(&verified)?;
+        // Clear presentation/input time travel from any pre-recovery state.
+        self.runahead_video.clear();
+        self.rewind_frames = 0;
+        self.pending_undo = None;
+        Ok(())
+    }
+
     /// Save the solo state before replacing the entire libretro core with
     /// the linked dual-GBA engine. Abort rather than discard solo progress.
     pub fn preserve_solo_for_link(&mut self) -> Result<Vec<u8>, String> {
