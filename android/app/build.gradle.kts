@@ -15,7 +15,9 @@ android {
         // or the separate Beta6 diagnostic APK. No install without save backup.
         versionCode = 75
         versionName = "0.1.0-rc5-mlab-a5"
-        ndk { abiFilters += listOf("arm64-v8a") }
+        // One byte-identical APK on ARM64 KONKR and x86_64 Mac AVD.
+        // Native libraries for BOTH ABIs are built/pinned by the same CI.
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
 
     // This APK is distributed directly for KONKR Android 12 (not via Google
