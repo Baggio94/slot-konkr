@@ -3220,6 +3220,14 @@ impl Engine {
             self.game_accum = 0.0;
             let mut commands = vec![Draw::Game];
             self.draw_overlay(&mut commands);
+            // The original Slot app draws the HUD AFTER draw_game_menu()
+            // (app.rs), including during its Linked animation. The four
+            // cyan/purple chain badges are already loaded into our Hud but
+            // used to disappear behind the Multiplayer overlay because we
+            // skipped this final HUD pass. Keep the exact upstream z-order.
+            if matches!(self.overlay, ShelfOverlay::Multiplayer) {
+                self.hud.draw(self.born.elapsed().as_millis() as u64, &mut commands);
+            }
             self.gpu.fit(self.size);
             self.gpu.begin_frame();
             self.gpu.draw_list(&commands);
