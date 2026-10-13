@@ -345,7 +345,7 @@ impl TcpLink {
                         [CONTROL_ENDED] => reader_ended.store(true, Ordering::Release),
                         [CONTROL_PAUSED] => reader_paused.store(true, Ordering::Release),
                         [CONTROL_RESUMED] => reader_paused.store(false, Ordering::Release),
-                        _ => reader_closed.store(true, Ordering::Release),
+                        _ => { reader_closed.store(true, Ordering::Release); return; },
                     }
                     continue;
                 }
@@ -495,7 +495,7 @@ mod lab_negotiation_tests {
     /// reader/writer worker threads, not only serialised greeting bytes.
     /// No device/emulator, BIOS or ROM is needed.
     #[test]
-    fn strict_kmlb2_host_rejects_wrong_peers_then_transfers_packets_and_end() {
+    fn strict_kmlb3_host_rejects_wrong_peers_then_transfers_packets_and_end() {
         use slot_retro::NETPACKET_RELIABLE;
         use std::net::{SocketAddr, TcpListener};
         use std::thread;
@@ -540,7 +540,7 @@ mod lab_negotiation_tests {
         variants.push(wrong);
         for wrong in variants {
             assert!(TcpLink::join_lab_greeted(addr, &wrong).is_err(),
-                "KMLB/2 must refuse a mismatched peer");
+                "KMLB/3 must refuse a mismatched peer");
         }
 
         let mut guest = TcpLink::join_lab_greeted(addr, &expected).unwrap();
@@ -573,6 +573,66 @@ mod lab_negotiation_tests {
             "the original five-byte END control must reach the Host");
     }
 
+    #[test]
+    fn documented_pair_uses_mutual_kmlb3_validation_and_out_of_band_pause() {
+        use std::net::{TcpListener, SocketAddr};
+        let reserve=TcpListener::bind(("127.0.0.1",0)).unwrap();
+        let addr:SocketAddr=reserve.local_addr().unwrap();drop(reserve);
+        let mut firered=identity();firered.backend=2;firered.mode=2;
+        let mut leafgreen=firered.clone();
+        leafgreen.game=*b"BPGE";leafgreen.rom_sha256=[0x81;32];
+        assert!(firered.accepts(&leafgreen));
+        assert!(leafgreen.accepts(&firered));
+        let (started,listening)=channel();
+        let expected=firered.clone();
+        let host=std::thread::spawn(move|| TcpLink::host_lab_greeted_until(
+            "127.0.0.1",addr.port(),Duration::from_secs(5),&Cancel::new(),
+            &expected,||{let _=started.send(());}).unwrap());
+        listening.recv_timeout(Duration::from_secs(3)).unwrap();
+        let mut guest=TcpLink::join_lab_greeted(addr,&leafgreen).unwrap();
+        let mut server=host.join().unwrap();
+        assert!(!server.peer_paused());
+        guest.set_paused(true);
+        let deadline=Instant::now()+Duration::from_secs(2);
+        while !server.peer_paused() && Instant::now()<deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(server.peer_paused(),"TCP PAUSE must be delivered even without game frames");
+        assert!(server.try_recv().is_none(),"PAUSE must not leak into RFU/cable bytes");
+        guest.set_paused(false);
+        let deadline=Instant::now()+Duration::from_secs(2);
+        while server.peer_paused() && Instant::now()<deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!server.peer_paused(),"RESUME must unfreeze the remote GBA");
+        assert!(server.try_recv().is_none(),"RESUME must not reach the cartridge");
+        server.send_end();
+    }
+    #[test]
+    fn cross_game_never_relaxes_unrelated_peer_integrity_checks(){
+        let mut host=identity();host.backend=2;host.mode=1;
+        let mut other=host.clone();other.game=*b"BPGE";other.rom_sha256=[0xAB;32];
+        assert!(host.accepts(&other));
+        let mut bad=other.clone();bad.core_sha256[1]^=1;assert!(!host.accepts(&bad));
+        let mut bad=other.clone();bad.bios_sha256[1]^=1;assert!(!host.accepts(&bad));
+        let mut bad=other.clone();bad.backend=1;assert!(!host.accepts(&bad));
+        let mut bad=other.clone();bad.game=*b"BRBE";assert!(!host.accepts(&bad));
+        let mut bad=other.clone();bad.mode=2;assert!(!host.accepts(&bad));
+        // Ruby and FireRed can communicate only over the GBA Cable.
+        let mut ruby=other.clone();ruby.game=*b"AXVE";ruby.mode=2;
+        let mut wireless_host=host.clone();wireless_host.mode=2;
+        assert!(!wireless_host.accepts(&ruby));
+        // Identical header code with modified ROM content is NOT an approved pair.
+        let mut patched=host.clone();patched.rom_sha256[0]^=1;
+        assert!(!host.accepts(&patched));
+        // mGBA pair snapshots cannot safely contain two different games.
+        let mut mgba=host.clone();mgba.backend=1;
+        let mut mgba_other=other.clone();mgba_other.backend=1;
+        assert!(!mgba.accepts(&mgba_other));
+        // Legacy framing/version can never be accepted in KMLB/3.
+        let mut legacy=host.bytes();legacy[4]=2;
+        assert!(LabGreeting::decode(&legacy).is_none());
+    }
     #[test]
     fn cancelled_listener_does_not_mark_a_peer_ready() {
         use std::net::TcpListener;

@@ -331,6 +331,38 @@ mod tests {
          Box::new(Wire { recv: b, send: a }))
     }
 
+    #[test]
+    fn pause_menu_stops_netpacket_frames_until_both_players_resume() {
+        struct PausableWire {
+            sent_local: Arc<AtomicBool>,
+            remote: Arc<AtomicBool>,
+        }
+        impl LinkChannel for PausableWire {
+            fn send(&mut self,_flags:i32,_buf:&[u8]){}
+            fn try_recv(&mut self)->Option<Vec<u8>>{None}
+            fn set_paused(&mut self,paused:bool){self.sent_local.store(paused,Ordering::SeqCst);}
+            fn peer_paused(&self)->bool{self.remote.load(Ordering::SeqCst)}
+        }
+        let remote=Arc::new(AtomicBool::new(false));
+        let local=Arc::new(AtomicBool::new(false));
+        let mut core=NetworkCore::new();
+        let mut link=LinkPlay::begin(&mut core,Role::Host,LinkKind::Wireless,
+            Box::new(PausableWire{sent_local:local.clone(),remote:remote.clone()})).unwrap();
+        assert_eq!(link.frame(&mut core,ButtonMask(0)),Frame::Advanced);
+        let saved=core.serialize().unwrap();
+        link.set_local_paused(true);
+        assert!(local.load(Ordering::SeqCst));
+        for _ in 0..90 {assert_eq!(link.frame(&mut core,ButtonMask(1)),Frame::Waiting);}
+        assert_eq!(core.serialize().unwrap(),saved,"local menu must never run the core");
+        link.set_local_paused(false);
+        remote.store(true,Ordering::SeqCst);
+        for _ in 0..90 {assert_eq!(link.frame(&mut core,ButtonMask(2)),Frame::Waiting);}
+        assert_eq!(core.serialize().unwrap(),saved,"remote menu must never run the core");
+        remote.store(false,Ordering::SeqCst);
+        assert_eq!(link.frame(&mut core,ButtonMask(3)),Frame::Advanced);
+        assert_ne!(core.serialize().unwrap(),saved,"both returning to game must resume frames");
+    }
+
     // Simulated transport controls let us prove a lost peer NEVER advances
     // either core after failure, even when its socket worker lags a frame.
     struct FaultWire {
