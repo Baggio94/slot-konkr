@@ -909,6 +909,9 @@ class MainActivity : Activity() {
             var requestedSpeed = 0
             var observedUnderruns = 0
             var audioProbeAt = 0L
+            var emptyAudioReads = 0
+            var playedShorts = 0L
+            var audioBufferBytes = 0
             try {
                 while (audioRunning.get()) {
                     val wanted = nativeAudioSampleRate()
@@ -928,6 +931,9 @@ class MainActivity : Activity() {
                         }
                         // Preserve the validated low-latency legacy AudioTrack buffer.
                         val bufferBytes = maxOf(16384, minBytes * 2)
+                        audioBufferBytes = bufferBytes
+                        Log.i(TAG, "Audio diagnostic: rate=$wanted Hz, " +
+                            "minBuffer=$minBytes bytes, allocated=$bufferBytes bytes")
                         player = AudioTrack.Builder()
                             .setAudioAttributes(AudioAttributes.Builder()
                                 .setUsage(AudioAttributes.USAGE_GAME)
@@ -942,6 +948,8 @@ class MainActivity : Activity() {
                         rate = wanted
                         requestedSpeed = 0
                         observedUnderruns = 0
+                        emptyAudioReads = 0
+                        playedShorts = 0L
                         audioProbeAt = SystemClock.elapsedRealtime()
                         player.play()
                     } else if (player.playState != AudioTrack.PLAYSTATE_PLAYING) {
@@ -975,6 +983,7 @@ class MainActivity : Activity() {
                     }
                     val samples = nativeReadAudio()
                     if (samples.isEmpty()) {
+                        emptyAudioReads++
                         // Event-driven wakeup instead of sleeping blindly for 8ms:
                         // GLSurfaceView signals after each libretro callback.
                         // The 30ms timeout is a safety fallback for paused frames.
@@ -991,6 +1000,8 @@ class MainActivity : Activity() {
                     val written = player.write(samples, 0, samples.size, AudioTrack.WRITE_BLOCKING)
                     if (written < 0) {
                         Log.w(TAG, "AudioTrack write error: $written")
+                    } else {
+                        playedShorts += written.toLong()
                     }
                     // Diagnostic only; do not modify audio queue, buffer size or
                     // event-driven wakeup. A rise here distinguishes Android
@@ -1002,7 +1013,16 @@ class MainActivity : Activity() {
                             Log.i(TAG, "AudioTrack underruns: +${underflows - observedUnderruns}" +
                                 " over 5s (total=$underflows, rate=$wanted Hz)")
                         }
+                        if (underflows > observedUnderruns) {
+                            Log.i(TAG, "Audio diagnostic: rate=$wanted, " +
+                                "bufferBytes=$audioBufferBytes, " +
+                                "writtenShorts=$playedShorts over 5s, " +
+                                "emptyReads=$emptyAudioReads, " +
+                                "underrunDelta=${underflows - observedUnderruns}")
+                        }
                         observedUnderruns = underflows
+                        playedShorts = 0L
+                        emptyAudioReads = 0
                         audioProbeAt = probeNow
                     }
                 }

@@ -207,6 +207,38 @@ internal object RetroArchStorage {
         return data.size in setOf(512, 8192, 32768, 65536, 131072)
     }
 
+    /**
+     * gpSP's pinned libretro core always exports 128 KiB, while mGBA exports
+     * the cartridge's actual EEPROM/SRAM/Flash capacity. Treat only erased
+     * 0xFF suffixes as equivalent: a non-erased suffix is real save data.
+     * This does not compare save histories by timestamps and never chooses
+     * between genuinely different prefixes.
+     */
+    internal fun sameGbaRam(a: ByteArray?, b: ByteArray?): Boolean {
+        if (a == null || b == null) return a == null && b == null
+        if (a.contentEquals(b)) return true
+        if (!validGbaRam(a) || !validGbaRam(b)) return false
+        val small = if (a.size < b.size) a else b
+        val large = if (a.size < b.size) b else a
+        for (i in small.indices) if (small[i] != large[i]) return false
+        for (i in small.size until large.size) {
+            if (large[i] != 0xff.toByte()) return false
+        }
+        return true
+    }
+
+    /** Only change capacity through erased bytes, never truncate progress. */
+    internal fun gbaRamAtSize(save: ByteArray, size: Int): ByteArray? {
+        if (!validGbaRam(save) || size !in setOf(512, 8192, 32768, 65536, 131072)) {
+            return null
+        }
+        if (save.size > size && (size until save.size).any { save[it] != 0xff.toByte() }) {
+            return null
+        }
+        if (save.size >= size) return save.copyOf(size)
+        return ByteArray(size) { 0xff.toByte() }.also { save.copyInto(it) }
+    }
+
     internal enum class SharedGbaSource { NONE, OWN, OTHER, CONFLICT }
 
     /** Pure migration decision: never infer recency from SAF timestamp or
@@ -218,9 +250,9 @@ internal object RetroArchStorage {
         own == null && other == null -> SharedGbaSource.NONE
         own == null -> SharedGbaSource.OTHER
         other == null -> SharedGbaSource.OWN
-        own.contentEquals(other) -> SharedGbaSource.OWN
-        lastPublished != null && own.contentEquals(lastPublished) -> SharedGbaSource.OTHER
-        lastPublished != null && other.contentEquals(lastPublished) -> SharedGbaSource.OWN
+        sameGbaRam(own, other) -> SharedGbaSource.OWN
+        lastPublished != null && sameGbaRam(own, lastPublished) -> SharedGbaSource.OTHER
+        lastPublished != null && sameGbaRam(other, lastPublished) -> SharedGbaSource.OWN
         else -> SharedGbaSource.CONFLICT
     }
 
@@ -314,40 +346,71 @@ internal object RetroArchStorage {
         }
         val baseline = journal.takeIf { it.isFile }?.readBytes()
         val atLaunch = loadedFile.takeIf { it.isFile }?.readBytes()
-        if (baseline != null && current.size != baseline.size) {
-            error("GBA save size changed between cores; no mirrors overwritten")
+        if (baseline != null && (gbaRamAtSize(current, baseline.size) == null ||
+                    gbaRamAtSize(baseline, current.size) == null)) {
+            Log.w(TAG, "Shared GBA mismatch: core=${target.core} " +
+                "current=${current.size} published=${baseline.size} " +
+                "loaded=${atLaunch?.size ?: 0}, non-erased bytes prevent safe capacity conversion")
+            error("GBA save sizes differ with non-erased data; no mirrors overwritten")
         }
+
+        // Construct all file payloads before touching either core's mirrors.
+        // A 128 KiB gpSP buffer may safely contain a 512B/8K/32K/64K mGBA
+        // save followed ONLY by 0xFF. Never truncate other bytes.
+        val otherLocal = otherPrivate(context, target)
+        val otherOld = otherLocal.takeIf { it.isFile }?.readBytes()
+        if (otherOld != null && !validGbaRam(otherOld)) {
+            error("Other core private save has an unsupported SRAM size; no mirrors overwritten")
+        }
+        if (otherOld != null && !sameGbaRam(otherOld, current) &&
+            !sameGbaRam(otherOld, baseline) && !sameGbaRam(otherOld, atLaunch)) {
+            error("Other core private SRAM changed independently; no mirrors overwritten")
+        }
+        val peerSize = otherOld?.size ?: if (otherCore(target.core) == "gpSP") 131072 else current.size
+        val peerData = gbaRamAtSize(current, peerSize)
+            ?: error("Other core has a different active SRAM capacity; no mirrors overwritten")
+        val canonical = gbaRamAtSize(current, 131072)
+            ?: error("Cannot safely represent shared GBA SRAM; no mirrors overwritten")
+
         val external = target.savesTree
+        val writes = mutableListOf<Pair<String, ByteArray>>()
         if (external != null) {
             // PRE-FLIGHT both destinations before writing ANY of them. A
             // concurrent RetroArch/Syncthing edit is a conflict, not a signal
             // to overwrite the other core's progress.
             for (core in arrayOf(target.core, otherCore(target.core))) {
                 val old = readNamed(context, external, core, target.stem + ".srm", MAX_SAVE)
-                if (old != null && !old.contentEquals(current) &&
-                    baseline?.contentEquals(old) != true &&
-                    atLaunch?.contentEquals(old) != true) {
-                    error("$core SRAM changed outside Slot; mirroring cancelled")
-                }
                 if (old != null && !validGbaRam(old)) {
                     error("$core SRAM has an unrecognized size; mirroring cancelled")
                 }
+                if (old != null && !sameGbaRam(old, current) &&
+                    !sameGbaRam(baseline, old) && !sameGbaRam(atLaunch, old)) {
+                    error("$core SRAM changed outside Slot; mirroring cancelled")
+                }
+                val destSize = old?.size ?: if (core == target.core) current.size
+                    else peerSize
+                val data = gbaRamAtSize(current, destSize)
+                    ?: error("$core SRAM has non-erased data beyond its capacity; mirroring cancelled")
+                writes.add(core to data)
             }
-            for (core in arrayOf(target.core, otherCore(target.core))) {
+        }
+        Log.i(TAG, "Shared GBA export: core=${target.core}, native=${current.size}, " +
+            "published=${baseline?.size ?: 0}, loaded=${atLaunch?.size ?: 0}, " +
+            "peer=${otherOld?.size ?: 0}, erased-padding-only=true")
+        if (external != null) {
+            for ((core, data) in writes) {
                 writeSaf(context, external, core, target.stem + ".srm",
-                    current, isState = false)
+                    data, isState = false)
             }
         }
-        val otherLocal = otherPrivate(context, target)
-        if (otherLocal.isFile) {
-            val prior = otherLocal.readBytes()
-            if (!prior.contentEquals(current)) {
-                val backup = File(journal.path + ".${otherCore(target.core)}.before-share.srm")
-                if (!backup.exists()) stage(backup, prior)
-            }
+        if (otherOld != null && !otherOld.contentEquals(peerData)) {
+            val backup = File(journal.path + ".${otherCore(target.core)}.before-share.srm")
+            if (!backup.exists()) stage(backup, otherOld)
         }
-        stage(otherLocal, current)
-        stage(journal, current)
+        stage(otherLocal, peerData)
+        // Canonical journal is always 128 KiB; private and external per-core
+        // files retain their actual capacity whenever a file already exists.
+        stage(journal, canonical)
         stage(File(journal.path + ".core"), target.core.toByteArray())
         loadedFile.delete()
     }

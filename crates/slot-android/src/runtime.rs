@@ -932,7 +932,11 @@ impl Engine {
         }
         let identity = self.link_identity.as_ref().expect("checked above");
         if !link_kind::link_carried(&identity.code, &identity.title) {
-            set_message("No verified gpSP serial/RFU mode for this GBA cartridge".into());
+            crate::game::log_launch_timing(&format!(
+                "Multiplayer unsupported protocol: game_code={}, title={}, clean_header={}",
+                identity.code, identity.title, identity.clean_header
+            ));
+            set_message("This GBA game's link protocol is not yet verified in gpSP. Try Pokemon FireRed or Emerald.".into());
             return;
         }
         // gpSP resolves gpsp_serial=auto at cartridge LOAD. Match the
