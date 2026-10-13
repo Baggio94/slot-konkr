@@ -66,13 +66,8 @@ class AppsActivity : Activity() {
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density + .5f).toInt()
 
-    private fun text(label: String, size: Float, bright: Boolean = true) = TextView(this).apply {
-        this.text = label
-        textSize = size
-        typeface = SlotUi.font(this@AppsActivity)
-        setTextColor(if (bright) SlotUi.ink else SlotUi.muted)
-        gravity = Gravity.CENTER_VERTICAL
-    }
+    private fun text(label: String, size: Float, bright: Boolean = true) =
+        SlotUi.label(this, label, size, if (bright) SlotUi.ink else SlotUi.muted, upper = false)
 
     private fun plate(color: Int, selected: Boolean = false) = GradientDrawable().apply {
         setColor(color)
@@ -121,9 +116,10 @@ class AppsActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         header.addView(text("APPS", 19f), LinearLayout.LayoutParams(0, dp(48), 1f))
-        homeButton = text("Set as Home", 13f).apply {
+        homeButton = SlotUi.label(this, "Set as Home", 13f).apply {
             gravity = Gravity.CENTER
             setPadding(dp(15), dp(7), dp(15), dp(7))
+            isFocusable = true
             isClickable = true
             contentDescription = "Choose the default home launcher"
             setOnClickListener { chooseHome() }
