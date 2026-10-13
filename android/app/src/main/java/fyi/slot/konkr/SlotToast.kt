@@ -67,7 +67,7 @@ internal object SlotToast {
                 rightMargin = dp(if (raCompact) 9 else 12)
             })
             val text = TextView(context).apply {
-                this.text = friendly.uppercase(java.util.Locale.getDefault())
+                this.text = friendly.uppercase(java.util.Locale.ROOT)
                 textSize = 12.5f
                 typeface = SlotUi.font(context)
                 letterSpacing = .09f
@@ -106,7 +106,7 @@ internal object SlotToast {
             msg.equals("RAOfflineProxy address invalid", true) ->
                 "RAOfflineProxy is running, but its connection settings need checking."
             msg.contains("ROM folder permission expired", true) ->
-                "Access to your games folder expired. Please select the folder again."
+                "Games folder access expired. Select it again."
             msg.contains("Choose a ROM folder first", true) ->
                 "Choose the folder containing your games first."
             msg.contains("Choose a cartridge first", true) ->
@@ -119,6 +119,20 @@ internal object SlotToast {
                 msg.replaceFirst("Slot loaded ", "Games ready: ")
                     .replace(" carts", " cartridges")
                     .replace(" (limited to 5000)", " (showing the first 5,000)")
+            msg.startsWith("Cannot load state:", true) ->
+                "Couldn't load the save state. Check your save files."
+            msg.startsWith("Cannot export state:", true) ->
+                "Save state created, but exporting it failed. Check your save folder."
+            msg.startsWith("Cannot open game:", true) ->
+                "Can't open this game. Check its ROM and selected core."
+            msg.startsWith("Cannot save core selection:", true) ->
+                "Couldn't save the selected emulator core."
+            msg.startsWith("Cannot save game emulation settings:", true) ->
+                "Couldn't save this game's emulation settings."
+            msg.startsWith("Multiplayer paused:", true) ->
+                "Multiplayer paused. Check the connection before trying again."
+            msg.startsWith("Multiplayer:", true) && msg.length > 90 ->
+                "Multiplayer connection failed. Check both consoles and retry."
             msg.contains("java.lang.", true) || msg.contains("Exception:", true) ||
                 msg.contains("content://", true) ->
                 "That didn't work. Check your files and try again."
