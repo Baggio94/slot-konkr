@@ -13,6 +13,29 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const MAX_SOLO_SNAPSHOT: usize = 7 * 1024 * 1024;
 
+pub const MAX_LINK_BATTERY_SEED: usize = 1024 * 1024;
+
+/// Copy a live solo SRAM or RTC to one private Link session, atomically.
+/// Missing battery files are normal, but corrupt, unreadable, oversized and
+/// already seeded files MUST NOT silently become the starting multiplayer
+/// save. In particular, do not overwrite any historical Link data.
+pub fn copy_solo_battery(source: &Path, target: &Path) -> io::Result<()> {
+    if target.exists() {
+        return Err(io::Error::new(io::ErrorKind::AlreadyExists,
+            "Private Link battery seed is not empty"));
+    }
+    let bytes = match fs::read(source) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if bytes.len() > MAX_LINK_BATTERY_SEED {
+        return Err(io::Error::new(io::ErrorKind::InvalidData,
+            "Oversized Link battery seed"));
+    }
+    slot_store::atomic_write(target, &bytes)
+}
+
 pub fn validate_solo_snapshot(bytes: &[u8]) -> Result<(), String> {
     if bytes.len() < 0x400 || bytes.len() > MAX_SOLO_SNAPSHOT || bytes.starts_with(b"SLK1") {
         return Err(format!(
@@ -82,6 +105,43 @@ mod tests {
         let mut paired = b"SLK1".to_vec();
         paired.resize(0x404, 0);
         assert!(validate_solo_snapshot(&paired).is_err());
+    }
+
+    #[test]
+    fn atomic_private_battery_seed_never_mutates_solo_or_old_sessions() {
+        let base = fixture();
+        let solo = base.join("solo.srm");
+        fs::write(&solo, b"solo SRAM before link").unwrap();
+        let first = fresh_session_for_core(&base, "gpSP", "abcdef0", "host").unwrap();
+        let first_sram = first.join("Pokemon.srm");
+        copy_solo_battery(&solo, &first_sram).unwrap();
+        assert_eq!(fs::read(&first_sram).unwrap(), b"solo SRAM before link");
+
+        fs::write(&solo, b"new solo SRAM next session").unwrap();
+        let second = fresh_session_for_core(&base, "gpSP", "abcdef0", "host").unwrap();
+        let second_sram = second.join("Pokemon.srm");
+        copy_solo_battery(&solo, &second_sram).unwrap();
+        assert_eq!(fs::read(&first_sram).unwrap(), b"solo SRAM before link");
+        assert_eq!(fs::read(&second_sram).unwrap(), b"new solo SRAM next session");
+        assert_eq!(fs::read(&solo).unwrap(), b"new solo SRAM next session");
+
+        assert_eq!(copy_solo_battery(&solo, &first_sram).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&first_sram).unwrap(), b"solo SRAM before link");
+
+        // A missing RTC does not create a fake battery clock; oversized
+        // sources fail closed without affecting historical or solo data.
+        let absent_rtc = base.join("absent.rtc");
+        let private_rtc = second.join("Pokemon.rtc");
+        copy_solo_battery(&absent_rtc, &private_rtc).unwrap();
+        assert!(!private_rtc.exists());
+        let huge = base.join("oversized.srm");
+        fs::write(&huge, vec![0xAB; MAX_LINK_BATTERY_SEED + 1]).unwrap();
+        let rejected = second.join("oversized.srm");
+        assert_eq!(copy_solo_battery(&huge, &rejected).unwrap_err().kind(),
+            io::ErrorKind::InvalidData);
+        assert!(!rejected.exists());
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
