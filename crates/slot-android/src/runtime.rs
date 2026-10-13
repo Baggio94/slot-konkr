@@ -1293,9 +1293,9 @@ impl Engine {
             self.buttons = 0;
         }
         if link_unplug_complete(self.link_phase, self.link_millis()) {
-            // Original Slot unplug travel is 260ms; the linked cartridge
-            // then requires a safe eject/relaunch rather than solo play.
-            self.overlay = ShelfOverlay::GameMenu { row: 2 };
+            // Return focus to the newly actionable "Eject to play solo"
+            // primary row, rather than the generic Save & Eject row.
+            self.overlay = ShelfOverlay::GameMenu { row: 0 };
         }
     }
 
@@ -1425,7 +1425,7 @@ impl Engine {
                 // the user briefly sees the cartridge carousel again.
                 if !self.external_pending {
                     self.overlay = if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
-                        ShelfOverlay::GameMenu { row: 2 }
+                        ShelfOverlay::GameMenu { row: 0 }
                     } else { ShelfOverlay::None };
                 }
                 self.picker = None;
@@ -1642,8 +1642,8 @@ impl Engine {
                             if self.game.is_some() { self.handle(Input::Exit); }
                         } else if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
                             self.mode_last_tap = None;
-                            self.overlay = ShelfOverlay::GameMenu { row: 2 };
-                            set_message("Eject and relaunch to play solo".into());
+                            self.overlay = ShelfOverlay::GameMenu { row: 0 };
+                            set_message("Press A to eject and relaunch in solo".into());
                         } else if self.game.is_some() {
                             let is_double=self.mode_last_tap.take()
                                 .is_some_and(|t|t.elapsed().as_millis()<360);
