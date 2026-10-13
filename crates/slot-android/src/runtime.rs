@@ -245,6 +245,30 @@ fn select_chord_bit(code: i32) -> u16 {
     }
 }
 
+/// Upstream slot-input: SELECT held, then HOME/MODE opens the Link menu.
+/// Consume both the press and its release, otherwise HOME also opens the
+/// regular game menu (or cancels the Link picker on release).
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum SelectHomeAction { Pass, OpenLink, Swallow }
+
+fn select_home_action(
+    pressed: bool,
+    select_held: bool,
+    in_game: bool,
+    may_open: bool,
+    home_consumed: &mut bool,
+) -> SelectHomeAction {
+    if *home_consumed {
+        if !pressed { *home_consumed = false; }
+        return SelectHomeAction::Swallow;
+    }
+    if pressed && select_held && in_game && may_open {
+        *home_consumed = true;
+        return SelectHomeAction::OpenLink;
+    }
+    SelectHomeAction::Pass
+}
+
 fn set_message(message: String) {
     *MESSAGE.lock().unwrap_or_else(|e| e.into_inner()) = Some(message);
 }
@@ -369,6 +393,8 @@ struct Engine {
     exiting_screen: bool,
     eject_hold_remaining: f32,
     select_down_at: Option<Instant>,
+    // HOME release must not close the Link screen opened by SELECT + HOME.
+    select_home_consumed: bool,
     select_chorded: bool,
     select_forwarded: bool,
     select_tap_frames: u8,
@@ -665,6 +691,7 @@ impl Engine {
             exiting_screen: false,
             eject_hold_remaining: 0.0,
             select_down_at: None,
+            select_home_consumed: false,
             select_chorded: false,
             select_forwarded: false,
             select_tap_frames: 0,
@@ -802,6 +829,7 @@ impl Engine {
         self.rewind_accum = 0.0;
         self.game_accum = 0.0;
         self.select_down_at = None;
+        self.select_home_consumed = false;
         self.select_chorded = false;
         self.select_forwarded = false;
         self.select_tap_frames = 0;
@@ -1220,6 +1248,7 @@ impl Engine {
                 self.mode_down_at = None;
                 self.mode_last_tap = None;
                 self.home_launch_held = false;
+                self.select_home_consumed = false;
                 self.a_down_at = None;
                 self.polaroids = None;
                 // Android calls Reset onPause. Retain the *native menu* behind
@@ -1297,6 +1326,7 @@ impl Engine {
                 self.fresh_launch = false;
                 self.mode_down_at = None;
                 self.mode_last_tap = None;
+                self.select_home_consumed = false;
                 self.polaroids = None;
                 self.requested_uri = None;
                 self.prepared_rom = None;
@@ -1355,6 +1385,38 @@ impl Engine {
                 }
             }
             Input::Key(code, pressed) => {
+                if code == 110 {
+                    match select_home_action(
+                        pressed,
+                        self.select_down_at.is_some(),
+                        self.game.is_some(),
+                        matches!(self.overlay, ShelfOverlay::None | ShelfOverlay::GameMenu { .. }),
+                        &mut self.select_home_consumed,
+                    ) {
+                        SelectHomeAction::Swallow => return,
+                        SelectHomeAction::OpenLink => {
+                            // The SELECT+HOME gesture belongs to Slot, not to
+                            // libretro or Android's normal HOME handler.
+                            self.select_down_at = None;
+                            self.select_chorded = true;
+                            self.select_forwarded = false;
+                            self.select_tap_frames = 0;
+                            self.buttons = 0;
+                            self.mode_down_at = None;
+                            self.mode_last_tap = None;
+                            self.game_accum = 0.0;
+                            if self.game.as_ref().is_some_and(GameSession::linked) {
+                                // Exactly like upstream: a live link opens its
+                                // existing disconnect controls, not a new Host.
+                                self.overlay = ShelfOverlay::GameMenu { row: 1 };
+                            } else {
+                                self.enter_multiplayer_menu();
+                            }
+                            return;
+                        }
+                        SelectHomeAction::Pass => {}
+                    }
+                }
                 if code == 110 && matches!(self.overlay, ShelfOverlay::Multiplayer) {
                     if !pressed {
                         self.cancel_link_discovery();
@@ -3275,6 +3337,46 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 #[cfg(test)]
 mod ui_feedback_tests {
     use super::*;
+
+    #[test]
+    fn select_home_opens_link_once_then_consumes_repeat_and_release() {
+        let mut consumed = false;
+        assert_eq!(select_home_action(true, true, true, true, &mut consumed),
+            SelectHomeAction::OpenLink);
+        assert!(consumed);
+        // Android may issue HOME auto-repeat while SELECT is still held.
+        assert_eq!(select_home_action(true, true, true, true, &mut consumed),
+            SelectHomeAction::Swallow);
+        assert_eq!(select_home_action(false, false, true, true, &mut consumed),
+            SelectHomeAction::Swallow);
+        assert!(!consumed);
+        assert_eq!(select_home_action(false, false, true, true, &mut consumed),
+            SelectHomeAction::Pass);
+    }
+
+    #[test]
+    fn select_home_never_hijacks_shelf_menu_or_state_browser() {
+        let mut consumed = false;
+        for (select, playing, menu_allowed) in [
+            (false, true, true),
+            (true, false, true),
+            (true, true, false),
+        ] {
+            assert_eq!(select_home_action(true, select, playing, menu_allowed,
+                &mut consumed), SelectHomeAction::Pass);
+            assert!(!consumed);
+        }
+    }
+
+    #[test]
+    fn home_alone_keeps_original_quick_menu_and_long_eject_paths() {
+        let mut consumed = false;
+        assert_eq!(select_home_action(true, false, true, true, &mut consumed),
+            SelectHomeAction::Pass);
+        assert_eq!(select_home_action(false, false, true, true, &mut consumed),
+            SelectHomeAction::Pass);
+        assert!(!consumed);
+    }
 
     #[test]
     fn avd_short_tap_is_held_until_one_actual_core_frame() {
