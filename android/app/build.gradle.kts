@@ -13,8 +13,8 @@ android {
         targetSdk = 32
         // Isolated Multiplayer Lab preview: never confuse with the physical Beta5
         // or the separate Beta6 diagnostic APK. No install without save backup.
-        versionCode = 73
-        versionName = "0.1.0-rc5-mlab-a3"
+        versionCode = 74
+        versionName = "0.1.0-rc5-mlab-a4"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
