@@ -1137,19 +1137,15 @@ impl Engine {
                 }
             }
         }
-        if let LinkMenu::Linked { since, opened: false, .. } = self.link_phase {
-            if self.link_millis().saturating_sub(since) >= 1000 {
-                self.overlay = ShelfOverlay::None;
-                self.game_accum = 0.0;
-                self.buttons = 0;
-            }
+        if link_menu_auto_closes(self.link_phase, self.link_millis()) {
+            self.overlay = ShelfOverlay::None;
+            self.game_accum = 0.0;
+            self.buttons = 0;
         }
-        if let LinkMenu::Unplug { since, .. } = self.link_phase {
+        if link_unplug_complete(self.link_phase, self.link_millis()) {
             // Original Slot unplug travel is 260ms; the linked cartridge
             // then requires a safe eject/relaunch rather than solo play.
-            if self.link_millis().saturating_sub(since) >= 260 {
-                self.overlay = ShelfOverlay::GameMenu { row: 2 };
-            }
+            self.overlay = ShelfOverlay::GameMenu { row: 2 };
         }
     }
 
@@ -3322,6 +3318,19 @@ impl Engine {
     }
 }
 
+/// Only the initial "Linked" seating animation is self-dismissing.
+/// Reopening from SELECT+HOME must keep End Link/Back visible until input.
+fn link_menu_auto_closes(phase: LinkMenu, now: u64) -> bool {
+    matches!(phase, LinkMenu::Linked { since, opened: false, .. }
+        if now.saturating_sub(since) >= 1000)
+}
+
+/// Use the exact 260ms Slot link adapter unplug animation.
+fn link_unplug_complete(phase: LinkMenu, now: u64) -> bool {
+    matches!(phase, LinkMenu::Unplug { since, .. }
+        if now.saturating_sub(since) >= 260)
+}
+
 /// A clean install has three shelves but zero cartridges. Never enqueue
 /// nonexistent artwork for the first draw (or after clearing the library).
 fn selected_prefetch_entry(shelves: &[Shelf], active: usize) -> Option<(usize, usize)> {
@@ -3409,6 +3418,34 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 #[cfg(test)]
 mod ui_feedback_tests {
     use super::*;
+
+    #[test]
+    fn linked_reopen_stays_visible_and_unplug_uses_original_timing() {
+        let first = LinkMenu::Linked {
+            role: LinkRow::Host, worked: 100, since: 200, opened: false,
+        };
+        let reopened = LinkMenu::Linked {
+            role: LinkRow::Host, worked: 100, since: 200, opened: true,
+        };
+        assert!(!link_menu_auto_closes(first, 1199));
+        assert!(link_menu_auto_closes(first, 1200));
+        assert!(!link_menu_auto_closes(reopened, 20000));
+        let unplug = LinkMenu::Unplug { role: LinkRow::Join, since: 500 };
+        assert!(!link_unplug_complete(unplug, 759));
+        assert!(link_unplug_complete(unplug, 760));
+        assert!(!link_unplug_complete(first, 10000));
+    }
+
+    #[test]
+    fn connected_link_keycaps_fit_konkr_screen() {
+        let linked_width = slot_ui::hint_width("B", "Back")
+            + slot_ui::hint_width("A", "End Link");
+        let failed_width = slot_ui::hint_width("A", "OK")
+            + slot_ui::hint_width("B", "Back");
+        for width in [linked_width, failed_width] {
+            assert!((width as f32) + 15.0 < OUT_W as f32 - 60.0);
+        }
+    }
 
     #[test]
     fn select_home_opens_link_once_then_consumes_repeat_and_release() {
