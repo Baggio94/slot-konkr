@@ -143,12 +143,24 @@ jobs:
           bash scripts/build-konkr-x86-android.sh
           export SLOT_KONKR_VERSION="$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' android/app/build.gradle.kts | head -1)"
           cargo ndk -t x86_64 -o android/app/src/main/jniLibs build --release -p slot-android
-          STRIP="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -type f -name llvm-strip -print -quit)"
-          test -x "$STRIP"
+          # llvm-strip is frequently a symlink; find -type f silently skips
+          # it and test -x "" aborts the job after a successful JNI build.
+          STRIP=""
+          for candidate in "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-strip; do
+            if [ -x "$candidate" ]; then STRIP="$candidate"; break; fi
+          done
+          if [ -z "$STRIP" ]; then
+            echo "::error::NDK llvm-strip executable not found (including symlinks)"
+            exit 1
+          fi
           for lib in slot_android mgba_libretro gpsp_libretro; do
             file="android/app/src/main/jniLibs/x86_64/lib${lib}.so"
-            test -s "$file"
+            if [ ! -s "$file" ]; then
+              echo "::error::x86_64 library missing: $file"
+              exit 1
+            fi
             "$STRIP" --strip-unneeded "$file"
+            echo "Stripped x86_64 library: $file"
           done
       - name: Checkout official Slot revision required by Cart Studio
         uses: actions/checkout@v4
