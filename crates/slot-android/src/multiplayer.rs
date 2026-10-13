@@ -3,14 +3,18 @@
 //! No blocking socket or DNS-SD work may execute on the GLSurfaceView GL thread.
 //! On-wire discovery, greeting and TCP frame packing are the fork's GPL code.
 
-use std::io;
+use std::io::{self, Read};
+use std::fs::File;
+use std::path::{Path, PathBuf};
+use ring::digest::{Context, SHA256};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::Duration;
 
 use crate::link_lan::{self, Advertiser, HostInfo, Multicast};
-use crate::link_net::{Cancel, TcpLink};
+use crate::link_net::{Cancel, TcpLink, LabGreeting};
+use crate::link_kind::LinkKind;
 
 const PORT: u16 = 7211;
 const BOUND: Duration = Duration::from_secs(30);
@@ -42,25 +46,90 @@ pub fn game_code(raw: &str) -> Option<String> {
         .then(|| raw.to_owned())
 }
 
-fn connect(role: Role, local: Ipv4Addr, game: &str, cancel: &Cancel) -> io::Result<TcpLink> {
+/// Keep all identity work off the GL thread. No ROM, core or BIOS bytes
+/// are transmitted; a hash mismatch fails before replacing the solo core.
+#[derive(Clone, Debug)]
+pub struct LinkConfig {
+    pub game: String,
+    pub rom: PathBuf,
+    pub core_file: PathBuf,
+    pub bios_file: PathBuf,
+    pub backend: Backend,
+    pub mode: LinkKind,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Backend { MgbaSlotCable, GpspNetpacket }
+
+fn sha256_file(path: &Path, max_size: u64) -> io::Result<[u8; 32]> {
+    let mut file = File::open(path)?;
+    let size = file.metadata()?.len();
+    if size == 0 || size > max_size {
+        return Err(io::Error::new(io::ErrorKind::InvalidData,
+            "Invalid Multiplayer fingerprint file size"));
+    }
+    let mut digest = Context::new(&SHA256);
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 { break; }
+        digest.update(&buffer[..n]);
+    }
+    let result = digest.finish();
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(result.as_ref());
+    Ok(hash)
+}
+
+impl LinkConfig {
+    fn fingerprint(&self) -> io::Result<LabGreeting> {
+        let code = game_code(&self.game).ok_or_else(||
+            io::Error::new(io::ErrorKind::InvalidInput, "Invalid Multiplayer GBA header code"))?;
+        if self.backend == Backend::MgbaSlotCable && self.mode != LinkKind::Cable {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput,
+                "mGBA Slot Link supports Cable only"));
+        }
+        let game: [u8; 4] = code.as_bytes().try_into()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Invalid game code"))?;
+        let bios_sha256 = if self.bios_file.is_file() {
+            sha256_file(&self.bios_file, 1024 * 1024)?
+        } else { [0u8; 32] };
+        Ok(LabGreeting {
+            game,
+            backend: match self.backend {
+                Backend::MgbaSlotCable => 1, Backend::GpspNetpacket => 2,
+            },
+            mode: match self.mode {
+                LinkKind::Cable => 1, LinkKind::Wireless => 2,
+            },
+            rom_sha256: sha256_file(&self.rom, 128 * 1024 * 1024)?,
+            core_sha256: sha256_file(&self.core_file, 64 * 1024 * 1024)?,
+            bios_sha256,
+        })
+    }
+}
+
+fn connect(role: Role, local: Ipv4Addr, config: &LinkConfig,
+           cancel: &Cancel) -> io::Result<TcpLink> {
     if local.is_unspecified() || local.is_loopback() || local.is_multicast()
         || local.is_link_local() || local.is_broadcast() {
         return Err(io::Error::new(io::ErrorKind::AddrNotAvailable,
             "no usable Wi-Fi IPv4 address"));
     }
+    let fingerprint = config.fingerprint()?;
     match role {
         Role::Host => {
             // Validate multicast and join the correct interface before announcing.
             let wire = Multicast::open(local)?;
             let info = HostInfo {
                 instance: link_lan::instance_name(),
-                addr: local, port: PORT, game: game.to_owned(),
+                addr: local, port: PORT, game: config.game.clone(),
             };
             let mut advert: Option<Advertiser> = None;
             // Bind TCP before publishing mDNS, so discovery never races the listener.
-            // The exact SLOT/1 + game-code greeting is validated by TcpLink.
-            let result = TcpLink::host_greeted_until(
-                &local.to_string(), PORT, BOUND, cancel, game,
+            // New Lab v2 handshake is isolated from legacy SLOT/1 on Beta5.
+            let result = TcpLink::host_lab_greeted_until(
+                &local.to_string(), PORT, BOUND, cancel, &fingerprint,
                 || advert = Some(Advertiser::start_with(Box::new(wire), info)),
             );
             drop(advert); // Publish DNS-SD goodbye on both success and failure.
@@ -68,8 +137,8 @@ fn connect(role: Role, local: Ipv4Addr, game: &str, cancel: &Cancel) -> io::Resu
         }
         Role::Join => {
             let mut wire = Multicast::open(local)?;
-            link_lan::find(&mut wire, game, cancel, BOUND, |addr| {
-                TcpLink::join_greeted(addr.into(), game)
+            link_lan::find(&mut wire, &config.game, cancel, BOUND, |addr| {
+                TcpLink::join_lab_greeted(addr.into(), &fingerprint)
             })
         }
     }
@@ -83,16 +152,16 @@ pub struct LinkStarter {
 }
 
 impl LinkStarter {
-    pub fn spawn(role: Role, local: Ipv4Addr, game: &str) -> io::Result<Self> {
-        let code = game_code(game).ok_or_else(|| io::Error::new(
-            io::ErrorKind::InvalidInput, "GBA cart has no valid 4-character game code",
-        ))?;
+    pub fn spawn(role: Role, local: Ipv4Addr, config: LinkConfig) -> io::Result<Self> {
+        if game_code(&config.game).is_none() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid GBA Link code"));
+        }
         let (tx, events) = mpsc::channel();
         let cancel = Cancel::new();
         let worker_cancel = cancel.clone();
         thread::spawn(move || {
             let _ = tx.send(Progress::Looking);
-            let result = connect(role, local, &code, &worker_cancel);
+            let result = connect(role, local, &config, &worker_cancel);
             let report = match result {
                 Ok(link) if !worker_cancel.is_cancelled() => Progress::Ready(link),
                 Ok(_) => Progress::Failed(Failure::Cancelled),
@@ -105,13 +174,13 @@ impl LinkStarter {
         Ok(Self { events, cancel })
     }
 
-    /// Android Emulator is behind a NAT that does not support IGMP. Allow
-    /// emulator Join to use a physical KONKR's explicitly supplied LAN IP,
-    /// while retaining SLOT/1 + ROM-code authentication and all async guards.
-    pub fn spawn_direct_join(local: Ipv4Addr, host: Ipv4Addr, game: &str) -> io::Result<Self> {
-        let code = game_code(game).ok_or_else(|| io::Error::new(
-            io::ErrorKind::InvalidInput, "Game has no valid GBA Link code",
-        ))?;
+    /// The Emulator NAT does not support IGMP. Direct-IP Join uses the
+    /// same strict Lab v2 fingerprint as mDNS and cannot downgrade to SLOT/1.
+    pub fn spawn_direct_join(local: Ipv4Addr, host: Ipv4Addr,
+                             config: LinkConfig) -> io::Result<Self> {
+        if game_code(&config.game).is_none() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid GBA Link code"));
+        }
         if local.is_unspecified() || local.is_loopback() || local.is_multicast() ||
             local.is_link_local() || host.is_unspecified() || host.is_loopback() ||
             host.is_link_local() || host.is_multicast() || host.is_broadcast() ||
@@ -127,7 +196,8 @@ impl LinkStarter {
             let result = if worker_cancel.is_cancelled() {
                 Err(io::Error::new(io::ErrorKind::Interrupted, "Join cancelled"))
             } else {
-                TcpLink::join_greeted(SocketAddrV4::new(host, PORT).into(), &code)
+                config.fingerprint().and_then(|fingerprint|
+                    TcpLink::join_lab_greeted(SocketAddrV4::new(host, PORT).into(), &fingerprint))
             };
             let report = match result {
                 Ok(link) if !worker_cancel.is_cancelled() => Progress::Ready(link),
@@ -165,21 +235,27 @@ mod tests {
         }
     }
 
+    fn test_config(code: &str) -> LinkConfig {
+        LinkConfig { game: code.into(), rom: PathBuf::from("unused.gba"),
+            core_file: PathBuf::from("unused.so"),
+            bios_file: PathBuf::from("unused.bin"), backend: Backend::MgbaSlotCable,
+            mode: LinkKind::Cable }
+    }
     #[test]
     fn direct_join_rejects_public_and_loopback_addresses() {
         for invalid in [Ipv4Addr::LOCALHOST, Ipv4Addr::BROADCAST,
             Ipv4Addr::new(8, 8, 8, 8), Ipv4Addr::new(224, 0, 0, 251)] {
-            assert!(LinkStarter::spawn_direct_join(Ipv4Addr::new(10,0,2,16), invalid, "BPRE").is_err());
+            assert!(LinkStarter::spawn_direct_join(Ipv4Addr::new(10,0,2,16), invalid, test_config("BPRE")).is_err());
         }
         assert!(LinkStarter::spawn_direct_join(Ipv4Addr::new(10,0,2,16),
-            Ipv4Addr::new(192,168,68,84), "bad").is_err());
+            Ipv4Addr::new(192,168,68,84), test_config("bad")).is_err());
     }
 
     #[test]
     fn connection_never_uses_loopback_or_unspecified_wifi() {
         for local in [Ipv4Addr::LOCALHOST, Ipv4Addr::UNSPECIFIED,
                       Ipv4Addr::new(224,0,0,251), Ipv4Addr::BROADCAST] {
-            let err = connect(Role::Host, local, "BPRE", &Cancel::new()).err().unwrap();
+            let err = connect(Role::Host, local, &test_config("BPRE"), &Cancel::new()).err().unwrap();
             assert_eq!(err.kind(), io::ErrorKind::AddrNotAvailable);
         }
     }
