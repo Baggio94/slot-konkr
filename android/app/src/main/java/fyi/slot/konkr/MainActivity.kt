@@ -97,6 +97,7 @@ class MainActivity : Activity() {
     external fun nativeExternalReturn()
     external fun nativePerformanceStats(): String?
     external fun nativeShelfIndicatorFlags(): Int
+    external fun nativeSetShelfStatus(code: Int)
     external fun nativeSetLibrary(json: String): Int
     external fun nativeConfigure(dataDir: String, libraryDir: String)
     external fun nativePollLaunchUri(): String?
@@ -326,13 +327,8 @@ class MainActivity : Activity() {
             if (::shelfStatus.isInitialized) {
                 val flags = nativeShelfIndicatorFlags()
                 shelfStatus.refresh(flags)
-                // Slot owns menu/onboarding drawing. Never show native Android
-                // scan/error status across an open menu or active game.
-                if (::status.isInitialized) {
-                    val shouldShow = status.text.isNotBlank() && (flags and 1) != 0
-                    val target = if (shouldShow) View.VISIBLE else View.GONE
-                    if (status.visibility != target) status.visibility = target
-                }
+                // Library feedback and START are rendered inside Slot's
+                // GL carousel, not overlaid by an Android TextView.
             }
             pollRumble()
             updateDisplaySyncMode()
@@ -515,7 +511,15 @@ class MainActivity : Activity() {
     }
     private val scanSerial = AtomicInteger()
     private var lastStatusPoll: Long = -15000L
-    private lateinit var status: TextView
+    // Fixed native shelf states mirror SHELF_STATUS_TEXT in runtime.rs.
+    private val shelfNone = 0
+    private val shelfScanning = 1
+    private val shelfEmpty = 2
+    private val shelfImportError = 3
+    private val shelfPermissionExpired = 4
+    private val shelfReadError = 5
+    private val shelfPickerError = 6
+    private val shelfPermissionError = 7
 
     private lateinit var view: GLSurfaceView
     private var startupSplash: View? = null
@@ -575,21 +579,8 @@ class MainActivity : Activity() {
         val frame = FrameLayout(this)
         frame.addView(view, FrameLayout.LayoutParams(-1, -1))
         shelfStatus = SlotStatusIndicators(this, frame)
-        status = TextView(this).apply {
-            typeface = SlotUi.font(this@MainActivity)
-            letterSpacing = .09f
-            setTextColor(SlotUi.ink)
-            setBackgroundColor(Color.TRANSPARENT)
-            textSize = 15f
-            gravity = Gravity.CENTER
-            setPadding(12, 12, 12, 12)
-        }
-        frame.addView(
-            status,
-            FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply {
-                topMargin = (76 * resources.displayMetrics.density).toInt()
-            }
-        )
+        // There is no Android status view: the native Slot renderer owns all
+        // shelf messages and controller hints, even during ROM rescanning.
         performanceHud = TextView(this).apply {
             typeface = SlotUi.font(this@MainActivity)
             textSize = 10.5f
@@ -642,13 +633,11 @@ class MainActivity : Activity() {
                 }) {
                 if (!restoreCachedLibrary(uri)) scanFolder(uri)
             } else {
-                status.text = "Games folder access expired. Choose it again. — START to choose again"
+                nativeSetShelfStatus(shelfPermissionExpired)
             }
         } else {
-            // First-run START keycap is now rendered by the native Slot GL
-            // renderer; no Android TextView must float above the carousel.
-            status.text = ""
-            status.visibility = View.GONE
+            // The native first-run keycap appears on an empty shelf.
+            nativeSetShelfStatus(shelfNone)
         }
     }
 
@@ -1393,7 +1382,8 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             startActivityForResult(intent, FOLDER_REQUEST)
         } catch (error: ActivityNotFoundException) {
-            status.text = "Can't open the folder picker: " + error.message
+            nativeSetShelfStatus(shelfPickerError)
+            Log.w(TAG, "Android folder picker unavailable", error)
         }
     }
 
@@ -1648,7 +1638,7 @@ class MainActivity : Activity() {
             }
         } catch (error: SecurityException) {
             if (requestCode == FOLDER_REQUEST) {
-                status.text = "Cannot keep ROM folder permission — choose another folder"
+                nativeSetShelfStatus(shelfPermissionError)
             } else {
                 SlotToast.makeText(this, "This folder needs storage access. Please select it again.", Toast.LENGTH_LONG).show()
             }
@@ -1671,10 +1661,9 @@ class MainActivity : Activity() {
             val count = setStudioOverrides(games.toString())
             if (count < 0) return false
             if (count == 0) {
-                status.visibility = View.VISIBLE
-                status.text = "No .gb/.gbc/.gba games found — START choose another folder"
+                nativeSetShelfStatus(shelfEmpty)
             } else {
-                status.visibility = View.GONE
+                nativeSetShelfStatus(shelfNone)
             }
             Log.i(TAG, "Restored $count cached ROMs without a SAF rescan")
             true
@@ -1710,8 +1699,7 @@ class MainActivity : Activity() {
 
     private fun scanFolder(uri: Uri) {
         val serial = scanSerial.incrementAndGet()
-        status.visibility = View.VISIBLE
-        status.text = "Scanning GB / GBC / GBA cartridges…"
+        nativeSetShelfStatus(shelfScanning)
         scanner.execute {
             try {
                 val result = RomLibrary.scan(this, uri)
@@ -1728,11 +1716,11 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
                     if (count < 0) {
-                        status.text = "Library import failed — START to retry"
+                        nativeSetShelfStatus(shelfImportError)
                     } else if (count == 0) {
-                        status.text = "No .gb/.gbc/.gba games found — START choose another folder"
+                        nativeSetShelfStatus(shelfEmpty)
                     } else {
-                        status.visibility = View.GONE
+                        nativeSetShelfStatus(shelfNone)
                         val note = if (result.truncated) " (limited to 5000)" else ""
                         SlotToast.makeText(this, "Library ready: " + count + " carts" + note, Toast.LENGTH_LONG).show()
                     }
@@ -1741,8 +1729,7 @@ class MainActivity : Activity() {
                 Log.e(TAG, "SAF cartridge scan failed", error)
                 runOnUiThread {
                     if (!isDestroyed && scanSerial.get() == serial) {
-                        status.visibility = View.VISIBLE
-                        status.text = "Cannot read ROM folder — START to choose again"
+                        nativeSetShelfStatus(shelfReadError)
                     }
                 }
             }
