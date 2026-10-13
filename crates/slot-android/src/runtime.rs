@@ -410,6 +410,9 @@ struct Engine {
     link_identity: Option<crate::link_rom::GbaIdentity>,
     link_role: LinkRow,
     link_mode: LinkKind,
+    // Optional mode chosen from original Slot's SELECT Mode key. Reset on
+    // each new cartridge; keep it when returning from a cancelled link menu.
+    link_mode_override: Option<LinkKind>,
     link_phase: LinkMenu,
     link_worked_at: u64,
     link_starter: Option<LinkStarter>,
@@ -454,6 +457,7 @@ struct Engine {
     shelf_status_start: (slot_gfx::TexId, u32),
     game_menu_hints: [(slot_gfx::TexId, u32); 3],
     link_hints: [(slot_gfx::TexId, u32); 3],
+    link_switch_hints: [(slot_gfx::TexId, u32); 4],
     link_connected_hints: [(slot_gfx::TexId, u32); 2],
     link_failed_hints: [(slot_gfx::TexId, u32); 2],
     board_texture: Option<slot_gfx::TexId>,
@@ -619,6 +623,16 @@ impl Engine {
                 let face = hint_face(key, label);
                 (gpu.create_texture(face.w, face.h, &face.rgba), face.w)
             });
+        // Upstream has SELECT Mode in the picker when Cable/RFU is truly
+        // switchable. Reuse exactly its hint and arrow primitives.
+        let link_switch_hints = [
+            hint_face("B", "Cancel"),
+            hint_face("SELECT", "Mode"),
+            arrows_hint_face("Swap"),
+            hint_face("A", "Link"),
+        ].map(|face| {
+            (gpu.create_texture(face.w, face.h, &face.rgba), face.w)
+        });
         let setting_values = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
@@ -731,6 +745,7 @@ impl Engine {
             link_identity: None,
             link_role: LinkRow::Host,
             link_mode: LinkKind::Cable,
+            link_mode_override: None,
             link_phase: LinkMenu::Pick(LinkRow::Host),
             link_worked_at: 0,
             link_starter: None,
@@ -773,6 +788,7 @@ impl Engine {
             shelf_status_start,
             game_menu_hints,
             link_hints,
+            link_switch_hints,
             link_connected_hints,
             link_failed_hints,
             board_texture: None,
@@ -994,8 +1010,9 @@ impl Engine {
                 set_message("This GBA game's link protocol is not yet verified in gpSP. Try Pokemon FireRed or Emerald.".into());
                 return;
             }
-            self.link_mode = link_kind::link_kind(&identity.code, &identity.title,
+            let automatic = link_kind::link_kind(&identity.code, &identity.title,
                 identity.clean_header);
+            self.link_mode = self.link_mode_override.unwrap_or(automatic);
         }
         self.cancel_link_discovery();
         self.link_role = LinkRow::Host;
@@ -1367,6 +1384,7 @@ impl Engine {
                 self.requested_uri = None;
                 self.prepared_rom = None;
                 self.link_identity = None;
+                self.link_mode_override = None;
                 self.game_emulation = None;
                 *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = None;
             }
@@ -2241,6 +2259,7 @@ impl Engine {
                     self.link_identity = if platform == Platform::Gba {
                         crate::link_rom::identify(Path::new(local)).ok()
                     } else { None };
+                    self.link_mode_override = None;
                     // Create libretro on the same GL thread, but defer audio
                     // and CRT presentation until Slot's seated hold completes.
                     crate::game::log_launch_timing(&format!(
@@ -2581,6 +2600,7 @@ impl Engine {
         // The footer follows original Slot Link phase transitions: only
         // Pick offers A Link / role swap, only a reopened link offers End.
         let hints: &[(slot_gfx::TexId, u32)] = match self.link_phase {
+            LinkMenu::Pick(_) if self.link_mode_switchable() => &self.link_switch_hints,
             LinkMenu::Pick(_) => &self.link_hints,
             LinkMenu::Working { .. } => &self.link_hints[..1],
             LinkMenu::Linked { opened: true, .. } => &self.link_connected_hints,
