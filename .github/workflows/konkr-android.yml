@@ -25,6 +25,7 @@ on:
       - 'scripts/patch-mgba-speculative-audio.py'
       - 'scripts/patch-gpsp-speculative-audio.py'
       - 'scripts/package-konkr-cart-studio.py'
+      - 'scripts/slot-kpa-mac-link-bridge.py'
       - '.github/workflows/konkr-android.yml'
 
 concurrency:
@@ -82,6 +83,10 @@ jobs:
               assert width > 20 and height == 24, (name, width, height)
               print(f'Verified authentic Slot legend {name}: {width}x{height}')
           PY
+      - name: Test native Mac Link bridge discovery framing
+        run: |
+          python3 -m py_compile scripts/slot-kpa-mac-link-bridge.py
+          python3 scripts/slot-kpa-mac-link-bridge.py --self-test
       - name: Test Android library and shelf selection
         run: cargo test -p slot-android --lib
       - name: Install cargo-ndk
