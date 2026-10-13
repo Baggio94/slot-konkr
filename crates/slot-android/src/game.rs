@@ -48,7 +48,9 @@ pub struct GameSession {
     // A linked mGBA state may contain TWO cores, incompatible with solo
     // RetroArch .state files. Never overwrite solo timeline after link use.
     link_touched: bool,
-    // Isolated GBA Link sessions never share SRAM, RTC or states with solo/RetroArch.
+    // Isolated mGBA OR gpSP Link core boot. Apart from app-controlled SRAM,
+    // libretro's GET_SAVE_DIRECTORY must itself point into this private root.
+    // No running solo gpSP may have its save paths redirected in-place.
     linked_boot: Option<Role>,
     // Upstream gpSP serial hardware mode selected before retro_load_game.
     // Changing auto/rfu/mul_poke requires reloading the core, never a
@@ -128,6 +130,23 @@ impl GameSession {
             Some(solo_state))
     }
 
+    /// gpSP requires a NEW libretro instance whose GET_SAVE_DIRECTORY is
+    /// private from the moment retro_load_game runs. Merely redirecting
+    /// GameSession.save/.rtc on a live solo core does not isolate libretro's
+    /// own cached directory pointer or potential core-side battery writes.
+    pub fn open_gpsp_linked(rom: &Path, core_file: &Path, storage: &Path,
+                            rom_stem: &str, colour_correction: bool,
+                            role: Role, solo_state: &[u8],
+                            serial: &'static str) -> Result<Self, String> {
+        if !matches!(serial, "auto" | "rfu" | "mul_poke" | "mul_aw1" | "mul_aw2") {
+            return Err("Unsupported gpSP Link serial mode".into());
+        }
+        crate::linked_storage::validate_solo_snapshot(solo_state)?;
+        Self::open_internal(rom, core_file, storage, Core::Gpsp, Platform::Gba,
+            false, rom_stem, None, colour_correction, None, Some(role), serial,
+            Some(solo_state))
+    }
+
     fn open_internal(rom: &Path, core_file: &Path, storage: &Path,
                      which: Core, platform: Platform, resume_state: bool,
                      rom_stem: &str, gb_palette: Option<&str>,
@@ -137,10 +156,10 @@ impl GameSession {
                      gpsp_serial: &'static str,
                      linked_resume: Option<&[u8]>) -> Result<Self, String> {
         let opening_at = Instant::now();
-        if linked_boot.is_some() && (which != Core::Mgba || platform != Platform::Gba ||
+        if linked_boot.is_some() && (platform != Platform::Gba ||
             resume_state || achievements.is_some()) ||
             (linked_boot.is_some() != linked_resume.is_some()) {
-            return Err("Invalid mGBA Multiplayer boot configuration".into());
+            return Err("Invalid isolated Multiplayer boot configuration".into());
         }
         if !rom.exists() || !core_file.exists() {
             return Err(format!("ROM cache or {} core missing", which.text()));
@@ -163,7 +182,7 @@ impl GameSession {
         // Host/Join files and every earlier session remain untouched.
         let core_root = if let Some(role) = linked_boot {
             let name = if role == Role::Host { "host" } else { "join" };
-            crate::linked_storage::fresh_session(&root, id, name)
+            crate::linked_storage::fresh_session_for_core(&root, which.text(), id, name)
                 .map_err(|e| format!("Cannot allocate private Link session: {e}"))?
         } else { solo_core_root.clone() };
         std::fs::create_dir_all(&core_root).map_err(|e| e.to_string())?;
@@ -286,21 +305,30 @@ impl GameSession {
                 eprintln!("slot-konkr: RTC restore skipped: {error}");
             }
         }
-        // Restore the two-GBA engine from the exact live solo snapshot:
-        // original Slot's Worker::for_core wraps this state as SLK1.
-        // mGBA accepts two independent states and the subsequent
-        // network exchange replaces the peer half with their real state.
-        // NEVER fall back to a fresh title-screen pair on a failed restore.
+        // Both Link cores start from this player's exact live SOLO snapshot
+        // and private SRAM/RTC. mGBA wraps it as a two-GBA SLK1 container;
+        // gpSP restores the original single-GBA state in a NEW sandboxed
+        // core with the desired serial mode already set before ROM load.
+        // Neither may silently restart at the title screen on a bad state.
         if let Some(solo) = linked_resume {
-            let combined = crate::link_state::pair(solo);
-            core.unserialize(&combined).map_err(|error|
-                format!("Cannot restore live solo game into Link engine: {error}"))?;
-            let verified = core.serialize().map_err(|error|
-                format!("Cannot verify new SLK1 link session: {error}"))?;
-            if !crate::link_state::is_pair(&verified) {
-                return Err("mGBA Link restored without two-GBA SLK1 state".into());
+            if which == Core::Mgba {
+                let combined = crate::link_state::pair(solo);
+                core.unserialize(&combined).map_err(|error|
+                    format!("Cannot restore live solo game into Link engine: {error}"))?;
+                let verified = core.serialize().map_err(|error|
+                    format!("Cannot verify new SLK1 link session: {error}"))?;
+                if !crate::link_state::is_pair(&verified) {
+                    return Err("mGBA Link restored without two-GBA SLK1 state".into());
+                }
+                log_launch_timing("mGBA Link: loaded live solo progress into isolated SLK1 pair");
+            } else {
+                core.unserialize(solo).map_err(|error|
+                    format!("Cannot restore live gpSP progress into private Link core: {error}"))?;
+                let verified = core.serialize().map_err(|error|
+                    format!("Cannot verify private gpSP Link restore: {error}"))?;
+                crate::linked_storage::validate_solo_snapshot(&verified)?;
+                log_launch_timing("gpSP Link: loaded solo progress into private libretro save directory");
             }
-            log_launch_timing("mGBA Link: loaded live solo progress into isolated SLK1 pair");
         }
         // Switching GBA emulation cores can import a newer battery save from
         // the other core. A stale same-core .state.auto would roll progress
@@ -421,56 +449,32 @@ impl GameSession {
         if self.link_touched {
             return Err("Relaunch cartridge before another link".into());
         }
-        if let Some(boot_role) = self.linked_boot {
-            if self.core_kind != Core::Mgba || boot_role != role || mode != LinkKind::Cable || self.core.supports_netpacket() {
-                return Err("mGBA Link session requires the matching role, Cable mode, and local lockstep".into());
+        // Both cores are booted in immutable fresh private Link sessions.
+        // For gpSP that includes libretro's GET_SAVE_DIRECTORY, not only
+        // Slot's own SRAM/RTC writers. Refuse an in-place solo gpSP Link.
+        let Some(boot_role) = self.linked_boot else {
+            return Err("Reopen the core in a private Link session before connecting".into());
+        };
+        if boot_role != role {
+            return Err("Private Link session role does not match network role".into());
+        }
+        match self.core_kind {
+            Core::Mgba => {
+                if mode != LinkKind::Cable || self.core.supports_netpacket() {
+                    return Err("mGBA Link requires Cable lockstep".into());
+                }
+                let state = self.core.serialize().map_err(|e| e.to_string())?;
+                if !crate::link_state::is_pair(&state) {
+                    return Err("mGBA Link core did not initialize an SLK1 two-GBA state".into());
+                }
             }
-            // Host snapshot must contain both GBAs. A solo state cannot be
-            // exchanged or restored into this linked engine.
-            let state = self.core.serialize().map_err(|e| e.to_string())?;
-            if !crate::link_state::is_pair(&state) {
-                return Err("mGBA Link core did not initialize an SLK1 two-GBA state".into());
-            }
-        } else {
-            if self.core_kind != Core::Gpsp {
-                return Err("Solo mGBA cannot enter Link; reopen with mGBA Link enabled".into());
-            }
-            if !self.core.supports_netpacket() {
-                return Err("gpSP did not register GBA serial/RFU netpacket callbacks".into());
+            Core::Gpsp => {
+                if !self.core.supports_netpacket() {
+                    return Err("gpSP did not register GBA serial/RFU netpacket callbacks".into());
+                }
             }
         }
-        // The auto-detected serial mode must be decided when the cartridge is
-        // loaded. Never attempt to switch RFU to Cable on a running gpSP core.
-        //
-        // gpSP is still a live SOLO instance at this point. Checkpoint its
-        // state/SRAM/RTC BEFORE attaching the wire, then redirect every
-        // subsequent battery write to a NEW private session. Otherwise an
-        // in-game SRAM flush, Suspend or Save & Eject overwrites solo progress
-        // with multiplayer data, unlike the isolated dual-mGBA boot.
-        let gpsp_battery = if self.linked_boot.is_none() {
-            self.preserve_solo_for_link()?;
-            let root = self.state.parent().ok_or("Missing solo saves directory")?;
-            let game_id = self.rom_path.file_stem().and_then(|id| id.to_str())
-                .ok_or("Missing cached ROM identity")?;
-            let role_name = if role == Role::Host { "host" } else { "join" };
-            let private = crate::linked_storage::fresh_session_for_core(
-                root, "gpSP", game_id, role_name)
-                .map_err(|e| format!("Cannot allocate private gpSP Link session: {e}"))?;
-            let private_save = private.join(
-                self.save.file_name().ok_or("Invalid solo SRAM path")?);
-            let private_rtc = private.join(
-                self.rtc.file_name().ok_or("Invalid solo RTC path")?);
-            for (source, target) in [(&self.save, &private_save), (&self.rtc, &private_rtc)] {
-                crate::linked_storage::copy_solo_battery(source, target)
-                    .map_err(|e| format!("Cannot seed private gpSP Link battery: {e}"))?;
-            }
-            Some((private_save, private_rtc))
-        } else { None };
         let link = LinkPlay::begin(self.core.as_mut(), role, mode, transport)?;
-        if let Some((private_save, private_rtc)) = gpsp_battery {
-            self.save = private_save;
-            self.rtc = private_rtc;
-        }
         self.link = Some(link);
         self.link_touched = true;
         self.runahead_video.clear();
