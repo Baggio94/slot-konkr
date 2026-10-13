@@ -11,10 +11,10 @@ android {
         applicationId = "fyi.slot.konkr"
         minSdk = 31
         targetSdk = 32
-        // First combined beta based on RC4. Incrementing versionCode allows
-        // an install-over when signed with the same permanent certificate.
-        versionCode = 69
-        versionName = "0.1.0-rc5-beta5"
+        // Isolated Multiplayer Lab preview: never confuse with the physical Beta5
+        // or the separate Beta6 diagnostic APK. No install without save backup.
+        versionCode = 71
+        versionName = "0.1.0-rc5-mlab-a1"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
