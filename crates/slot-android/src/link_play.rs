@@ -414,6 +414,71 @@ mod tests {
     }
 
     #[test]
+    fn real_tcp_mgba_link_preserves_two_distinct_solo_states_and_stops_on_end() {
+        use crate::link_net::{Cancel, LabGreeting, TcpLink};
+        use std::net::{SocketAddr, TcpListener};
+        use std::thread;
+
+        // Exercise actual KMLB/2 + framed TCP + reader/writer threads +
+        // Slot's paired-GBA seed exchange and lockstep in ONE test.
+        // This does not require a Mac AVD, physical KONKR or a ROM.
+        let reserved = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address: SocketAddr = reserved.local_addr().unwrap();
+        drop(reserved);
+        let fingerprint = LabGreeting {
+            game: *b"AMAE", backend: 1, mode: 1,
+            rom_sha256: [0x11; 32], core_sha256: [0x22; 32],
+            bios_sha256: [0x33; 32],
+        };
+        let host_identity = fingerprint.clone();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let server = thread::spawn(move || TcpLink::host_lab_greeted_until(
+            "127.0.0.1", address.port(), Duration::from_secs(5),
+            &Cancel::new(), &host_identity, || { let _ = ready_tx.send(()); },
+        ).unwrap());
+        ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+        let guest_wire = TcpLink::join_lab_greeted(address, &fingerprint).unwrap();
+        let host_wire = server.join().unwrap();
+        let mut host = PairedCore::new(0x11, 0xBAAE187F);
+        let mut guest = PairedCore::new(0x22, 0xBAAE187F);
+        let mut h = LinkPlay::begin(&mut host, Role::Host, LinkKind::Cable,
+            Box::new(host_wire)).unwrap();
+        let mut g = LinkPlay::begin(&mut guest, Role::Join, LinkKind::Cable,
+            Box::new(guest_wire)).unwrap();
+        assert_eq!(host.steps, 0);
+        assert_eq!(guest.steps, 0);
+        let end = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < end && (host.steps == 0 || guest.steps == 0) {
+            let a = h.frame(&mut host, ButtonMask(0x01));
+            let b = g.frame(&mut guest, ButtonMask(0x02));
+            assert!(!matches!(a, Frame::Failed(_)), "Host link failed: {a:?}");
+            assert!(!matches!(b, Frame::Failed(_)), "Join link failed: {b:?}");
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(host.steps >= 1 && guest.steps >= 1,
+            "real TCP peers must both advance after transferring two solo saves");
+        assert_eq!(link_state::local(&host.state, 0).unwrap()[12], 0x11);
+        assert_eq!(link_state::local(&host.state, 1).unwrap()[12], 0x22);
+        assert_eq!(host.state, guest.state);
+
+        let before = host.steps;
+        g.end(&mut guest);
+        let stop = Instant::now() + Duration::from_secs(3);
+        let mut stopped = false;
+        while Instant::now() < stop {
+            if matches!(h.frame(&mut host, ButtonMask(0)), Frame::Failed(
+                LinkError::PeerEnded | LinkError::Disconnected)) {
+                stopped = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(stopped, "TCP End must terminate the Host link");
+        assert_eq!(host.steps, before, "Host must not run a solo frame after End");
+    }
+
+    #[test]
     fn mga_link_rejects_guest_with_different_bios_without_replacing_host() {
         let (host_wire, guest_wire) = pair();
         let (mut host, mut guest) = (PairedCore::new(0x11, 0xBAAE187F),
