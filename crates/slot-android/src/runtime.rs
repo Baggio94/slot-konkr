@@ -922,24 +922,23 @@ impl Engine {
             return;
         }
         let game = self.game.as_ref().expect("checked above");
-        if game.core_kind() != Core::Gpsp {
-            set_message("GBA Multiplayer requires gpSP. Eject, select gpSP as core, then relaunch.".into());
-            return;
-        }
-        if !game.wireless_capable() {
-            set_message("This gpSP build did not register its GBA Link interface".into());
-            return;
-        }
         let identity = self.link_identity.as_ref().expect("checked above");
-        if !link_kind::link_carried(&identity.code, &identity.title) {
-            set_message("No verified gpSP serial/RFU mode for this GBA cartridge".into());
-            return;
+        if game.core_kind() == Core::Mgba {
+            // Slot original lockstep uses Cable only. The core is reopened
+            // in dual-GBA mode after the network connection succeeds.
+            self.link_mode = LinkKind::Cable;
+        } else {
+            if !game.wireless_capable() {
+                set_message("This gpSP build did not register its GBA Link interface".into());
+                return;
+            }
+            if !link_kind::link_carried(&identity.code, &identity.title) {
+                set_message("No verified gpSP serial/RFU mode for this GBA cartridge".into());
+                return;
+            }
+            self.link_mode = link_kind::link_kind(&identity.code, &identity.title,
+                identity.clean_header);
         }
-        // gpSP resolves gpsp_serial=auto at cartridge LOAD. Match the
-        // upstream game's actual expected auto mode, not the chosen core.
-        // Switching cables without reloading gpSP would be cosmetic only.
-        self.link_mode = link_kind::link_kind(&identity.code, &identity.title,
-            identity.clean_header);
         self.cancel_link_discovery();
         self.link_role = LinkRow::Host;
         self.link_phase = LinkMenu::Pick(self.link_role);
@@ -970,6 +969,64 @@ impl Engine {
         set_message(format!("Multiplayer: {reason}"));
     }
 
+    fn begin_link_session(&mut self, role: LinkRole,
+                          wire: crate::link_net::TcpLink) -> Result<(), String> {
+        let game = self.game.as_ref().ok_or("No game active")?;
+        if game.core_kind() != Core::Mgba {
+            return self.game.as_mut().ok_or("No game active".to_owned())?
+                .begin_multiplayer(role, self.link_mode, Box::new(wire));
+        }
+        if self.link_mode != LinkKind::Cable || game.linked() || game.is_link_sandbox() {
+            return Err("mGBA Link requires a fresh Cable session".into());
+        }
+        let (storage, library) = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .clone().ok_or("Slot storage is not mounted".to_owned())?;
+        let rom = game.rom_path().to_path_buf();
+        let stem = game.rom_stem().to_owned();
+        let core_file = library.join("libmgba_libretro.so");
+        // Save the current solo state/ram/RTC atomically BEFORE replacing
+        // the core. Failure stops link without losing the solo instance.
+        self.game.as_mut().ok_or("No game active".to_owned())?
+            .preserve_solo_for_link()?;
+        drop(self.game.take());
+        let mut linked = match GameSession::open_mgba_linked(&rom, &core_file,
+            &storage, &stem, self.settings.colour_correction, role) {
+            Ok(session) => session,
+            Err(error) => {
+                self.restore_solo_after_link_failure(&rom, &core_file, &storage, &stem);
+                return Err(format!("Cannot initialize mGBA Link: {error}"));
+            }
+        };
+        if let Err(error) = linked.begin_multiplayer(role, LinkKind::Cable, Box::new(wire)) {
+            drop(linked);
+            self.restore_solo_after_link_failure(&rom, &core_file, &storage, &stem);
+            return Err(format!("Cannot begin mGBA Link: {error}"));
+        }
+        SAMPLE_RATE.store(linked.sample_rate, Ordering::Release);
+        AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.game_accum = 0.0;
+        self.buttons = 0;
+        self.game = Some(linked);
+        Ok(())
+    }
+
+    fn restore_solo_after_link_failure(&mut self, rom: &Path,
+                                       core_file: &Path, storage: &Path, stem: &str) {
+        // Restore the preserved solo state on failures; do not continue a
+        // partially loaded pair or silently switch to an empty game.
+        match GameSession::open(rom, core_file, storage, Core::Mgba, Platform::Gba,
+            true, stem, None, self.settings.colour_correction, self.ra_service.as_ref()) {
+            Ok(game) => {
+                SAMPLE_RATE.store(game.sample_rate, Ordering::Release);
+                self.game = Some(game);
+            }
+            Err(error) => {
+                SAMPLE_RATE.store(0, Ordering::Release);
+                set_message(format!("Solo restore requires eject/reload: {error}"));
+            }
+        }
+    }
+
     fn poll_multiplayer(&mut self) {
         if !matches!(self.overlay, ShelfOverlay::Multiplayer) { return; }
         let event = self.link_starter.as_mut().and_then(LinkStarter::poll);
@@ -986,8 +1043,7 @@ impl Engine {
                     let role = if self.link_role == LinkRow::Host {
                         LinkRole::Host
                     } else { LinkRole::Join };
-                    let joined = self.game.as_mut().ok_or_else(|| "No game active".to_owned())
-                        .and_then(|game| game.begin_multiplayer(role, self.link_mode, Box::new(wire)));
+                    let joined = self.begin_link_session(role, wire);
                     match joined {
                         Ok(()) => {
                             self.link_phase = LinkMenu::Linked {
@@ -1162,7 +1218,7 @@ impl Engine {
                     self.overlay = ShelfOverlay::GameMenu { row: 0 };
                 }
                 if let Some(session) = self.game.as_mut() {
-                    if session.save(true) {
+                    if session.save(true) && !session.is_link_sandbox() {
                         if let Some(uri) = self.requested_uri.as_deref() {
                             let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
                             let core = paths.as_ref().map(|(storage, _)| {
@@ -1192,7 +1248,7 @@ impl Engine {
                 if self.progress > 0.0 || self.inserted { self.eject_sound_armed = true; }
                 if let Some(mut session) = self.game.take() {
                     let saved = session.save(self.settings.eject_save);
-                    if saved {
+                    if saved && !session.is_link_sandbox() {
                         if let Some(uri) = self.requested_uri.as_deref() {
                             let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
                             let core = paths.as_ref().map(|(storage, _)| {
