@@ -1,6 +1,7 @@
 package fyi.slot.konkr
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -9,6 +10,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.TextView
 import java.util.Locale
 
@@ -94,6 +96,29 @@ internal object SlotUi {
             }
             addView(name)
         }
+
+    /** The same upstream-rastered keycaps used by the native Slot renderer.
+     * Assets are generated at APK build-time by export_apps_legend.rs.
+     * Retain the label-font approximation only as a safe asset fallback.
+     */
+    fun nativeHint(context: Context, key: String, action: String): View {
+        val assetName = when (key.uppercase(Locale.ROOT) to action.uppercase(Locale.ROOT)) {
+            "A" to "SELECT" -> "select.png"
+            "B" to "BACK" -> "back.png"
+            "START" to "REFRESH" -> "refresh.png"
+            "X" to "SIGN OUT" -> "sign-out.png"
+            else -> return hint(context, key, action)
+        }
+        val image = runCatching {
+            context.assets.open("apps_controls/$assetName").use(BitmapFactory::decodeStream)
+        }.getOrNull() ?: return hint(context, key, action)
+        return ImageView(context).apply {
+            setImageBitmap(image)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            adjustViewBounds = true
+            contentDescription = "$key $action"
+        }
+    }
 
     fun field(context: Context, hint: String, password: Boolean = false): EditText =
         EditText(context).apply {
