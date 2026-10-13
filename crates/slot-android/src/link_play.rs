@@ -14,6 +14,21 @@ use crate::multiplayer::Role;
 const MAX_RECEIVE_PER_FRAME: usize = 256;
 const MAX_INITIAL_STATE: usize = 16 * 1024 * 1024;
 const MAX_FUTURE_FRAMES: u64 = 256;
+// Original Slot cable::state_packets emits at most 60,000 state bytes per
+// TCP frame (plus one kind byte). Reject larger or malformed packets before
+// they reach Cable::accept, which tolerates duplicate *old input frames*.
+const MAX_STATE_CHUNK_PACKET: usize = 60_001;
+
+fn valid_cable_packet_shape(packet: &[u8]) -> bool {
+    match packet.first() {
+        Some(0) => cable::decode(packet).is_some(),
+        Some(1 | 2) => (2..=MAX_STATE_CHUNK_PACKET).contains(&packet.len()),
+        Some(3) => packet.len() == 1,
+        _ => false,
+    }
+}
+
+
 const INITIAL_STATE_TIMEOUT: Duration = Duration::from_secs(12);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -135,6 +150,17 @@ impl LinkPlay {
         for _ in 0..MAX_RECEIVE_PER_FRAME {
             let Some(packet) = self.wire.try_recv() else { break };
             if let Some(cable) = self.cable.as_mut() {
+                // A bad kind, empty chunk, trailing bytes on READY, or an
+                // oversized state fragment is a protocol error, not a
+                // packet to ignore while the emulators drift apart.
+                if !valid_cable_packet_shape(&packet) {
+                    return self.fail(LinkError::InvalidState);
+                }
+                if packet.first() == Some(&3) && self.awaiting_join_seed {
+                    // Host cannot be READY until the guest's own GBA state
+                    // has been incorporated into the initial SLK1 pair.
+                    return self.fail(LinkError::InvalidState);
+                }
                 if matches!(packet.first(), Some(1 | 2)) {
                     // A second state stream, or any state packet after the
                     // first END, is not part of Cable lockstep. Reject even
@@ -491,6 +517,41 @@ mod tests {
         assert!(matches!(h.frame(&mut host, ButtonMask(0)),
             Frame::Failed(LinkError::PeerEnded | LinkError::Disconnected)));
         assert_eq!(host.steps, before, "Host must not run a solo frame after End");
+    }
+
+    #[test]
+    fn cable_wire_packet_shapes_match_upstream_and_reject_unknown_kinds() {
+        assert!(valid_cable_packet_shape(&cable::encode(0, ButtonMask(0))));
+        assert!(valid_cable_packet_shape(&cable::ready_packet()));
+        assert!(cable::state_packets(&vec![7u8; 60_000]).iter()
+            .all(|p| valid_cable_packet_shape(p)));
+        assert!(!valid_cable_packet_shape(&[]));
+        assert!(!valid_cable_packet_shape(&[0]));
+        assert!(!valid_cable_packet_shape(&[3, 0]));
+        assert!(!valid_cable_packet_shape(&[4]));
+        assert!(!valid_cable_packet_shape(&[1]));
+        assert!(!valid_cable_packet_shape(&[2]));
+        assert!(!valid_cable_packet_shape(&vec![1u8; MAX_STATE_CHUNK_PACKET + 1]));
+    }
+
+    #[test]
+    fn malformed_cable_packets_cannot_mutate_or_advance_mgba() {
+        for malformed in [
+            vec![0u8], vec![3, 0], vec![0xFF], vec![1], vec![2],
+            vec![1u8; MAX_STATE_CHUNK_PACKET + 1],
+        ] {
+            let received = Arc::new(Mutex::new(VecDeque::from([malformed])));
+            let sent = Arc::new(Mutex::new(VecDeque::new()));
+            let wire: Box<dyn LinkChannel> = Box::new(Wire {recv: received, send: sent});
+            let mut core = PairedCore::new(0x44, 0xBAAE187F);
+            let before = core.state.clone();
+            let mut link = LinkPlay::begin(
+                &mut core, Role::Join, LinkKind::Cable, wire).unwrap();
+            assert_eq!(link.frame(&mut core, ButtonMask(1)),
+                Frame::Failed(LinkError::InvalidState));
+            assert_eq!(core.state, before);
+            assert_eq!(core.steps, 0);
+        }
     }
 
     #[test]
