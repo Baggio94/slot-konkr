@@ -161,7 +161,7 @@ internal class RaPanelDialog(
             Triple("X", "SIGN OUT", onSignOut),
             Triple("B", "BACK", { dialog.dismiss() })
         )) {
-            val hint = SlotUi.hint(activity, key, action).apply {
+            val hint = SlotUi.nativeHint(activity, key, action).apply {
                 isFocusable = false
                 isClickable = true
                 setOnClickListener { callback() }
