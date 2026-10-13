@@ -22,6 +22,7 @@ on:
       - 'scripts/build-konkr-android.sh'
       - 'scripts/build-mgba-android.sh'
       - 'scripts/build-gpsp-android.sh'
+      - 'scripts/build-konkr-x86-android.sh'
       - 'scripts/patch-mgba-speculative-audio.py'
       - 'scripts/patch-gpsp-speculative-audio.py'
       - 'scripts/package-konkr-cart-studio.py'
@@ -57,7 +58,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: '1.96.0'
-          targets: aarch64-linux-android
+          targets: aarch64-linux-android,x86_64-linux-android
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
@@ -101,6 +102,23 @@ jobs:
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           bash scripts/build-gpsp-android.sh
+      - name: Build pinned x86_64 mGBA/gpSP and Rust JNI for same Mac AVD APK
+        # A physical arm64-only APK cannot run in an x86_64 AVD, no matter
+        # how many times it is copied or whether its versionCode matches.
+        run: |
+          set -euo pipefail
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          bash scripts/build-konkr-x86-android.sh
+          export SLOT_KONKR_VERSION="$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' android/app/build.gradle.kts | head -1)"
+          cargo ndk -t x86_64 -o android/app/src/main/jniLibs build --release -p slot-android
+          STRIP="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -type f -name llvm-strip -print -quit)"
+          test -x "$STRIP"
+          for lib in slot_android mgba_libretro gpsp_libretro; do
+            file="android/app/src/main/jniLibs/x86_64/lib${lib}.so"
+            test -s "$file"
+            "$STRIP" --strip-unneeded "$file"
+          done
+
       - name: Checkout official Slot revision required by Cart Studio
         uses: actions/checkout@v4
         with:
@@ -175,6 +193,245 @@ jobs:
           "$NM" -D --defined-only "$DIR/libslot_android.so" | grep -F 'Java_fyi_slot_konkr_MainActivity_nativeDrawFrame'
           "$NM" -D --defined-only "$DIR/libmgba_libretro.so" | grep -E ' retro_run$'
           "$NM" -D --defined-only "$DIR/libgpsp_libretro.so" | grep -E ' retro_run$'
+      - name: Verify universal APK ABI parity and native exports
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          NM="$(find "$ANDROID_SDK_ROOT/ndk/27.2.12479018/toolchains/llvm/prebuilt" -type f -name llvm-nm -print -quit)"
+          for abi in arm64-v8a x86_64; do
+            for lib in slot_android mgba_libretro gpsp_libretro; do
+              native="android/app/src/main/jniLibs/$abi/lib${lib}.so"
+              test -s "$native"
+              unzip -Z -1 "$APK" | grep -Fx "lib/$abi/lib${lib}.so"
+            done
+            "$NM" -D --defined-only "android/app/src/main/jniLibs/$abi/libslot_android.so" | grep -F 'Java_fyi_slot_konkr_MainActivity_nativeDrawFrame'
+            "$NM" -D --defined-only "android/app/src/main/jniLibs/$abi/libmgba_libretro.so" | grep -E ' retro_run
+        run: |
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs \
+            android/app/build/outputs/apk/debug/app-debug.apk
+          shasum -a 256 android/app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slot-konkr-preview-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+      - name: Verify isolated Lab test APK contains both ABIs
+        if: github.ref == 'refs/heads/feat/konkr-multiplayer-lab'
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/multiplayerLab/app-multiplayerLab.apk"
+          for abi in arm64-v8a x86_64; do
+            for lib in slot_android mgba_libretro gpsp_libretro; do
+              unzip -Z -1 "$APK" | grep -Fx "lib/$abi/lib${lib}.so"
+            done
+          done
+          echo 'ONE signed sidecar APK now works on both physical KONKR and Mac x86_64 AVD'
+
+      - name: Verify isolated Multiplayer Lab APK cannot replace physical Slot
+        if: github.ref == 'refs/heads/feat/konkr-multiplayer-lab'
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/multiplayerLab/app-multiplayerLab.apk
+          test -s "$APK"
+          AAPT="$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt"
+          "$AAPT" dump badging "$APK" | tee "$RUNNER_TEMP/mlab-badging.txt"
+          grep -F "package: name='fyi.slot.konkr.lab'" "$RUNNER_TEMP/mlab-badging.txt"
+          grep -F "application-label:'slot. Multiplayer Lab'" "$RUNNER_TEMP/mlab-badging.txt"
+          "$AAPT" dump xmltree "$APK" AndroidManifest.xml > "$RUNNER_TEMP/mlab-manifest.txt"
+          if grep -F 'android.intent.category.HOME' "$RUNNER_TEMP/mlab-manifest.txt"; then
+            echo "::error::Sidecar app must not register as an Android HOME candidate."
+            exit 1
+          fi
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK"
+          shasum -a 256 "$APK"
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/feat/konkr-multiplayer-lab'
+        with:
+          name: slot-konkr-mlab-physical-isolated-apk
+          path: android/app/build/outputs/apk/multiplayerLab/app-multiplayerLab.apk
+          if-no-files-found: error
+
+      - name: Verify RC4 release APK is signed with permanent certificate
+        if: startsWith(github.ref, 'refs/heads/release/')
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          CERT="$("$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK")"
+          printf '%s\n' "$CERT"
+          echo "$CERT" | grep -Fi '4f42b8f0ac98f6a0102804ab51020ea0e7e2de7685c6ce09400a744de0b0fa2f'
+          shasum -a 256 "$APK"
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/heads/release/')
+        with:
+          name: slot-konkr-rc4-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Verify signed RC5 beta APK for RC4 install-over tests
+        if: github.ref == 'refs/heads/integration/konkr-rc4-next'
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          test -s "$APK"
+          CERT="$("$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK")"
+          printf '%s\n' "$CERT"
+          # Enforce install-over compatibility with RC4's permanent signer.
+          echo "$CERT" | grep -Fi '4f42b8f0ac98f6a0102804ab51020ea0e7e2de7685c6ce09400a744de0b0fa2f'
+          shasum -a 256 "$APK"
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/integration/konkr-rc4-next'
+        with:
+          name: slot-konkr-rc5-beta5-signed-release
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+  # A6 A1 must exercise the REAL patched mGBA libretro library on a runnable
+  # Linux host, not pass a test that silently skips when vendor/ is empty.
+  # The Android arm64 core is separately built in debug-apk above.
+  a6-a1-mgba-continuity:
+    if: github.ref == 'refs/heads/feat/konkr-multiplayer-lab'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native libretro test prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config \
+            libasound2-dev libudev-dev \
+            libx11-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+      - name: Build exact pinned patched mGBA for native execution
+        run: |
+          mkdir -p vendor
+          bash cores/mgba/build.sh build \
+            7a12d6d4b9acb14c0ae62c9166b6a2f3d08007f6 \
+            "$RUNNER_TEMP/a6-mgba-host" "$PWD/vendor/mgba_libretro.so"
+          test -s vendor/mgba_libretro.so
+          file vendor/mgba_libretro.so
+          sha256sum vendor/mgba_libretro.so
+      - name: Prove original single-state to paired-GBA transition
+        run: |
+          cargo test -p slot --test mgba_link \
+            a_link_state_of_two_single_gba_states_restores_each_player_where_they_were \
+            -- --exact --nocapture
+      - name: Prove live Host/Join progress and lockstep after a6 state exchange
+        run: |
+          cargo test -p slot --test mgba_link \
+            live_solo_host_join_snapshots_resume_without_a_title_screen \
+            -- --exact --nocapture
+
+            "$NM" -D --defined-only "android/app/src/main/jniLibs/$abi/libgpsp_libretro.so" | grep -E ' retro_run
+        run: |
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs \
+            android/app/build/outputs/apk/debug/app-debug.apk
+          shasum -a 256 android/app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slot-konkr-preview-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+      - name: Verify isolated Multiplayer Lab APK cannot replace physical Slot
+        if: github.ref == 'refs/heads/feat/konkr-multiplayer-lab'
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/multiplayerLab/app-multiplayerLab.apk
+          test -s "$APK"
+          AAPT="$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt"
+          "$AAPT" dump badging "$APK" | tee "$RUNNER_TEMP/mlab-badging.txt"
+          grep -F "package: name='fyi.slot.konkr.lab'" "$RUNNER_TEMP/mlab-badging.txt"
+          grep -F "application-label:'slot. Multiplayer Lab'" "$RUNNER_TEMP/mlab-badging.txt"
+          "$AAPT" dump xmltree "$APK" AndroidManifest.xml > "$RUNNER_TEMP/mlab-manifest.txt"
+          if grep -F 'android.intent.category.HOME' "$RUNNER_TEMP/mlab-manifest.txt"; then
+            echo "::error::Sidecar app must not register as an Android HOME candidate."
+            exit 1
+          fi
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK"
+          shasum -a 256 "$APK"
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/feat/konkr-multiplayer-lab'
+        with:
+          name: slot-konkr-mlab-physical-isolated-apk
+          path: android/app/build/outputs/apk/multiplayerLab/app-multiplayerLab.apk
+          if-no-files-found: error
+
+      - name: Verify RC4 release APK is signed with permanent certificate
+        if: startsWith(github.ref, 'refs/heads/release/')
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          CERT="$("$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK")"
+          printf '%s\n' "$CERT"
+          echo "$CERT" | grep -Fi '4f42b8f0ac98f6a0102804ab51020ea0e7e2de7685c6ce09400a744de0b0fa2f'
+          shasum -a 256 "$APK"
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/heads/release/')
+        with:
+          name: slot-konkr-rc4-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Verify signed RC5 beta APK for RC4 install-over tests
+        if: github.ref == 'refs/heads/integration/konkr-rc4-next'
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          test -s "$APK"
+          CERT="$("$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK")"
+          printf '%s\n' "$CERT"
+          # Enforce install-over compatibility with RC4's permanent signer.
+          echo "$CERT" | grep -Fi '4f42b8f0ac98f6a0102804ab51020ea0e7e2de7685c6ce09400a744de0b0fa2f'
+          shasum -a 256 "$APK"
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/integration/konkr-rc4-next'
+        with:
+          name: slot-konkr-rc5-beta5-signed-release
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+  # A6 A1 must exercise the REAL patched mGBA libretro library on a runnable
+  # Linux host, not pass a test that silently skips when vendor/ is empty.
+  # The Android arm64 core is separately built in debug-apk above.
+  a6-a1-mgba-continuity:
+    if: github.ref == 'refs/heads/feat/konkr-multiplayer-lab'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native libretro test prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config \
+            libasound2-dev libudev-dev \
+            libx11-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+      - name: Build exact pinned patched mGBA for native execution
+        run: |
+          mkdir -p vendor
+          bash cores/mgba/build.sh build \
+            7a12d6d4b9acb14c0ae62c9166b6a2f3d08007f6 \
+            "$RUNNER_TEMP/a6-mgba-host" "$PWD/vendor/mgba_libretro.so"
+          test -s vendor/mgba_libretro.so
+          file vendor/mgba_libretro.so
+          sha256sum vendor/mgba_libretro.so
+      - name: Prove original single-state to paired-GBA transition
+        run: |
+          cargo test -p slot --test mgba_link \
+            a_link_state_of_two_single_gba_states_restores_each_player_where_they_were \
+            -- --exact --nocapture
+      - name: Prove live Host/Join progress and lockstep after a6 state exchange
+        run: |
+          cargo test -p slot --test mgba_link \
+            live_solo_host_join_snapshots_resume_without_a_title_screen \
+            -- --exact --nocapture
+
+          done
+          echo 'ONE universal debug APK confirmed for arm64-v8a and x86_64'
+
       - name: Verify APK signature and print certificate fingerprint
         run: |
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs \
