@@ -86,7 +86,7 @@ NM="$NDK/toolchains/llvm/prebuilt/$NDK_HOST/bin/llvm-nm"
 SYMBOLS="$("$NM" -D --defined-only "$CORE")"
 for symbol in retro_init retro_load_game retro_run retro_serialize retro_unserialize slot_mgba_audio_sidecar slot_mgba_audio_sidecar_size; do
   grep -q " $symbol$" <<< "$SYMBOLS" || {
-    echo "mGBA speculative-audio symbol missing: $symbol" >&2
+    echo "mGBA ABI symbol missing: $symbol" >&2
     exit 1
   }
 done
@@ -96,7 +96,7 @@ python3 - "$CORE" <<'PY'
 from pathlib import Path
 import sys
 core = Path(sys.argv[1]).read_bytes()
-for value in (b"mgba_link\\0", b"mgba_link_player\\0", b"SLK1"):
+for value in (b"mgba_link\0", b"mgba_link_player\0", b"SLK1"):
     if value not in core:
         raise SystemExit(f"mGBA linked-core marker missing: {value!r}")
     print(f"Verified linked-core marker: {value!r}")
