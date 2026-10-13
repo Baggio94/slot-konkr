@@ -1872,13 +1872,16 @@ impl Engine {
                                     match row {
                                         1 => {
                                             if self.game.as_ref().is_some_and(GameSession::linked) {
-                                                if let Some(game) = self.game.as_mut() {
-                                                    game.end_multiplayer();
-                                                }
-                                                self.hud.set_link(LinkBadge::Off);
-                                                let now = self.link_millis();
-                                                self.hud.toast(Toast::LinkEnded, now);
-                                                set_message("Multiplayer disconnected".into());
+                                                // Reopen the connected adapter instead of
+                                            // ENDing the Link when the Pause menu row
+                                            // 'Multiplayer' is selected.
+                                            self.link_phase = LinkMenu::Linked {
+                                                role: self.link_role,
+                                                worked: self.link_worked_at,
+                                                since: self.link_millis(),
+                                                opened: true,
+                                            };
+                                            self.overlay = ShelfOverlay::Multiplayer;
                                             } else { self.enter_multiplayer_menu(); }
                                         }
                                         3 => {
@@ -3284,8 +3287,9 @@ impl Engine {
         }
         if self.game.is_some() && matches!(self.overlay,
             ShelfOverlay::GameMenu { .. } | ShelfOverlay::Multiplayer) {
-            // Rendering the pause menu does not borrow an active libretro session
-            // or advance the core, so input and audio stay frozen.
+            // Coordinate the pause with the remote game. Without this
+            // the other Cable peer times out and gpSP RFU can drift.
+            if let Some(game) = self.game.as_mut() { game.set_link_paused(true); }
             self.game_accum = 0.0;
             let mut commands = vec![Draw::Game];
             self.draw_overlay(&mut commands);
@@ -3317,6 +3321,9 @@ impl Engine {
         DISPLAY_SYNC.store(self.game.is_some() && profile.display_sync_pacing,
             Ordering::Release);
         if let Some(session) = self.game.as_mut() {
+            // Resume only after the remote has also left its pause menu;
+            // LinkPlay::frame holds either core while peer_paused is true.
+            session.set_link_paused(false);
             // In-game HUD replaces the shelf chrome; never let the upper
             // Android indicators remain visible on the first game frame.
             SHELF_INDICATOR_FLAGS.store(0, Ordering::Release);

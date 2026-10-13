@@ -122,6 +122,8 @@ fn vet_lab(stream:&mut TcpStream,local:&LabGreeting)->bool{
 }
 
 const CONTROL_ENDED: u8 = 0x00;
+const CONTROL_PAUSED: u8 = 0x01;
+const CONTROL_RESUMED: u8 = 0x02;
 
 const BYE_MS: u64 = 100;
 
@@ -136,6 +138,7 @@ pub struct TcpLink {
     stream: TcpStream,
     closed: Arc<AtomicBool>,
     ended: Arc<AtomicBool>,
+    peer_paused: Arc<AtomicBool>,
 }
 
 impl TcpLink {
@@ -316,6 +319,8 @@ impl TcpLink {
         let reader_closed = closed.clone();
         let ended = Arc::new(AtomicBool::new(false));
         let reader_ended = ended.clone();
+        let peer_paused = Arc::new(AtomicBool::new(false));
+        let reader_paused = peer_paused.clone();
 
         std::thread::spawn(move || {
             let mut header = [0u8; 2];
@@ -336,8 +341,11 @@ impl TcpLink {
                     return;
                 }
                 if std::mem::take(&mut control) {
-                    if buf.first() == Some(&CONTROL_ENDED) {
-                        reader_ended.store(true, Ordering::Release);
+                    match buf.as_slice() {
+                        [CONTROL_ENDED] => reader_ended.store(true, Ordering::Release),
+                        [CONTROL_PAUSED] => reader_paused.store(true, Ordering::Release),
+                        [CONTROL_RESUMED] => reader_paused.store(false, Ordering::Release),
+                        _ => reader_closed.store(true, Ordering::Release),
                     }
                     continue;
                 }
@@ -374,6 +382,7 @@ impl TcpLink {
             stream,
             closed,
             ended,
+            peer_paused,
         })
     }
 
@@ -431,6 +440,18 @@ impl LinkChannel for TcpLink {
 
     fn peer_ended(&self) -> bool {
         self.ended.load(Ordering::Acquire)
+    }
+
+    fn set_paused(&mut self, paused: bool) {
+        // The GL thread never blocks waiting for the writer; in-order TCP
+        // guarantees the remote sees preceding game bytes before PAUSE.
+        let (ack, _written) = channel();
+        let control = if paused { CONTROL_PAUSED } else { CONTROL_RESUMED };
+        let _ = self.outbox.send(Out::Control(control, ack));
+    }
+
+    fn peer_paused(&self) -> bool {
+        self.peer_paused.load(Ordering::Acquire)
     }
 }
 

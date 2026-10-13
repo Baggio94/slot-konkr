@@ -53,6 +53,7 @@ pub struct LinkPlay {
     mode: LinkKind,
     net: Link,
     error: Option<LinkError>,
+    local_paused: bool,
     state_bytes: usize,
     // Exactly ONE initial state transfer is legal for each TCP Link role.
     // Later state packets could overwrite a running peer or grow unbounded
@@ -131,7 +132,7 @@ impl LinkPlay {
             }
         };
         Ok(Self {
-            wire, cable, mode, net, error: None, state_bytes: 0,
+            wire, cable, mode, net, error: None, local_paused: false, state_bytes: 0,
             state_final_received: false, awaiting_join_seed, started: Instant::now(),
         })
     }
@@ -140,12 +141,28 @@ impl LinkPlay {
 
     pub fn fault(&self) -> Option<LinkError> { self.error }
 
+    /// Pause changes are transport controls, never gpSP RFU payloads or
+    /// mGBA Cable input frames. Only send when the state actually changes.
+    pub fn set_local_paused(&mut self, paused: bool) {
+        if self.local_paused != paused {
+            self.local_paused = paused;
+            self.wire.set_paused(paused);
+        }
+    }
+
+    pub fn peer_paused(&self) -> bool { self.wire.peer_paused() }
+
+
     /// A pending packet must never block a GPU frame. The emulation is held
     /// at the exact same frame until both input masks are available.
     pub fn frame(&mut self, core: &mut dyn RetroCore, buttons: ButtonMask) -> Frame {
         if let Some(error) = self.error { return Frame::Failed(error); }
         if self.wire.peer_ended() { return self.fail(LinkError::PeerEnded); }
         if self.wire.is_closed() { return self.fail(LinkError::Disconnected); }
+        // The network reader updates peer_paused even if this core has not
+        // advanced a frame for an arbitrarily long pause-menu interaction.
+        // Do not pump RFU or sample Cable input until BOTH peers resume.
+        if self.local_paused || self.wire.peer_paused() { return Frame::Waiting; }
 
         for _ in 0..MAX_RECEIVE_PER_FRAME {
             let Some(packet) = self.wire.try_recv() else { break };

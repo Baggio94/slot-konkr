@@ -514,6 +514,17 @@ impl GameSession {
 
     pub fn linked(&self) -> bool { self.link.is_some() }
 
+    /// Keep the connected gameplay session alive while a native overlay
+    /// is open. The peer stops at its next emulation callback without
+    /// sending any artificial GBA serial packets.
+    pub fn set_link_paused(&mut self, paused: bool) {
+        if let Some(link) = self.link.as_mut() { link.set_local_paused(paused); }
+    }
+
+    pub fn link_peer_paused(&self) -> bool {
+        self.link.as_ref().is_some_and(|link| link.peer_paused())
+    }
+
     /// An ended link must never become a local solo timeline. Eject and
     /// reopen the ROM to reinitialize both save and emulation state safely.
     pub fn requires_relaunch(&self) -> bool {
