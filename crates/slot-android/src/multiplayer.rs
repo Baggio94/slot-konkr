@@ -176,6 +176,8 @@ fn connect(role: Role, local: Ipv4Addr, config: &LinkConfig,
 pub struct LinkStarter {
     events: Receiver<Progress>,
     cancel: Cancel,
+    // Report unexpected worker exit exactly once, rather than spinner forever.
+    done: bool,
 }
 
 impl LinkStarter {
@@ -198,7 +200,7 @@ impl LinkStarter {
             };
             let _ = tx.send(report);
         });
-        Ok(Self { events, cancel })
+        Ok(Self { events, cancel, done: false })
     }
 
     /// The Emulator NAT does not support IGMP. Direct-IP Join uses the
@@ -233,13 +235,21 @@ impl LinkStarter {
             };
             let _ = tx.send(report);
         });
-        Ok(Self { events, cancel })
+        Ok(Self { events, cancel, done: false })
     }
 
     pub fn poll(&mut self) -> Option<Progress> {
+        if self.done { return None; }
         match self.events.try_recv() {
-            Ok(event) => Some(event),
-            Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
+            Ok(event) => {
+                self.done = matches!(&event, Progress::Ready(_) | Progress::Failed(_));
+                Some(event)
+            }
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => {
+                self.done = true;
+                Some(Progress::Failed(Failure::PeerVanished))
+            }
         }
     }
 
@@ -253,6 +263,29 @@ impl Drop for LinkStarter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dropped_network_worker_fails_once_instead_of_spinning_forever() {
+        let (tx, events) = mpsc::channel::<Progress>();
+        let mut starter = LinkStarter { events, cancel: Cancel::new(), done: false };
+        assert!(starter.poll().is_none(), "an idle worker may still connect");
+        drop(tx);
+        assert!(matches!(starter.poll(), Some(Progress::Failed(Failure::PeerVanished))));
+        assert!(starter.poll().is_none(), "terminal failure must occur once");
+    }
+
+    #[test]
+    fn completed_network_worker_cannot_trigger_duplicate_errors() {
+        let (tx, events) = mpsc::channel::<Progress>();
+        tx.send(Progress::Looking).unwrap();
+        tx.send(Progress::Failed(Failure::Cancelled)).unwrap();
+        drop(tx);
+        let mut starter = LinkStarter { events, cancel: Cancel::new(), done: false };
+        assert!(matches!(starter.poll(), Some(Progress::Looking)));
+        assert!(matches!(starter.poll(), Some(Progress::Failed(Failure::Cancelled))));
+        assert!(starter.poll().is_none(),
+            "worker channel closing after a terminal status is not another failure");
+    }
+
     #[test]
     fn accepts_only_exact_rom_header_codes() {
         assert_eq!(game_code("BPRE"), Some("BPRE".into()));
