@@ -276,8 +276,8 @@ mod tests {
     #[test]
     fn completed_network_worker_cannot_trigger_duplicate_errors() {
         let (tx, events) = mpsc::channel::<Progress>();
-        tx.send(Progress::Looking).unwrap();
-        tx.send(Progress::Failed(Failure::Cancelled)).unwrap();
+        assert!(tx.send(Progress::Looking).is_ok());
+        assert!(tx.send(Progress::Failed(Failure::Cancelled)).is_ok());
         drop(tx);
         let mut starter = LinkStarter { events, cancel: Cancel::new(), done: false };
         assert!(matches!(starter.poll(), Some(Progress::Looking)));
