@@ -149,7 +149,10 @@ class MainActivity : Activity() {
     private val gameLoader = Executors.newSingleThreadExecutor()
     // AVD-only; querying the Mac Bonjour bridge must never block GL/UI,
     // Android AudioTrack, normal ROM loading or real KONKR Wi-Fi discovery.
-    private val linkBridgeWorker = Executors.newSingleThreadExecutor()
+    private val linkBridgeWorker = Executors.newFixedThreadPool(2)
+    // Reject delayed results if the user cancelled and reopened the same
+    // game's Host/Join menu before an older Mac discovery request finished.
+    private val linkBridgeGeneration = AtomicInteger()
     // Independent physical QA package. It may read the same ROM and BIOS
     // folders, but MUST NOT import from or write to a selected RetroArch
     // Saves/States SAF folder belonging to the user's daily Slot installation.
@@ -255,6 +258,7 @@ class MainActivity : Activity() {
      *  dialog. No new Android permission or public socket is required.
      */
     private fun tryLinkMacBridge(local: String, game: String) {
+        val generation = linkBridgeGeneration.incrementAndGet()
         linkBridgeWorker.execute {
             val host = try {
                 Socket().use { socket ->
@@ -267,7 +271,9 @@ class MainActivity : Activity() {
                 }
             } catch (_: Exception) { null }
             runOnUiThread {
-                if (isDestroyed || !resumed || nativeLinkDiscoveryGame() != game) {
+                if (isDestroyed || !resumed || 
+                    generation != linkBridgeGeneration.get() ||
+                    nativeLinkDiscoveryGame() != game) {
                     return@runOnUiThread // Cancelled or a different cartridge
                 }
                 if (host != null && validLinkIpv4(host)) {
@@ -1842,6 +1848,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        linkBridgeGeneration.incrementAndGet()
         releaseLinkMulticast()
         Choreographer.getInstance().removeFrameCallback(vsyncCallback)
         raConnectivity?.let { manager ->
@@ -1865,6 +1872,7 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         resumed = false
+        linkBridgeGeneration.incrementAndGet()
         // Rust nativeSuspend aborts discovery/linked play; never keep a
         // multicast lock across Android background sleep.
         releaseLinkMulticast()
