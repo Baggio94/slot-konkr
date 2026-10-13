@@ -72,7 +72,10 @@ jobs:
           done
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: '1.96.0'
+          # Match rust-toolchain.toml (channel = "1.96") exactly.
+          # "1.96.0" and "1.96" can install into DISTINCT rustup homes;
+          # cargo reads the project's 1.96 override.
+          toolchain: '1.96'
           targets: aarch64-linux-android,x86_64-linux-android
       - uses: gradle/actions/setup-gradle@v4
         with:
@@ -122,11 +125,19 @@ jobs:
         run: |
           set -euo pipefail
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
-          # The setup action's comma-separated targets may not be installed
-          # under this repository's pinned toolchain in a fresh CI runner.
-          # Fail here, rather than after all native C/C++ cores have built.
-          rustup target add x86_64-linux-android --toolchain 1.96.0
-          rustup target list --installed --toolchain 1.96.0 | grep -Fx 'x86_64-linux-android'
+          # Cargo follows the repository's rust-toolchain.toml (1.96),
+          # NOT the "1.96.0" rustup toolchain installed by earlier CI. Put
+          # rust-std in the exact toolchain that cargo-ndk will execute.
+          rustup target add x86_64-linux-android --toolchain 1.96
+          rustup target list --installed --toolchain 1.96 | grep -Fx 'x86_64-linux-android'
+          rustup show active-toolchain
+          rustc --version
+          target_libdir="$(rustc --print target-libdir --target x86_64-linux-android)"
+          compgen -G "$target_libdir/libcore-*.rlib" >/dev/null || {
+            echo "::error::x86_64 Android libcore missing from ACTIVE Rust toolchain ($target_libdir)"
+            exit 1
+          }
+          echo "Confirmed active Rust x86_64 target: $target_libdir"
           # cargo-ndk also reads ANDROID_NDK_ROOT; keep it consistent.
           export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
           bash scripts/build-konkr-x86-android.sh
