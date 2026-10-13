@@ -33,7 +33,7 @@ use slot_ui::{
     CHIP_U, CHIP_V, CHIP_W, CHIP_H, HOP_LIFT, TURN_PAD, SHADOW_W, SHADOW_H,
     CART_W, hint_face, arrows_hint_face, title_face, photo_face, Polaroids, Printed, HINT_H, HINT_EDGE,
     draw_footer, draw_slot_name, draw_platform_name, word_face, platform_name_face,
-    icon_face, Icon, BOLT_PX, HUD_INK,
+    icon_face, badge_face, Icon, LinkBadge, BOLT_PX, HUD_INK,
     Hud, HudKind, FfState, Toast, toast_face, QUICK_PITCH, opening, edge, centred_hints, LEGEND_GAP,
     sticker_face_konkr, StickerFields, STICKER_W, STICKER_H, quick_caret_face,
 };
@@ -686,6 +686,16 @@ impl Engine {
             gpu.create_texture(face.w, face.h, &face.rgba)
         }).collect();
         hud.set_icons(icons);
+        // Exact upstream slot. Link badge glyphs, colour and 24px halo.
+        // The HUD already places these in the top-right of the game image,
+        // but Android previously never populated its link texture atlas.
+        let link_faces = LinkBadge::FACES.into_iter().map(|badge| {
+            let glyph = badge.badge().expect("only visible LinkBadge variants");
+            let colour = badge.colour().expect("visible LinkBadge has a colour");
+            let face = badge_face(glyph, slot_ui::HUD_ICON_PX, colour);
+            gpu.create_texture(face.w, face.h, &face.rgba)
+        }).collect();
+        hud.set_link_faces(link_faces);
         let bolt = icon_face(Icon::Charging, BOLT_PX, HUD_INK);
         let bolt_texture = gpu.create_texture(bolt.w, bolt.h, &bolt.rgba);
 
@@ -1033,6 +1043,8 @@ impl Engine {
 
     fn fail_multiplayer(&mut self, reason: &str, failure: LinkFail) {
         self.cancel_link_discovery();
+        // No link has been established: never display a false connected icon.
+        self.hud.set_link(LinkBadge::Off);
         self.link_phase = LinkMenu::Failed {
             role: self.link_role, fail: failure,
             worked: self.link_worked_at, since: self.link_millis(),
@@ -1117,6 +1129,9 @@ impl Engine {
                     let joined = self.begin_link_session(role, wire);
                     match joined {
                         Ok(()) => {
+                            // Host purple / Join grey, permanently shown in
+                            // the exact upstream top-right in-game HUD.
+                            self.hud.set_link(link_badge_for(self.link_role, false));
                             self.link_phase = LinkMenu::Linked {
                                 role: self.link_role,
                                 worked: self.link_worked_at,
@@ -1287,6 +1302,7 @@ impl Engine {
                 self.emulator_key_latch.reset();
                 self.cancel_link_discovery();
                 if let Some(session) = self.game.as_mut() { session.end_multiplayer(); }
+                self.hud.set_link(LinkBadge::Off);
                 if matches!(self.overlay, ShelfOverlay::Multiplayer) {
                     self.overlay = ShelfOverlay::GameMenu { row: 0 };
                 }
@@ -1306,6 +1322,7 @@ impl Engine {
                 AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
             }
             Input::Exit => {
+                self.hud.set_link(LinkBadge::Off);
                 self.emulator_key_latch.reset();
                 self.cancel_link_discovery();
                 self.link_identity = None;
@@ -1549,6 +1566,7 @@ impl Engine {
                                     if let Some(game) = self.game.as_mut() {
                                         game.end_multiplayer();
                                     }
+                                    self.hud.set_link(LinkBadge::Off);
                                     set_message("Multiplayer ended. Eject to return to solo.".into());
                                     self.link_phase = LinkMenu::Unplug {
                                         role, since: self.link_millis(),
@@ -1629,6 +1647,7 @@ impl Engine {
                                                 if let Some(game) = self.game.as_mut() {
                                                     game.end_multiplayer();
                                                 }
+                                                self.hud.set_link(LinkBadge::Off);
                                                 set_message("Multiplayer disconnected".into());
                                             } else { self.enter_multiplayer_menu(); }
                                         }
@@ -3116,6 +3135,7 @@ impl Engine {
                             // Fail closed on link loss: pause the game instead
                             // of silently continuing a divergent solo timeline.
                             session.end_multiplayer();
+                            self.hud.set_link(link_badge_for(self.link_role, true));
                             self.ff_held = false;
                             self.ff_latched = false;
                             self.rewind_held = false;
@@ -3318,6 +3338,16 @@ impl Engine {
     }
 }
 
+/// Map the negotiated on-wire role to upstream Slot Link icon variants.
+fn link_badge_for(role: LinkRow, disconnected: bool) -> LinkBadge {
+    match (role, disconnected) {
+        (LinkRow::Host, false) => LinkBadge::Hosting,
+        (LinkRow::Join, false) => LinkBadge::Joined,
+        (LinkRow::Host, true) => LinkBadge::HostingLost,
+        (LinkRow::Join, true) => LinkBadge::JoinedLost,
+    }
+}
+
 /// Only the initial "Linked" seating animation is self-dismissing.
 /// Reopening from SELECT+HOME must keep End Link/Back visible until input.
 fn link_menu_auto_closes(phase: LinkMenu, now: u64) -> bool {
@@ -3418,6 +3448,21 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 #[cfg(test)]
 mod ui_feedback_tests {
     use super::*;
+
+    #[test]
+    fn multiplayer_badges_match_original_host_join_broken_and_off() {
+        assert_eq!(link_badge_for(LinkRow::Host, false), LinkBadge::Hosting);
+        assert_eq!(link_badge_for(LinkRow::Join, false), LinkBadge::Joined);
+        assert_eq!(link_badge_for(LinkRow::Host, true), LinkBadge::HostingLost);
+        assert_eq!(link_badge_for(LinkRow::Join, true), LinkBadge::JoinedLost);
+        for variant in LinkBadge::FACES {
+            assert!(variant.badge().is_some());
+            assert!(variant.colour().is_some());
+            assert!(variant.face_index().is_some());
+        }
+        assert!(LinkBadge::Off.badge().is_none());
+        assert!(LinkBadge::Off.face_index().is_none());
+    }
 
     #[test]
     fn linked_reopen_stays_visible_and_unplug_uses_original_timing() {
