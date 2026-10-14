@@ -34,6 +34,15 @@ pub enum Progress {
     Failed(Failure),
 }
 
+fn report_setup_error(error: &io::Error) {
+    let message = format!("KMLB4 setup failure: kind={:?} reason={error}",
+        error.kind());
+    #[cfg(target_os = "android")]
+    crate::game::log_launch_timing(&message);
+    #[cfg(not(target_os = "android"))]
+    eprintln!("SlotKONKR: {message}");
+}
+
 fn classify(err: &io::Error) -> Failure {
     match err.kind() {
         io::ErrorKind::Interrupted => Failure::Cancelled,
@@ -329,6 +338,7 @@ impl LinkStarter {
         thread::spawn(move || {
             let _ = tx.send(Progress::Looking);
             let result = connect(role, local, &config, &worker_cancel, &tx, &approval);
+            if let Err(ref error) = result { report_setup_error(error); }
             let report = match result {
                 Ok((link, remote)) if !worker_cancel.is_cancelled() =>
                     Progress::Ready(link, remote),
@@ -373,6 +383,7 @@ impl LinkStarter {
                     Ok((link, peer))
                 })
             };
+            if let Err(ref error) = result { report_setup_error(error); }
             let report = match result {
                 Ok((link, remote)) if !worker_cancel.is_cancelled() =>
                     Progress::Ready(link, remote),

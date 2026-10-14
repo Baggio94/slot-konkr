@@ -13,8 +13,8 @@ android {
         targetSdk = 32
         // Isolated Multiplayer Lab preview: never confuse with the physical Beta5
         // or the separate Beta6 diagnostic APK. No install without save backup.
-        versionCode = 84
-        versionName = "0.1.0-rc5-mlab-a13r1"
+        versionCode = 85
+        versionName = "0.1.0-rc5-mlab-a13r2"
         // One byte-identical APK on ARM64 KONKR and x86_64 Mac AVD.
         // Native libraries for BOTH ABIs are built/pinned by the same CI.
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }

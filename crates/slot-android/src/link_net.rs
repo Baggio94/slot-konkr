@@ -37,6 +37,14 @@ fn report_link_transport_fault(stage: &str, reason: &str) {
     eprintln!("SlotKONKR: {message}");
 }
 
+/// The KMLB/4 trace contains metadata only; never record ROM bytes or hashes.
+fn report_link_rom_phase(stage: &str, details: &str) {
+    let message = format!("KMLB4 ROM exchange: stage={stage} {details}");
+    #[cfg(target_os = "android")]
+    crate::game::log_launch_timing(&message);
+    #[cfg(not(target_os = "android"))]
+    eprintln!("SlotKONKR: {message}");
+}
 const POLL_MS: u64 = 50;
 
 pub const HOST_BOUND: Duration = Duration::from_secs(30);
@@ -469,8 +477,10 @@ impl TcpLink {
         }
         const MAX_ROM: usize = 32 * 1024 * 1024;
         const CHUNK: usize = 60 * 1024;
-        const DEADLINE: Duration = Duration::from_secs(90);
-        const PACKET_WAIT: Duration = Duration::from_secs(8);
+        // A13 field traces show repeat disconnects about 8s after ROM
+        // consent; allow slow Wi-Fi/AVD transfers without unbounded waits.
+        const DEADLINE: Duration = Duration::from_secs(180);
+        const PACKET_WAIT: Duration = Duration::from_secs(20);
         let peer = self.peer_identity().ok_or_else(||
             invalid("KMLB/4 missing verified peer greeting"))?.clone();
         if local.backend != 1 || peer.backend != 1 || local.mode != 1
@@ -484,7 +494,10 @@ impl TcpLink {
             if local.rom_sha256 == peer.rom_sha256 { return Ok(None); }
             return Err(invalid("Identical GBA game code with different ROM revisions"));
         }
+        let began = Instant::now();
         let own = fs::read(own_rom)?;
+        report_link_rom_phase("start", &format!("own_bytes={} peer_game_code={}",
+            own.len(), String::from_utf8_lossy(&peer.game)));
         if !(0xC0..=MAX_ROM).contains(&own.len()) ||
             own.get(0xAC..0xB0) != Some(local.game.as_slice()) ||
             digest(&SHA256, &own).as_ref() != local.rom_sha256 {
@@ -536,17 +549,30 @@ impl TcpLink {
         // transmits ANY game image bytes. One party can take longer reading
         // the permission dialog; the other waits up to 60s for R4OK instead
         // of timing out after the normal 8s per-packet limit.
+        report_link_rom_phase("consent", "awaiting_remote");
         self.send(slot_retro::NETPACKET_RELIABLE, b"R4OK");
-        if take_frame(self, Duration::from_secs(60), cancel)?.as_slice() != b"R4OK" {
+        let approval = take_frame(self, Duration::from_secs(60), cancel)
+            .map_err(|error| {
+                report_link_transport_fault("rom_consent", &error.to_string());
+                error
+            })?;
+        if approval.as_slice() != b"R4OK" {
             return Err(invalid("Mixed-ROM peer did not authorize cartridge exchange"));
         }
+        report_link_rom_phase("consent", &format!(
+            "authorized elapsed_ms={}", began.elapsed().as_millis()));
         let until = Instant::now() + DEADLINE;
         let mut manifest = Vec::with_capacity(44);
         manifest.extend_from_slice(b"R4M0");
         manifest.extend_from_slice(&(own.len() as u32).to_be_bytes());
         manifest.extend_from_slice(&local.game);
         manifest.extend_from_slice(&local.rom_sha256);
-        let remote_meta = exchange_frame(self, &manifest, until, cancel)?;
+        report_link_rom_phase("manifest", "awaiting_remote");
+        let remote_meta = exchange_frame(self, &manifest, until, cancel)
+            .map_err(|error| {
+                report_link_transport_fault("rom_manifest", &error.to_string());
+                error
+            })?;
         if remote_meta.len() != 44 || &remote_meta[..4] != b"R4M0" ||
             remote_meta[8..12] != peer.game ||
             remote_meta[12..44] != peer.rom_sha256 {
@@ -559,6 +585,9 @@ impl TcpLink {
         }
         let local_chunks = own.len().div_ceil(CHUNK);
         let remote_chunks = remote_len.div_ceil(CHUNK);
+        report_link_rom_phase("manifest", &format!(
+            "accepted remote_bytes={remote_len} chunks={} elapsed_ms={}",
+            local_chunks.max(remote_chunks), began.elapsed().as_millis()));
         let mut received = Vec::with_capacity(remote_len);
         for seq in 0..local_chunks.max(remote_chunks) {
             let st = seq * CHUNK;
@@ -568,7 +597,13 @@ impl TcpLink {
             packet.extend_from_slice(b"R4D0");
             packet.extend_from_slice(&(seq as u16).to_be_bytes());
             packet.extend_from_slice(slice);
-            let frame = exchange_frame(self, &packet, until, cancel)?;
+            let frame = exchange_frame(self, &packet, until, cancel)
+                .map_err(|error| {
+                    report_link_transport_fault("rom_fragment",
+                        &format!("seq={seq}/{} elapsed_ms={} reason={error}",
+                            local_chunks.max(remote_chunks), began.elapsed().as_millis()));
+                    error
+                })?;
             if frame.len() < 6 || &frame[..4] != b"R4D0" ||
                 u16::from_be_bytes([frame[4], frame[5]]) != seq as u16 {
                 return Err(invalid("Remote ROM fragment sequence mismatch"));
@@ -580,21 +615,36 @@ impl TcpLink {
                 return Err(invalid("Remote ROM fragment length mismatch"));
             }
             received.extend_from_slice(&frame[6..]);
+            if seq % 32 == 0 || seq + 1 == local_chunks.max(remote_chunks) {
+                report_link_rom_phase("fragment", &format!(
+                    "seq={}/{} received_bytes={} elapsed_ms={}",
+                    seq + 1, local_chunks.max(remote_chunks),
+                    received.len(), began.elapsed().as_millis()));
+            }
         }
         if cancel.is_cancelled() {
             return Err(std::io::Error::new(std::io::ErrorKind::Interrupted,
                 "Peer ROM exchange cancelled before publishing cache"));
         }
+        report_link_rom_phase("verification", &format!(
+            "received_bytes={} expected_bytes={} elapsed_ms={}",
+            received.len(), remote_len, began.elapsed().as_millis()));
         if received.len() != remote_len ||
             received.get(0xAC..0xB0) != Some(peer.game.as_slice()) ||
             digest(&SHA256, &received).as_ref() != peer.rom_sha256 {
+            report_link_transport_fault("rom_verification",
+                "remote size/header/SHA256 mismatch");
             return Err(invalid("Remote ROM data failed header or SHA256 authentication"));
         }
         let hex: String = peer.rom_sha256.iter().map(|b| format!("{b:02x}")).collect();
         let dest = cache.join(format!("{hex}.gba"));
         if dest.is_file() {
             let old = fs::read(&dest)?;
-            if old == received { return Ok(Some(dest)); }
+            if old == received {
+                report_link_rom_phase("ready", &format!(
+                    "existing_cache_verified elapsed_ms={}", began.elapsed().as_millis()));
+                return Ok(Some(dest));
+            }
             return Err(invalid("Verified remote ROM cache changed unexpectedly"));
         }
         // Use a unique private temp generation so an interrupted exchange
@@ -623,6 +673,8 @@ impl TcpLink {
         if fs::read(&dest)? != received {
             return Err(invalid("Cached peer ROM was modified during publishing"));
         }
+        report_link_rom_phase("ready", &format!(
+            "cache_published elapsed_ms={}", began.elapsed().as_millis()));
         Ok(Some(dest))
     }
 
@@ -732,8 +784,9 @@ mod lab_negotiation_tests {
             bytes[0xAC..0xB0].copy_from_slice(&code);
             bytes
         }
-        let host_rom = cart(*b"BPRE", 256 * 1024, 0xA5);
-        let guest_rom = cart(*b"BPGE", 384 * 1024, 0x5A);
+        // Retail-sized Pokémon images: hundreds of bidirectional packets.
+        let host_rom = cart(*b"BPRE", 16 * 1024 * 1024, 0xA5);
+        let guest_rom = cart(*b"BPGE", 16 * 1024 * 1024, 0x5A);
         let host_file = a_dir.join("firered.gba");
         let guest_file = b_dir.join("leafgreen.gba");
         fs::write(&host_file, &host_rom).unwrap();
