@@ -14,9 +14,10 @@ The mGBA libretro patch (`cores/mgba/link-mode.patch`) calls `_linkCreatePeer(ga
 - mGBA's internal `mgba_link_peer_rom` loads the verified cached ROM as its second GBA. The local player keeps their own game, SRAM/RTC, display and inputs. This peer option must be specified before libretro ROM load.
 - Initial SLK1 creation uses `link_state::with_local_player` to load only the local player's pre-Link progress into the correct GBA, leaving the other cartridge's fresh boot state intact. The Join then transmits their local saved GBA state; Host combines both and sends the authoritative pair, as in existing lockstep.
 - The transfer has 32 MiB retail ROM size caps, per-chunk sequencing, 90-second overall deadline, SHA/header rechecks and an explicit cancellation path. Failure closes the connection and leaves existing solo SRAM untouched.
+- For different ROMs, **both Android users must explicitly tap Allow once** before the ROM image transfer. Each side waits for the other's approved `R4OK` barrier; the same-ROM mGBA path and gpSP KMLB/3 have no new dialog. Cancellation or permission timeout aborts without sending game image bytes.
 - Native tests include a real TCP exchange between two different synthetic ROMs and both mGBA role directions; tests are **not evidence of successful Pokémon trading on real Android devices**.
 
-**Safety / UX note:** The ROM-file exchange is materially different from ordinary game-input-only local multiplayer. The UI should disclose that mixed-ROM Cable sends the game image to the other device before this becomes a normal release default. Privacy/ownership consent and real network performance still require review.
+**Safety / UX note:** The ROM-file exchange is materially different from ordinary game-input-only local multiplayer. An Android one-time permission dialog now discloses the full ROM transfer and requires approval on **both** devices. The transfer is on the local network and is **not encrypted**; users should connect only trusted devices on a trusted LAN. Real UI usability and network performance still require device QA.
 
 ## Implementation gates and physical QA
 
