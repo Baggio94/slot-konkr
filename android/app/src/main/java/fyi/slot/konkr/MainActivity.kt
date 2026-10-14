@@ -1004,8 +1004,19 @@ class MainActivity : Activity() {
                                 return@execute
                             }
                             CoreStateChoice.EXISTING -> {
+                                // Do not delete the one-shot SRAM guard until
+                                // an explicitly requested external RetroArch
+                                // state has actually been decoded and staged.
+                                // Existing protected generations remain higher
+                                // priority than stale external auto-states.
+                                RetroArchStorage.importExplicitExistingState(
+                                    this@MainActivity, shared)
                                 val lower = if (core == "mGBA") "mgba" else "gpsp"
-                                File(filesDir, "Saves/$digest.$lower.skip-resume.once").delete()
+                                val skipped = File(filesDir,
+                                    "Saves/$digest.$lower.skip-resume.once")
+                                if (skipped.isFile && !skipped.delete()) {
+                                    error("Cannot restore existing state while SRAM guard is active")
+                                }
                                 resumeChoice = 1
                             }
                             CoreStateChoice.SHARED -> {
