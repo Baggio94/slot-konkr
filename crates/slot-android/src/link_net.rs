@@ -3,7 +3,7 @@
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -146,7 +146,7 @@ enum Out {
 }
 
 pub struct TcpLink {
-    outbox: Sender<Out>,
+    outbox: SyncSender<Out>,
     inbox: Receiver<Vec<u8>>,
     stream: TcpStream,
     closed: Arc<AtomicBool>,
