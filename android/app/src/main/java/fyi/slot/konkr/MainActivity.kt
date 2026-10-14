@@ -883,6 +883,35 @@ class MainActivity : Activity() {
         }
     }
 
+    private enum class SharedGbaChoice { MGBA, GPSP, CANCEL }
+
+    /** Three-way conflict arbitration. Nothing is written to either
+     * cartridge while the dialog is open; Cancel must abort ROM launch.
+     */
+    private fun askSharedGbaConflict(): SharedGbaChoice {
+        val ready = CountDownLatch(1)
+        val selected = java.util.concurrent.atomic.AtomicReference(SharedGbaChoice.CANCEL)
+        runOnUiThread {
+            if (isDestroyed || isFinishing) { ready.countDown(); return@runOnUiThread }
+            AlertDialog.Builder(this)
+                .setTitle("Choose shared game save")
+                .setMessage("mGBA and gpSP contain different game progress. " +
+                    "Choose which cartridge save to share. Both original files " +
+                    "will be backed up before anything is replaced.")
+                .setPositiveButton("Keep mGBA") { _, _ ->
+                    selected.set(SharedGbaChoice.MGBA); ready.countDown()
+                }
+                .setNeutralButton("Keep gpSP") { _, _ ->
+                    selected.set(SharedGbaChoice.GPSP); ready.countDown()
+                }
+                .setNegativeButton("Cancel") { _, _ -> ready.countDown() }
+                .setOnCancelListener { ready.countDown() }
+                .show()
+        }
+        return if (ready.await(120L, TimeUnit.SECONDS)) selected.get()
+            else SharedGbaChoice.CANCEL
+    }
+
     private enum class CoreStateChoice { EXISTING, SHARED, CANCEL }
 
     /** This dialog is deliberately rare: only Share Saves ON, actual core
@@ -976,14 +1005,20 @@ class MainActivity : Activity() {
                         prefs.getBoolean(SHARE_GBA_SAVES, false))
                 try {
                     RetroArchStorage.importBeforeLaunch(this@MainActivity, shared)
-                } catch (error: Exception) {
-                    Log.w(TAG, "RetroArch SAF import skipped, keeping private saves", error)
-                    runOnUiThread {
-                        if (!isDestroyed) SlotToast.makeText(this@MainActivity,
-                            if (error is RetroArchStorage.SaveConflict) error.message
-                                ?: "Different core saves preserved; sharing paused."
-                            else "Couldn't load existing saves. Check your Saves and Save State folders.",
-                            Toast.LENGTH_LONG).show()
+                } catch (error: RetroArchStorage.SaveConflict) {
+                    Log.w(TAG, "Conflicting mGBA/gpSP SRAM needs explicit choice", error)
+                    when (val choice = askSharedGbaConflict()) {
+                        SharedGbaChoice.CANCEL -> {
+                            nativeGameError(rawUri, "Shared save selection cancelled")
+                            return@execute
+                        }
+                        SharedGbaChoice.MGBA, SharedGbaChoice.GPSP -> {
+                            val source = if (choice == SharedGbaChoice.MGBA)
+                                "mGBA" else "gpSP"
+                            RetroArchStorage.resolveSharedGbaConflict(
+                                this@MainActivity, shared, source)
+                            RetroArchStorage.importBeforeLaunch(this@MainActivity, shared)
+                        }
                     }
                 }
                 // Share Saves never silently chooses an old same-core state
