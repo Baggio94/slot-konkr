@@ -47,6 +47,18 @@ enum PendingUndo {
 }
 
 
+/// Validated local single-GBA checkpoint recovered from a private Link
+/// session. The other player's SRAM and emulator state are NEVER included.
+pub struct SoloRejoin {
+    pub snapshot: Vec<u8>,
+    pub ram: Option<Vec<u8>>,
+    pub rtc: Option<Vec<u8>>,
+    expected_ram: Option<Vec<u8>>,
+    expected_rtc: Option<Vec<u8>>,
+    expected_state: Vec<u8>,
+    expected_ra_export: Option<Vec<u8>>,
+}
+
 pub struct GameSession {
     // Wrapped with the native softcore evaluator for opted-in GBA sessions.
     core: Box<dyn RetroCore>,
@@ -208,14 +220,25 @@ impl GameSession {
         let save = core_root.join(format!("{rom_stem}.srm"));
         let rtc = core_root.join(format!("{rom_stem}.rtc"));
         if linked_boot.is_some() {
-            // Every new session starts from a COPY of this player's
-            // immediate solo SRAM/RTC. A previous session's files must
-            // NEVER shadow these fresh live progress bytes.
+            // Preserve the exact pre-Link solo SRAM/RTC and state identity in
+            // the unique private session. Check the original files have not
+            // changed before promoting any Link gameplay to SOLO.
             for (ext, target) in [("srm", &save), ("rtc", &rtc)] {
                 let source = solo_core_root.join(format!("{rom_stem}.{ext}"));
                 crate::linked_storage::copy_solo_battery(&source, target)
-                    .map_err(|e| format!("Cannot seed mGBA Link {ext}: {e}"))?;
+                    .map_err(|e| format!("Cannot seed private Link {ext}: {e}"))?;
+                let baseline = core_root.join(format!("{rom_stem}.prelink.{ext}"));
+                crate::linked_storage::copy_solo_battery(&source, &baseline)
+                    .map_err(|e| format!("Cannot stage Link baseline {ext}: {e}"))?;
             }
+            if let Some(snapshot) = linked_resume {
+                atomic_write(&core_root.join("prelink.state"), snapshot)
+                    .map_err(|e| format!("Cannot stage Link state baseline: {e}"))?;
+            }
+            let ra_before = root.join(format!("{id}.{}.retroarch-export.state.auto", which.as_str()));
+            crate::linked_storage::copy_solo_battery(&ra_before,
+                &core_root.join("prelink.retroarch-export.state.auto"))
+                .map_err(|e| format!("Cannot stage Link RA baseline: {e}"))?;
         }
         // Save states belong to their specific emulator core. Incompatible
         // mGBA/gpSP states must never be deserialized in the other core.
@@ -576,6 +599,123 @@ impl GameSession {
         atomic_write(&self.state.with_extension("prefer-solo-after-link.once"), b"1")
             .map_err(|e| format!("Cannot record solo recovery guard: {e}"))?;
         Ok(bytes)
+    }
+
+    /// Capture the player's own live GBA BEFORE the transport or core is
+    /// destroyed. mGBA's SLK1 container has both consoles; only the local
+    /// role may be extracted. gpSP already has one local GBA.
+    pub fn prepare_solo_rejoin(&mut self) -> Result<SoloRejoin, String> {
+        let role = self.linked_boot.ok_or("Not a private multiplayer game")?;
+        if !self.link_touched { return Err("Link was never started".into()); }
+        let full = self.core.serialize().map_err(|e| format!("Cannot capture Link progress: {e}"))?;
+        let snapshot = if self.core_kind == Core::Mgba {
+            let player = if role == Role::Host { 0 } else { 1 };
+            crate::link_state::local(&full, player)
+                .ok_or("Cannot extract local mGBA from SLK1 pair")?
+        } else { full };
+        crate::linked_storage::validate_solo_snapshot(&snapshot)?;
+        let ram = self.core.save_ram();
+        let rtc = self.core.save_rtc();
+        let root = self.save.parent().ok_or("No private Link save root")?;
+        let baseline = |name: &str| -> Result<Option<Vec<u8>>, String> {
+            match std::fs::read(root.join(name)) {
+                Ok(data) => Ok(Some(data)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(format!("Cannot read Link baseline {name}: {e}")),
+            }
+        };
+        let expected_ram = baseline(&format!("{}.prelink.srm", self.rom_stem))?;
+        let expected_rtc = baseline(&format!("{}.prelink.rtc", self.rom_stem))?;
+        let expected_state = std::fs::read(root.join("prelink.state"))
+            .map_err(|e| format!("Missing pre-Link solo checkpoint: {e}"))?;
+        crate::linked_storage::validate_solo_snapshot(&expected_state)?;
+        let expected_ra_export = baseline("prelink.retroarch-export.state.auto")?;
+        // Always preserve the final native local snapshot in the isolated
+        // private history even if a later solo recovery fails.
+        atomic_write(&root.join("last-local-gba.state"), &snapshot)
+            .map_err(|e| format!("Cannot preserve recovered Link state: {e}"))?;
+        if let Some(ref bytes) = ram {
+            atomic_write(&self.save, bytes)
+                .map_err(|e| format!("Cannot preserve recovered Link SRAM: {e}"))?;
+        }
+        if let Some(ref bytes) = rtc {
+            atomic_write(&self.rtc, bytes)
+                .map_err(|e| format!("Cannot preserve recovered Link RTC: {e}"))?;
+        }
+        Ok(SoloRejoin { snapshot, ram, rtc, expected_ram, expected_rtc,
+            expected_state, expected_ra_export })
+    }
+
+    /// The rebuilt core must be an ordinary single-GBA SOLO context.
+    /// No link-specific state, netpacket callback, RA evaluator or network
+    /// transport is carried into it. Verify the exact live checkpoint.
+    pub fn restore_local_after_link(&mut self, rejoin: &SoloRejoin) -> Result<(), String> {
+        if self.linked_boot.is_some() || self.link_touched || self.link.is_some() {
+            return Err("Refusing to resume Link data in non-solo core".into());
+        }
+        restore_solo_checkpoint_to_core(self.core.as_mut(), &rejoin.snapshot)?;
+        if let Some(ram) = rejoin.ram.as_deref() {
+            self.core.load_save_ram(ram)
+                .map_err(|e| format!("Core rejected local Link SRAM: {e}"))?;
+        }
+        if let Some(rtc) = rejoin.rtc.as_deref() {
+            self.core.load_rtc(rtc)
+                .map_err(|e| format!("Core rejected local Link RTC: {e}"))?;
+        }
+        self.runahead_video.clear();
+        self.rewind_frames = 0;
+        self.pending_undo = None;
+        Ok(())
+    }
+
+    /// Atomically switch the saved SOLO progress to its just-detached local
+    /// GBA only when its pre-Link baseline is still untouched. Immutable
+    /// before/after backup generations survive a crash or future conflict.
+    pub fn commit_rejoined_solo(&mut self, rejoin: &SoloRejoin)
+        -> Result<std::path::PathBuf, String> {
+        if self.linked_boot.is_some() || self.link_touched || self.link.is_some() {
+            return Err("A Link sandbox cannot promote itself to SOLO".into());
+        }
+        let resumed = self.core.serialize()
+            .map_err(|e| format!("Cannot verify resumed solo state: {e}"))?;
+        crate::linked_storage::validate_solo_snapshot(&resumed)?;
+        if let Some(expected) = rejoin.ram.as_deref() {
+            if self.core.save_ram().as_deref() != Some(expected) {
+                return Err("Recovered solo SRAM differs from Link original; refusing promotion".into());
+            }
+        }
+        let compressed = retroarch_state::encode(&resumed)
+            .map_err(|e| format!("Cannot encode resumed RetroArch state: {e}"))?;
+        let backup_root = self.save.parent()
+            .and_then(|d| d.parent())
+            .ok_or("Missing Slot Saves root")?
+            .join("LinkPromotions");
+        let promotions = [
+            crate::linked_storage::PromotionFile {
+                path: self.save.as_path(), expected: rejoin.expected_ram.as_deref(),
+                after: rejoin.ram.as_deref(),
+            },
+            crate::linked_storage::PromotionFile {
+                path: self.rtc.as_path(), expected: rejoin.expected_rtc.as_deref(),
+                after: rejoin.rtc.as_deref(),
+            },
+            crate::linked_storage::PromotionFile {
+                path: self.state.as_path(), expected: Some(&rejoin.expected_state),
+                after: Some(&resumed),
+            },
+            crate::linked_storage::PromotionFile {
+                path: self.retroarch_export.as_path(),
+                expected: rejoin.expected_ra_export.as_deref(),
+                after: Some(&compressed),
+            },
+        ];
+        let backup = crate::linked_storage::promote_player_files(&backup_root, &promotions)?;
+        // A stale RetroArch external auto-state might still exist. Always
+        // prefer newly promoted private progress at least on the next launch.
+        atomic_write(&self.state.with_extension("prefer-solo-after-link.once"), b"1")
+            .map_err(|e| format!("Link progress committed but resume guard failed: {e}"))?;
+        self.last_sram = Instant::now();
+        Ok(backup)
     }
 
     pub fn wireless_capable(&self) -> bool {
