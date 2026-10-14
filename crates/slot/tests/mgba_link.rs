@@ -439,6 +439,59 @@ fn live_solo_host_join_snapshots_resume_without_a_title_screen() {
         "Host and Join must compute identical SLK1 states after linked frames");
 }
 
+/// Detaching a Link cable must keep the LOCAL player's single-GBA state,
+/// never the peer's nor the SLK1 wrapper. This is the first feasibility
+/// regression for returning from a linked mGBA core to a genuine solo core.
+#[test]
+fn end_link_local_player_snapshot_can_resume_in_unlinked_mgba() {
+    let _g = common::core_lock();
+    let Some(dylib) = vendored() else { return };
+    let rom = rom("mgba-link-unplug-to-solo.gba", common::gba_rom());
+
+    let mut standalone = single_core(&dylib);
+    standalone.load(&rom).expect("load solo");
+    let mut starts = Vec::new();
+    for frames in [12, 32] {
+        for _ in 0..frames {
+            standalone.run_frame(ButtonMask::default());
+        }
+        starts.push(standalone.serialize().expect("solo state"));
+    }
+    drop(standalone);
+    let paired = slot::link_state::combine_players(
+        &slot::link_state::pair(&starts[0]), &starts[1])
+        .expect("distinct players must make a valid link state");
+
+    for player in [0u8, 1u8] {
+        let mut linked = link_core(&dylib, player);
+        linked.load(&rom).expect("load linked instance");
+        linked.unserialize(&paired).expect("resume linked machines");
+        for _ in 0..10 {
+            linked.run_frame_linked(ButtonMask::default(), ButtonMask::default());
+        }
+        let final_pair = linked.serialize().expect("serialize both linked GBAs");
+        assert!(slot::link_state::is_pair(&final_pair));
+        let own = slot::link_state::local(&final_pair, player)
+            .expect("the requested player must have a one-GBA state");
+        let peer = slot::link_state::local(&final_pair, 1 - player)
+            .expect("the other player must have a different one-GBA state");
+        assert!(!slot::link_state::is_pair(&own),
+            "never feed a two-GBA state into a solo emulator");
+        assert_ne!(own, peer, "players must retain distinct live progress");
+        drop(linked);
+
+        let mut solo = single_core(&dylib);
+        solo.load(&rom).expect("load a clean solo GBA after unplug");
+        solo.unserialize(&own)
+            .expect("local linked GBA must be loadable by a non-linked core");
+        solo.run_frame(ButtonMask::default());
+        assert_eq!(solo.video_xrgb8888().len(), GBA_W * GBA_H * 4,
+            "the unlinked GBA must resume rendering without ejecting its ROM");
+        let resume = solo.serialize().expect("solo after unplug");
+        assert!(!slot::link_state::is_pair(&resume));
+    }
+}
+
 #[test]
 fn link_mode_refuses_anything_but_a_whole_link_state() {
     let _g = common::core_lock();
