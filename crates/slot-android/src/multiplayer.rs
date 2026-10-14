@@ -27,7 +27,7 @@ pub enum Failure { NoNetwork, NobodyCame, IncompatiblePeer, PeerVanished, Cancel
 
 pub enum Progress {
     Looking,
-    Ready(TcpLink),
+    Ready(TcpLink, Option<PathBuf>),
     Failed(Failure),
 }
 
@@ -187,14 +187,14 @@ impl LinkConfig {
 }
 
 fn connect(role: Role, local: Ipv4Addr, config: &LinkConfig,
-           cancel: &Cancel) -> io::Result<TcpLink> {
+           cancel: &Cancel) -> io::Result<(TcpLink, Option<PathBuf>)> {
     if local.is_unspecified() || local.is_loopback() || local.is_multicast()
         || local.is_link_local() || local.is_broadcast() {
         return Err(io::Error::new(io::ErrorKind::AddrNotAvailable,
             "no usable Wi-Fi IPv4 address"));
     }
     let fingerprint = config.fingerprint()?;
-    match role {
+    let mut link = match role {
         Role::Host => {
             // Validate multicast and join the correct interface before announcing.
             let wire = Multicast::open(local)?;
@@ -218,6 +218,19 @@ fn connect(role: Role, local: Ipv4Addr, config: &LinkConfig,
                 TcpLink::join_lab_greeted(addr.into(), &fingerprint)
             })
         }
+    }?;
+    let peer_path = stage_mgba_peer(&mut link, &fingerprint, config)?;
+    Ok((link, peer_path))
+}
+
+/// A new KMLB/4 session cannot become READY until the remote cartridge
+/// has been fully exchanged, SHA-verified and published inside the private
+/// app cache. The GL thread never hashes, copies or downloads ROM data.
+fn stage_mgba_peer(link: &mut TcpLink, local: &LabGreeting,
+                   config: &LinkConfig) -> io::Result<Option<PathBuf>> {
+    match config.backend {
+        Backend::MgbaSlotCable => link.exchange_mgba_peer_rom(local, &config.rom),
+        Backend::GpspNetpacket => Ok(None),
     }
 }
 
@@ -289,7 +302,8 @@ impl LinkStarter {
             let _ = tx.send(Progress::Looking);
             let result = connect(role, local, &config, &worker_cancel);
             let report = match result {
-                Ok(link) if !worker_cancel.is_cancelled() => Progress::Ready(link),
+                Ok((link, remote)) if !worker_cancel.is_cancelled() =>
+                    Progress::Ready(link, remote),
                 Ok(_) => Progress::Failed(Failure::Cancelled),
                 Err(e) if e.kind() == io::ErrorKind::AddrNotAvailable =>
                     Progress::Failed(Failure::NoNetwork),
@@ -322,11 +336,16 @@ impl LinkStarter {
             let result = if worker_cancel.is_cancelled() {
                 Err(io::Error::new(io::ErrorKind::Interrupted, "Join cancelled"))
             } else {
-                config.fingerprint().and_then(|fingerprint|
-                    TcpLink::join_lab_greeted(SocketAddrV4::new(host, PORT).into(), &fingerprint))
+                config.fingerprint().and_then(|fingerprint| {
+                    let mut link = TcpLink::join_lab_greeted(
+                        SocketAddrV4::new(host, PORT).into(), &fingerprint)?;
+                    let peer = stage_mgba_peer(&mut link, &fingerprint, &config)?;
+                    Ok((link, peer))
+                })
             };
             let report = match result {
-                Ok(link) if !worker_cancel.is_cancelled() => Progress::Ready(link),
+                Ok((link, remote)) if !worker_cancel.is_cancelled() =>
+                    Progress::Ready(link, remote),
                 Ok(_) => Progress::Failed(Failure::Cancelled),
                 Err(error) => Progress::Failed(classify(&error)),
             };
@@ -339,7 +358,7 @@ impl LinkStarter {
         if self.done { return None; }
         match self.events.try_recv() {
             Ok(event) => {
-                self.done = matches!(&event, Progress::Ready(_) | Progress::Failed(_));
+                self.done = matches!(&event, Progress::Ready(..) | Progress::Failed(_));
                 Some(event)
             }
             Err(TryRecvError::Empty) => None,
