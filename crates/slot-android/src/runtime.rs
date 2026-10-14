@@ -2741,6 +2741,11 @@ impl Engine {
         });
     }
     fn change_game_emulation(&mut self, key: usize, right: bool) {
+        if key == 12 && self.game.as_ref().is_some_and(|game|
+            game.mgba_flash_runahead_blocked()) {
+            set_message("Run-Ahead is disabled for Pokemon Gen III with mGBA to protect Flash saves. gpSP is unchanged.".into());
+            return;
+        }
         let Some(uri) = self.selected_rom_uri() else { return; };
         let core = self.selected_emulation_core();
         let mut profile = self.current_emulation();
