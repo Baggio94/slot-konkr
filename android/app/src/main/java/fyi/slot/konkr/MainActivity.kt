@@ -134,6 +134,7 @@ class MainActivity : Activity() {
     external fun nativeSetNextResumeMode(mode: Int)
     // The renderer requests LAN only when Host/Join is selected. It never
     // touches WifiManager, Android UI or permissions from the GL thread.
+    external fun nativeLinkPeerRomConsent(allowed: Boolean)
     external fun nativeLinkNetworkReady(ipv4: String)
     external fun nativeLinkDirectHost(addressPair: String)
     external fun nativeLinkDiscoveryGame(): String?
@@ -333,6 +334,38 @@ class MainActivity : Activity() {
         dialog.show()
     }
 
+    /** Mixed-ROM mGBA can only work if each emulator has both cartridges.
+     * This is a full ROM image transfer, not just gamepad traffic. Require
+     * explicit approval on BOTH devices after identity negotiation.
+     * Same-ROM Link and gpSP RFU/Cable never prompt.
+     */
+    private fun showPeerCartridgeConsent() {
+        if (!resumed || isDestroyed || isFinishing) {
+            nativeLinkPeerRomConsent(false)
+            return
+        }
+        val answered = AtomicBoolean(false)
+        fun reply(allow: Boolean) {
+            if (answered.compareAndSet(false, true)) nativeLinkPeerRomConsent(allow)
+        }
+        try {
+            AlertDialog.Builder(this)
+                .setTitle("Connect different GBA games?")
+                .setMessage("To run two different cartridges with mGBA Cable, " +
+                    "slot. must send this device's full game ROM to the other " +
+                    "device over your local network and receive the other ROM. " +
+                    "The received copy is kept privately, not added to your library. " +
+                    "Only allow this when you trust the other device.")
+                .setPositiveButton("Allow once") { _, _ -> reply(true) }
+                .setNegativeButton("Cancel") { _, _ -> reply(false) }
+                .setOnCancelListener { reply(false) }
+                .show()
+        } catch (error: Exception) {
+            Log.w(TAG, "Cannot show mixed-ROM sharing confirmation", error)
+            reply(false)
+        }
+    }
+
     private fun requestLinkWifi() {
         if (!resumed) {
             nativeLinkNetworkError("Return to Slot before starting Multiplayer")
@@ -501,6 +534,7 @@ class MainActivity : Activity() {
                 }
                 16 -> requestLinkWifi()
                 17 -> toggleShareGbaSaves()
+                18 -> showPeerCartridgeConsent()
             }
             // Multicast is required during discovery, not for ongoing TCP
             // emulation. Release on success, cancellation and timeout.
