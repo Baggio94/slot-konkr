@@ -109,10 +109,16 @@ impl LabGreeting {
             std::str::from_utf8(&other.game).unwrap_or(""))) { return false; }
         if self.backend!=other.backend || self.mode!=other.mode ||
             self.core_sha256!=other.core_sha256 || self.bios_sha256!=other.bios_sha256{return false;}
-        if self.game==other.game{return self.rom_sha256==other.rom_sha256;}
         let mode=match self.mode{1=>crate::link_kind::LinkKind::Cable,
             2=>crate::link_kind::LinkKind::Wireless,_=>return false};
-        self.backend==2 && crate::link_compat::compatible_cross_title(self.game,other.game,mode)
+        if self.backend==2 {
+            for code in [self.game, other.game] {
+                let Ok(code) = std::str::from_utf8(&code) else { return false; };
+                if !crate::link_kind::gpsp_runtime_mode_supported(code, mode) {return false;}
+            }
+        }
+        if self.game==other.game{return self.rom_sha256==other.rom_sha256;}
+        self.backend==2 && crate::link_compat::runnable_gpsp_cross_title(self.game,other.game,mode)
     }
 }
 fn vet_lab(stream:&mut TcpStream,local:&LabGreeting)->bool{
@@ -660,6 +666,18 @@ mod lab_negotiation_tests {
         // Identical header code with modified ROM content is NOT an approved pair.
         let mut patched=host.clone();patched.rom_sha256[0]^=1;
         assert!(!host.accepts(&patched));
+        // Physically compatible but unsupported generic Cable protocols
+        // must never complete an apparently successful gpSP handshake.
+        let mut battle=host.clone();
+        battle.game=*b"BRBE";battle.mode=1;
+        let mut colonel=battle.clone();
+        colonel.game=*b"BRKE";colonel.rom_sha256=[0x22;32];
+        assert!(!battle.accepts(&colonel));
+        battle.mode=2;colonel.mode=2;
+        assert!(battle.accepts(&colonel));
+        let mut bn3=battle.clone();bn3.game=*b"A3XE";bn3.mode=1;
+        let mut bn3_white=bn3.clone();bn3_white.game=*b"A6BE";
+        assert!(!bn3.accepts(&bn3_white));
         // mGBA pair snapshots cannot safely contain two different games.
         let mut mgba=host.clone();mgba.backend=1;
         let mut mgba_other=other.clone();mgba_other.backend=1;
