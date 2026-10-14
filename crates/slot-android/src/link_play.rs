@@ -30,6 +30,9 @@ fn valid_cable_packet_shape(packet: &[u8]) -> bool {
 
 
 const INITIAL_STATE_TIMEOUT: Duration = Duration::from_secs(12);
+// A delayed Mac AVD can miss 60 GL callbacks in ~1 second while TCP is still
+// healthy. Use wall-clock time, NOT callback count; never invent peer input.
+const CABLE_INPUT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum LinkError {
@@ -96,6 +99,12 @@ pub struct LinkPlay {
     awaiting_join_seed: bool,
     started: Instant,
     pacing: LinkPacing,
+    // Track an actual contiguous missing-input interval. Unlike the five-
+    // second diagnostic window this survives reporting boundaries.
+    waiting_for_input_since: Option<Instant>,
+    // TCP guarantees one input packet per sampled future frame; sending the
+    // same frame on every waiting draw floods both bounded socket queues.
+    last_sent_cable_frame: Option<u64>,
     // The cable protocol deliberately has a 3-frame input delay, as upstream.
     // Wireless passes bytes through the core's registered netpacket ABI.
 }
@@ -167,6 +176,8 @@ impl LinkPlay {
             wire, cable, mode, net, error: None, local_paused: false, state_bytes: 0,
             state_final_received: false, awaiting_join_seed, started: Instant::now(),
             pacing: LinkPacing::new(),
+            waiting_for_input_since: None,
+            last_sent_cable_frame: None,
         })
     }
 
@@ -190,6 +201,8 @@ impl LinkPlay {
     /// mGBA Cable input frames. Only send when the state actually changes.
     pub fn set_local_paused(&mut self, paused: bool) {
         if self.local_paused != paused {
+            // A menu interaction is intentional, not a peer-input timeout.
+            self.waiting_for_input_since = None;
             self.local_paused = paused;
             self.wire.set_paused(paused);
         }
@@ -257,7 +270,10 @@ impl LinkPlay {
         // The network reader updates peer_paused even if this core has not
         // advanced a frame for an arbitrarily long pause-menu interaction.
         // Do not pump RFU or sample Cable input until BOTH peers resume.
-        if self.local_paused || self.wire.peer_paused() { return Frame::Waiting; }
+        if self.local_paused || self.wire.peer_paused() {
+            self.waiting_for_input_since = None;
+            return Frame::Waiting;
+        }
 
         for _ in 0..MAX_RECEIVE_PER_FRAME {
             let Some(packet) = self.wire.try_recv() else { break };
@@ -354,9 +370,18 @@ impl LinkPlay {
                 }
                 return Frame::Waiting;
             }
-            // The original sampler is idempotent across a stalled frame.
-            self.wire.send(NETPACKET_RELIABLE, &cable.sample(buttons));
+            // TCP is reliable and in-order. Sampling is idempotent while
+            // stalled, so send each frame ONCE. A retransmission on every GL
+            // callback previously filled the bounded write/receive queues
+            // whenever the other device was briefly suspended.
+            let frame_index = cable.frame();
+            if self.last_sent_cable_frame != Some(frame_index) {
+                self.wire.send(NETPACKET_RELIABLE, &cable.sample(buttons));
+                self.last_sent_cable_frame = Some(frame_index);
+                if self.wire.is_closed() { return self.fail(LinkError::Disconnected); }
+            }
             if let Some((p0, p1)) = cable.ready() {
+                self.waiting_for_input_since = None;
                 let core_started = Instant::now();
                 core.run_frame_linked(p0, p1);
                 let us = core_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
@@ -366,8 +391,8 @@ impl LinkPlay {
                 cable.advance();
                 Frame::Advanced
             } else {
-                cable.stall();
-                if cable.stalled() >= cable::QUIET_FRAMES {
+                let since = *self.waiting_for_input_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= CABLE_INPUT_TIMEOUT {
                     self.fail(LinkError::Timeout)
                 } else {
                     Frame::Waiting
@@ -396,6 +421,16 @@ impl LinkPlay {
     }
 
     fn fail(&mut self, error: LinkError) -> Frame {
+        if self.error != Some(error) {
+            let elapsed = self.waiting_for_input_since.map_or(0, |t| t.elapsed().as_millis());
+            let frame = self.cable.as_ref().map(Cable::frame);
+            let detail = format!("Link fault: kind={error:?} mode={:?} frame={frame:?} input_wait_ms={elapsed} peer_paused={} local_paused={} rx_packets_window={}",
+                self.mode, self.wire.peer_paused(), self.local_paused, self.pacing.packets);
+            #[cfg(target_os = "android")]
+            crate::game::log_launch_timing(&detail);
+            #[cfg(not(target_os = "android"))]
+            eprintln!("SlotKONKR: {detail}");
+        }
         self.error = Some(error);
         Frame::Failed(error)
     }
