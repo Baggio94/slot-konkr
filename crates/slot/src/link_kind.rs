@@ -66,6 +66,16 @@ pub fn link_kind(code: &str, title: &str, clean: bool) -> LinkKind {
     }
 }
 
+/// Menu preference only: where both gpSP backends are usable, show the
+/// original Cable Link first. Retain RFU-only cartridges and the existing
+/// automatic core configuration for hardware that cannot do Cable.
+pub fn preferred_mode(code: &str, title: &str, clean: bool) -> LinkKind {
+    let automatic = link_kind(code, title, clean);
+    if gpsp_runtime_mode_supported(code, LinkKind::Cable) {
+        LinkKind::Cable
+    } else { automatic }
+}
+
 pub fn serial_option(chosen: LinkKind, auto: LinkKind, code: &str, title: &str) -> &'static str {
     if chosen == auto {
         // These EU/JP Battle Network 5/6 IDs support genuine RFU on GBA,
@@ -114,6 +124,20 @@ fn pokemon(code: &str, title: &str) -> bool {
 #[cfg(test)]
 mod a6_serial_regressions {
     use super::*;
+
+    #[test]
+    fn gp_sp_menu_prefers_cable_only_when_real_backend_supports_it() {
+        for (code, title) in [
+            ("BPRE", "POKEMON FIRE"), ("BPGE", "POKEMON LEAF"),
+            ("BPEE", "POKEMON EMER"), ("AXVE", "POKEMON RUBY"),
+        ] {
+            assert_eq!(preferred_mode(code, title, true), LinkKind::Cable);
+        }
+        assert_eq!(preferred_mode("BRBE", "MEGAMAN BN5", true), LinkKind::Wireless);
+        assert_eq!(preferred_mode("AWRE", "ADVANCE WARS", true), LinkKind::Cable);
+        assert_eq!(link_kind("BPRE", "POKEMON FIRE", true), LinkKind::Wireless,
+            "retain original auto profile for selecting gpsp_serial correctly");
+    }
 
     #[test]
     fn retail_pokemon_rfu_and_hacked_or_older_cable_stay_distinct() {
