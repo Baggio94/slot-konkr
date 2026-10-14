@@ -55,6 +55,18 @@ pub fn compatible_cross_title(a:[u8;4], b:[u8;4], mode:LinkKind)->bool {
     let Some(group)=family(a) else{return false;};
     family(b)==Some(group) && (mode==LinkKind::Cable || (rfu(a)&&rfu(b)))
 }
+/// Runtime subset of the original GBA cross-cartridge catalogue. The
+/// remaining families stay documented for a future generic Cable backend,
+/// but KMLB/3 must not say LINKED when pinned gpSP cannot emulate them.
+pub fn runnable_gpsp_cross_title(a:[u8;4], b:[u8;4], mode:LinkKind)->bool {
+    if !compatible_cross_title(a, b, mode) { return false; }
+    let (Ok(a), Ok(b))=(std::str::from_utf8(&a), std::str::from_utf8(&b)) else {
+        return false;
+    };
+    crate::link_kind::gpsp_runtime_mode_supported(a, mode)
+        && crate::link_kind::gpsp_runtime_mode_supported(b, mode)
+}
+
 #[cfg(test)] mod tests{
     use super::*;
     fn id(s:&str)->[u8;4]{s.as_bytes().try_into().unwrap()}
@@ -88,6 +100,24 @@ pub fn compatible_cross_title(a:[u8;4], b:[u8;4], mode:LinkKind)->bool {
                     "these cross-game transfers do not use Wireless Adapter");
             assert_eq!(discovery_key(a),discovery_key(b));
         }
+    }
+    #[test] fn hardware_catalogue_does_not_overpromise_unsupported_gpsp_protocols(){
+        for (a,b) in [("AREE","AE2E"),("AMAE","AA2E"),("A3XE","A6BE"),
+                      ("B4WE","B4BE"),("AGSE","AGFE"),("A8BE","A9BE"),
+                      ("B4WE","BZ3E"),("BRBE","BRKE"),("BR5E","BR6E")] {
+            assert!(compatible_cross_title(id(a), id(b), LinkKind::Cable));
+            assert!(!runnable_gpsp_cross_title(id(a), id(b), LinkKind::Cable),
+                "original GBA Cable compatibility is not gpSP's generic serial support");
+        }
+        for (a,b) in [("BPRE","BPGE"),("BPRE","BPEE"),("AXVE","AXPE"),
+                      ("AXVE","BPRE")] {
+            assert!(runnable_gpsp_cross_title(id(a), id(b), LinkKind::Cable));
+        }
+        for (a,b) in [("BRBE","BRKE"),("BR5E","BR6E"),
+                      ("BRBP","BRKP"),("BR5J","BR6J"),("BPRE","BPGE")] {
+            assert!(runnable_gpsp_cross_title(id(a), id(b), LinkKind::Wireless));
+        }
+        assert!(!runnable_gpsp_cross_title(id("AXVE"),id("BPGE"),LinkKind::Wireless));
     }
     #[test] fn unknown_and_unsafe_cross_families_stay_closed(){
         for(a,b)in[("BRBE","BR5E"),("A8BE","AK8E"),("AGSE","BPRE"),
