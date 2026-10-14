@@ -160,7 +160,15 @@ internal object RetroArchStorage {
                 failures.add("RTC sync failed (${target.core}): " + (e.message ?: "access denied"))
             }
         }
-        if (target.stateExportLocal.isFile) {
+        // A core switch that chose shared SRAM intentionally did NOT
+        // consume the previous core-specific auto-state. Its successor is
+        // written to a separate private generation by Rust. Publishing it
+        // over the original RetroArch .state.auto would silently destroy the
+        // ignored state (F-Zero regression). Wait for explicit user consent.
+        val lower = if (target.core == "mGBA") "mgba" else "gpsp"
+        val guarded = File(context.filesDir,
+            "Saves/${target.romIdentity}.$lower.state-export-protected").isFile
+        if (!guarded && target.stateExportLocal.isFile) {
             try {
                 val bytes = target.stateExportLocal.readBytes()
                 require(bytes.size in 16..MAX_STATE && bytes.startsWithRASTATE()) {
@@ -182,6 +190,10 @@ internal object RetroArchStorage {
                 Log.e(TAG, "RetroArch state export failed for ${target.core}/${target.stem}", e)
                 failures.add("State sync skipped (${target.core}): " + (e.message ?: "unsupported format"))
             }
+        }
+        if (guarded) {
+            Log.i(TAG, "Preserved previous RetroArch auto-state; " +
+                "new cross-core state is stored in a private generation")
         }
         return failures
     }
