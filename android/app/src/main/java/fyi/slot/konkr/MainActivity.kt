@@ -1012,6 +1012,31 @@ class MainActivity : Activity() {
                                 RetroArchStorage.importExplicitExistingState(
                                     this@MainActivity, shared)
                                 val lower = if (core == "mGBA") "mgba" else "gpsp"
+                                // The previous SRAM-first attempt may have
+                                // allocated a generation but never written a
+                                // state (e.g. Android killed the app before
+                                // Save & Eject). Explicitly choosing the OLD
+                                // state must not be masked by that empty
+                                // redirect. Completed generations stay valid.
+                                val genIndex = File(filesDir,
+                                    "Saves/$digest.$lower.state-generation.active")
+                                if (genIndex.isFile) {
+                                    val name = genIndex.readText()
+                                    val valid = name.startsWith("$digest.$lower.gen-") &&
+                                        name.matches(Regex("[a-zA-Z0-9.-]{1,180}"))
+                                    val genState = File(filesDir, "Saves/$name.state")
+                                    if (!valid) error("Invalid protected state generation")
+                                    if (!genState.isFile) {
+                                        if (!genIndex.delete()) {
+                                            error("Cannot select existing state over empty generation")
+                                        }
+                                        val hold = File(filesDir,
+                                            "Saves/$digest.$lower.state-export-protected")
+                                        if (hold.isFile && !hold.delete()) {
+                                            error("Cannot clear empty generation export guard")
+                                        }
+                                    }
+                                }
                                 val skipped = File(filesDir,
                                     "Saves/$digest.$lower.skip-resume.once")
                                 if (skipped.isFile && !skipped.delete()) {
