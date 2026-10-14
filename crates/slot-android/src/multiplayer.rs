@@ -8,7 +8,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use ring::digest::{Context, SHA256};
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::Duration;
 
@@ -27,6 +27,9 @@ pub enum Failure { NoNetwork, NobodyCame, IncompatiblePeer, PeerVanished, Cancel
 
 pub enum Progress {
     Looking,
+    /// Both devices must explicitly approve transmitting their ROM image
+    /// to the other player. Only emitted for mixed-ROM mGBA Cable.
+    PeerRomConsent,
     Ready(TcpLink, Option<PathBuf>),
     Failed(Failure),
 }
@@ -187,7 +190,8 @@ impl LinkConfig {
 }
 
 fn connect(role: Role, local: Ipv4Addr, config: &LinkConfig,
-           cancel: &Cancel) -> io::Result<(TcpLink, Option<PathBuf>)> {
+           cancel: &Cancel, ui: &Sender<Progress>, approval: &Receiver<bool>)
+    -> io::Result<(TcpLink, Option<PathBuf>)> {
     if local.is_unspecified() || local.is_loopback() || local.is_multicast()
         || local.is_link_local() || local.is_broadcast() {
         return Err(io::Error::new(io::ErrorKind::AddrNotAvailable,
@@ -219,7 +223,8 @@ fn connect(role: Role, local: Ipv4Addr, config: &LinkConfig,
             })
         }
     }?;
-    let peer_path = stage_mgba_peer(&mut link, &fingerprint, config, cancel)?;
+    let peer_path = stage_mgba_peer(&mut link, &fingerprint, config,
+        cancel, ui, approval)?;
     Ok((link, peer_path))
 }
 
@@ -227,8 +232,28 @@ fn connect(role: Role, local: Ipv4Addr, config: &LinkConfig,
 /// has been fully exchanged, SHA-verified and published inside the private
 /// app cache. The GL thread never hashes, copies or downloads ROM data.
 fn stage_mgba_peer(link: &mut TcpLink, local: &LabGreeting,
-                   config: &LinkConfig, cancel: &Cancel)
+                   config: &LinkConfig, cancel: &Cancel,
+                   ui: &Sender<Progress>, approval: &Receiver<bool>)
     -> io::Result<Option<PathBuf>> {
+    if config.backend == Backend::MgbaSlotCable &&
+        link.peer_identity().is_some_and(|peer| peer.game != local.game) {
+        ui.send(Progress::PeerRomConsent).map_err(|_|
+            io::Error::new(io::ErrorKind::Interrupted, "UI no longer accepts peer ROM consent"))?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            if cancel.is_cancelled() || std::time::Instant::now() >= deadline {
+                return Err(io::Error::new(io::ErrorKind::Interrupted,
+                    "Peer ROM consent timed out or was cancelled"));
+            }
+            match approval.recv_timeout(Duration::from_millis(200)) {
+                Ok(true) => break,
+                Ok(false) | Err(mpsc::RecvTimeoutError::Disconnected) =>
+                    return Err(io::Error::new(io::ErrorKind::Interrupted,
+                        "Remote ROM exchange not authorized")),
+                Err(mpsc::RecvTimeoutError::Timeout) => (),
+            }
+        }
+    }
     match config.backend {
         Backend::MgbaSlotCable => link.exchange_mgba_peer_rom(local, &config.rom, cancel),
         Backend::GpspNetpacket => Ok(None),
@@ -286,6 +311,7 @@ mod cross_abi_fingerprint_tests {
 /// RetroAchievements, GL, Android UI or save files.
 pub struct LinkStarter {
     events: Receiver<Progress>,
+    consent: Sender<bool>,
     cancel: Cancel,
     // Report unexpected worker exit exactly once, rather than spinner forever.
     done: bool,
@@ -297,11 +323,12 @@ impl LinkStarter {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid GBA Link code"));
         }
         let (tx, events) = mpsc::channel();
+        let (consent, approval) = mpsc::channel();
         let cancel = Cancel::new();
         let worker_cancel = cancel.clone();
         thread::spawn(move || {
             let _ = tx.send(Progress::Looking);
-            let result = connect(role, local, &config, &worker_cancel);
+            let result = connect(role, local, &config, &worker_cancel, &tx, &approval);
             let report = match result {
                 Ok((link, remote)) if !worker_cancel.is_cancelled() =>
                     Progress::Ready(link, remote),
@@ -312,7 +339,7 @@ impl LinkStarter {
             };
             let _ = tx.send(report);
         });
-        Ok(Self { events, cancel, done: false })
+        Ok(Self { events, consent, cancel, done: false })
     }
 
     /// The Emulator NAT does not support IGMP. Direct-IP Join uses the
@@ -330,6 +357,7 @@ impl LinkStarter {
                 "Direct Join requires a private LAN IPv4 address"));
         }
         let (tx, events) = mpsc::channel();
+        let (consent, approval) = mpsc::channel();
         let cancel = Cancel::new();
         let worker_cancel = cancel.clone();
         thread::spawn(move || {
@@ -340,7 +368,8 @@ impl LinkStarter {
                 config.fingerprint().and_then(|fingerprint| {
                     let mut link = TcpLink::join_lab_greeted(
                         SocketAddrV4::new(host, PORT).into(), &fingerprint)?;
-                    let peer = stage_mgba_peer(&mut link, &fingerprint, &config, &worker_cancel)?;
+                    let peer = stage_mgba_peer(&mut link, &fingerprint, &config,
+                        &worker_cancel, &tx, &approval)?;
                     Ok((link, peer))
                 })
             };
@@ -352,7 +381,7 @@ impl LinkStarter {
             };
             let _ = tx.send(report);
         });
-        Ok(Self { events, cancel, done: false })
+        Ok(Self { events, consent, cancel, done: false })
     }
 
     pub fn poll(&mut self) -> Option<Progress> {
@@ -370,7 +399,14 @@ impl LinkStarter {
         }
     }
 
-    pub fn cancel(&self) { self.cancel.cancel(); }
+    pub fn approve_peer_rom(&self, allowed: bool) {
+        let _ = self.consent.send(allowed);
+    }
+
+    pub fn cancel(&self) {
+        self.cancel.cancel();
+        let _ = self.consent.send(false);
+    }
 }
 
 impl Drop for LinkStarter {
@@ -383,7 +419,8 @@ mod tests {
     #[test]
     fn dropped_network_worker_fails_once_instead_of_spinning_forever() {
         let (tx, events) = mpsc::channel::<Progress>();
-        let mut starter = LinkStarter { events, cancel: Cancel::new(), done: false };
+        let (consent, _approval) = mpsc::channel();
+        let mut starter = LinkStarter { events, consent, cancel: Cancel::new(), done: false };
         assert!(starter.poll().is_none(), "an idle worker may still connect");
         drop(tx);
         assert!(matches!(starter.poll(), Some(Progress::Failed(Failure::PeerVanished))));
