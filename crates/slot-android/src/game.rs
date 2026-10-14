@@ -236,9 +236,17 @@ impl GameSession {
                     .map_err(|e| format!("Cannot stage Link state baseline: {e}"))?;
             }
             let ra_before = root.join(format!("{id}.{}.retroarch-export.state.auto", which.as_str()));
-            crate::linked_storage::copy_solo_battery(&ra_before,
-                &core_root.join("prelink.retroarch-export.state.auto"))
-                .map_err(|e| format!("Cannot stage Link RA baseline: {e}"))?;
+            match std::fs::read(&ra_before) {
+                Ok(data) => {
+                    if data.is_empty() || data.len() > crate::linked_storage::MAX_SOLO_SNAPSHOT {
+                        return Err("Existing RetroArch export exceeds Link rollback limit".into());
+                    }
+                    atomic_write(&core_root.join("prelink.retroarch-export.state.auto"), &data)
+                        .map_err(|e| format!("Cannot stage Link RetroArch baseline: {e}"))?;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                Err(e) => return Err(format!("Cannot inspect Link RetroArch baseline: {e}")),
+            }
         }
         // Save states belong to their specific emulator core. Incompatible
         // mGBA/gpSP states must never be deserialized in the other core.
