@@ -1,6 +1,9 @@
 //! GPL-3.0-or-later: fork LAN greeting and original Slot TCP packet framing.
 //! Source: https://github.com/pvaibhav/slot/blob/pvaibhav-improvements/crates/slot/src/link_net.rs
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::{fs, thread};
+use ring::digest::{digest, SHA256};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender, TryRecvError};
@@ -434,6 +437,140 @@ impl TcpLink {
     /// remote ROM transfer matches the negotiated SHA-256 and game code.
     pub fn peer_identity(&self) -> Option<&LabGreeting> {
         self.peer_identity.as_ref()
+    }
+
+    /// KMLB/4 only. Transfer the other player's cartridge into a PRIVATE
+    /// cache on the background LinkStarter worker. The game never sees
+    /// LINKED until the full file/header/SHA has passed. No ROM is written to
+    /// the user's selected library. This is not part of gpSP KMLB/3.
+    pub fn exchange_mgba_peer_rom(&mut self, local: &LabGreeting,
+                                  own_rom: &Path) -> std::io::Result<Option<PathBuf>> {
+        fn invalid(message: &str) -> std::io::Error {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, message)
+        }
+        const MAX_ROM: usize = 32 * 1024 * 1024;
+        const CHUNK: usize = 60 * 1024;
+        const DEADLINE: Duration = Duration::from_secs(90);
+        const PACKET_WAIT: Duration = Duration::from_secs(8);
+        let peer = self.peer_identity().ok_or_else(||
+            invalid("KMLB/4 missing verified peer greeting"))?.clone();
+        if local.backend != 1 || peer.backend != 1 || local.mode != 1
+            || !local.accepts(&peer) {
+            return Err(invalid("Not a negotiated mGBA Cable pair"));
+        }
+        // Same-ROM Cable must stay byte-for-byte on its proven a7 path.
+        // When different codes negotiate, exchange AND authenticate ROM data
+        // before any libretro core is replaced.
+        if local.game == peer.game {
+            if local.rom_sha256 == peer.rom_sha256 { return Ok(None); }
+            return Err(invalid("Identical GBA game code with different ROM revisions"));
+        }
+        let own = fs::read(own_rom)?;
+        if !(0xC0..=MAX_ROM).contains(&own.len()) ||
+            own.get(0xAC..0xB0) != Some(local.game.as_slice()) ||
+            digest(&SHA256, &own).as_ref() != local.rom_sha256 {
+            return Err(invalid("Own cartridge changed since KMLB/4 negotiation"));
+        }
+        let cache = own_rom.parent().ok_or_else(||
+            invalid("Own ROM has no private cache folder"))?.join("link-peer-cache");
+        fs::create_dir_all(&cache)?;
+
+        fn take_frame(link: &mut TcpLink, bound: Duration)
+            -> std::io::Result<Vec<u8>> {
+            let limit = Instant::now() + bound;
+            loop {
+                if link.peer_ended() || link.is_closed() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof, "Peer closed ROM exchange"));
+                }
+                if let Some(data) = link.try_recv() { return Ok(data); }
+                if Instant::now() >= limit {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut, "Peer ROM exchange timed out"));
+                }
+                thread::sleep(Duration::from_millis(2));
+            }
+        }
+        fn exchange_frame(link: &mut TcpLink, bytes: &[u8], until: Instant)
+            -> std::io::Result<Vec<u8>> {
+            if Instant::now() >= until {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut, "Peer ROM transfer deadline exceeded"));
+            }
+            link.send(slot_retro::NETPACKET_RELIABLE, bytes);
+            if link.is_closed() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe, "Cannot send verified ROM fragment"));
+            }
+            take_frame(link, PACKET_WAIT)
+        }
+        let until = Instant::now() + DEADLINE;
+        let mut manifest = Vec::with_capacity(44);
+        manifest.extend_from_slice(b"R4M0");
+        manifest.extend_from_slice(&(own.len() as u32).to_be_bytes());
+        manifest.extend_from_slice(&local.game);
+        manifest.extend_from_slice(&local.rom_sha256);
+        let remote_meta = exchange_frame(self, &manifest, until)?;
+        if remote_meta.len() != 44 || &remote_meta[..4] != b"R4M0" ||
+            remote_meta[8..12] != peer.game ||
+            remote_meta[12..44] != peer.rom_sha256 {
+            return Err(invalid("Remote ROM manifest did not match negotiated KMLB/4 peer"));
+        }
+        let remote_len = u32::from_be_bytes(remote_meta[4..8].try_into()
+            .map_err(|_|invalid("Invalid remote ROM length"))?) as usize;
+        if !(0xC0..=MAX_ROM).contains(&remote_len) {
+            return Err(invalid("Remote ROM length outside bounded retail GBA range"));
+        }
+        let local_chunks = own.len().div_ceil(CHUNK);
+        let remote_chunks = remote_len.div_ceil(CHUNK);
+        let mut received = Vec::with_capacity(remote_len);
+        for seq in 0..local_chunks.max(remote_chunks) {
+            let st = seq * CHUNK;
+            let en = own.len().min(st.saturating_add(CHUNK));
+            let slice = if st < own.len() { &own[st..en] } else { &[] };
+            let mut packet = Vec::with_capacity(6 + slice.len());
+            packet.extend_from_slice(b"R4D0");
+            packet.extend_from_slice(&(seq as u16).to_be_bytes());
+            packet.extend_from_slice(slice);
+            let frame = exchange_frame(self, &packet, until)?;
+            if frame.len() < 6 || &frame[..4] != b"R4D0" ||
+                u16::from_be_bytes([frame[4], frame[5]]) != seq as u16 {
+                return Err(invalid("Remote ROM fragment sequence mismatch"));
+            }
+            let expected = if seq < remote_chunks {
+                (remote_len - seq * CHUNK).min(CHUNK)
+            } else { 0 };
+            if frame.len() != expected + 6 {
+                return Err(invalid("Remote ROM fragment length mismatch"));
+            }
+            received.extend_from_slice(&frame[6..]);
+        }
+        if received.len() != remote_len ||
+            received.get(0xAC..0xB0) != Some(peer.game.as_slice()) ||
+            digest(&SHA256, &received).as_ref() != peer.rom_sha256 {
+            return Err(invalid("Remote ROM data failed header or SHA256 authentication"));
+        }
+        let hex: String = peer.rom_sha256.iter().map(|b| format!("{b:02x}")).collect();
+        let dest = cache.join(format!("{hex}.gba"));
+        if dest.is_file() {
+            let old = fs::read(&dest)?;
+            if old == received { return Ok(Some(dest)); }
+            return Err(invalid("Verified remote ROM cache changed unexpectedly"));
+        }
+        let scratch = cache.join(format!("{hex}.partial-{}", std::process::id()));
+        {
+            let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&scratch)?;
+            file.write_all(&received)?;
+            file.sync_all()?;
+        }
+        if let Err(error) = fs::rename(&scratch, &dest) {
+            let _ = fs::remove_file(&scratch);
+            return Err(error);
+        }
+        if fs::read(&dest)? != received {
+            return Err(invalid("Cached peer ROM was modified during publishing"));
+        }
+        Ok(Some(dest))
     }
 
     pub fn send_end(&mut self) {
