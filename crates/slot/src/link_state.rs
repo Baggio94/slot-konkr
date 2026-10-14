@@ -26,6 +26,26 @@ pub fn pair(state: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Mixed-cartridge bootstrap: replace ONLY the local player's GBA
+/// with that player's existing solo checkpoint. The other GBA retains the
+/// fresh state produced by booting its OWN different cartridge. Never
+/// unserialize FireRed progress into LeafGreen or vice versa.
+pub fn with_local_player(pair: &[u8], player: u8, own: &[u8]) -> Option<Vec<u8>> {
+    const LIMIT: usize = 16 * 1024 * 1024;
+    if player > 1 || own.len() < 0x400 || own.starts_with(MAGIC) { return None; }
+    let mut states = [local(pair, 0)?, local(pair, 1)?];
+    states[usize::from(player)] = own.to_vec();
+    let size = 12usize.checked_add(states[0].len())?.checked_add(states[1].len())?;
+    if size > LIMIT || states.iter().any(|x| x.len() < 0x400) { return None; }
+    let mut result = Vec::with_capacity(size);
+    result.extend_from_slice(MAGIC);
+    for single in &states {
+        result.extend_from_slice(&u32::try_from(single.len()).ok()?.to_le_bytes());
+        result.extend_from_slice(single);
+    }
+    Some(result)
+}
+
 /// Build the *first* linked snapshot with player 0's in-progress Host
 /// cartridge and player 1's own Join cartridge. It is never a solo/RA state.
 /// Neither player's save is overwritten: the transport supplies the guest's
@@ -97,6 +117,24 @@ mod tests {
         assert_eq!(local(&whole[..whole.len() - 1], 0), None);
         assert_eq!(local(&[whole.as_slice(), b"x"].concat(), 0), None);
         assert_eq!(local(&whole, 2), None);
+    }
+
+    #[test]
+    fn mixed_cart_boot_preserves_the_other_game_state() {
+        let original_host = vec![0x10; 0x1100];
+        let original_guest = vec![0x20; 0x1800];
+        let candidate = combine_players(&pair(&original_host), &original_guest).unwrap();
+        let local_host = vec![0x33; 0x1000];
+        let swapped_host = with_local_player(&candidate, 0, &local_host).unwrap();
+        assert_eq!(local(&swapped_host, 0).unwrap(), local_host);
+        assert_eq!(local(&swapped_host, 1).unwrap(), original_guest);
+        let local_guest = vec![0x44; 0x1400];
+        let swapped_guest = with_local_player(&candidate, 1, &local_guest).unwrap();
+        assert_eq!(local(&swapped_guest, 0).unwrap(), original_host);
+        assert_eq!(local(&swapped_guest, 1).unwrap(), local_guest);
+        assert!(with_local_player(&candidate, 2, &local_guest).is_none());
+        assert!(with_local_player(&candidate, 0, &pair(&local_host)).is_none());
+        assert!(with_local_player(&candidate, 1, &[0; 12]).is_none());
     }
 
     #[test]
