@@ -1038,6 +1038,10 @@ impl Engine {
             let automatic = link_kind::link_kind(&identity.code, &identity.title,
                 identity.clean_header);
             self.link_mode = self.link_mode_override.unwrap_or(automatic);
+            if !link_kind::gpsp_runtime_mode_supported(&identity.code, self.link_mode) {
+                set_message("This gpSP core cannot emulate this cartridge's GBA Cable protocol. Try mGBA Cable with identical ROMs.".into());
+                return;
+            }
         }
         self.cancel_link_discovery();
         self.link_role = LinkRow::Host;
@@ -3670,7 +3674,9 @@ fn link_legend_profile(menu: LinkMenu, selectable_mode: bool) -> LinkLegendProfi
 fn link_mode_can_switch(core: Core, chosen: LinkKind, code: &str,
                         title: &str, clean: bool) -> bool {
     if core != Core::Gpsp || !link_kind::link_carried(code, title)
-        || !link_kind::has_wireless_adapter(code) { return false; }
+        || !link_kind::has_wireless_adapter(code)
+        || !link_kind::gpsp_runtime_mode_supported(code, chosen)
+        || !link_kind::gpsp_runtime_mode_supported(code, chosen.other()) { return false; }
     let automatic = link_kind::link_kind(code, title, clean);
     let selected_serial = link_kind::serial_option(chosen, automatic, code, title);
     let opposite_serial = link_kind::serial_option(chosen.other(), automatic, code, title);
@@ -3917,6 +3923,9 @@ mod ui_feedback_tests {
             "BPRE", "POKEMON FIRE", true));
         assert!(!link_mode_can_switch(Core::Gpsp, LinkKind::Cable,
             "NONE", "UNKNOWN", false));
+        assert!(!link_mode_can_switch(Core::Gpsp, LinkKind::Wireless,
+            "BRBE", "MEGAMAN BN5", true),
+            "gpSP RFU-only Battle Network must not offer a fake Cable mode");
     }
 
     #[test]
