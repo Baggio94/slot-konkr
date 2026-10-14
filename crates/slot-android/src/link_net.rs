@@ -444,7 +444,8 @@ impl TcpLink {
     /// LINKED until the full file/header/SHA has passed. No ROM is written to
     /// the user's selected library. This is not part of gpSP KMLB/3.
     pub fn exchange_mgba_peer_rom(&mut self, local: &LabGreeting,
-                                  own_rom: &Path) -> std::io::Result<Option<PathBuf>> {
+                                  own_rom: &Path, cancel: &Cancel)
+        -> std::io::Result<Option<PathBuf>> {
         fn invalid(message: &str) -> std::io::Error {
             std::io::Error::new(std::io::ErrorKind::InvalidData, message)
         }
@@ -475,10 +476,14 @@ impl TcpLink {
             invalid("Own ROM has no private cache folder"))?.join("link-peer-cache");
         fs::create_dir_all(&cache)?;
 
-        fn take_frame(link: &mut TcpLink, bound: Duration)
+        fn take_frame(link: &mut TcpLink, bound: Duration, cancel: &Cancel)
             -> std::io::Result<Vec<u8>> {
             let limit = Instant::now() + bound;
             loop {
+                if cancel.is_cancelled() {
+                    return Err(std::io::Error::new(std::io::ErrorKind::Interrupted,
+                        "Peer ROM exchange cancelled"));
+                }
                 if link.peer_ended() || link.is_closed() {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof, "Peer closed ROM exchange"));
@@ -491,8 +496,13 @@ impl TcpLink {
                 thread::sleep(Duration::from_millis(2));
             }
         }
-        fn exchange_frame(link: &mut TcpLink, bytes: &[u8], until: Instant)
+        fn exchange_frame(link: &mut TcpLink, bytes: &[u8], until: Instant,
+                          cancel: &Cancel)
             -> std::io::Result<Vec<u8>> {
+            if cancel.is_cancelled() {
+                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted,
+                    "Peer ROM exchange cancelled"));
+            }
             if Instant::now() >= until {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::TimedOut, "Peer ROM transfer deadline exceeded"));
@@ -502,7 +512,7 @@ impl TcpLink {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::BrokenPipe, "Cannot send verified ROM fragment"));
             }
-            take_frame(link, PACKET_WAIT)
+            take_frame(link, PACKET_WAIT, cancel)
         }
         let until = Instant::now() + DEADLINE;
         let mut manifest = Vec::with_capacity(44);
@@ -510,7 +520,7 @@ impl TcpLink {
         manifest.extend_from_slice(&(own.len() as u32).to_be_bytes());
         manifest.extend_from_slice(&local.game);
         manifest.extend_from_slice(&local.rom_sha256);
-        let remote_meta = exchange_frame(self, &manifest, until)?;
+        let remote_meta = exchange_frame(self, &manifest, until, cancel)?;
         if remote_meta.len() != 44 || &remote_meta[..4] != b"R4M0" ||
             remote_meta[8..12] != peer.game ||
             remote_meta[12..44] != peer.rom_sha256 {
@@ -532,7 +542,7 @@ impl TcpLink {
             packet.extend_from_slice(b"R4D0");
             packet.extend_from_slice(&(seq as u16).to_be_bytes());
             packet.extend_from_slice(slice);
-            let frame = exchange_frame(self, &packet, until)?;
+            let frame = exchange_frame(self, &packet, until, cancel)?;
             if frame.len() < 6 || &frame[..4] != b"R4D0" ||
                 u16::from_be_bytes([frame[4], frame[5]]) != seq as u16 {
                 return Err(invalid("Remote ROM fragment sequence mismatch"));
@@ -544,6 +554,10 @@ impl TcpLink {
                 return Err(invalid("Remote ROM fragment length mismatch"));
             }
             received.extend_from_slice(&frame[6..]);
+        }
+        if cancel.is_cancelled() {
+            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted,
+                "Peer ROM exchange cancelled before publishing cache"));
         }
         if received.len() != remote_len ||
             received.get(0xAC..0xB0) != Some(peer.game.as_slice()) ||
@@ -700,11 +714,11 @@ mod lab_negotiation_tests {
             let mut wire = TcpLink::host_lab_greeted_until(
                 "127.0.0.1", addr.port(), Duration::from_secs(5),
                 &Cancel::new(), &h_copy, || { ready.send(()).unwrap(); }).unwrap();
-            wire.exchange_mgba_peer_rom(&h_copy, &host_file).unwrap().unwrap()
+            wire.exchange_mgba_peer_rom(&h_copy, &host_file, &Cancel::new()).unwrap().unwrap()
         });
         listening.recv_timeout(Duration::from_secs(3)).unwrap();
         let mut guest = TcpLink::join_lab_greeted(addr, &g).unwrap();
-        let guest_peer = guest.exchange_mgba_peer_rom(&g, &guest_file).unwrap().unwrap();
+        let guest_peer = guest.exchange_mgba_peer_rom(&g, &guest_file, &Cancel::new()).unwrap().unwrap();
         let host_peer = host.join().unwrap();
         assert_eq!(fs::read(&guest_peer).unwrap(), host_rom);
         assert_eq!(fs::read(&host_peer).unwrap(), guest_rom);
