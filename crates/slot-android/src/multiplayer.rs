@@ -433,7 +433,8 @@ mod tests {
         assert!(tx.send(Progress::Looking).is_ok());
         assert!(tx.send(Progress::Failed(Failure::Cancelled)).is_ok());
         drop(tx);
-        let mut starter = LinkStarter { events, cancel: Cancel::new(), done: false };
+        let (consent, _approval) = mpsc::channel();
+        let mut starter = LinkStarter { events, consent, cancel: Cancel::new(), done: false };
         assert!(matches!(starter.poll(), Some(Progress::Looking)));
         assert!(matches!(starter.poll(), Some(Progress::Failed(Failure::Cancelled))));
         assert!(starter.poll().is_none(),
@@ -469,7 +470,10 @@ mod tests {
     fn connection_never_uses_loopback_or_unspecified_wifi() {
         for local in [Ipv4Addr::LOCALHOST, Ipv4Addr::UNSPECIFIED,
                       Ipv4Addr::new(224,0,0,251), Ipv4Addr::BROADCAST] {
-            let err = connect(Role::Host, local, &test_config("BPRE"), &Cancel::new()).err().unwrap();
+            let (tx, _events) = mpsc::channel();
+            let (_consent, approval) = mpsc::channel();
+            let err = connect(Role::Host, local, &test_config("BPRE"),
+                &Cancel::new(), &tx, &approval).err().unwrap();
             assert_eq!(err.kind(), io::ErrorKind::AddrNotAvailable);
         }
     }
