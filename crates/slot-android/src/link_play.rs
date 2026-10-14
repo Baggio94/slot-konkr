@@ -233,14 +233,18 @@ impl LinkPlay {
             let seconds = pacing.started.elapsed().as_secs_f64();
             let avg_core_us = if pacing.core_calls == 0 { 0 }
                 else { pacing.core_total_us / pacing.core_calls };
-            crate::game::log_launch_timing(&format!(
+            let report = format!(
                 "Link pacing: mode={:?} callbacks={} advanced={} effective_emu_fps={:.1} wait_peer={} wait_setup={} wait_paused={} stall_events={} max_stall_ms={} rx_pkts={} core_us_avg={} core_us_max={} link_call_us_max={} calls_over_16ms={} calls_over_33ms={}",
                 self.mode, pacing.attempts, pacing.advanced,
                 pacing.advanced as f64 / seconds,
                 pacing.waiting_input, pacing.seeding, pacing.paused,
                 pacing.stall_events, pacing.max_stall_ms, pacing.packets,
                 avg_core_us, pacing.core_max_us, pacing.max_call_us,
-                pacing.long_calls_16ms, pacing.long_calls_33ms));
+                pacing.long_calls_16ms, pacing.long_calls_33ms);
+            #[cfg(target_os = "android")]
+            crate::game::log_launch_timing(&report);
+            #[cfg(not(target_os = "android"))]
+            eprintln!("SlotKONKR: {report}");
             *pacing = LinkPacing::new();
         }
         result
