@@ -284,7 +284,6 @@ thread_local! {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum LinkEntry { Shortcut, GameMenu }
 
 impl LinkEntry {
@@ -296,6 +295,7 @@ impl LinkEntry {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum ShelfOverlay {
     None,
     Menu { row: usize },
