@@ -662,6 +662,61 @@ mod lab_negotiation_tests {
             rom_sha256: [3;32], core_sha256: [4;32], bios_sha256: [5;32] }
     }
     #[test]
+    fn kmlb4_transfers_two_distinct_gba_roms_into_verified_private_caches() {
+        use std::net::{SocketAddr, TcpListener};
+        let home = std::env::temp_dir().join(format!(
+            "slot-kmlb4-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                .unwrap().as_nanos()));
+        let a_dir = home.join("host");
+        let b_dir = home.join("guest");
+        fs::create_dir_all(&a_dir).unwrap();
+        fs::create_dir_all(&b_dir).unwrap();
+        fn cart(code: [u8; 4], size: usize, seed: u8) -> Vec<u8> {
+            let mut bytes = vec![seed; size];
+            bytes[0xAC..0xB0].copy_from_slice(&code);
+            bytes
+        }
+        let host_rom = cart(*b"BPRE", 256 * 1024, 0xA5);
+        let guest_rom = cart(*b"BPGE", 384 * 1024, 0x5A);
+        let host_file = a_dir.join("firered.gba");
+        let guest_file = b_dir.join("leafgreen.gba");
+        fs::write(&host_file, &host_rom).unwrap();
+        fs::write(&guest_file, &guest_rom).unwrap();
+        let mut h = identity();
+        let mut g = h.clone();
+        h.rom_sha256.copy_from_slice(digest(&SHA256, &host_rom).as_ref());
+        g.game = *b"BPGE";
+        g.rom_sha256.copy_from_slice(digest(&SHA256, &guest_rom).as_ref());
+        assert!(h.accepts(&g));
+        assert_eq!(h.bytes()[4], 4, "mGBA must use KMLB/4, not legacy KMLB/3");
+
+        let reserve = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr: SocketAddr = reserve.local_addr().unwrap();
+        drop(reserve);
+        let (ready, listening) = channel();
+        let h_copy = h.clone();
+        let host = thread::spawn(move || {
+            let mut wire = TcpLink::host_lab_greeted_until(
+                "127.0.0.1", addr.port(), Duration::from_secs(5),
+                &Cancel::new(), &h_copy, || { ready.send(()).unwrap(); }).unwrap();
+            wire.exchange_mgba_peer_rom(&h_copy, &host_file).unwrap().unwrap()
+        });
+        listening.recv_timeout(Duration::from_secs(3)).unwrap();
+        let mut guest = TcpLink::join_lab_greeted(addr, &g).unwrap();
+        let guest_peer = guest.exchange_mgba_peer_rom(&g, &guest_file).unwrap().unwrap();
+        let host_peer = host.join().unwrap();
+        assert_eq!(fs::read(&guest_peer).unwrap(), host_rom);
+        assert_eq!(fs::read(&host_peer).unwrap(), guest_rom);
+        assert_eq!(fs::read(&guest_file).unwrap(), guest_rom);
+        // The private peer caches are not added to the user's library.
+        assert_eq!(host_peer.parent().unwrap().file_name().unwrap(), "link-peer-cache");
+        assert_eq!(guest_peer.parent().unwrap().file_name().unwrap(), "link-peer-cache");
+        drop(guest);
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
     fn lab_greeting_is_not_legacy_slot_one() {
         assert_ne!(&identity().bytes()[..9], &greeting("BPRE"));
         assert_eq!(&identity().bytes()[..4], b"KMLB");
