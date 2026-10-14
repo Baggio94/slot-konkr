@@ -341,6 +341,18 @@ internal object RetroArchStorage {
 
 
 
+    /** Pure preflight: never truncate non-erased bytes or invent a size.
+     * Used before any conflict resolution writes and covered by JVM tests.
+     */
+    internal fun prepareSharedChoice(selected: ByteArray, sizes: List<Int>): List<ByteArray> {
+        require(validGbaRam(selected)) { "Selected GBA SRAM size is not supported" }
+        require(sizes.isNotEmpty() && sizes.size <= 2) { "Expected one or two core capacities" }
+        return sizes.map { size ->
+            gbaRamAtSize(selected, size)
+                ?: error("Cannot share cartridge SRAM without losing non-erased data")
+        }
+    }
+
     /** User-approved conflict arbitration. All reads, hash/size checks and
      * immutable backups happen BEFORE any SRAM mirror is changed. SAF has no
      * multi-document atomic commit, so on a provider failure best-effort
@@ -381,10 +393,7 @@ internal object RetroArchStorage {
             oldExternal[index]?.size ?: oldPrivate[index]?.size
                 ?: if (cores[index] == "gpSP") 131072 else chosen.size
         }
-        val converted = nativeSizes.map { size ->
-            gbaRamAtSize(chosen, size)
-                ?: error("Cannot convert selected $chosenCore save to other core without discarding data")
-        }
+        val converted = prepareSharedChoice(chosen, nativeSizes)
         val canonical = gbaRamAtSize(chosen, 131072)
             ?: error("Selected SRAM contains data beyond supported capacity")
 
@@ -420,9 +429,11 @@ internal object RetroArchStorage {
                     }
                 }
                 for (i in cores.indices) {
+                    // Even a failed provider write may have truncated the
+                    // document before throwing. Track it for rollback.
+                    changedExternal.add(i)
                     writeSaf(context, external, cores[i],
                         "${target.stem}.srm", converted[i], isState = false)
-                    changedExternal.add(i)
                 }
             }
             // External writes verified. Now commit private files, including
@@ -453,14 +464,41 @@ internal object RetroArchStorage {
                     val latest = readNamed(context, external, cores[i],
                         "${target.stem}.srm", MAX_SAVE)
                     if (sameOptionalBytes(latest, converted[i])) {
-                        oldExternal[i]?.let {
+                        if (oldExternal[i] != null) {
                             writeSaf(context, external, cores[i],
-                                "${target.stem}.srm", it, isState = false)
+                                "${target.stem}.srm", oldExternal[i]!!, isState = false)
+                        } else {
+                            // Revert a newly created file only if nobody
+                            // else modified it after our attempted export.
+                            val folder = coreFolder(context, external, cores[i], false)
+                            if (folder != null) {
+                                val id = DocumentsContract.getDocumentId(folder)
+                                val created = children(context, external, id)
+                                    .firstOrNull { it.first == "${target.stem}.srm" }?.second
+                                if (created != null) check(DocumentsContract.deleteDocument(
+                                    context.contentResolver, created)) {
+                                    "Cannot remove newly created SRAM after failed sync"
+                                }
+                            }
                         }
                     }
                 } catch (rollback: Exception) {
                     Log.e(TAG, "SRAM external rollback needs manual recovery", rollback)
                 }
+            }
+            // Restore each modified private mirror iff it is still our
+            // chosen image. Another writer's modification is never replaced.
+            for (i in cores.indices) try {
+                val now = privateFiles[i].takeIf(File::isFile)?.readBytes()
+                if (sameOptionalBytes(now, converted[i])) {
+                    val old = oldPrivate[i]
+                    if (old != null) stage(privateFiles[i], old)
+                    else if (privateFiles[i].isFile && !privateFiles[i].delete()) {
+                        Log.e(TAG, "Failed to remove newly seeded private SRAM")
+                    }
+                }
+            } catch (restore: Exception) {
+                Log.e(TAG, "Private SRAM rollback needs recovery backup", restore)
             }
             // Never delete an immutable recovery snapshot on failure.
             throw SaveConflict("Sharing not changed safely: ${e.message}. Originals backed up.")
