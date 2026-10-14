@@ -485,7 +485,7 @@ fn end_link_local_player_snapshot_can_resume_in_unlinked_mgba() {
         solo.unserialize(&own)
             .expect("local linked GBA must be loadable by a non-linked core");
         solo.run_frame(ButtonMask::default());
-        assert_eq!(solo.video_xrgb8888().len(), GBA_W * GBA_H * 4,
+        assert_eq!(solo.video_xrgb8888().len(), (GBA_W * GBA_H * 4) as usize,
             "the unlinked GBA must resume rendering without ejecting its ROM");
         let resume = solo.serialize().expect("solo after unplug");
         assert!(!slot::link_state::is_pair(&resume));
