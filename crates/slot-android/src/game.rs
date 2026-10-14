@@ -9,7 +9,7 @@ use crate::thumb;
 use crate::retroarch_state;
 use crate::rewind::{RewindThread, REWIND_BYTES};
 use std::path::{Path, PathBuf};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "android")]
@@ -40,6 +40,19 @@ fn emulation_may_advance(link_touched: bool, link_active: bool) -> bool {
 const SRAM_PERIOD: Duration = Duration::from_secs(30);
 const REWIND_CAPTURE_FRAMES: u8 = 6; // 10 states/second at the original GBA FPS
 const UNDO_WINDOW: Duration = Duration::from_secs(30);
+
+/// Cartridge header code, not a localized filename: FireRed, LeafGreen,
+/// Emerald, Ruby and Sapphire, across original game-code regions.
+fn pokemon_gen3_flash_code(code: &[u8; 4]) -> bool {
+    matches!(&code[..3], b"BPR" | b"BPG" | b"BPE" | b"AXV" | b"AXP")
+}
+fn mgba_flash_runahead_guard(rom: &Path, which: Core, platform: Platform) -> bool {
+    if which != Core::Mgba || platform != Platform::Gba { return false; }
+    let Ok(mut file) = std::fs::File::open(rom) else { return false; };
+    if file.seek(SeekFrom::Start(0xAC)).is_err() { return false; }
+    let mut code = [0u8; 4];
+    file.read_exact(&mut code).is_ok() && pokemon_gen3_flash_code(&code)
+}
 
 enum PendingUndo {
     Saved { stamp: String, evicted: Option<(String, Vec<u8>, Vec<u8>)> },
@@ -92,6 +105,8 @@ pub struct GameSession {
     // Preserve the libretro state allocation across speculative frames.
     runahead_state: Vec<u8>,
     runahead_unavailable: bool,
+    // Keep mGBA speculative frames away from Pokémon Gen III FLASH1M.
+    mgba_flash_runahead_guard: bool,
     palette_live: bool,
     core_kind: Core,
     pending_undo: Option<(Instant, PendingUndo)>,
@@ -514,6 +529,10 @@ impl GameSession {
         ));
         let sample_rate = core.av_info().sample_rate.round() as i32;
         let fps = core.av_info().fps.clamp(30.0, 120.0);
+        let flash_guard = mgba_flash_runahead_guard(rom, which, platform);
+        if flash_guard && linked_boot.is_none() {
+            log_launch_timing("mGBA Flash safety: Run-Ahead OFF for Pokemon Gen III, including after End Link; gpSP unchanged");
+        }
         Ok(Self {
             core, link: None, link_touched: false, linked_boot, gpsp_serial,
             rom_path: rom.to_path_buf(), rom_stem: rom_stem.to_owned(),
@@ -522,6 +541,7 @@ impl GameSession {
             frame_count: 0, palette_live, core_kind: which,
             runahead_video: Vec::new(), runahead_state: Vec::new(),
             runahead_unavailable: false,
+            mgba_flash_runahead_guard: flash_guard,
             pending_undo: None, last_sram: Instant::now(),
             sample_rate: sample_rate.clamp(8_000, 96_000),
             fps,
@@ -809,15 +829,20 @@ impl GameSession {
         self.rewind_frames = 0;
     }
 
+    pub fn mgba_flash_runahead_blocked(&self) -> bool { self.mgba_flash_runahead_guard }
+
     pub fn runahead_supported(&self) -> bool {
-        self.linked_boot.is_none() && !self.link_touched && self.link.is_none() && !self.runahead_unavailable && self.core.speculative_audio_supported()
+        !self.mgba_flash_runahead_guard && self.linked_boot.is_none() && !self.link_touched
+            && self.link.is_none() && !self.runahead_unavailable
+            && self.core.speculative_audio_supported()
     }
 
     /// Roll back both standard libretro state and core-specific transient
     /// audio: gpSP's sound ring, or mGBA's converter/filter/queue sidecar.
     pub fn prepare_runahead(&mut self, buttons: u16, turbo: bool, frames: u8) {
         self.runahead_video.clear();
-        if frames == 0 || frames > 2 || self.runahead_unavailable || self.link_touched || self.linked_boot.is_some() { return; }
+        if frames == 0 || frames > 2 || self.mgba_flash_runahead_guard ||
+            self.runahead_unavailable || self.link_touched || self.linked_boot.is_some() { return; }
         if !self.core.speculative_audio_supported() {
             self.runahead_unavailable = true;
             log_launch_timing("Run-Ahead disabled: core has no safe speculative audio support");
@@ -1038,6 +1063,31 @@ impl Drop for GameSession {
         // Ejection, Android lifecycle teardown and failed launches must tell
         // the remote console the link ended, not leave an orphaned TCP session.
         self.end_multiplayer();
+    }
+}
+
+#[cfg(test)]
+mod pokemon_flash_guard_tests {
+    use super::*;
+    #[test]
+    fn per_rom_guard_is_mgba_pokemon_gen3_only() {
+        for code in [*b"BPRE",*b"BPGE",*b"BPGJ",*b"BPEE",*b"AXVE",*b"AXPJ"] {
+            assert!(pokemon_gen3_flash_code(&code), "{code:?}");
+        }
+        for code in [*b"AFZE",*b"AWRE",*b"BRBE",*b"    "] {
+            assert!(!pokemon_gen3_flash_code(&code), "{code:?}");
+        }
+        let dir = std::env::temp_dir().join(format!("slot-flash-guard-{}",std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("renamed-localized-game.gba");
+        let mut rom = vec![0u8; 192];
+        rom[0xAC..0xB0].copy_from_slice(b"BPGE");
+        std::fs::write(&path, &rom).unwrap();
+        assert!(mgba_flash_runahead_guard(&path, Core::Mgba, Platform::Gba));
+        assert!(!mgba_flash_runahead_guard(&path, Core::Gpsp, Platform::Gba));
+        assert!(!mgba_flash_runahead_guard(&path, Core::Mgba, Platform::Gb));
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
 
