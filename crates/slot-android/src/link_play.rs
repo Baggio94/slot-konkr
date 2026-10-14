@@ -47,6 +47,37 @@ pub enum Frame {
     Failed(LinkError),
 }
 
+/// Diagnostic-only link pacing counters. No gameplay timing or packet
+/// scheduling is changed by these measurements. Log every five seconds so
+/// AudioTrack underruns can be correlated with network and core bottlenecks.
+struct LinkPacing {
+    started: Instant,
+    attempts: u64,
+    advanced: u64,
+    paused: u64,
+    seeding: u64,
+    waiting_input: u64,
+    long_calls_16ms: u64,
+    long_calls_33ms: u64,
+    max_call_us: u64,
+    core_total_us: u64,
+    core_max_us: u64,
+    core_calls: u64,
+    packets: u64,
+    stall_started: Option<Instant>,
+    stall_events: u64,
+    max_stall_ms: u64,
+}
+impl LinkPacing {
+    fn new() -> Self {
+        Self { started: Instant::now(), attempts: 0, advanced: 0,
+            paused: 0, seeding: 0, waiting_input: 0,
+            long_calls_16ms: 0, long_calls_33ms: 0, max_call_us: 0,
+            core_total_us: 0, core_max_us: 0, core_calls: 0, packets: 0,
+            stall_started: None, stall_events: 0, max_stall_ms: 0 }
+    }
+}
+
 pub struct LinkPlay {
     wire: Box<dyn LinkChannel>,
     cable: Option<Cable>,
@@ -64,6 +95,7 @@ pub struct LinkPlay {
     // with Host's blank peer cartridge.
     awaiting_join_seed: bool,
     started: Instant,
+    pacing: LinkPacing,
     // The cable protocol deliberately has a 3-frame input delay, as upstream.
     // Wireless passes bytes through the core's registered netpacket ABI.
 }
@@ -134,6 +166,7 @@ impl LinkPlay {
         Ok(Self {
             wire, cable, mode, net, error: None, local_paused: false, state_bytes: 0,
             state_final_received: false, awaiting_join_seed, started: Instant::now(),
+            pacing: LinkPacing::new(),
         })
     }
 
@@ -168,6 +201,52 @@ impl LinkPlay {
     /// A pending packet must never block a GPU frame. The emulation is held
     /// at the exact same frame until both input masks are available.
     pub fn frame(&mut self, core: &mut dyn RetroCore, buttons: ButtonMask) -> Frame {
+        let started = Instant::now();
+        let paused = self.local_paused || self.wire.peer_paused();
+        let startup = self.awaiting_join_seed || self.cable.as_ref()
+            .is_some_and(|cable| !cable.armed());
+        let result = self.advance_core_frame(core, buttons);
+        let micros = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        let pacing = &mut self.pacing;
+        pacing.attempts += 1;
+        pacing.max_call_us = pacing.max_call_us.max(micros);
+        if micros > 16_667 { pacing.long_calls_16ms += 1; }
+        if micros > 33_333 { pacing.long_calls_33ms += 1; }
+        match result {
+            Frame::Advanced => {
+                pacing.advanced += 1;
+                if let Some(since) = pacing.stall_started.take() {
+                    pacing.stall_events += 1;
+                    pacing.max_stall_ms = pacing.max_stall_ms.max(
+                        since.elapsed().as_millis().min(u64::MAX as u128) as u64);
+                }
+            }
+            Frame::Waiting => {
+                if paused { pacing.paused += 1; }
+                else if startup { pacing.seeding += 1; }
+                else { pacing.waiting_input += 1; }
+                pacing.stall_started.get_or_insert_with(Instant::now);
+            }
+            Frame::Failed(_) => { pacing.stall_started = None; }
+        }
+        if pacing.started.elapsed() >= Duration::from_secs(5) {
+            let seconds = pacing.started.elapsed().as_secs_f64();
+            let avg_core_us = if pacing.core_calls == 0 { 0 }
+                else { pacing.core_total_us / pacing.core_calls };
+            crate::game::log_launch_timing(&format!(
+                "Link pacing: mode={:?} callbacks={} advanced={} effective_emu_fps={:.1} wait_peer={} wait_setup={} wait_paused={} stall_events={} max_stall_ms={} rx_pkts={} core_us_avg={} core_us_max={} link_call_us_max={} calls_over_16ms={} calls_over_33ms={}",
+                self.mode, pacing.attempts, pacing.advanced,
+                pacing.advanced as f64 / seconds,
+                pacing.waiting_input, pacing.seeding, pacing.paused,
+                pacing.stall_events, pacing.max_stall_ms, pacing.packets,
+                avg_core_us, pacing.core_max_us, pacing.max_call_us,
+                pacing.long_calls_16ms, pacing.long_calls_33ms));
+            *pacing = LinkPacing::new();
+        }
+        result
+    }
+
+    fn advance_core_frame(&mut self, core: &mut dyn RetroCore, buttons: ButtonMask) -> Frame {
         if let Some(error) = self.error { return Frame::Failed(error); }
         if self.wire.peer_ended() { return self.fail(LinkError::PeerEnded); }
         if self.wire.is_closed() { return self.fail(LinkError::Disconnected); }
@@ -178,6 +257,7 @@ impl LinkPlay {
 
         for _ in 0..MAX_RECEIVE_PER_FRAME {
             let Some(packet) = self.wire.try_recv() else { break };
+            self.pacing.packets += 1;
             if let Some(cable) = self.cable.as_mut() {
                 // A bad kind, empty chunk, trailing bytes on READY, or an
                 // oversized state fragment is a protocol error, not a
@@ -273,7 +353,12 @@ impl LinkPlay {
             // The original sampler is idempotent across a stalled frame.
             self.wire.send(NETPACKET_RELIABLE, &cable.sample(buttons));
             if let Some((p0, p1)) = cable.ready() {
+                let core_started = Instant::now();
                 core.run_frame_linked(p0, p1);
+                let us = core_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+                self.pacing.core_calls += 1;
+                self.pacing.core_total_us = self.pacing.core_total_us.saturating_add(us);
+                self.pacing.core_max_us = self.pacing.core_max_us.max(us);
                 cable.advance();
                 Frame::Advanced
             } else {
@@ -287,7 +372,12 @@ impl LinkPlay {
         } else {
             core.pump_link();
             self.flush();
+            let core_started = Instant::now();
             core.run_frame(buttons);
+            let us = core_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+            self.pacing.core_calls += 1;
+            self.pacing.core_total_us = self.pacing.core_total_us.saturating_add(us);
+            self.pacing.core_max_us = self.pacing.core_max_us.max(us);
             core.pump_link();
             self.flush();
             Frame::Advanced
