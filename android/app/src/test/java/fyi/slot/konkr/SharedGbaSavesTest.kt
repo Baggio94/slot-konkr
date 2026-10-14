@@ -10,6 +10,18 @@ class SharedGbaSavesTest {
     private val a = ByteArray(32768) { 0x11 }
     private val b = ByteArray(32768) { 0x22 }
 
+    @Test fun coreSwitchDialogOnlyAppearsForRealSwitchWithDestinationAutoState() {
+        val offer = RetroArchStorage::shouldOfferCoreResume
+        assertEquals(true, offer(true, "mGBA", "gpSP", true))
+        assertEquals(true, offer(true, "gpSP", "mGBA", true))
+        assertEquals(false, offer(false, "mGBA", "gpSP", true))
+        assertEquals(false, offer(true, "mGBA", "mGBA", true))
+        assertEquals(false, offer(true, "gpSP", "gpSP", true))
+        assertEquals(false, offer(true, "mGBA", "gpSP", false))
+        assertEquals(false, offer(true, null, "gpSP", true))
+        assertEquals(false, offer(true, "legacy", "gpSP", true))
+    }
+
     @Test fun firstMigrationNeverGuessesBetweenDifferentProgress() {
         assertEquals(RetroArchStorage.SharedGbaSource.CONFLICT,
             RetroArchStorage.chooseGbaSource(a, b, null))
