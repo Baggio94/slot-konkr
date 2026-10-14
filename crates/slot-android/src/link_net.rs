@@ -83,7 +83,9 @@ impl LabGreeting {
     fn bytes(&self) -> [u8; LAB_GREETING_LEN] {
         let mut bytes = [0u8; LAB_GREETING_LEN];
         bytes[..4].copy_from_slice(b"KMLB");
-        bytes[4] = 3; // Mutual-auth KMLB/3, no KMLB/2 or SLOT/1 downgrade.
+        bytes[4] = if self.backend == 1 { 4 } else { 3 };
+        // KMLB/4: mGBA dual-cartridge transfer, no fallback to KMLB/3.
+        // gpSP KMLB/3 remains unchanged; both formats reject old peers.
         bytes[5..9].copy_from_slice(&self.game);
         bytes[9] = self.backend;
         bytes[10] = self.mode;
@@ -93,7 +95,8 @@ impl LabGreeting {
         bytes
     }
     fn decode(bytes:&[u8])->Option<Self>{
-        if bytes.len()!=LAB_GREETING_LEN || &bytes[0..4]!=b"KMLB" || bytes[4]!=3{return None;}
+        if bytes.len()!=LAB_GREETING_LEN || &bytes[0..4]!=b"KMLB" ||
+            !matches!((bytes[4], bytes[9]), (4, 1) | (3, 2)) {return None;}
         let mut game=[0;4]; game.copy_from_slice(&bytes[5..9]);
         let mut rom_sha256=[0;32];rom_sha256.copy_from_slice(&bytes[11..43]);
         let mut core_sha256=[0;32];core_sha256.copy_from_slice(&bytes[43..75]);
@@ -118,19 +121,26 @@ impl LabGreeting {
             }
         }
         if self.game==other.game{return self.rom_sha256==other.rom_sha256;}
-        self.backend==2 && crate::link_compat::runnable_gpsp_cross_title(self.game,other.game,mode)
+        match self.backend {
+            1 => mode == crate::link_kind::LinkKind::Cable
+                && crate::link_compat::compatible_cross_title(self.game, other.game, mode),
+            2 => crate::link_compat::runnable_gpsp_cross_title(self.game, other.game, mode),
+            _ => false,
+        }
     }
 }
-fn vet_lab(stream:&mut TcpStream,local:&LabGreeting)->bool{
+fn vet_lab(stream:&mut TcpStream,local:&LabGreeting)->Option<LabGreeting>{
     let mut bytes=[0u8;LAB_GREETING_LEN];
     if stream.set_read_timeout(Some(GREET_WAIT)).is_err() ||
         stream.set_write_timeout(Some(GREET_WAIT)).is_err() ||
-        stream.read_exact(&mut bytes).is_err(){return false;}
-    let Some(peer)=LabGreeting::decode(&bytes) else{return false;};
-    if !local.accepts(&peer){return false;}
+        stream.read_exact(&mut bytes).is_err(){return None;}
+    let peer=LabGreeting::decode(&bytes)?;
+    if !local.accepts(&peer){return None;}
     if stream.write_all(&[GREETING_ACK]).is_err() ||
-        stream.write_all(&local.bytes()).is_err(){return false;}
-    stream.set_read_timeout(None).is_ok() && stream.set_write_timeout(None).is_ok()
+        stream.write_all(&local.bytes()).is_err(){return None;}
+    if stream.set_read_timeout(None).is_err() ||
+        stream.set_write_timeout(None).is_err(){return None;}
+    Some(peer)
 }
 
 const CONTROL_ENDED: u8 = 0x00;
@@ -158,6 +168,7 @@ pub struct TcpLink {
     closed: Arc<AtomicBool>,
     ended: Arc<AtomicBool>,
     peer_paused: Arc<AtomicBool>,
+    peer_identity: Option<LabGreeting>,
 }
 
 impl TcpLink {
@@ -224,9 +235,10 @@ impl TcpLink {
             match listener.accept() {
                 Ok((mut stream, _peer)) => {
                     stream.set_nonblocking(false)?;
-                    if let Some(ref local) = lab {
-                        if !vet_lab(&mut stream, local) { continue; }
-                    }
+                    let peer_identity = if let Some(ref local) = lab {
+                        let Some(remote) = vet_lab(&mut stream, local) else { continue; };
+                        Some(remote)
+                    } else { None };
                     if let Some(ref want) = expect {
                         // Vetted before it is anyone's session: a stranger, a scanner or the
                         // wrong game gets dropped here and the host keeps waiting for the
@@ -235,7 +247,7 @@ impl TcpLink {
                             continue;
                         }
                     }
-                    return TcpLink::wrap(stream);
+                    return TcpLink::wrap_identified(stream, peer_identity);
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
                 Err(e) => return Err(e),
@@ -309,7 +321,7 @@ impl TcpLink {
             if !identity.accepts(&host){return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,"incompatible KMLB/3 host identity"));}
             stream.set_read_timeout(None)?;stream.set_write_timeout(None)?;
-            TcpLink::wrap(stream)
+            TcpLink::wrap_identified(stream, Some(host))
         }
     }
 
@@ -329,6 +341,11 @@ impl TcpLink {
     }
 
     fn wrap(stream: TcpStream) -> std::io::Result<TcpLink> {
+        Self::wrap_identified(stream, None)
+    }
+
+    fn wrap_identified(stream: TcpStream, peer_identity: Option<LabGreeting>)
+        -> std::io::Result<TcpLink> {
         stream.set_nodelay(true)?;
         let mut reader = stream.try_clone()?;
         let mut writer = stream.try_clone()?;
@@ -408,7 +425,15 @@ impl TcpLink {
             closed,
             ended,
             peer_paused,
+            peer_identity,
         })
+    }
+
+    /// Authenticated against the local backend/core/BIOS before the socket
+    /// ever became visible to the link session. Used by KMLB/4 to prove the
+    /// remote ROM transfer matches the negotiated SHA-256 and game code.
+    pub fn peer_identity(&self) -> Option<&LabGreeting> {
+        self.peer_identity.as_ref()
     }
 
     pub fn send_end(&mut self) {
@@ -678,10 +703,15 @@ mod lab_negotiation_tests {
         let mut bn3=battle.clone();bn3.game=*b"A3XE";bn3.mode=1;
         let mut bn3_white=bn3.clone();bn3_white.game=*b"A6BE";
         assert!(!bn3.accepts(&bn3_white));
-        // mGBA pair snapshots cannot safely contain two different games.
+        // mGBA KMLB/4 may now negotiate compatible dual cartridges;
+        // actual Link READY is gated on the verified ROM transfer.
         let mut mgba=host.clone();mgba.backend=1;
         let mut mgba_other=other.clone();mgba_other.backend=1;
-        assert!(!mgba.accepts(&mgba_other));
+        assert!(mgba.accepts(&mgba_other));
+        let mut incompatible=mgba_other.clone();incompatible.game=*b"BRBE";
+        assert!(!mgba.accepts(&incompatible));
+        assert_eq!(mgba.bytes()[4],4);
+        assert_eq!(host.bytes()[4],3);
         // Legacy framing/version can never be accepted in KMLB/3.
         let mut legacy=host.bytes();legacy[4]=2;
         assert!(LabGreeting::decode(&legacy).is_none());
