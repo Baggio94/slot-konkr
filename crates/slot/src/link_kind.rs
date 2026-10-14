@@ -28,6 +28,26 @@ pub fn has_wireless_adapter(code: &str) -> bool {
     WIRELESS.contains(&code)
 }
 
+/// Protocols implemented by our *pinned* libretro gpSP serial core, not
+/// every two-cartridge feature that works on original GBA hardware.
+/// See gpsp/gba_over.h at 5819380c2ffb0900219d700a382ee68c464ebb99.
+/// Generic Cable (Golden Sun, BN1-4, Mario Bros., Medabots...) is not
+/// implemented by gpSP's Pokemon/Advance Wars serial emulators.
+pub fn gpsp_runtime_mode_supported(code: &str, mode: LinkKind) -> bool {
+    match mode {
+        LinkKind::Wireless => has_wireless_adapter(code),
+        LinkKind::Cable => {
+            let pokemon_rfu = has_wireless_adapter(code)
+                && ["BPR", "BPG", "BPE"].iter().any(|p| code.starts_with(p));
+            let pokemon_original_cable = matches!(code,
+                "AXVE" | "AXVJ" | "AXVD" | "AXVI" | "AXVS" | "AXVF"
+                | "AXPE" | "AXPJ" | "AXPD" | "AXPI" | "AXPS" | "AXPF");
+            pokemon_rfu || pokemon_original_cable
+                || matches!(code, "AWRE" | "AWRP" | "AW2E" | "AW2P")
+        }
+    }
+}
+
 pub fn link_kind(code: &str, title: &str, clean: bool) -> LinkKind {
     if pokemon(code, title) {
         let retail = clean
@@ -48,6 +68,15 @@ pub fn link_kind(code: &str, title: &str, clean: bool) -> LinkKind {
 
 pub fn serial_option(chosen: LinkKind, auto: LinkKind, code: &str, title: &str) -> &'static str {
     if chosen == auto {
+        // These EU/JP Battle Network 5/6 IDs support genuine RFU on GBA,
+        // but are missing FLAGS_SERIAL|FLAGS_RFU overrides in the pinned
+        // gpSP gba_over.h. Force the existing gpSP RFU backend explicitly:
+        // leaving "auto" would silently DISABLE serial communication.
+        if chosen == LinkKind::Wireless && matches!(code,
+            "BRBP" | "BRKP" | "BRBJ" | "BRKJ"
+            | "BR5P" | "BR6P" | "BR5J" | "BR6J") {
+            return "rfu";
+        }
         return "auto";
     }
     match chosen {
@@ -133,5 +162,23 @@ mod a6_serial_regressions {
             assert!(has_wireless_adapter(code), "retail EU/JP adapter support: {code}");
         }
         assert_eq!(link_kind("NONE", "UNSUPPORTED", true), LinkKind::Cable);
+        for code in ["BPRE", "BPGE", "BPEE", "AXVE", "AXPE", "AWRE", "AW2E"] {
+            assert!(gpsp_runtime_mode_supported(code, LinkKind::Cable));
+        }
+        for code in ["BPRE", "BPGE", "BPEE", "BRBE", "BR5E", "BRBP", "BR5J"] {
+            assert!(gpsp_runtime_mode_supported(code, LinkKind::Wireless));
+        }
+        for code in ["AXVE", "AXPE", "A3XE", "B4WE", "AGSE", "A88E"] {
+            assert!(!gpsp_runtime_mode_supported(code, LinkKind::Wireless));
+        }
+        for code in ["AREE","AE2E","AMAE","A88E","A3XE","A6BE",
+                     "B4WE","B4BE","AGSE","AGFE","BZ3E","BRBE","BR5E"] {
+            assert!(!gpsp_runtime_mode_supported(code, LinkKind::Cable),
+                "no gpSP generic GBA cable serial backend: {code}");
+        }
+        assert_eq!(serial_option(LinkKind::Wireless, LinkKind::Wireless,
+            "BRBP", "MEGAMAN BN5"), "rfu");
+        assert_eq!(serial_option(LinkKind::Wireless, LinkKind::Wireless,
+            "BR6J", "MEGAMAN BN6"), "rfu");
     }
 }
