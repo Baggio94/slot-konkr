@@ -16,10 +16,10 @@ fn family(code: &str) -> Option<Family> {
         "AMAE"|"AMAP"|"AMAJ"|"AA2E"|"AA2P"|"AA2J"|
         "A3AE"|"A3AP"|"A3AJ"|"AX4E"|"AX4P"|"AX4J"|
         "A88E"|"A88P"|"A88J"=>Some(Family::MarioBros),
-        "A3XE"|"A6BE"=>Some(Family::Bn3),
-        "B4WE"|"B4BE"|"B4WP"|"B4BP"=>Some(Family::Bn4),
-        "BRBE"|"BRKE"|"BRBP"|"BRKP"=>Some(Family::Bn5),
-        "BR5E"|"BR6E"|"BR5P"|"BR6P"=>Some(Family::Bn6),
+        "A3XE"|"A6BE"|"A3XJ"|"A6BJ"=>Some(Family::Bn3),
+        "B4WE"|"B4BE"|"B4WP"|"B4BP"|"B4WJ"|"B4BJ"=>Some(Family::Bn4),
+        "BRBE"|"BRKE"|"BRBP"|"BRKP"|"BRBJ"|"BRKJ"=>Some(Family::Bn5),
+        "BR5E"|"BR6E"|"BR5P"|"BR6P"|"BR5J"|"BR6J"=>Some(Family::Bn6),
         "A8BE"|"A9BE"=>Some(Family::Medabots),
         "AK8E"|"AK9E"=>Some(Family::MedabotsAx),
         "AGSE"|"AGFE"=>Some(Family::GoldenSun),
@@ -68,7 +68,9 @@ pub fn compatible_cross_title(a:[u8;4], b:[u8;4], mode:LinkKind)->bool {
     }
     #[test] fn documented_non_pokemon_pairs(){
         for (a,b,wireless) in [("A3XE","A6BE",false),("B4WE","B4BE",false),
-                              ("BRBE","BRKE",true),("BR5E","BR6E",true),
+                              ("BRBE","BRKE",true),("BRBP","BRKP",true),("BRBJ","BRKJ",true),
+                              ("BR5E","BR6E",true),("BR5P","BR6P",true),
+                              ("BR5J","BR6J",true),
                               ("A8BE","A9BE",false),("AK8E","AK9E",false),
                               ("AGSE","AGFE",false)]{
             assert!(compatible_cross_title(id(a),id(b),LinkKind::Cable));

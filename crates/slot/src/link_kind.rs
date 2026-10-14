@@ -13,11 +13,13 @@ impl LinkKind {
     }
 }
 
-const WIRELESS: [&str; 43] = [
+const WIRELESS: [&str; 51] = [
     "B2WE", "B3AE", "B4UE", "B4UP", "B85A", "B85P", "BDGE", "BDGP", "BG3E", "BKRJ", "BMGD", "BMGE",
     "BMGF", "BMGI", "BMGJ", "BMGP", "BMGS", "BMGU", "BPED", "BPEE", "BPEF", "BPEI", "BPEJ", "BPES",
     "BPGD", "BPGE", "BPGF", "BPGI", "BPGJ", "BPGS", "BPRD", "BPRE", "BPRF", "BPRI", "BPRJ", "BPRS",
-    "BR5E", "BR6E", "BRBE", "BRKE", "BTME", "BTMJ", "BTMP",
+    "BR5E", "BR6E", "BRBE", "BRKE",
+    "BR5P", "BR6P", "BRBP", "BRKP",
+    "BR5J", "BR6J", "BRBJ", "BRKJ", "BTME", "BTMJ", "BTMP",
 ];
 
 /// RFU requires actual GBA Wireless Adapter support. Excludes Ruby,
@@ -63,7 +65,9 @@ pub fn link_carried(code: &str, title: &str) -> bool {
         || code.starts_with("AWR")
         || code.starts_with("AW2")
         || ["A3XE","A6BE","B4WE","B4BE","B4WP","B4BP",
-            "BRBE","BRKE","BRBP","BRKP","BR5E","BR6E","BR5P","BR6P",
+            "BRBE","BRKE","BRBP","BRKP","BRBJ","BRKJ",
+            "BR5E","BR6E","BR5P","BR6P","BR5J","BR6J",
+            "A3XJ","A6BJ","B4WJ","B4BJ",
             "A8BE","A9BE","AK8E","AK9E","AGSE","AGFE",
             "AREE","AE2E","BZ3E",
             "AMAE","AMAP","AMAJ","AA2E","AA2P","AA2J",
@@ -125,6 +129,9 @@ mod a6_serial_regressions {
         assert!(has_wireless_adapter("BPEE"));
         assert!(has_wireless_adapter("BRBE"));
         assert!(has_wireless_adapter("BR5E"));
+        for code in ["BRBP","BRKP","BRBJ","BRKJ","BR5P","BR6P","BR5J","BR6J"] {
+            assert!(has_wireless_adapter(code), "retail EU/JP adapter support: {code}");
+        }
         assert_eq!(link_kind("NONE", "UNSUPPORTED", true), LinkKind::Cable);
     }
 }
