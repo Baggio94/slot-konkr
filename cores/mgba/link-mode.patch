@@ -136,7 +136,7 @@ index d4de13f..754846e 100644
  	deferredSetup = false;
  }
  
-@@ -1534,6 +1584,343 @@ int16_t cycleturbo(bool a, bool b, bool l, bool r) {
+@@ -1534,6 +1584,353 @@ int16_t cycleturbo(bool a, bool b, bool l, bool r) {
  	return buttons;
  }
  
@@ -303,7 +303,17 @@ index d4de13f..754846e 100644
 + * cartridge save and `core`'s settings. It gets no device peripherals, and in link mode neither
 + * does `core`: a light or tilt sensor on one SP is not there for the other SP's copy. */
 +static bool _linkCreatePeer(const struct retro_game_info* game, const char* biosPath) {
-+	struct VFile* rom = data ? VFileFromMemory(data, dataSize) : VFileOpen(game->path, O_RDONLY);
++	/* The default remains same-ROM. A future authenticated KMLB dual-cart
++	 * launcher may supply ONLY a locally validated, private peer ROM path.
++	 * This option is internal and must be fixed before retro_load_game. */
++	struct retro_variable peerVar = { .key = "mgba_link_peer_rom", .value = NULL };
++	const char* peerPath = NULL;
++	if (environCallback(RETRO_ENVIRONMENT_GET_VARIABLE, &peerVar) &&
++		peerVar.value && peerVar.value[0] == '/' && strlen(peerVar.value) < 1024) {
++		peerPath = peerVar.value;
++	}
++	struct VFile* rom = peerPath ? VFileOpen(peerPath, O_RDONLY)
++		: data ? VFileFromMemory(data, dataSize) : VFileOpen(game->path, O_RDONLY);
 +	if (!rom) {
 +		return false;
 +	}
