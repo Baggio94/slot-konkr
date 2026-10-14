@@ -219,7 +219,7 @@ fn connect(role: Role, local: Ipv4Addr, config: &LinkConfig,
             })
         }
     }?;
-    let peer_path = stage_mgba_peer(&mut link, &fingerprint, config)?;
+    let peer_path = stage_mgba_peer(&mut link, &fingerprint, config, cancel)?;
     Ok((link, peer_path))
 }
 
@@ -227,9 +227,10 @@ fn connect(role: Role, local: Ipv4Addr, config: &LinkConfig,
 /// has been fully exchanged, SHA-verified and published inside the private
 /// app cache. The GL thread never hashes, copies or downloads ROM data.
 fn stage_mgba_peer(link: &mut TcpLink, local: &LabGreeting,
-                   config: &LinkConfig) -> io::Result<Option<PathBuf>> {
+                   config: &LinkConfig, cancel: &Cancel)
+    -> io::Result<Option<PathBuf>> {
     match config.backend {
-        Backend::MgbaSlotCable => link.exchange_mgba_peer_rom(local, &config.rom),
+        Backend::MgbaSlotCable => link.exchange_mgba_peer_rom(local, &config.rom, cancel),
         Backend::GpspNetpacket => Ok(None),
     }
 }
@@ -339,7 +340,7 @@ impl LinkStarter {
                 config.fingerprint().and_then(|fingerprint| {
                     let mut link = TcpLink::join_lab_greeted(
                         SocketAddrV4::new(host, PORT).into(), &fingerprint)?;
-                    let peer = stage_mgba_peer(&mut link, &fingerprint, &config)?;
+                    let peer = stage_mgba_peer(&mut link, &fingerprint, &config, &worker_cancel)?;
                     Ok((link, peer))
                 })
             };
