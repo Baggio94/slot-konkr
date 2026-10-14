@@ -41,11 +41,13 @@ internal object RetroArchStorage {
         val savesTree: Uri?,
         val statesTree: Uri?,
         val isGba: Boolean,
-        val romIdentity: String
+        val romIdentity: String,
+        val shareGbaSaves: Boolean = false
     )
 
     fun target(context: Context, rawUri: String, core: String, savesTree: Uri?, statesTree: Uri?,
-               scannedFileName: String? = null): Target {
+               scannedFileName: String? = null,
+               shareGbaSaves: Boolean = false): Target {
         require(core == "mGBA" || core == "gpSP")
         // ROM discovery (or restored shelf cache) already queried the SAF
         // display name. Reuse only that exact URI's name; older caches and
@@ -73,7 +75,7 @@ internal object RetroArchStorage {
             File(prefix, "$digest.$coreLower.retroarch-import.state.auto"),
             File(prefix, "$digest.$coreLower.retroarch-export.state.auto"),
             savesTree, statesTree,
-            name.endsWith(".gba", ignoreCase = true), digest)
+            name.endsWith(".gba", ignoreCase = true), digest, shareGbaSaves)
     }
 
     fun importBeforeLaunch(context: Context, target: Target) {
@@ -85,7 +87,7 @@ internal object RetroArchStorage {
         // hierarchical. Use the user-granted tree to open the exact document
         // directly, without listing its siblings. Other providers retain the
         // existing safe directory-enumeration fallback.
-        if (target.isGba) {
+        if (target.isGba && target.shareGbaSaves) {
             importSharedGba(context, target)
         } else {
             target.savesTree?.let { root ->
@@ -128,7 +130,7 @@ internal object RetroArchStorage {
     /** Returns human-readable export errors; no silent data loss. */
     fun exportAfterSave(context: Context, target: Target): List<String> {
         val failures = mutableListOf<String>()
-        if (target.isGba) {
+        if (target.isGba && target.shareGbaSaves) {
             try {
                 exportSharedGba(context, target)
             } catch (e: Exception) {
