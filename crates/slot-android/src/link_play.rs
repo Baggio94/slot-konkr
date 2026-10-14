@@ -473,6 +473,62 @@ mod tests {
     }
 
     #[test]
+    fn cable_waits_for_real_wall_clock_timeout_without_retransmitting_duplicate_frames() {
+        let inbound = Arc::new(Mutex::new(VecDeque::from([cable::ready_packet().to_vec()])));
+        let outbound = Arc::new(Mutex::new(VecDeque::<Vec<u8>>::new()));
+        let wire: Box<dyn LinkChannel> = Box::new(Wire {
+            recv: inbound, send: outbound.clone(),
+        });
+        let mut core = MockCore::new();
+        let mut link = LinkPlay::begin(&mut core, Role::Host, LinkKind::Cable, wire).unwrap();
+        // Three pre-seeded neutral frames never need remote input.
+        for _ in 0..cable::DELAY {
+            assert_eq!(link.frame(&mut core, ButtonMask(1)), Frame::Advanced);
+        }
+        let before = core.serialize().unwrap();
+        // The remote becomes temporarily non-responsive while TCP is alive.
+        assert_eq!(link.frame(&mut core, ButtonMask(1)), Frame::Waiting);
+        let count = outbound.lock().unwrap().len();
+        for _ in 0..360 {
+            assert_eq!(link.frame(&mut core, ButtonMask(3)), Frame::Waiting,
+                "Six seconds worth of GL polls must not trigger the old 60-poll timeout");
+        }
+        assert_eq!(core.serialize().unwrap(), before,
+            "Never invent another player's missing Cable input");
+        assert_eq!(outbound.lock().unwrap().len(), count,
+            "Never resend the same missing frame on every GL callback");
+        link.waiting_for_input_since =
+            Some(Instant::now() - CABLE_INPUT_TIMEOUT - Duration::from_millis(1));
+        assert_eq!(link.frame(&mut core, ButtonMask(4)),
+            Frame::Failed(LinkError::Timeout));
+        assert_eq!(core.serialize().unwrap(), before);
+        assert_eq!(outbound.lock().unwrap().len(), count);
+    }
+
+    #[test]
+    fn cable_pause_clears_missing_input_deadline_without_advancing_the_game() {
+        let inbound = Arc::new(Mutex::new(VecDeque::from([cable::ready_packet().to_vec()])));
+        let sent = Arc::new(Mutex::new(VecDeque::<Vec<u8>>::new()));
+        let wire: Box<dyn LinkChannel> = Box::new(Wire { recv: inbound, send: sent });
+        let mut core = MockCore::new();
+        let mut link = LinkPlay::begin(&mut core, Role::Host, LinkKind::Cable, wire).unwrap();
+        for _ in 0..cable::DELAY {
+            assert_eq!(link.frame(&mut core, ButtonMask(0)), Frame::Advanced);
+        }
+        assert_eq!(link.frame(&mut core, ButtonMask(0)), Frame::Waiting);
+        let before = core.serialize().unwrap();
+        link.set_local_paused(true);
+        link.waiting_for_input_since =
+            Some(Instant::now() - CABLE_INPUT_TIMEOUT - Duration::from_millis(1));
+        assert_eq!(link.frame(&mut core, ButtonMask(0)), Frame::Waiting);
+        assert!(link.waiting_for_input_since.is_none());
+        link.set_local_paused(false);
+        assert_eq!(link.frame(&mut core, ButtonMask(0)), Frame::Waiting);
+        assert!(link.waiting_for_input_since.is_some());
+        assert_eq!(core.serialize().unwrap(), before);
+    }
+
+    #[test]
     fn pause_menu_stops_netpacket_frames_until_both_players_resume() {
         struct PausableWire {
             sent_local: Arc<AtomicBool>,
