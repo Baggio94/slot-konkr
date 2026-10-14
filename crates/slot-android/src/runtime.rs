@@ -1418,7 +1418,7 @@ impl Engine {
                         crate::multiplayer::Failure::PeerVanished => LinkFail::PeerVanished,
                     };
                     let details = if reason == crate::multiplayer::Failure::IncompatiblePeer {
-                        "Peer rejected KMLB/3. Verify a compatible game pair, core, BIOS and Cable/Wireless mode."
+                        "Peer refused Link: check compatible cartridges, same build, BIOS and Cable/RFU mode (mGBA KMLB/4, gpSP KMLB/3)."
                     } else {
                         match reason {
                             crate::multiplayer::Failure::NobodyCame => "No compatible Host found. Ensure Host is waiting on the same LAN.",
