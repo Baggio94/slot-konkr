@@ -113,6 +113,24 @@ internal object RetroArchStorage {
         } ?: false
     }
 
+    /** User explicitly selected the destination core's existing auto-state.
+     * Re-stage it from RetroArch, even when the normal automatic importer was
+     * deferred to protect that old state while offering the choice.
+     * Never delete the source or another emulator core's state.
+     */
+    fun importExplicitExistingState(context: Context, target: Target) {
+        val bytes = if (target.statesTree != null) {
+            readNamed(context, target.statesTree, target.core,
+                target.stem + ".state.auto", MAX_STATE)
+        } else {
+            target.stateDefaultLocal.takeIf { it.isFile }?.readBytes()
+        }
+        if (bytes != null) {
+            require(bytes.isNotEmpty() && bytes.size <= MAX_STATE) { "Existing state is invalid" }
+            stage(target.stateImportLocal, RetroArchCompression.decode(bytes))
+        }
+    }
+
     fun importBeforeLaunch(context: Context, target: Target) {
         val started = SystemClock.elapsedRealtime()
         // The original implementation enumerated the entire save/state
