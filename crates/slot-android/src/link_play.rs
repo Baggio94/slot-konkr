@@ -102,6 +102,7 @@ pub struct LinkPlay {
     // Track an actual contiguous missing-input interval. Unlike the five-
     // second diagnostic window this survives reporting boundaries.
     waiting_for_input_since: Option<Instant>,
+    last_poll_at: Instant,
     // TCP guarantees one input packet per sampled future frame; sending the
     // same frame on every waiting draw floods both bounded socket queues.
     last_sent_cable_frame: Option<u64>,
@@ -177,6 +178,7 @@ impl LinkPlay {
             state_final_received: false, awaiting_join_seed, started: Instant::now(),
             pacing: LinkPacing::new(),
             waiting_for_input_since: None,
+            last_poll_at: Instant::now(),
             last_sent_cable_frame: None,
         })
     }
@@ -215,6 +217,20 @@ impl LinkPlay {
     /// at the exact same frame until both input masks are available.
     pub fn frame(&mut self, core: &mut dyn RetroCore, buttons: ButtonMask) -> Frame {
         let started = Instant::now();
+        let gap = started.saturating_duration_since(self.last_poll_at);
+        self.last_poll_at = started;
+        if gap > Duration::from_millis(500) && self.waiting_for_input_since.is_some() {
+            // The Android GL thread itself did not run during this interval
+            // (backgrounding, Mac AVD suspension or device scheduling).
+            // Don't count local inactivity as proof that the peer vanished;
+            // TCP reader/writer still report real EOF/broken pipes directly.
+            self.waiting_for_input_since = None;
+            let detail = format!("Link local GL scheduling gap: {gap:?}; suspended input deadline reset");
+            #[cfg(target_os = "android")]
+            crate::game::log_launch_timing(&detail);
+            #[cfg(not(target_os = "android"))]
+            eprintln!("SlotKONKR: {detail}");
+        }
         let paused = self.local_paused || self.wire.peer_paused();
         let startup = self.awaiting_join_seed || self.cable.as_ref()
             .is_some_and(|cable| !cable.armed());
@@ -503,6 +519,26 @@ mod tests {
             Frame::Failed(LinkError::Timeout));
         assert_eq!(core.serialize().unwrap(), before);
         assert_eq!(outbound.lock().unwrap().len(), count);
+    }
+
+    #[test]
+    fn resuming_a_suspended_gl_thread_does_not_mistake_local_sleep_for_peer_loss() {
+        let inbound = Arc::new(Mutex::new(VecDeque::from([cable::ready_packet().to_vec()])));
+        let outbound = Arc::new(Mutex::new(VecDeque::<Vec<u8>>::new()));
+        let wire: Box<dyn LinkChannel> = Box::new(Wire { recv: inbound, send: outbound });
+        let mut core = MockCore::new();
+        let mut link = LinkPlay::begin(&mut core, Role::Host, LinkKind::Cable, wire).unwrap();
+        for _ in 0..cable::DELAY {
+            assert_eq!(link.frame(&mut core, ButtonMask(0)), Frame::Advanced);
+        }
+        assert_eq!(link.frame(&mut core, ButtonMask(0)), Frame::Waiting);
+        let original = core.serialize().unwrap();
+        link.waiting_for_input_since = Some(Instant::now() - Duration::from_secs(11));
+        link.last_poll_at = Instant::now() - Duration::from_secs(11);
+        assert_eq!(link.frame(&mut core, ButtonMask(0)), Frame::Waiting);
+        assert_eq!(core.serialize().unwrap(), original);
+        assert!(link.waiting_for_input_since.is_some());
+        assert!(link.waiting_for_input_since.unwrap().elapsed() < Duration::from_secs(1));
     }
 
     #[test]
