@@ -176,6 +176,41 @@ fn painted(picture: &[u8], x: usize) -> u16 {
     u16::from(pixel[2] >> 3) | u16::from(pixel[1] >> 3) << 5 | u16::from(pixel[0] >> 3) << 10
 }
 
+/// First native feasibility gate for mixed cartridges. The additional
+/// peer-ROM option must affect ONLY the second GBA, without changing the
+/// local cartridge's boot path or normal same-ROM link behavior. This does
+/// not yet enable mixed-ROM network sessions (KMLB/3 still rejects them).
+#[test]
+fn gba_pair_can_boot_a_distinct_explicit_peer_cartridge() {
+    let _g = common::core_lock();
+    let Some(dylib) = vendored() else { return };
+    let local = rom("mgba-mixed-peer-local.gba", normal_rom());
+    let remote = rom("mgba-mixed-peer-remote.gba", keys_rom());
+    let mut mixed = link_core(&dylib, 0);
+    mixed.set_option("mgba_link_peer_rom", remote.to_str().expect("valid peer path"));
+    mixed.load(&local).expect("two distinct GBA cartridges must boot");
+    for _ in 0..15 {
+        mixed.run_frame_linked(ButtonMask(0), ButtonMask(0));
+    }
+    let mixed_pair = mixed.serialize().expect("distinct peers need paired states");
+    let mixed_local = slot::link_state::local(&mixed_pair, 0).expect("local GBA");
+    let mixed_peer = slot::link_state::local(&mixed_pair, 1).expect("different peer GBA");
+    drop(mixed);
+
+    let mut same = link_core(&dylib, 0);
+    same.load(&local).expect("same-ROM pairing must remain supported");
+    for _ in 0..15 {
+        same.run_frame_linked(ButtonMask(0), ButtonMask(0));
+    }
+    let same_pair = same.serialize().expect("same-ROM states");
+    let same_local = slot::link_state::local(&same_pair, 0).expect("same local GBA");
+    let same_peer = slot::link_state::local(&same_pair, 1).expect("same peer GBA");
+    assert_eq!(mixed_local, same_local,
+        "changing peer ROM must never replace the user's own local GBA");
+    assert_ne!(mixed_peer, same_peer,
+        "peer ROM option must actually load different game data in GBA #2");
+}
+
 #[test]
 fn a_pair_restored_in_multiplayer_mode_talks_from_the_first_transfer() {
     let _g = common::core_lock();
