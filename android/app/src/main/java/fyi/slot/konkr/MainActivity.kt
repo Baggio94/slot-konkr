@@ -1161,6 +1161,18 @@ class MainActivity : Activity() {
         if (!audioRunning.compareAndSet(false, true)) return
         audioFrameSignal.drainPermits()
         audioThread = Thread({
+            // Android's streaming AudioTrack is fed from this app-owned
+            // worker. Prefer the platform's documented audio scheduling
+            // priority so transient GL/Wi-Fi activity cannot preempt the
+            // PCM writer unnecessarily. Do NOT change the playback buffer
+            // or add latency to hide actual missing linked game frames.
+            try {
+                android.os.Process.setThreadPriority(
+                    android.os.Process.THREAD_PRIORITY_AUDIO)
+                Log.i(TAG, "Audio worker: THREAD_PRIORITY_AUDIO enabled")
+            } catch (error: Exception) {
+                Log.w(TAG, "Audio priority unavailable; using default worker priority", error)
+            }
             var player: AudioTrack? = null
             var rate = 0
             var requestedSpeed = 0
