@@ -78,6 +78,41 @@ internal object RetroArchStorage {
             name.endsWith(".gba", ignoreCase = true), digest, shareGbaSaves)
     }
 
+    /** The choice only exists on an actual mGBA<->gpSP switch with
+     * Share Saves enabled and an existing auto-state for the destination
+     * core. A same-core launch must never show this dialog.
+     */
+    internal fun shouldOfferCoreResume(
+        sharing: Boolean, previousCore: String?, incomingCore: String,
+        hasDestinationState: Boolean
+    ): Boolean = sharing && hasDestinationState &&
+        previousCore in setOf("mGBA", "gpSP") && previousCore != incomingCore &&
+        incomingCore in setOf("mGBA", "gpSP")
+
+    /** Only auto-states count; manual Polaroids do not implicitly resume. */
+    fun hasCoreAutoState(context: Context, target: Target): Boolean {
+        val lower = if (target.core == "mGBA") "mgba" else "gpsp"
+        val local = File(context.filesDir,
+            "Saves/${target.romIdentity}.$lower.state")
+        if ((local.isFile && local.length() > 0) ||
+            (target.stateImportLocal.isFile && target.stateImportLocal.length() > 0) ||
+            (target.stateDefaultLocal.isFile && target.stateDefaultLocal.length() > 0)) {
+            return true
+        }
+        val index = File(context.filesDir,
+            "Saves/${target.romIdentity}.$lower.state-generation.active")
+        if (index.isFile) {
+            val key = index.readText()
+            if (key.startsWith("${target.romIdentity}.$lower.gen-") &&
+                key.matches(Regex("[a-zA-Z0-9.-]{1,180}")) &&
+                File(context.filesDir, "Saves/$key.state").isFile) return true
+        }
+        return target.statesTree?.let { root ->
+            readNamed(context, root, target.core,
+                target.stem + ".state.auto", MAX_STATE) != null
+        } ?: false
+    }
+
     fun importBeforeLaunch(context: Context, target: Target) {
         val started = SystemClock.elapsedRealtime()
         // The original implementation enumerated the entire save/state
