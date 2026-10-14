@@ -514,6 +514,14 @@ impl TcpLink {
             }
             take_frame(link, PACKET_WAIT, cancel)
         }
+        // Both users must have accepted ROM sharing before either side
+        // transmits ANY game image bytes. One party can take longer reading
+        // the permission dialog; the other waits up to 60s for R4OK instead
+        // of timing out after the normal 8s per-packet limit.
+        self.send(slot_retro::NETPACKET_RELIABLE, b"R4OK");
+        if take_frame(self, Duration::from_secs(60), cancel)?.as_slice() != b"R4OK" {
+            return Err(invalid("Mixed-ROM peer did not authorize cartridge exchange"));
+        }
         let until = Instant::now() + DEADLINE;
         let mut manifest = Vec::with_capacity(44);
         manifest.extend_from_slice(b"R4M0");
