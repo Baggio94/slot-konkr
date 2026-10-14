@@ -164,9 +164,9 @@ internal object RetroArchStorage {
         val guardRoot = File(context.filesDir, "Saves")
         val skipped = File(guardRoot,
             "${target.romIdentity}.$coreLower.skip-resume.once").isFile
-        val protected = File(guardRoot,
+        val stateProtected = File(guardRoot,
             "${target.romIdentity}.$coreLower.state-export-protected").isFile
-        if (skipped || protected) {
+        if (skipped || stateProtected) {
             Log.i(TAG, "Deferred stale RetroArch state import; SRAM / existing states preserved")
             return
         }
