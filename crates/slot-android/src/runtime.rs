@@ -3290,6 +3290,23 @@ impl Engine {
             // Coordinate the pause with the remote game. Without this
             // the other Cable peer times out and gpSP RFU can drift.
             if let Some(game) = self.game.as_mut() { game.set_link_paused(true); }
+            // No libretro frames are evaluated while a native overlay is
+            // visible. Poll transport atomics here as well; otherwise a remote
+            // End Link or a broken socket is invisible until the local player
+            // closes the menu, potentially leaving a permanent "Linked" UI.
+            if let Some(fault) = self.game.as_ref().and_then(GameSession::link_fault) {
+                if let Some(game) = self.game.as_mut() { game.end_multiplayer(); }
+                self.hud.set_link(link_badge_for(self.link_role, true));
+                let now = self.born.elapsed().as_millis() as u64;
+                self.hud.toast(link_fault_toast(fault), now);
+                self.ff_held = false;
+                self.ff_latched = false;
+                self.rewind_held = false;
+                self.hud.set_ff(FfState::Off);
+                AUDIO_SPEED_PERMILLE.store(1000, Ordering::Release);
+                self.overlay = ShelfOverlay::GameMenu { row: 0 };
+                set_message(format!("Multiplayer paused: {fault:?}"));
+            }
             self.game_accum = 0.0;
             let mut commands = vec![Draw::Game];
             self.draw_overlay(&mut commands);
