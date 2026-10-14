@@ -147,6 +147,19 @@ impl GameSession {
             true, rom_stem, None, colour_correction, achievements, None, serial, None)
     }
 
+    /// A post-Link solo rebuild must not consume an old RetroArch auto-state,
+    /// pre-Link checkpoint or one-shot cross-core guard before the live local
+    /// GBA snapshot has been verified and durably promoted.
+    pub fn open_gpsp_solo_unresumed(rom: &Path, core_file: &Path, storage: &Path,
+                                   rom_stem: &str, colour_correction: bool,
+                                   serial: &'static str) -> Result<Self, String> {
+        if !matches!(serial, "auto" | "rfu" | "mul_poke" | "mul_aw1" | "mul_aw2") {
+            return Err("Unsupported gpSP solo serial mode".into());
+        }
+        Self::open_internal(rom, core_file, storage, Core::Gpsp, Platform::Gba,
+            false, rom_stem, None, colour_correction, None, None, serial, None)
+    }
+
     /// Reopen a *fresh* two-GBA mGBA instance. The libretro link options
     /// must be set BEFORE retro_load_game; an existing solo core cannot switch.
     /// Never pass RetroAchievements to this experimental dual-instance session.
