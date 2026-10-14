@@ -140,6 +140,9 @@ static LABEL_PICK_REQUEST: Mutex<Option<String>> = Mutex::new(None);
 static UI_ACTION: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
 static SAVE_SYNC: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static SHARE_SAVES_ENABLED: AtomicBool = AtomicBool::new(false);
+// -1 = preserve ordinary Slot rule, 0 = start from SRAM, 1 = user chose
+// existing destination-core state in the explicit Share Saves dialogue.
+static NEXT_RESUME_MODE: AtomicI32 = AtomicI32::new(-1);
 static CART_SFX: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
 const CART_INSERT_SFX: i32 = 1;
 const CART_EJECT_SFX: i32 = 2;
@@ -2557,8 +2560,13 @@ impl Engine {
                 .get(self.shelves[self.active].index)
                 .map_or("", |cart| cart.stem.as_str());
             let started = Instant::now();
+            let resume_preference = NEXT_RESUME_MODE.swap(-1, Ordering::AcqRel);
+            let wants_state = match resume_preference {
+                0 => false, 1 => true,
+                _ => self.settings.eject_save && !self.fresh_launch,
+            };
             match GameSession::open(Path::new(local), &core_file, &storage,
-                core, platform, self.settings.eject_save && !self.fresh_launch,
+                core, platform, wants_state,
                 rom_stem, self.settings.gb_palettes.then(|| self.settings.palette_name()),
                 self.settings.colour_correction,
                 self.ra_service.as_ref()) {
@@ -4696,6 +4704,16 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetShareSaves(
     _env: *mut c_void, _this: *mut c_void, enabled: jboolean,
 ) {
     SHARE_SAVES_ENABLED.store(enabled != 0, Ordering::Release);
+}
+
+/// Set only after Android's destination-core Save State dialogue has been
+/// answered, and consume exactly once at the matching ROM load.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetNextResumeMode(
+    _env: *mut c_void, _this: *mut c_void, mode: jint,
+) {
+    NEXT_RESUME_MODE.store(if matches!(mode, -1..=1) {mode} else {-1},
+        Ordering::Release);
 }
 
 #[unsafe(no_mangle)]
