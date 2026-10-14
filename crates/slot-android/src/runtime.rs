@@ -3372,17 +3372,36 @@ impl Engine {
             // End Link or a broken socket is invisible until the local player
             // closes the menu, potentially leaving a permanent "Linked" UI.
             if let Some(fault) = self.game.as_ref().and_then(GameSession::link_fault) {
-                if let Some(game) = self.game.as_mut() { game.end_multiplayer(); }
-                self.hud.set_link(link_badge_for(self.link_role, true));
-                let now = self.born.elapsed().as_millis() as u64;
-                self.hud.toast(link_fault_toast(fault), now);
+                self.hud.toast(link_fault_toast(fault),
+                    self.born.elapsed().as_millis() as u64);
                 self.ff_held = false;
                 self.ff_latched = false;
                 self.rewind_held = false;
                 self.hud.set_ff(FfState::Off);
                 AUDIO_SPEED_PERMILLE.store(1000, Ordering::Release);
-                self.overlay = ShelfOverlay::GameMenu { row: 0 };
-                set_message(format!("Multiplayer paused: {fault:?}"));
+                let rejoined = if matches!(fault,
+                    crate::link_play::LinkError::PeerEnded |
+                    crate::link_play::LinkError::Disconnected) {
+                    self.return_link_to_solo()
+                } else {
+                    Err(format!("Unsafe Link transport: {fault:?}"))
+                };
+                match rejoined {
+                    Ok(()) => {
+                        // Peer unplugged; this cartridge keeps its local
+                        // SRAM and full solo state without an app eject.
+                        self.hud.set_link(LinkBadge::Off);
+                        self.overlay = ShelfOverlay::None;
+                    }
+                    Err(reason) => {
+                        if let Some(game) = self.game.as_mut() { game.end_multiplayer(); }
+                        self.hud.set_link(link_badge_for(self.link_role, true));
+                        if self.game.is_some() {
+                            self.overlay = ShelfOverlay::GameMenu { row: 0 };
+                        } else { self.handle(Input::Exit); }
+                        set_message(format!("Multiplayer stopped: {reason}"));
+                    }
+                }
             }
             self.game_accum = 0.0;
             let mut commands = vec![Draw::Game];
@@ -3422,6 +3441,7 @@ impl Engine {
             // Android indicators remain visible on the first game frame.
             SHELF_INDICATOR_FLAGS.store(0, Ordering::Release);
             let mut stepped = 0;
+            let mut peer_unplugged = None;
             if self.rewind_held {
                 // Rewind is mutually exclusive with forward libretro frames.
                 // Restore up to 3 historical snapshots per render frame and
@@ -3470,21 +3490,26 @@ impl Engine {
                         self.settings.rewind && !session.linked()) {
                         self.game_accum = 0.0;
                         if let Some(fault) = session.link_fault() {
-                            // Fail closed on link loss: pause the game instead
-                            // of silently continuing a divergent solo timeline.
-                            session.end_multiplayer();
-                            self.hud.set_link(link_badge_for(self.link_role, true));
-                            // Preserve the broken Link badge and show the
-                            // original Slot reason-specific HUD toast.
-                            let now = self.born.elapsed().as_millis() as u64;
-                            self.hud.toast(link_fault_toast(fault), now);
+                            // Remote End Link and TCP loss can become a
+                            // verified single-GBA SOLO instance after the
+                            // live session's final frame has been drawn.
+                            // Invalid/corrupt frames remain fail-closed.
+                            if matches!(fault, crate::link_play::LinkError::PeerEnded |
+                                crate::link_play::LinkError::Disconnected) {
+                                peer_unplugged = Some(fault);
+                            } else {
+                                session.end_multiplayer();
+                                self.hud.set_link(link_badge_for(self.link_role, true));
+                                self.hud.toast(link_fault_toast(fault),
+                                    self.born.elapsed().as_millis() as u64);
+                                self.overlay = ShelfOverlay::GameMenu { row: 0 };
+                                set_message(format!("Multiplayer paused: {fault:?}"));
+                            }
                             self.ff_held = false;
                             self.ff_latched = false;
                             self.rewind_held = false;
                             self.hud.set_ff(FfState::Off);
                             AUDIO_SPEED_PERMILLE.store(1000, Ordering::Release);
-                            self.overlay = ShelfOverlay::GameMenu { row: 0 };
-                            set_message(format!("Multiplayer paused: {fault:?}"));
                         }
                         break;
                     }
@@ -3538,6 +3563,24 @@ impl Engine {
             self.hud.draw(self.born.elapsed().as_millis() as u64, &mut commands);
             self.gpu.draw_list(&commands);
             self.gpu.end_frame(self.size);
+            if let Some(fault) = peer_unplugged {
+                self.hud.toast(link_fault_toast(fault),
+                    self.born.elapsed().as_millis() as u64);
+                match self.return_link_to_solo() {
+                    Ok(()) => {
+                        self.hud.set_link(LinkBadge::Off);
+                        self.overlay = ShelfOverlay::None;
+                    }
+                    Err(reason) => {
+                        if let Some(game) = self.game.as_mut() { game.end_multiplayer(); }
+                        self.hud.set_link(link_badge_for(self.link_role, true));
+                        if self.game.is_some() {
+                            self.overlay = ShelfOverlay::GameMenu { row: 0 };
+                        } else { self.handle(Input::Exit); }
+                        set_message(format!("Unable to recover Link player: {reason}"));
+                    }
+                }
+            }
             return;
         }
 
