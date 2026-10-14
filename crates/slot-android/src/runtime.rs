@@ -206,6 +206,8 @@ static AUDIO: Mutex<VecDeque<i16>> = Mutex::new(VecDeque::new());
 static PLAYING: AtomicBool = AtomicBool::new(false);
 static SAMPLE_RATE: AtomicI32 = AtomicI32::new(0);
 static DISPLAY_SYNC: AtomicBool = AtomicBool::new(false);
+// A12 diagnostic A/B. Default keeps A11 recovery; flag file selects legacy.
+static MGBA_CABLE_RECOVERY: AtomicBool = AtomicBool::new(true);
 // Android AudioTrack time-stretches 2x game audio while preserving pitch.
 // Expose the current transport speed separately from libretro's sample rate.
 static AUDIO_SPEED_PERMILLE: AtomicI32 = AtomicI32::new(1000);
@@ -281,6 +283,60 @@ fn set_message(message: String) {
     *MESSAGE.lock().unwrap_or_else(|e| e.into_inner()) = Some(message);
 }
 
+
+// A12 GL-thread-only diagnostic; no extra simulation step or GPU readback.
+// Native draw duration is measured BEFORE GLSurfaceView's EGL buffer swap.
+struct A12DrawProbe {
+    started: Instant,
+    callbacks: u64,
+    steps0: u64,
+    steps1: u64,
+    steps2: u64,
+    native_us_max: u64,
+    over_16ms: u64,
+    over_33ms: u64,
+}
+impl A12DrawProbe {
+    fn new() -> Self {
+        Self { started: Instant::now(), callbacks: 0, steps0: 0,
+            steps1: 0, steps2: 0, native_us_max: 0,
+            over_16ms: 0, over_33ms: 0 }
+    }
+    fn record(&mut self, steps: usize, us: u64, recovery: bool) {
+        self.callbacks += 1;
+        match steps {
+            0 => self.steps0 += 1,
+            1 => self.steps1 += 1,
+            _ => self.steps2 += 1,
+        }
+        self.native_us_max = self.native_us_max.max(us);
+        if us > 16_667 { self.over_16ms += 1; }
+        if us > 33_333 { self.over_33ms += 1; }
+        let span = self.started.elapsed();
+        if span >= Duration::from_secs(5) {
+            crate::game::log_launch_timing(&format!(
+                "Link display pacing: recovery={} callbacks={} emu_fps={:.1} steps0={} steps1={} steps2={} native_us_max={} native_over_16ms={} native_over_33ms={}",
+                if recovery { "a11" } else { "legacy" }, self.callbacks,
+                (self.steps1 + 2 * self.steps2) as f64 / span.as_secs_f64(),
+                self.steps0, self.steps1, self.steps2, self.native_us_max,
+                self.over_16ms, self.over_33ms));
+            *self = Self::new();
+        }
+    }
+}
+thread_local! {
+    static A12_DRAW_PROBE: RefCell<Option<A12DrawProbe>> = const { RefCell::new(None) };
+}
+fn a12_draw_sample(linked: bool, steps: usize, native_us: u64, recovery: bool) {
+    A12_DRAW_PROBE.with(|probe| {
+        let mut probe = probe.borrow_mut();
+        if linked {
+            probe.get_or_insert_with(A12DrawProbe::new).record(steps, native_us, recovery);
+        } else {
+            *probe = None;
+        }
+    });
+}
 
 // All engine / OpenGL work occurs on GLSurfaceView's dedicated GL thread.
 thread_local! {
@@ -3486,6 +3542,7 @@ impl Engine {
         // GL resource ownership ever moves away from the GL render thread.
         DISPLAY_SYNC.store(self.game.is_some() && profile.display_sync_pacing,
             Ordering::Release);
+        let a12_native_started = Instant::now();
         if let Some(session) = self.game.as_mut() {
             // Resume only after the remote has also left its pause menu;
             // LinkPlay::frame holds either core while peer_paused is true.
@@ -3528,7 +3585,8 @@ impl Engine {
                 // and audio permanently lose an emulated frame. Restrict
                 // recovery to mGBA Cable; gpSP and solo retain their policy.
                 let mgba_cable_pacing = session.linked()
-                    && session.core_kind() == Core::Mgba && !fast;
+                    && session.core_kind() == Core::Mgba && !fast
+                    && MGBA_CABLE_RECOVERY.load(Ordering::Acquire);
                 // Preserve a little more fractional game time in the
                 // opt-in DISPLAY SYNC mode ONLY. No extra libretro frames
                 // can run in any single callback; Beta 4 catch-up stays gone.
@@ -3633,6 +3691,9 @@ impl Engine {
             self.hud.draw(self.born.elapsed().as_millis() as u64, &mut commands);
             self.gpu.draw_list(&commands);
             self.gpu.end_frame(self.size);
+            a12_draw_sample(session.linked() && session.core_kind() == Core::Mgba,
+                stepped, a12_native_started.elapsed().as_micros() as u64,
+                MGBA_CABLE_RECOVERY.load(Ordering::Acquire));
             if let Some(fault) = peer_unplugged {
                 self.hud.toast(link_fault_toast(fault),
                     self.born.elapsed().as_millis() as u64);
@@ -4914,6 +4975,26 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeFastAudioSupported
 ) {
     FF_AUDIO_SUPPORTED.store(supported != 0, Ordering::Release);
     if supported == 0 { AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear(); }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetMgbaLinkRecoveryEnabled(
+    _env: *mut c_void, _this: *mut c_void, enabled: jboolean,
+) {
+    MGBA_CABLE_RECOVERY.store(enabled != 0, Ordering::Release);
+    crate::game::log_launch_timing(if enabled != 0 {
+        "A12 Link recovery setting: a11"
+    } else {
+        "A12 Link recovery setting: legacy"
+    });
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeAudioQueuedShorts(
+    _env: *mut c_void, _this: *mut c_void,
+) -> jint {
+    AUDIO.lock().unwrap_or_else(|e| e.into_inner())
+        .len().min(i32::MAX as usize) as jint
 }
 
 #[unsafe(no_mangle)]

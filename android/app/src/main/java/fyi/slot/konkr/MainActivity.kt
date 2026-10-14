@@ -110,6 +110,8 @@ class MainActivity : Activity() {
     external fun nativeSuspend()
     external fun nativeIsPlaying(): Boolean
     external fun nativeAudioSampleRate(): Int
+    external fun nativeAudioQueuedShorts(): Int
+    external fun nativeSetMgbaLinkRecoveryEnabled(enabled: Boolean)
     external fun nativeDisplaySyncEnabled(): Boolean
     external fun nativeAudioSpeedPermille(): Int
     external fun nativeFastAudioSupported(supported: Boolean)
@@ -648,6 +650,10 @@ class MainActivity : Activity() {
         // A staged sign-out must finish before any native HTTP worker is started.
         val cleanSignOut = RaAccount.finishPendingSignOut(filesDir)
         nativeConfigure(filesDir.absolutePath, applicationInfo.nativeLibraryDir)
+        // App-private A12 A/B marker; no save or ROM folders are touched.
+        val a12Recovery = !File(filesDir, "a12-mgba-legacy-pacing.flag").exists()
+        nativeSetMgbaLinkRecoveryEnabled(a12Recovery)
+        Log.i(TAG, "A12 recovery mode: " + if (a12Recovery) "a11" else "legacy")
         nativeSetShareSaves(getSharedPreferences(PREFS, MODE_PRIVATE)
             .getBoolean(SHARE_GBA_SAVES, false))
         if (cleanSignOut && RaAccount.configuredUser(filesDir) != null) nativeRaAccountConfigured()
@@ -658,6 +664,15 @@ class MainActivity : Activity() {
                 preserveEGLContextOnPause = true
                 setRenderer(object : Renderer {
                     var ready = false
+                    private var probeStartNs = 0L
+                    private var lastDrawNs = 0L
+                    private var callbacks = 0
+                    private var gapOver25ms = 0
+                    private var gapOver40ms = 0
+                    private var gapUsMax = 0L
+                    private var nativeUsMax = 0L
+                    private var nativeOver16ms = 0
+                    private var nativeOver33ms = 0
                     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
                         ready = nativeSurfaceCreated()
                         if (!ready) Log.e(TAG, "Slot GLES initialization failed")
@@ -670,8 +685,12 @@ class MainActivity : Activity() {
                         if (ready) nativeSurfaceChanged(width, height)
                     }
                     override fun onDrawFrame(gl: GL10?) {
+                        val a12StartedNs = SystemClock.elapsedRealtimeNanos()
+                        var a12NativeUs = 0L
                         if (ready) {
+                            val beginNativeNs = SystemClock.elapsedRealtimeNanos()
                             nativeDrawFrame()
+                            a12NativeUs = (SystemClock.elapsedRealtimeNanos() - beginNativeNs) / 1000L
                             // Notify the existing AudioTrack worker that libretro
                             // may have produced samples. Never block GL on audio.
                             if (audioRunning.get() && nativeIsPlaying() &&
@@ -686,6 +705,41 @@ class MainActivity : Activity() {
                         } else {
                             GLES20.glClearColor(0f, 0f, 0f, 1f)
                             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+                        }
+                        // Diagnostic-only. EGL swaps after this callback returns:
+                        // callback gaps are not true presentation timestamps.
+                        if (ready && nativeIsPlaying()) {
+                            if (probeStartNs == 0L) probeStartNs = a12StartedNs
+                            if (lastDrawNs != 0L) {
+                                val gapUs = (a12StartedNs - lastDrawNs) / 1000L
+                                gapUsMax = maxOf(gapUsMax, gapUs)
+                                if (gapUs > 25_000L) gapOver25ms++
+                                if (gapUs > 40_000L) gapOver40ms++
+                            }
+                            lastDrawNs = a12StartedNs
+                            callbacks++
+                            nativeUsMax = maxOf(nativeUsMax, a12NativeUs)
+                            if (a12NativeUs > 16_667L) nativeOver16ms++
+                            if (a12NativeUs > 33_333L) nativeOver33ms++
+                            val spanNs = SystemClock.elapsedRealtimeNanos() - probeStartNs
+                            if (spanNs >= 5_000_000_000L) {
+                                val fpsX10 = callbacks.toLong() * 10_000_000_000L / spanNs
+                                Log.i(TAG, "GL callback pacing: callbacks=$callbacks fps_x10=$fpsX10 " +
+                                    "gap_over_25ms=$gapOver25ms gap_over_40ms=$gapOver40ms " +
+                                    "gap_us_max=$gapUsMax native_us_max=$nativeUsMax " +
+                                    "native_over_16ms=$nativeOver16ms native_over_33ms=$nativeOver33ms")
+                                probeStartNs = a12StartedNs
+                                callbacks = 0
+                                gapOver25ms = 0
+                                gapOver40ms = 0
+                                gapUsMax = 0L
+                                nativeUsMax = 0L
+                                nativeOver16ms = 0
+                                nativeOver33ms = 0
+                            }
+                        } else {
+                            probeStartNs = 0L
+                            lastDrawNs = 0L
                         }
                     }
                 })
@@ -1289,6 +1343,14 @@ class MainActivity : Activity() {
                                 "emptyReads=$emptyAudioReads, " +
                                 "underrunDelta=${underflows - observedUnderruns}")
                         }
+                        val spanMs = (probeNow - audioProbeAt).coerceAtLeast(1L)
+                        val expected = wanted.toLong() * 2L * spanMs / 1000L
+                        // Report even when there are no underruns, to isolate
+                        // PCM producer starvation from AudioTrack HAL behaviour.
+                        Log.i(TAG, "A12 PCM pacing: rate=$wanted span_ms=$spanMs " +
+                            "written_shorts=$playedShorts expected_shorts=$expected " +
+                            "empty_reads=$emptyAudioReads queued_shorts=${nativeAudioQueuedShorts()} " +
+                            "underruns=${underflows - observedUnderruns}")
                         observedUnderruns = underflows
                         playedShorts = 0L
                         emptyAudioReads = 0
