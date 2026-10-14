@@ -1890,7 +1890,7 @@ impl Engine {
                                         }
                                     }
                                 }
-                                97 | 108 => self.overlay = ShelfOverlay::None,
+                                97 | 108 => self.overlay = self.link_entry.back(),
                                 _ => {}
                             },
                             LinkMenu::Linked { opened: false, .. } | LinkMenu::Unplug { .. } => {}
