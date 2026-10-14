@@ -181,6 +181,38 @@ fn painted(picture: &[u8], x: usize) -> u16 {
 /// local cartridge's boot path or normal same-ROM link behavior. This does
 /// not yet enable mixed-ROM network sessions (KMLB/3 still rejects them).
 #[test]
+fn dual_cart_can_restore_each_players_solo_without_overwriting_remote_rom() {
+    let _g = common::core_lock();
+    let Some(dylib) = vendored() else { return };
+    let host_rom = rom("mgba-dual-state-host.gba", normal_rom());
+    let guest_rom = rom("mgba-dual-state-guest.gba", keys_rom());
+    for (role, own_rom, peer_rom) in [
+        (0u8, &host_rom, &guest_rom),
+        (1u8, &guest_rom, &host_rom),
+    ] {
+        let own = single_state(&dylib, own_rom, 12);
+        let mut paired = link_core(&dylib, role);
+        paired.set_option("mgba_link_peer_rom", peer_rom.to_str().unwrap());
+        paired.load(own_rom).expect("load two distinct ROMs");
+        let fresh = paired.serialize().expect("snapshot before first linked frame");
+        assert!(slot::link_state::is_pair(&fresh));
+        let other_role = 1 - role;
+        let before_other = slot::link_state::local(&fresh, other_role)
+            .expect("fresh peer cartridge state");
+        let seeded = slot::link_state::with_local_player(&fresh, role, &own)
+            .expect("only own checkpoint may replace local GBA");
+        assert_eq!(slot::link_state::local(&seeded, other_role).unwrap(), before_other);
+        paired.unserialize(&seeded)
+            .expect("real patched mGBA must accept distinct peer and own solo state");
+        let verified = paired.serialize().expect("verified dual ROM state");
+        assert!(slot::link_state::local(&verified, role).is_some());
+        assert!(slot::link_state::local(&verified, other_role).is_some());
+        paired.run_frame_linked(ButtonMask::default(), ButtonMask::default());
+        assert_eq!(paired.video_xrgb8888().len(), (GBA_W * GBA_H * 4) as usize);
+    }
+}
+
+#[test]
 fn gba_pair_can_boot_a_distinct_explicit_peer_cartridge() {
     let _g = common::core_lock();
     let Some(dylib) = vendored() else { return };
