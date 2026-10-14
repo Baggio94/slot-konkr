@@ -1262,6 +1262,57 @@ impl Engine {
         Ok(())
     }
 
+    /// An explicit unplug is a core transition, not a cartridge ejection.
+    /// Capture the live LOCAL player's GBA, destroy its private Link core,
+    /// verify a fresh non-Link emulator before modifying any solo save,
+    /// and promote an immutable, conflict-checked battery/state generation.
+    fn return_link_to_solo(&mut self) -> Result<(), String> {
+        let linked = self.game.as_mut().ok_or("No Link game to unplug")?;
+        let which = linked.core_kind();
+        let serial = linked.loaded_serial();
+        let rom = linked.rom_path().to_path_buf();
+        let stem = linked.rom_stem().to_owned();
+        let rejoin = linked.prepare_solo_rejoin()?;
+        let (storage, library) = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .clone().ok_or("Slot storage not configured")?;
+        // libretro cores cannot safely have two independent active instances
+        // in this single process. Store the complete private snapshot before
+        // dropping the Link instance, never write to solo until verified.
+        linked.end_multiplayer();
+        drop(self.game.take());
+        let dylib = library.join(format!("lib{}_libretro.so", which.as_str()));
+        let mut solo = match which {
+            Core::Mgba => GameSession::open(&rom, &dylib, &storage,
+                which, Platform::Gba, false, &stem, None,
+                self.settings.colour_correction, self.ra_service.as_ref()),
+            Core::Gpsp => GameSession::open_gpsp_solo_unresumed(
+                &rom, &dylib, &storage, &stem,
+                self.settings.colour_correction, self.ra_service.as_ref(), serial),
+        }?;
+        solo.restore_local_after_link(&rejoin)?;
+        let backup = solo.commit_rejoined_solo(&rejoin)?;
+        crate::game::log_launch_timing(&format!(
+            "Link -> SOLO validated for {} in {}, immutable backup={}",
+            which.text(), stem, backup.display()));
+        SAMPLE_RATE.store(solo.sample_rate, Ordering::Release);
+        AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        RUMBLE_STRENGTH.store(0, Ordering::Release);
+        self.game_accum = 0.0;
+        self.buttons = 0;
+        self.reset_time_controls();
+        self.game = Some(solo);
+        // Kotlin may now export current SOLO SRAM and the newly regenerated
+        // compatible RetroArch auto-state. It must not export private Link
+        // session files, nor mix FireRed with LeafGreen.
+        if let Some(uri) = self.requested_uri.as_deref() {
+            let event = serde_json::json!({
+                "uri": uri, "core": which.as_str(),
+            }).to_string();
+            SAVE_SYNC.lock().unwrap_or_else(|e| e.into_inner()).push_back(event);
+        }
+        Ok(())
+    }
+
     fn restore_gpsp_solo_after_link_failure(&mut self, rom: &Path,
                                              core_file: &Path, storage: &Path,
                                              stem: &str, serial: &'static str,
@@ -1362,9 +1413,11 @@ impl Engine {
             self.buttons = 0;
         }
         if link_unplug_complete(self.link_phase, self.link_millis()) {
-            // Return focus to the newly actionable "Eject to play solo"
-            // primary row, rather than the generic Save & Eject row.
-            self.overlay = ShelfOverlay::GameMenu { row: 0 };
+            // A successfully rebuilt solo cartridge resumes *in place*.
+            // A failed conversion remains in the fail-closed Eject menu.
+            self.overlay = if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
+                ShelfOverlay::GameMenu { row: 0 }
+            } else { ShelfOverlay::None };
         }
     }
 
@@ -1780,22 +1833,36 @@ impl Engine {
                             }
                             LinkMenu::Linked { opened: true, role, .. } => match code {
                                 96 => {
-                                    // Never import a linked state into solo.
-                                    // Original Slot A ends link with unplug motion.
-                                    if let Some(game) = self.game.as_mut() {
-                                        game.end_multiplayer();
+                                    // End Link is a virtual unplug, not a
+                                    // cartridge ejection. Solo save states and
+                                    // Polaroids become available ONLY after
+                                    // a verified one-GBA recovery + promotion.
+                                    match self.return_link_to_solo() {
+                                        Ok(()) => {
+                                            self.hud.set_link(LinkBadge::Off);
+                                            self.hud.toast(Toast::LinkEnded, self.link_millis());
+                                            self.link_phase = LinkMenu::Unplug {
+                                                role, since: self.link_millis(),
+                                            };
+                                            self.game_accum = 0.0;
+                                            self.buttons = 0;
+                                        }
+                                        Err(reason) => {
+                                            // Never continue in a stale Link
+                                            // core and never overwrite solo
+                                            // progress following recovery error.
+                                            if let Some(game) = self.game.as_mut() {
+                                                game.end_multiplayer();
+                                            }
+                                            set_message(format!("Link recovery unsafe: {reason}. Original solo progress preserved."));
+                                            self.hud.set_link(link_badge_for(role, true));
+                                            if self.game.is_some() {
+                                                self.overlay = ShelfOverlay::GameMenu { row: 0 };
+                                            } else {
+                                                self.handle(Input::Exit);
+                                            }
+                                        }
                                     }
-                                    self.hud.set_link(LinkBadge::Off);
-                                    let now = self.link_millis();
-                                    // Upstream Slot uses its existing HUD toast on
-                                    // explicit End Link, not a fabricated Link SFX.
-                                    self.hud.toast(Toast::LinkEnded, now);
-                                    set_message("Multiplayer ended. Eject to return to solo.".into());
-                                    self.link_phase = LinkMenu::Unplug {
-                                        role, since: self.link_millis(),
-                                    };
-                                    self.game_accum = 0.0;
-                                    self.buttons = 0;
                                 }
                                 97 | 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
