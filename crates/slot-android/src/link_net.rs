@@ -579,13 +579,26 @@ impl TcpLink {
             if old == received { return Ok(Some(dest)); }
             return Err(invalid("Verified remote ROM cache changed unexpectedly"));
         }
-        let scratch = cache.join(format!("{hex}.partial-{}", std::process::id()));
-        {
+        // Use a unique private temp generation so an interrupted exchange
+        // never prevents the next Host/Join attempt from completing.
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| invalid("Invalid clock for peer ROM cache"))?.as_nanos();
+        let scratch = cache.join(format!("{hex}.partial-{}-{nonce}", std::process::id()));
+        let writing = (|| -> std::io::Result<()> {
             let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&scratch)?;
             file.write_all(&received)?;
             file.sync_all()?;
-        }
-        if let Err(error) = fs::rename(&scratch, &dest) {
+            if cancel.is_cancelled() {
+                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted,
+                    "ROM cache publish cancelled"));
+            }
+            if dest.exists() {
+                return Err(invalid("Another peer ROM publish raced with this transfer"));
+            }
+            fs::rename(&scratch, &dest)
+        })();
+        if let Err(error) = writing {
             let _ = fs::remove_file(&scratch);
             return Err(error);
         }
