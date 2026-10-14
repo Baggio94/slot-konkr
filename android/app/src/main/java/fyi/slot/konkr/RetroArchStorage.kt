@@ -102,6 +102,21 @@ internal object RetroArchStorage {
                     stage(target.rtcLocal, bytes)
                 }
         }
+        // When Share Saves chooses cartridge SRAM over an older same-core
+        // Save State, preserve the original imported RetroArch state byte for
+        // byte. Rust will resume/write only a fresh generation and the export
+        // guard will keep the original external auto-state unchanged.
+        // Do not even restage an existing private import during this launch.
+        val coreLower = if (target.core == "mGBA") "mgba" else "gpsp"
+        val guardRoot = File(context.filesDir, "Saves")
+        val skipped = File(guardRoot,
+            "${target.romIdentity}.$coreLower.skip-resume.once").isFile
+        val protected = File(guardRoot,
+            "${target.romIdentity}.$coreLower.state-export-protected").isFile
+        if (skipped || protected) {
+            Log.i(TAG, "Deferred stale RetroArch state import; SRAM / existing states preserved")
+            return
+        }
         val savesAt = SystemClock.elapsedRealtime()
         val incoming = if (target.statesTree != null) {
             readNamed(context, target.statesTree, target.core,
