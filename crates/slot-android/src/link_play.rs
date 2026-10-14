@@ -139,7 +139,19 @@ impl LinkPlay {
 
     pub fn mode(&self) -> LinkKind { self.mode }
 
-    pub fn fault(&self) -> Option<LinkError> { self.error }
+    /// The overlay does not advance libretro frames, so the UI must be able
+    /// to observe a remote END or TCP loss without calling frame().
+    pub fn fault(&self) -> Option<LinkError> {
+        self.error.or_else(|| {
+            if self.wire.peer_ended() {
+                Some(LinkError::PeerEnded)
+            } else if self.wire.is_closed() {
+                Some(LinkError::Disconnected)
+            } else {
+                None
+            }
+        })
+    }
 
     /// Pause changes are transport controls, never gpSP RFU payloads or
     /// mGBA Cable input frames. Only send when the state actually changes.
@@ -361,6 +373,20 @@ mod tests {
         remote.store(false,Ordering::SeqCst);
         assert_eq!(link.frame(&mut core,ButtonMask(3)),Frame::Advanced);
         assert_ne!(core.serialize().unwrap(),saved,"both returning to game must resume frames");
+    }
+
+    #[test]
+    fn pause_overlay_observes_remote_end_without_advancing_the_core() {
+        let (wire, _closed, ended, _sent_end) = fault_wire();
+        let mut core = NetworkCore::new();
+        let mut link = LinkPlay::begin(&mut core, Role::Host, LinkKind::Wireless, wire).unwrap();
+        link.set_local_paused(true);
+        let before = core.serialize().unwrap();
+        ended.store(true, Ordering::SeqCst);
+        assert_eq!(link.fault(), Some(LinkError::PeerEnded));
+        assert_eq!(core.serialize().unwrap(), before);
+        assert_eq!(link.frame(&mut core, ButtonMask(0)), Frame::Failed(LinkError::PeerEnded));
+        assert_eq!(core.serialize().unwrap(), before);
     }
 
     // Simulated transport controls let us prove a lost peer NEVER advances
