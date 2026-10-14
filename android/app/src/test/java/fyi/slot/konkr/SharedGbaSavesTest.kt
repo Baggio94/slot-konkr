@@ -22,6 +22,39 @@ class SharedGbaSavesTest {
         assertEquals(false, offer(true, "legacy", "gpSP", true))
     }
 
+    @Test fun explicitCoreChoiceCanSafelyExpandErasedGbaSram() {
+        val selected = ByteArray(65536) { (it and 0x7f).toByte() }
+        val saved = RetroArchStorage.prepareSharedChoice(selected,
+            listOf(65536, 131072))
+        assertEquals(65536, saved[0].size)
+        assertEquals(131072, saved[1].size)
+        org.junit.Assert.assertArrayEquals(selected, saved[0])
+        org.junit.Assert.assertArrayEquals(selected, saved[1].copyOf(65536))
+        org.junit.Assert.assertTrue(saved[1].copyOfRange(65536, 131072)
+            .all { it == 0xff.toByte() })
+    }
+
+    @Test fun explicitCoreChoiceNeverTruncatesNonErasedSaveData() {
+        val selected = ByteArray(131072) { 0xff.toByte() }
+        selected[90000] = 0x35
+        try {
+            RetroArchStorage.prepareSharedChoice(selected, listOf(65536, 131072))
+            org.junit.Assert.fail("Cannot discard a real 90KiB flash sector")
+        } catch (expected: IllegalStateException) {
+            org.junit.Assert.assertTrue(expected.message!!.contains("without losing"))
+        }
+    }
+
+    @Test fun explicitCoreChoiceRejectsMalformedSramBeforeAnyFileWrite() {
+        for (size in listOf(0, 123, 2048, 262144)) {
+            try {
+                RetroArchStorage.prepareSharedChoice(ByteArray(size),
+                    listOf(131072, 65536))
+                org.junit.Assert.fail("Unsupported choice size $size")
+            } catch (_: IllegalArgumentException) { }
+        }
+    }
+
     @Test fun firstMigrationNeverGuessesBetweenDifferentProgress() {
         assertEquals(RetroArchStorage.SharedGbaSource.CONFLICT,
             RetroArchStorage.chooseGbaSource(a, b, null))
