@@ -131,6 +131,7 @@ class MainActivity : Activity() {
     external fun nativeCoreForUri(uri: String): String
     external fun nativePollSaveFlush(): String?
     external fun nativeSetShareSaves(enabled: Boolean)
+    external fun nativeSetNextResumeMode(mode: Int)
     // The renderer requests LAN only when Host/Join is selected. It never
     // touches WifiManager, Android UI or permissions from the GL thread.
     external fun nativeLinkNetworkReady(ipv4: String)
@@ -882,6 +883,37 @@ class MainActivity : Activity() {
         }
     }
 
+    private enum class CoreStateChoice { EXISTING, SHARED, CANCEL }
+
+    /** This dialog is deliberately rare: only Share Saves ON, actual core
+     *  change, and an existing destination-core auto-state. The ROM loader
+     *  worker waits while the UI thread remains free to handle the answer.
+     */
+    private fun askCoreSwitchResume(core: String): CoreStateChoice {
+        val ready = CountDownLatch(1)
+        val selected = java.util.concurrent.atomic.AtomicReference(CoreStateChoice.CANCEL)
+        runOnUiThread {
+            if (isDestroyed || isFinishing) { ready.countDown(); return@runOnUiThread }
+            AlertDialog.Builder(this)
+                .setTitle("Continue with $core?")
+                .setMessage("An existing $core save state may contain older progress " +
+                    "than the shared cartridge save. Which progress should be used?")
+                .setPositiveButton("Shared cartridge save") { _, _ ->
+                    selected.set(CoreStateChoice.SHARED); ready.countDown()
+                }
+                .setNeutralButton("Existing $core state") { _, _ ->
+                    selected.set(CoreStateChoice.EXISTING); ready.countDown()
+                }
+                .setNegativeButton("Cancel") { _, _ ->
+                    ready.countDown()
+                }
+                .setOnCancelListener { ready.countDown() }
+                .show()
+        }
+        return if (ready.await(120L, TimeUnit.SECONDS)) selected.get()
+            else CoreStateChoice.CANCEL
+    }
+
     private fun loadGameFromSaf(rawUri: String) {
         val uri = try { Uri.parse(rawUri) } catch (_: Exception) {
             nativeGameError(rawUri, "Invalid ROM URI")
@@ -954,11 +986,48 @@ class MainActivity : Activity() {
                             Toast.LENGTH_LONG).show()
                     }
                 }
+                // Share Saves never silently chooses an old same-core state
+                // over freshly imported cross-core SRAM. A direct same-core
+                // launch has no dialogue and behaves exactly as before.
+                val previous = if (ext == "gba")
+                    prefs.getString("last_gba_core_$digest", null) else null
+                val switched = ext == "gba" && shared.shareGbaSaves &&
+                    previous != null && previous != core
+                var resumeChoice = -1 // Existing default Slot behavior.
+                if (switched) {
+                    val exists = RetroArchStorage.hasCoreAutoState(this@MainActivity, shared)
+                    if (RetroArchStorage.shouldOfferCoreResume(
+                            shared.shareGbaSaves, previous, core, exists)) {
+                        when (askCoreSwitchResume(core)) {
+                            CoreStateChoice.CANCEL -> {
+                                nativeGameError(rawUri, "Core switch cancelled")
+                                return@execute
+                            }
+                            CoreStateChoice.EXISTING -> {
+                                val lower = if (core == "mGBA") "mgba" else "gpsp"
+                                File(filesDir, "Saves/$digest.$lower.skip-resume.once").delete()
+                                resumeChoice = 1
+                            }
+                            CoreStateChoice.SHARED -> {
+                                val lower = if (core == "mGBA") "mgba" else "gpsp"
+                                RetroArchStorage.stage(File(filesDir,
+                                    "Saves/$digest.$lower.skip-resume.once"), byteArrayOf(1))
+                                resumeChoice = 0
+                            }
+                        }
+                    } else {
+                        // No old state on the new core: start from shared
+                        // SRAM, not a state from the previous emulator.
+                        resumeChoice = 0
+                    }
+                }
                 activeTargets[rawUri] = shared
                 val readyAt = SystemClock.elapsedRealtime()
                 Log.i(TAG, "Slot launch preparation: ROM cache=${romReadyAt - launchStart}ms, " +
                     "RetroArch import=${readyAt - romReadyAt}ms, total=${readyAt - launchStart}ms")
+                nativeSetNextResumeMode(resumeChoice)
                 nativeGameReady(rawUri, target.absolutePath)
+                if (ext == "gba") prefs.edit().putString("last_gba_core_$digest", core).apply()
             } catch (error: Exception) {
                 Log.e(TAG, "Could not prepare ROM", error)
                 nativeGameError(rawUri, error.message ?: "Cannot open ROM")
