@@ -165,6 +165,17 @@ pub fn frame_debt_mgba_cable(prev: f64, elapsed: f64, period: f64) -> f64 {
     (prev + elapsed.max(0.0)).min(period * 2.5)
 }
 
+/// A13: prioritize good presentation pacing without starving AudioTrack.
+/// A11 remains the base; only a second confirmed linked frame is eligible.
+/// A PCM producer with <32 ms queued gets a little extra time to refill.
+/// This is a SOFT budget: Android's actual swap/present is outside this timer.
+pub fn mgba_link_allow_second_step(elapsed_us: u64, first_step_us: u64,
+                                    queued_pcm_shorts: usize) -> bool {
+    let budget_us = if queued_pcm_shorts < 4_096 { 23_000 } else { 20_000 };
+    let expected_second_us = first_step_us.max(1);
+    elapsed_us.saturating_add(expected_second_us) <= budget_us
+}
+
 /// DISPLAY SYNC pacing: retain up to 0.95 frame of fractional carryover
 /// after each simulation step, tolerating occasional 60Hz callback jitter.
 /// The engine still executes a maximum of ONE real core frame per callback,
@@ -177,6 +188,22 @@ pub fn frame_debt_display_sync(prev: f64, elapsed: f64, speed: f64,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a13_budget_avoids_extreme_double_step_bursts() {
+        assert!(mgba_link_allow_second_step(9_000, 9_000, 6_000));
+        assert!(!mgba_link_allow_second_step(13_000, 11_000, 6_000));
+        assert!(mgba_link_allow_second_step(13_000, 9_000, 0));
+        assert!(!mgba_link_allow_second_step(16_000, 9_000, 0));
+    }
+
+    #[test]
+    fn a13_budget_never_changes_a11_bounded_frame_debt() {
+        let period = 1.0 / 59.7275;
+        assert!((frame_debt_mgba_cable(0.0, period * 10.0, period)
+            - period * 2.5).abs() < 1e-9);
+    }
+
     #[test]
     fn mgba_cable_preserves_bounded_debt_while_peer_frame_is_missing() {
         let frame = 1.0 / 59.7275;

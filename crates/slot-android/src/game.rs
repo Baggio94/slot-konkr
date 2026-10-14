@@ -722,11 +722,15 @@ impl GameSession {
         if self.linked_boot.is_some() || self.link_touched {
             return Err("Only a clean solo game can start mGBA Link".into());
         }
+        // A13: never seed a Pokémon Cable session from a malformed FLASH1M
+        // image. The in-memory core can differ from the verified disk save,
+        // so check it BEFORE writing the checkpoint or dropping the solo core.
+        let battery = self.core.save_ram();
+        self.ensure_pokemon_flash(battery.as_deref(), "before Link")?;
         let bytes = self.core.serialize().map_err(|e| e.to_string())?;
         crate::linked_storage::validate_solo_snapshot(&bytes)?;
         atomic_write(&self.state, &bytes).map_err(|e| format!("Cannot preserve solo state: {e}"))?;
-        let ram = self.core.save_ram();
-        if let Some(data) = ram {
+        if let Some(data) = battery {
             atomic_write(&self.save, &data).map_err(|e| format!("Cannot preserve solo SRAM: {e}"))?;
         }
         if let Some(data) = self.core.save_rtc() {
@@ -742,6 +746,18 @@ impl GameSession {
     /// Capture the player's own live GBA BEFORE the transport or core is
     /// destroyed. mGBA's SLK1 container has both consoles; only the local
     /// role may be extracted. gpSP already has one local GBA.
+    fn ensure_pokemon_flash(&self, ram: Option<&[u8]>, stage: &str) -> Result<(), String> {
+        if !self.mgba_flash_runahead_guard { return Ok(()); }
+        let Some(bytes) = ram else {
+            return Err(format!("Pokémon FLASH1M unavailable {stage}; solo save protected"));
+        };
+        if pokemon_flash_complete_bank_count(bytes) == 0 {
+            log_launch_timing(&format!("Pokémon FLASH1M rejected {stage}: no complete checksum-valid save bank"));
+            return Err(format!("Pokémon FLASH1M invalid {stage}; solo save protected"));
+        }
+        Ok(())
+    }
+
     pub fn prepare_solo_rejoin(&mut self) -> Result<SoloRejoin, String> {
         let role = self.linked_boot.ok_or("Not a private multiplayer game")?;
         if !self.link_touched { return Err("Link was never started".into()); }
@@ -753,6 +769,9 @@ impl GameSession {
         } else { full };
         crate::linked_storage::validate_solo_snapshot(&snapshot)?;
         let ram = self.core.save_ram();
+        // A13: a corrupt local Link player must never become the solo save,
+        // even when its SLK1 snapshot itself deserializes correctly.
+        self.ensure_pokemon_flash(ram.as_deref(), "after Link")?;
         let rtc = self.core.save_rtc();
         let root = self.save.parent().ok_or("No private Link save root")?;
         let baseline = |name: &str| -> Result<Option<Vec<u8>>, String> {
@@ -791,6 +810,7 @@ impl GameSession {
         if self.linked_boot.is_some() || self.link_touched || self.link.is_some() {
             return Err("Refusing to resume Link data in non-solo core".into());
         }
+        self.ensure_pokemon_flash(rejoin.ram.as_deref(), "while restoring solo")?;
         restore_solo_checkpoint_to_core(self.core.as_mut(), &rejoin.snapshot)?;
         if let Some(ram) = rejoin.ram.as_deref() {
             self.core.load_save_ram(ram)
@@ -814,6 +834,9 @@ impl GameSession {
         if self.linked_boot.is_some() || self.link_touched || self.link.is_some() {
             return Err("A Link sandbox cannot promote itself to SOLO".into());
         }
+        // No publication to SOLO unless the new core has the exact local
+        // FLASH and at least one complete generation after the transition.
+        self.ensure_pokemon_flash(self.core.save_ram().as_deref(), "before promotion")?;
         let resumed = self.core.serialize()
             .map_err(|e| format!("Cannot verify resumed solo state: {e}"))?;
         crate::linked_storage::validate_solo_snapshot(&resumed)?;

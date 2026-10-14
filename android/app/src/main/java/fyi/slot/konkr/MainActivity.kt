@@ -342,6 +342,15 @@ class MainActivity : Activity() {
      * Same-ROM Link and gpSP RFU/Cable never prompt.
      */
     private fun showPeerCartridgeConsent() {
+        // A13: preauthorization is ONLY for an explicitly provisioned
+        // private Multiplayer Lab device. It suppresses per-session prompts,
+        // not the KMLB/4 SHA/header/core/BIOS handshake or LAN restrictions.
+        // No automatic full-ROM sharing for unprovisioned installations.
+        if (File(filesDir, "a13-trusted-mixed-rom.flag").isFile) {
+            Log.i(TAG, "A13: mixed-ROM transfer preauthorized for this test device")
+            nativeLinkPeerRomConsent(true)
+            return
+        }
         if (!resumed || isDestroyed || isFinishing) {
             nativeLinkPeerRomConsent(false)
             return

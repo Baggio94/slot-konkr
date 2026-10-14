@@ -295,15 +295,17 @@ struct A12DrawProbe {
     native_us_max: u64,
     over_16ms: u64,
     over_33ms: u64,
+    budget_deferred: u64,
 }
 impl A12DrawProbe {
     fn new() -> Self {
         Self { started: Instant::now(), callbacks: 0, steps0: 0,
             steps1: 0, steps2: 0, native_us_max: 0,
-            over_16ms: 0, over_33ms: 0 }
+            over_16ms: 0, over_33ms: 0, budget_deferred: 0 }
     }
-    fn record(&mut self, steps: usize, us: u64, recovery: bool) {
+    fn record(&mut self, steps: usize, us: u64, recovery: bool, deferred: bool) {
         self.callbacks += 1;
+        if deferred { self.budget_deferred += 1; }
         match steps {
             0 => self.steps0 += 1,
             1 => self.steps1 += 1,
@@ -315,11 +317,11 @@ impl A12DrawProbe {
         let span = self.started.elapsed();
         if span >= Duration::from_secs(5) {
             crate::game::log_launch_timing(&format!(
-                "Link display pacing: recovery={} callbacks={} emu_fps={:.1} steps0={} steps1={} steps2={} native_us_max={} native_over_16ms={} native_over_33ms={}",
+                "Link display pacing: recovery={} callbacks={} emu_fps={:.1} steps0={} steps1={} steps2={} native_us_max={} native_over_16ms={} native_over_33ms={} a13_budget_deferred={}",
                 if recovery { "a11" } else { "legacy" }, self.callbacks,
                 (self.steps1 + 2 * self.steps2) as f64 / span.as_secs_f64(),
                 self.steps0, self.steps1, self.steps2, self.native_us_max,
-                self.over_16ms, self.over_33ms));
+                self.over_16ms, self.over_33ms, self.budget_deferred));
             *self = Self::new();
         }
     }
@@ -327,11 +329,12 @@ impl A12DrawProbe {
 thread_local! {
     static A12_DRAW_PROBE: RefCell<Option<A12DrawProbe>> = const { RefCell::new(None) };
 }
-fn a12_draw_sample(linked: bool, steps: usize, native_us: u64, recovery: bool) {
+fn a12_draw_sample(linked: bool, steps: usize, native_us: u64,
+                   recovery: bool, deferred: bool) {
     A12_DRAW_PROBE.with(|probe| {
         let mut probe = probe.borrow_mut();
         if linked {
-            probe.get_or_insert_with(A12DrawProbe::new).record(steps, native_us, recovery);
+            probe.get_or_insert_with(A12DrawProbe::new).record(steps, native_us, recovery, deferred);
         } else {
             *probe = None;
         }
@@ -1450,7 +1453,9 @@ impl Engine {
                     // Both users must approve sharing their full cartridge
                     // files before KMLB/4 transfers any ROM bytes.
                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(18);
-                    set_message("Different GBA cartridges: approve private LAN ROM exchange on both devices.".into());
+                    // A13: no transient Android toast for normal ROM negotiation.
+                    // Without explicit local preauthorization Kotlin retains its
+                    // one-time private ROM transfer consent dialog.
                 }
                 LinkProgress::Ready(wire, peer_rom) => {
                     self.cancel_link_discovery();
@@ -1941,7 +1946,8 @@ impl Engine {
                                     match self.return_link_to_solo() {
                                         Ok(()) => {
                                             self.hud.set_link(LinkBadge::Off);
-                                            self.hud.toast(Toast::LinkEnded, self.link_millis());
+                                            // The physical unplug animation is the success cue.
+                                            // No additional transient toast over gameplay.
                                             self.link_phase = LinkMenu::Unplug {
                                                 role, since: self.link_millis(),
                                             };
@@ -3481,8 +3487,14 @@ impl Engine {
             // End Link or a broken socket is invisible until the local player
             // closes the menu, potentially leaving a permanent "Linked" UI.
             if let Some(fault) = self.game.as_ref().and_then(GameSession::link_fault) {
-                self.hud.toast(link_fault_toast(fault),
-                    self.born.elapsed().as_millis() as u64);
+                // Peer End/EOF returns to SOLO in-place; don't display
+                // a misleading transient link-ended banner over gameplay.
+                if !matches!(fault,
+                    crate::link_play::LinkError::PeerEnded |
+                    crate::link_play::LinkError::Disconnected) {
+                    self.hud.toast(link_fault_toast(fault),
+                        self.born.elapsed().as_millis() as u64);
+                }
                 self.ff_held = false;
                 self.ff_latched = false;
                 self.rewind_held = false;
@@ -3552,6 +3564,7 @@ impl Engine {
             SHELF_INDICATOR_FLAGS.store(0, Ordering::Release);
             let mut stepped = 0;
             let mut peer_unplugged = None;
+            let mut a13_budget_deferred = false;
             if self.rewind_held {
                 // Rewind is mutually exclusive with forward libretro frames.
                 // Restore up to 3 historical snapshots per render frame and
@@ -3603,7 +3616,22 @@ impl Engine {
                 let frame_limit = if mgba_cable_pacing { 2 }
                     else if fast { usize::from(self.settings.ff_speed) * 4 }
                     else if responsive { 1 } else { 4 };
+                let mut a13_first_core_us = 0u64;
                 while self.game_accum >= period && stepped < frame_limit {
+                    if mgba_cable_pacing && stepped == 1 {
+                        // A11's second real frame is vital to PCM continuity,
+                        // but a slow first core step predicts a costly burst.
+                        // Use real measured cost, not a fixed every-other-frame
+                        // throttle. Defer into bounded debt; never invent input.
+                        let elapsed_us = a12_native_started.elapsed().as_micros() as u64;
+                        let pcm_queued = AUDIO.lock().unwrap_or_else(|e| e.into_inner()).len();
+                        if !crate::settings::mgba_link_allow_second_step(
+                            elapsed_us, a13_first_core_us, pcm_queued) {
+                            a13_budget_deferred = true;
+                            break;
+                        }
+                    }
+                    let a13_step_started = Instant::now();
                     // Cable lockstep must not consume emulation time while
                     // the remote frame has not arrived. NEVER invent a solo
                     // frame or perform speculative Run-Ahead on a held link.
@@ -3640,6 +3668,9 @@ impl Engine {
                             AUDIO_SPEED_PERMILLE.store(1000, Ordering::Release);
                         }
                         break;
+                    }
+                    if stepped == 0 {
+                        a13_first_core_us = a13_step_started.elapsed().as_micros() as u64;
                     }
                     self.perf_emulated = self.perf_emulated.saturating_add(1);
                     self.game_accum -= period;
@@ -3693,10 +3724,9 @@ impl Engine {
             self.gpu.end_frame(self.size);
             a12_draw_sample(session.linked() && session.core_kind() == Core::Mgba,
                 stepped, a12_native_started.elapsed().as_micros() as u64,
-                MGBA_CABLE_RECOVERY.load(Ordering::Acquire));
-            if let Some(fault) = peer_unplugged {
-                self.hud.toast(link_fault_toast(fault),
-                    self.born.elapsed().as_millis() as u64);
+                MGBA_CABLE_RECOVERY.load(Ordering::Acquire), a13_budget_deferred);
+            if let Some(_fault) = peer_unplugged {
+                // Silent, verified solo return on intentional unplug or TCP EOF.
                 match self.return_link_to_solo() {
                     Ok(()) => {
                         self.hud.set_link(LinkBadge::Off);
