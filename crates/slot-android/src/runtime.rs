@@ -1199,7 +1199,8 @@ impl Engine {
     }
 
     fn begin_link_session(&mut self, role: LinkRole,
-                          wire: crate::link_net::TcpLink) -> Result<(), String> {
+                          wire: crate::link_net::TcpLink,
+                          peer_rom: Option<PathBuf>) -> Result<(), String> {
         let game = self.game.as_ref().ok_or("No game active")?;
         if game.core_kind() == Core::Gpsp {
             if game.linked() || game.is_link_sandbox() {
@@ -1260,7 +1261,8 @@ impl Engine {
         // The existing solo core remains alive until its checkpoint is durable.
         drop(self.game.take());
         let mut linked = match GameSession::open_mgba_linked(&rom, &core_file,
-            &storage, &stem, self.settings.colour_correction, role, &solo_snapshot) {
+            &storage, &stem, self.settings.colour_correction, role,
+            &solo_snapshot, peer_rom.as_deref()) {
             Ok(session) => session,
             Err(error) => {
                 let recovery = self.restore_solo_after_link_failure(
@@ -1387,12 +1389,12 @@ impl Engine {
                         since: self.link_worked_at,
                     };
                 }
-                LinkProgress::Ready(wire) => {
+                LinkProgress::Ready(wire, peer_rom) => {
                     self.cancel_link_discovery();
                     let role = if self.link_role == LinkRow::Host {
                         LinkRole::Host
                     } else { LinkRole::Join };
-                    let joined = self.begin_link_session(role, wire);
+                    let joined = self.begin_link_session(role, wire, peer_rom);
                     match joined {
                         Ok(()) => {
                             // Host purple / Join grey, permanently shown in
