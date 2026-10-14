@@ -54,6 +54,44 @@ fn mgba_flash_runahead_guard(rom: &Path, which: Core, platform: Platform) -> boo
     file.read_exact(&mut code).is_ok() && pokemon_gen3_flash_code(&code)
 }
 
+/// FireRed/LeafGreen/Ruby/Sapphire/Emerald write alternating 14-sector
+/// FLASH1M save banks. A save is durable only when *every* sector of at
+/// least one bank has a unique section ID 0..13, a matching generation
+/// counter, the 0x08012025 signature and the official additive checksum.
+/// Their data is zero-padded to 3968 bytes; summing the whole data region
+/// exactly matches pret/pokefirered's variable-section checksum.
+/// This is NOT applied to unrelated 128 KiB games or other save types.
+fn pokemon_flash_complete_bank_count(bytes: &[u8]) -> usize {
+    const BANK_SECTORS: usize = 14;
+    const SECTOR: usize = 4096;
+    const SIGNATURE: u32 = 0x0801_2025;
+    if bytes.len() != 128 * 1024 { return 0; }
+    (0..2).filter(|bank| {
+        let mut seen = 0u16;
+        let mut counter = None;
+        for sector_index in 0..BANK_SECTORS {
+            let at = (bank * BANK_SECTORS + sector_index) * SECTOR;
+            let sector = &bytes[at..at + SECTOR];
+            let id = u16::from_le_bytes([sector[0xFF4], sector[0xFF5]]);
+            let expected = u16::from_le_bytes([sector[0xFF6], sector[0xFF7]]);
+            let signature = u32::from_le_bytes(sector[0xFF8..0xFFC].try_into().unwrap());
+            let generation = u32::from_le_bytes(sector[0xFFC..0x1000].try_into().unwrap());
+            if signature != SIGNATURE || id >= BANK_SECTORS as u16 ||
+                seen & (1 << id) != 0 || counter.is_some_and(|old| old != generation) {
+                return false;
+            }
+            let total = sector[..3968].chunks_exact(4).fold(0u32, |sum, chunk| {
+                sum.wrapping_add(u32::from_le_bytes(chunk.try_into().unwrap()))
+            });
+            let checksum = ((total >> 16) + (total & 0xFFFF)) as u16;
+            if checksum != expected { return false; }
+            seen |= 1 << id;
+            counter = Some(generation);
+        }
+        seen == (1 << BANK_SECTORS) - 1
+    }).count()
+}
+
 enum PendingUndo {
     Saved { stamp: String, evicted: Option<(String, Vec<u8>, Vec<u8>)> },
     Loaded { prior: Vec<u8> },
@@ -931,6 +969,16 @@ impl GameSession {
 
     fn save_sram(&mut self) -> bool {
         let success = match self.core.save_ram() {
+            Some(bytes) if self.mgba_flash_runahead_guard &&
+                pokemon_flash_complete_bank_count(&bytes) == 0 => {
+                // A Flash erase/program operation can span several GBA
+                // frames. Never publish an incomplete battery image over
+                // the last known-good save or push it into RetroArch SAF.
+                // This does not modify emulator memory and never repairs
+                // corruption silently: the in-game error remains visible.
+                log_launch_timing("mGBA Pokemon FLASH1M: incomplete/corrupt bank; protected existing SRAM, no disk export");
+                false
+            }
             Some(bytes) => match atomic_write(&self.save, &bytes) {
                 Ok(()) => true,
                 Err(err) => {
@@ -1069,6 +1117,34 @@ impl Drop for GameSession {
 #[cfg(test)]
 mod pokemon_flash_guard_tests {
     use super::*;
+    #[test]
+    fn flash_guard_accepts_complete_checksum_banks_and_rejects_partial_erase() {
+        fn write_sector(image: &mut [u8], physical: usize, section: usize, counter: u32) {
+            let at = physical * 4096;
+            let s = &mut image[at..at + 4096];
+            s.fill(0);
+            s[0] = section as u8;
+            s[0xFF4..0xFF6].copy_from_slice(&(section as u16).to_le_bytes());
+            s[0xFF8..0xFFC].copy_from_slice(&0x0801_2025u32.to_le_bytes());
+            s[0xFFC..0x1000].copy_from_slice(&counter.to_le_bytes());
+            let checksum = section as u16;
+            s[0xFF6..0xFF8].copy_from_slice(&checksum.to_le_bytes());
+        }
+        let mut image = vec![0xFF; 128 * 1024];
+        assert_eq!(pokemon_flash_complete_bank_count(&image), 0);
+        for i in 0..14 {
+            write_sector(&mut image, i, i, 22);
+            write_sector(&mut image, 14+i, i, 21);
+        }
+        assert_eq!(pokemon_flash_complete_bank_count(&image), 2);
+        image[0] ^= 0x01;
+        assert_eq!(pokemon_flash_complete_bank_count(&image), 1);
+        image[14 * 4096 + 0xFF8] = 0xff;
+        assert_eq!(pokemon_flash_complete_bank_count(&image), 0);
+        image.truncate(65536);
+        assert_eq!(pokemon_flash_complete_bank_count(&image), 0);
+    }
+
     #[test]
     fn per_rom_guard_is_mgba_pokemon_gen3_only() {
         for code in [*b"BPRE",*b"BPGE",*b"BPGJ",*b"BPEE",*b"AXVE",*b"AXPJ"] {
