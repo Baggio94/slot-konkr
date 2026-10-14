@@ -266,8 +266,13 @@ impl GameSession {
         // mGBA/gpSP states must never be deserialized in the other core.
         // Legacy single-core .state files are still readable by mGBA only.
         let state_root = if linked_boot.is_some() { &core_root } else { &root };
-        let state = state_root.join(format!("{id}.{}.state", which.as_str()));
-        let retroarch_export = state_root.join(format!("{id}.{}.retroarch-export.state.auto", which.as_str()));
+        let mut state = state_root.join(format!("{id}.{}.state", which.as_str()));
+        let mut retroarch_export = state_root.join(format!("{id}.{}.retroarch-export.state.auto", which.as_str()));
+        // A cross-core SRAM import intentionally skips a possibly older
+        // save-state. Its next Save & Eject must write a NEW generation,
+        // never overwrite the ignored state or its RetroArch auto export.
+        let generation_record = root.join(format!("{id}.{}.state-generation.active", which.as_str()));
+        let generation_export_guard = root.join(format!("{id}.{}.state-export-protected", which.as_str()));
         let retroarch_import = state_root.join(format!("{id}.{}.retroarch-import.state.auto", which.as_str()));
         let manual_dir = state_root.join("ManualExports");
         std::fs::create_dir_all(&manual_dir).map_err(|e| e.to_string())?;
@@ -403,10 +408,33 @@ impl GameSession {
         // cross-core guard; it belongs exclusively to solo resume.
         let cross_core_import = linked_boot.is_none() && skip_resume_marker.exists();
         if cross_core_import {
-            if let Err(error) = std::fs::remove_file(&skip_resume_marker) {
-                return Err(format!("Cannot clear cross-core resume guard: {error}"));
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let nonce = SystemTime::now().duration_since(UNIX_EPOCH)
+                .map_err(|e| format!("Invalid system clock for state generation: {e}"))?
+                .as_nanos();
+            let key = format!("{id}.{}.gen-{nonce}", which.as_str());
+            state = root.join(format!("{key}.state"));
+            retroarch_export = root.join(format!("{key}.retroarch-export.state.auto"));
+            // Fail closed BEFORE consuming the legacy one-shot guard: if
+            // storage is unavailable the user cannot accidentally overwrite
+            // old states or resume the wrong historical timeline.
+            atomic_write(&generation_export_guard, b"preserve previous auto-state")
+                .map_err(|e| format!("Cannot guard existing RetroArch states: {e}"))?;
+            atomic_write(&generation_record, key.as_bytes())
+                .map_err(|e| format!("Cannot record protected save-state generation: {e}"))?;
+            std::fs::remove_file(&skip_resume_marker)
+                .map_err(|e| format!("Cannot clear cross-core resume guard: {e}"))?;
+            log_launch_timing("Cross-core SRAM selected: new immutable state generation; old auto states protected");
+        } else if linked_boot.is_none() && generation_record.exists() {
+            let key = std::fs::read_to_string(&generation_record)
+                .map_err(|e| format!("Cannot read protected state generation: {e}"))?;
+            if key.len() > 180 || !key.starts_with(&format!("{id}.{}.gen-", which.as_str()))
+                || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+                || !key.ends_with(|c: char| c.is_ascii_digit()) {
+                return Err("Protected state-generation journal is corrupt; refusing stale auto-state".into());
             }
-            eprintln!("slot-konkr: cross-core SRAM selected; old savestate auto-resume suppressed");
+            state = root.join(format!("{key}.state"));
+            retroarch_export = root.join(format!("{key}.retroarch-export.state.auto"));
         }
         if resume_state && linked_boot.is_none() && !cross_core_import {
             // Prefer a successfully decoded RetroArch auto state, then the
@@ -432,7 +460,11 @@ impl GameSession {
             // RetroArch imports must not silently roll back that timeline.
             let marker = state.with_extension("prefer-solo-after-link.once");
             let prefer_private = marker.is_file();
-            let (chosen, used_private) = if prefer_private {
+            let (chosen, used_private) = if state != root.join(format!("{id}.{}.state", which.as_str())) {
+                // A state deliberately skipped during SharedGBA migration
+                // cannot reappear through an old external RetroArch auto.
+                (std::fs::read(&state).ok(), false)
+            } else if prefer_private {
                 match local() {
                     Some(bytes) => (Some(bytes), true),
                     None => (external, false),
