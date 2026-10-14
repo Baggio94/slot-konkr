@@ -3,7 +3,7 @@
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -132,6 +132,13 @@ const CONTROL_PAUSED: u8 = 0x01;
 const CONTROL_RESUMED: u8 = 0x02;
 
 const BYE_MS: u64 = 100;
+
+/// A paused core does not drain incoming serial packets. Bound both worker
+/// queues so a stalled/malicious peer cannot grow the process heap forever.
+/// A 16 MiB initial mGBA state needs at most 280 chunks of <=60 KiB; 512
+/// leaves headroom for that one legal transfer and some in-flight inputs.
+/// Saturation is fatal rather than silently losing a lockstep/RFU packet.
+const MAX_QUEUED_PACKETS: usize = 512;
 
 enum Out {
     Packet(Vec<u8>),
@@ -319,8 +326,8 @@ impl TcpLink {
         stream.set_nodelay(true)?;
         let mut reader = stream.try_clone()?;
         let mut writer = stream.try_clone()?;
-        let (rtx, inbox) = channel();
-        let (wtx, wrx) = channel::<Out>();
+        let (rtx, inbox) = sync_channel(MAX_QUEUED_PACKETS);
+        let (wtx, wrx) = sync_channel::<Out>(MAX_QUEUED_PACKETS);
         let closed = Arc::new(AtomicBool::new(false));
         let reader_closed = closed.clone();
         let ended = Arc::new(AtomicBool::new(false));
@@ -355,7 +362,12 @@ impl TcpLink {
                     }
                     continue;
                 }
-                if rtx.send(buf).is_err() {
+                if rtx.try_send(buf).is_err() {
+                    // Never drop just one packet and let linked cores
+                    // diverge. Close the entire link when the receiver has
+                    // stopped draining its finite queue.
+                    reader_closed.store(true, Ordering::Release);
+                    let _ = reader.shutdown(Shutdown::Both);
                     return;
                 }
             }
@@ -377,6 +389,7 @@ impl TcpLink {
                     // has not yet observed EOF. Never keep advancing gpSP
                     // serial/RFU frames after a local TCP write failure.
                     writer_closed.store(true, Ordering::Release);
+                    let _ = writer.shutdown(Shutdown::Both);
                     return;
                 }
             }
@@ -394,7 +407,9 @@ impl TcpLink {
 
     pub fn send_end(&mut self) {
         let (ack, wrote) = channel();
-        if self.outbox.send(Out::Control(CONTROL_ENDED, ack)).is_err() {
+        if self.outbox.try_send(Out::Control(CONTROL_ENDED, ack)).is_err() {
+            self.closed.store(true, Ordering::Release);
+            let _ = self.stream.shutdown(Shutdown::Both);
             return;
         }
         let _ = wrote.recv_timeout(Duration::from_millis(BYE_MS));
@@ -426,7 +441,12 @@ impl LinkChannel for TcpLink {
         if buf.is_empty() {
             return;
         }
-        let _ = self.outbox.send(Out::Packet(buf.to_vec()));
+        if self.outbox.try_send(Out::Packet(buf.to_vec())).is_err() {
+            // Dropping an input/state packet corrupts the emulated link.
+            // Report a dead channel on the next LinkPlay::frame instead.
+            self.closed.store(true, Ordering::Release);
+            let _ = self.stream.shutdown(Shutdown::Both);
+        }
     }
 
     fn try_recv(&mut self) -> Option<Vec<u8>> {
@@ -453,7 +473,12 @@ impl LinkChannel for TcpLink {
         // guarantees the remote sees preceding game bytes before PAUSE.
         let (ack, _written) = channel();
         let control = if paused { CONTROL_PAUSED } else { CONTROL_RESUMED };
-        let _ = self.outbox.send(Out::Control(control, ack));
+        if self.outbox.try_send(Out::Control(control, ack)).is_err() {
+            // A PAUSE/RESUME that cannot be queued is not acknowledged:
+            // fail closed instead of allowing the peers to drift.
+            self.closed.store(true, Ordering::Release);
+            let _ = self.stream.shutdown(Shutdown::Both);
+        }
     }
 
     fn peer_paused(&self) -> bool {
@@ -643,6 +668,31 @@ mod lab_negotiation_tests {
         let mut legacy=host.bytes();legacy[4]=2;
         assert!(LabGreeting::decode(&legacy).is_none());
     }
+    #[test]
+    fn stalled_reader_has_bounded_memory_and_disconnects_instead_of_dropping_frames() {
+        use std::net::{TcpListener, TcpStream};
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        peer.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let mut local = TcpLink::wrap(stream).unwrap();
+        // Deliberately never drain local.inbox, as during an extended pause.
+        // The reader must terminate on MAX_QUEUED_PACKETS rather than
+        // buffering unbounded traffic or losing one serial packet silently.
+        for _ in 0..MAX_QUEUED_PACKETS + 16 {
+            if peer.write_all(&[0, 1, 0x47]).is_err() { break; }
+        }
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !local.is_closed() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(local.is_closed(), "saturated inbound queue must close the Link");
+        let mut delivered = 0;
+        while local.try_recv().is_some() { delivered += 1; }
+        assert_eq!(delivered, MAX_QUEUED_PACKETS,
+            "all queued frames are preserved in order until the fail-closed bound");
+    }
+
     #[test]
     fn cancelled_listener_does_not_mark_a_peer_ready() {
         use std::net::TcpListener;
