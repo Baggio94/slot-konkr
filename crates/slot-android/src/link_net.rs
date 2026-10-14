@@ -29,6 +29,14 @@ impl Cancel {
     }
 }
 
+fn report_link_transport_fault(stage: &str, reason: &str) {
+    let message = format!("Link transport fault: stage={stage} reason={reason}");
+    #[cfg(target_os = "android")]
+    crate::game::log_launch_timing(&message);
+    #[cfg(not(target_os = "android"))]
+    eprintln!("SlotKONKR: {message}");
+}
+
 const POLL_MS: u64 = 50;
 
 pub const HOST_BOUND: Duration = Duration::from_secs(30);
@@ -365,7 +373,8 @@ impl TcpLink {
             let mut header = [0u8; 2];
             let mut control = false;
             loop {
-                if reader.read_exact(&mut header).is_err() {
+                if let Err(error) = reader.read_exact(&mut header) {
+                    report_link_transport_fault("tcp_read_header", &error.to_string());
                     reader_closed.store(true, Ordering::Release);
                     return;
                 }
@@ -375,20 +384,28 @@ impl TcpLink {
                     continue;
                 }
                 let mut buf = vec![0u8; len];
-                if len > 0 && reader.read_exact(&mut buf).is_err() {
-                    reader_closed.store(true, Ordering::Release);
-                    return;
+                if len > 0 {
+                    if let Err(error) = reader.read_exact(&mut buf) {
+                        report_link_transport_fault("tcp_read_body", &error.to_string());
+                        reader_closed.store(true, Ordering::Release);
+                        return;
+                    }
                 }
                 if std::mem::take(&mut control) {
                     match buf.as_slice() {
                         [CONTROL_ENDED] => reader_ended.store(true, Ordering::Release),
                         [CONTROL_PAUSED] => reader_paused.store(true, Ordering::Release),
                         [CONTROL_RESUMED] => reader_paused.store(false, Ordering::Release),
-                        _ => { reader_closed.store(true, Ordering::Release); return; },
+                        _ => {
+                            report_link_transport_fault("tcp_control", "invalid control opcode");
+                            reader_closed.store(true, Ordering::Release);
+                            return;
+                        },
                     }
                     continue;
                 }
                 if rtx.try_send(buf).is_err() {
+                    report_link_transport_fault("rx_queue", "saturated or disconnected");
                     // Never drop just one packet and let linked cores
                     // diverge. Close the entire link when the receiver has
                     // stopped draining its finite queue.
@@ -410,7 +427,8 @@ impl TcpLink {
                         result
                     }
                 };
-                if sent.is_err() {
+                if let Err(error) = sent {
+                    report_link_transport_fault("tcp_write", &error.to_string());
                     // A broken write side is a dead Link even when the reader
                     // has not yet observed EOF. Never keep advancing gpSP
                     // serial/RFU frames after a local TCP write failure.
@@ -645,6 +663,7 @@ impl LinkChannel for TcpLink {
             return;
         }
         if self.outbox.try_send(Out::Packet(buf.to_vec())).is_err() {
+            report_link_transport_fault("tx_queue", "saturated or disconnected");
             // Dropping an input/state packet corrupts the emulated link.
             // Report a dead channel on the next LinkPlay::frame instead.
             self.closed.store(true, Ordering::Release);
@@ -677,6 +696,7 @@ impl LinkChannel for TcpLink {
         let (ack, _written) = channel();
         let control = if paused { CONTROL_PAUSED } else { CONTROL_RESUMED };
         if self.outbox.try_send(Out::Control(control, ack)).is_err() {
+            report_link_transport_fault("tx_control_queue", "saturated or disconnected");
             // A PAUSE/RESUME that cannot be queued is not acknowledged:
             // fail closed instead of allowing the peers to drift.
             self.closed.store(true, Ordering::Release);
