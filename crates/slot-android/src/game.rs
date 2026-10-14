@@ -57,6 +57,37 @@ fn mgba_flash_runahead_guard(rom: &Path, which: Core, platform: Platform) -> boo
 }
 
 
+/** The active protected state generation is part of the SOLO export path.
+ * Link must snapshot and compare this very same path; using the legacy
+ * {id}.{core}.retroarch-export path falsely detects concurrent writes and
+ * ejects Pokémon on End Link after a legitimate cross-core save migration.
+ */
+fn active_state_generation(root: &Path, id: &str, which: Core) -> Result<Option<String>, String> {
+    let record = root.join(format!("{id}.{}.state-generation.active", which.as_str()));
+    let key = match std::fs::read_to_string(&record) {
+        Ok(key) => key,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("Cannot read protected state generation: {e}")),
+    };
+    if key.len() > 180 || !key.starts_with(&format!("{id}.{}.gen-", which.as_str()))
+        || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+        || !key.ends_with(|c: char| c.is_ascii_digit()) {
+        return Err("Protected state-generation journal is corrupt; refusing stale auto-state".into());
+    }
+    Ok(Some(key))
+}
+
+fn active_export_filename(root: &Path, id: &str, which: Core) -> Result<String, String> {
+    Ok(match active_state_generation(root, id, which)? {
+        Some(key) => format!("{key}.retroarch-export.state.auto"),
+        None => format!("{id}.{}.retroarch-export.state.auto", which.as_str()),
+    })
+}
+
+fn export_path_matches_snapshot(path: &Path, expected: &str) -> bool {
+    path.file_name().and_then(|name| name.to_str()) == Some(expected)
+}
+
 enum PendingUndo {
     Saved { stamp: String, evicted: Option<(String, Vec<u8>, Vec<u8>)> },
     Loaded { prior: Vec<u8> },
@@ -73,6 +104,7 @@ pub struct SoloRejoin {
     expected_rtc: Option<Vec<u8>>,
     expected_state: Vec<u8>,
     expected_ra_export: Option<Vec<u8>>,
+    expected_ra_export_name: String,
 }
 
 pub struct GameSession {
@@ -278,7 +310,16 @@ impl GameSession {
                 atomic_write(&core_root.join("prelink.state"), snapshot)
                     .map_err(|e| format!("Cannot stage Link state baseline: {e}"))?;
             }
-            let ra_before = root.join(format!("{id}.{}.retroarch-export.state.auto", which.as_str()));
+            // A13r3: compare the generation that SOLO will actually promote,
+            // not a stale legacy export abandoned by cross-core migration.
+            let ra_name = active_export_filename(&root, id, which)?;
+            atomic_write(&core_root.join("prelink.retroarch-export-target.name"),
+                ra_name.as_bytes()).map_err(|e|
+                format!("Cannot stage Link RetroArch generation identity: {e}"))?;
+            let ra_before = root.join(&ra_name);
+            log_launch_timing(&format!(
+                "Link export generation checkpoint: {}", if ra_name.contains(".gen-") {
+                    "protected" } else { "standard" }));
             match std::fs::read(&ra_before) {
                 Ok(data) => {
                     if data.is_empty() || data.len() > crate::linked_storage::MAX_SOLO_SNAPSHOT {
@@ -468,16 +509,11 @@ impl GameSession {
             std::fs::remove_file(&skip_resume_marker)
                 .map_err(|e| format!("Cannot clear cross-core resume guard: {e}"))?;
             log_launch_timing("Cross-core SRAM selected: new immutable state generation; old auto states protected");
-        } else if linked_boot.is_none() && generation_record.exists() {
-            let key = std::fs::read_to_string(&generation_record)
-                .map_err(|e| format!("Cannot read protected state generation: {e}"))?;
-            if key.len() > 180 || !key.starts_with(&format!("{id}.{}.gen-", which.as_str()))
-                || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
-                || !key.ends_with(|c: char| c.is_ascii_digit()) {
-                return Err("Protected state-generation journal is corrupt; refusing stale auto-state".into());
+        } else if linked_boot.is_none() {
+            if let Some(key) = active_state_generation(&root, id, which)? {
+                state = root.join(format!("{key}.state"));
+                retroarch_export = root.join(format!("{key}.retroarch-export.state.auto"));
             }
-            state = root.join(format!("{key}.state"));
-            retroarch_export = root.join(format!("{key}.retroarch-export.state.auto"));
         }
         if resume_state && linked_boot.is_none() && !cross_core_import {
             // Prefer a successfully decoded RetroArch auto state, then the
@@ -751,6 +787,15 @@ impl GameSession {
             .map_err(|e| format!("Missing pre-Link solo checkpoint: {e}"))?;
         crate::linked_storage::validate_solo_snapshot(&expected_state)?;
         let expected_ra_export = baseline("prelink.retroarch-export.state.auto")?;
+        let expected_ra_export_name = std::fs::read_to_string(
+            root.join("prelink.retroarch-export-target.name"))
+            .map_err(|e| format!("Missing pre-Link RetroArch export identity: {e}"))?;
+        if expected_ra_export_name.len() > 220 ||
+            !expected_ra_export_name.ends_with(".retroarch-export.state.auto") ||
+            !expected_ra_export_name.bytes().all(|b|
+                b.is_ascii_alphanumeric() || b == b'.' || b == b'-') {
+            return Err("Invalid pre-Link RetroArch generation identity".into());
+        }
         // Always preserve the final native local snapshot in the isolated
         // private history even if a later solo recovery fails.
         atomic_write(&root.join("last-local-gba.state"), &snapshot)
@@ -764,7 +809,7 @@ impl GameSession {
                 .map_err(|e| format!("Cannot preserve recovered Link RTC: {e}"))?;
         }
         Ok(SoloRejoin { snapshot, ram, rtc, expected_ram, expected_rtc,
-            expected_state, expected_ra_export })
+            expected_state, expected_ra_export, expected_ra_export_name })
     }
 
     /// The rebuilt core must be an ordinary single-GBA SOLO context.
@@ -797,6 +842,13 @@ impl GameSession {
         -> Result<std::path::PathBuf, String> {
         if self.linked_boot.is_some() || self.link_touched || self.link.is_some() {
             return Err("A Link sandbox cannot promote itself to SOLO".into());
+        }
+        // If another worker really changed the active generation, still
+        // refuse all publication. Only the false legacy-vs-generation
+        // mismatch is fixed. This runs before ANY promotion writes.
+        if !export_path_matches_snapshot(&self.retroarch_export,
+            &rejoin.expected_ra_export_name) {
+            return Err("Active RetroArch save generation changed during Link; original solo save protected".into());
         }
         // No publication to SOLO unless the new core has the exact local
         // FLASH and at least one complete generation after the transition.
@@ -1152,6 +1204,52 @@ mod pokemon_flash_guard_tests {
         assert!(!mgba_flash_runahead_guard(&path, Core::Mgba, Platform::Gb));
         std::fs::remove_file(path).unwrap();
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod a13r3_generation_rejoin_tests {
+    use super::*;
+    use std::fs;
+
+    fn fixture() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("slot-a13r3-rejoin-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn protected_retroarch_export_checkpoint_uses_active_generation() {
+        let root = fixture();
+        let id = "a371cbb437f277426a3303a7e7cd83e6f38f0f426ff3b1f827ecc11fa3e25742";
+        let plain = format!("{id}.mgba.retroarch-export.state.auto");
+        assert_eq!(active_export_filename(&root, id, Core::Mgba).unwrap(), plain);
+        let key = format!("{id}.mgba.gen-1792007598729624196");
+        fs::write(root.join(format!("{id}.mgba.state-generation.active")), &key).unwrap();
+        let name = active_export_filename(&root, id, Core::Mgba).unwrap();
+        assert_eq!(name, format!("{key}.retroarch-export.state.auto"));
+        assert!(export_path_matches_snapshot(&root.join(&name), &name));
+        assert!(!export_path_matches_snapshot(&root.join(&plain), &name));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn generation_switch_during_link_remains_fail_closed() {
+        let root = fixture();
+        let id = "abe34";
+        let record = root.join(format!("{id}.mgba.state-generation.active"));
+        let first = format!("{id}.mgba.gen-11111");
+        fs::write(&record, &first).unwrap();
+        let expected = active_export_filename(&root, id, Core::Mgba).unwrap();
+        fs::write(&record, format!("{id}.mgba.gen-22222")).unwrap();
+        let actual = active_export_filename(&root, id, Core::Mgba).unwrap();
+        assert!(!export_path_matches_snapshot(&root.join(&actual), &expected));
+        fs::write(&record, "../other").unwrap();
+        assert!(active_export_filename(&root, id, Core::Mgba).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 }
 
