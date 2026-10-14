@@ -295,17 +295,15 @@ struct A12DrawProbe {
     native_us_max: u64,
     over_16ms: u64,
     over_33ms: u64,
-    budget_deferred: u64,
 }
 impl A12DrawProbe {
     fn new() -> Self {
         Self { started: Instant::now(), callbacks: 0, steps0: 0,
             steps1: 0, steps2: 0, native_us_max: 0,
-            over_16ms: 0, over_33ms: 0, budget_deferred: 0 }
+            over_16ms: 0, over_33ms: 0 }
     }
-    fn record(&mut self, steps: usize, us: u64, recovery: bool, deferred: bool) {
+    fn record(&mut self, steps: usize, us: u64, recovery: bool) {
         self.callbacks += 1;
-        if deferred { self.budget_deferred += 1; }
         match steps {
             0 => self.steps0 += 1,
             1 => self.steps1 += 1,
@@ -317,11 +315,11 @@ impl A12DrawProbe {
         let span = self.started.elapsed();
         if span >= Duration::from_secs(5) {
             crate::game::log_launch_timing(&format!(
-                "Link display pacing: recovery={} callbacks={} emu_fps={:.1} steps0={} steps1={} steps2={} native_us_max={} native_over_16ms={} native_over_33ms={} a13_budget_deferred={}",
+                "Link display pacing: recovery={} callbacks={} emu_fps={:.1} steps0={} steps1={} steps2={} native_us_max={} native_over_16ms={} native_over_33ms={}",
                 if recovery { "a11" } else { "legacy" }, self.callbacks,
                 (self.steps1 + 2 * self.steps2) as f64 / span.as_secs_f64(),
                 self.steps0, self.steps1, self.steps2, self.native_us_max,
-                self.over_16ms, self.over_33ms, self.budget_deferred));
+                self.over_16ms, self.over_33ms));
             *self = Self::new();
         }
     }
@@ -329,12 +327,11 @@ impl A12DrawProbe {
 thread_local! {
     static A12_DRAW_PROBE: RefCell<Option<A12DrawProbe>> = const { RefCell::new(None) };
 }
-fn a12_draw_sample(linked: bool, steps: usize, native_us: u64,
-                   recovery: bool, deferred: bool) {
+fn a12_draw_sample(linked: bool, steps: usize, native_us: u64, recovery: bool) {
     A12_DRAW_PROBE.with(|probe| {
         let mut probe = probe.borrow_mut();
         if linked {
-            probe.get_or_insert_with(A12DrawProbe::new).record(steps, native_us, recovery, deferred);
+            probe.get_or_insert_with(A12DrawProbe::new).record(steps, native_us, recovery);
         } else {
             *probe = None;
         }
@@ -3564,7 +3561,6 @@ impl Engine {
             SHELF_INDICATOR_FLAGS.store(0, Ordering::Release);
             let mut stepped = 0;
             let mut peer_unplugged = None;
-            let mut a13_budget_deferred = false;
             if self.rewind_held {
                 // Rewind is mutually exclusive with forward libretro frames.
                 // Restore up to 3 historical snapshots per render frame and
@@ -3616,22 +3612,11 @@ impl Engine {
                 let frame_limit = if mgba_cable_pacing { 2 }
                     else if fast { usize::from(self.settings.ff_speed) * 4 }
                     else if responsive { 1 } else { 4 };
-                let mut a13_first_core_us = 0u64;
+                // A13.1: revert the experimental second-frame budget.
+                // Real-world A13 KONKR/AVD tests suffered repeated Link
+                // wait_peer stalls and severe AudioTrack starvation.
+                // A12's A11 bounded-debt/2-frame policy was smoother.
                 while self.game_accum >= period && stepped < frame_limit {
-                    if mgba_cable_pacing && stepped == 1 {
-                        // A11's second real frame is vital to PCM continuity,
-                        // but a slow first core step predicts a costly burst.
-                        // Use real measured cost, not a fixed every-other-frame
-                        // throttle. Defer into bounded debt; never invent input.
-                        let elapsed_us = a12_native_started.elapsed().as_micros() as u64;
-                        let pcm_queued = AUDIO.lock().unwrap_or_else(|e| e.into_inner()).len();
-                        if !crate::settings::mgba_link_allow_second_step(
-                            elapsed_us, a13_first_core_us, pcm_queued) {
-                            a13_budget_deferred = true;
-                            break;
-                        }
-                    }
-                    let a13_step_started = Instant::now();
                     // Cable lockstep must not consume emulation time while
                     // the remote frame has not arrived. NEVER invent a solo
                     // frame or perform speculative Run-Ahead on a held link.
@@ -3668,9 +3653,6 @@ impl Engine {
                             AUDIO_SPEED_PERMILLE.store(1000, Ordering::Release);
                         }
                         break;
-                    }
-                    if stepped == 0 {
-                        a13_first_core_us = a13_step_started.elapsed().as_micros() as u64;
                     }
                     self.perf_emulated = self.perf_emulated.saturating_add(1);
                     self.game_accum -= period;
@@ -3724,7 +3706,7 @@ impl Engine {
             self.gpu.end_frame(self.size);
             a12_draw_sample(session.linked() && session.core_kind() == Core::Mgba,
                 stepped, a12_native_started.elapsed().as_micros() as u64,
-                MGBA_CABLE_RECOVERY.load(Ordering::Acquire), a13_budget_deferred);
+                MGBA_CABLE_RECOVERY.load(Ordering::Acquire));
             if let Some(_fault) = peer_unplugged {
                 // Silent, verified solo return on intentional unplug or TCP EOF.
                 match self.return_link_to_solo() {
