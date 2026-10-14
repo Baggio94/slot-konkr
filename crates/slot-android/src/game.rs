@@ -44,7 +44,8 @@ const UNDO_WINDOW: Duration = Duration::from_secs(30);
 /// Cartridge header code, not a localized filename: FireRed, LeafGreen,
 /// Emerald, Ruby and Sapphire, across original game-code regions.
 fn pokemon_gen3_flash_code(code: &[u8; 4]) -> bool {
-    matches!(&code[..3], b"BPR" | b"BPG" | b"BPE" | b"AXV" | b"AXP")
+    [b"BPR", b"BPG", b"BPE", b"AXV", b"AXP"]
+        .iter().any(|prefix| code.starts_with(*prefix))
 }
 fn mgba_flash_runahead_guard(rom: &Path, which: Core, platform: Platform) -> bool {
     if which != Core::Mgba || platform != Platform::Gba { return false; }
@@ -66,7 +67,7 @@ fn pokemon_flash_complete_bank_count(bytes: &[u8]) -> usize {
     const SECTOR: usize = 4096;
     const SIGNATURE: u32 = 0x0801_2025;
     if bytes.len() != 128 * 1024 { return 0; }
-    (0..2).filter(|bank| {
+    (0usize..2).filter(|&bank| {
         let mut seen = 0u16;
         let mut counter = None;
         for sector_index in 0..BANK_SECTORS {
