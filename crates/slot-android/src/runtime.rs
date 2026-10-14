@@ -284,6 +284,18 @@ thread_local! {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum LinkEntry { Shortcut, GameMenu }
+
+impl LinkEntry {
+    fn back(self) -> ShelfOverlay {
+        match self {
+            Self::Shortcut => ShelfOverlay::None,
+            Self::GameMenu => ShelfOverlay::GameMenu { row: 1 },
+        }
+    }
+}
+
 enum ShelfOverlay {
     None,
     Menu { row: usize },
@@ -420,6 +432,7 @@ struct Engine {
     // each new cartridge; keep it when returning from a cancelled link menu.
     link_mode_override: Option<LinkKind>,
     link_phase: LinkMenu,
+    link_entry: LinkEntry,
     link_worked_at: u64,
     link_starter: Option<LinkStarter>,
     link_art: LinkSprites,
@@ -770,6 +783,7 @@ impl Engine {
             link_mode: LinkKind::Cable,
             link_mode_override: None,
             link_phase: LinkMenu::Pick(LinkRow::Host),
+            link_entry: LinkEntry::GameMenu,
             link_worked_at: 0,
             link_starter: None,
             link_art,
@@ -1040,7 +1054,9 @@ impl Engine {
             }
             let automatic = link_kind::link_kind(&identity.code, &identity.title,
                 identity.clean_header);
-            self.link_mode = self.link_mode_override.unwrap_or(automatic);
+            self.link_mode = self.link_mode_override.unwrap_or_else(||
+                link_kind::preferred_mode(&identity.code, &identity.title,
+                    identity.clean_header));
             if !link_kind::gpsp_runtime_mode_supported(&identity.code, self.link_mode) {
                 set_message("This gpSP core cannot emulate this cartridge's GBA Cable protocol. Try mGBA Cable with identical ROMs.".into());
                 return;
@@ -1711,6 +1727,7 @@ impl Engine {
                             self.mode_last_tap = None;
                             self.game_accum = 0.0;
                             if self.game.as_ref().is_some_and(GameSession::linked) {
+                                self.link_entry = LinkEntry::Shortcut;
                                 // Upstream SELECT+MENU reopens the animated
                                 // linked adapter and A=End Link / B=Back.
                                 self.link_phase = LinkMenu::Linked {
@@ -1722,6 +1739,9 @@ impl Engine {
                                 self.overlay = ShelfOverlay::Multiplayer;
                             } else {
                                 self.enter_multiplayer_menu();
+                                if matches!(self.overlay, ShelfOverlay::Multiplayer) {
+                                    self.link_entry = LinkEntry::Shortcut;
+                                }
                             }
                             return;
                         }
@@ -1734,7 +1754,7 @@ impl Engine {
                             self.overlay = ShelfOverlay::None;
                         } else if !matches!(self.link_phase, LinkMenu::Unplug { .. }) {
                             self.cancel_link_discovery();
-                            self.overlay = ShelfOverlay::GameMenu { row: 1 };
+                            self.overlay = self.link_entry.back();
                         }
                     }
                     return;
@@ -1819,19 +1839,19 @@ impl Engine {
                                 96 => self.request_multiplayer_network(),
                                 97 | 108 => {
                                     self.cancel_link_discovery();
-                                    self.overlay = ShelfOverlay::GameMenu { row: 1 };
+                                    self.overlay = self.link_entry.back();
                                 }
                                 _ => {}
                             },
                             LinkMenu::Working { .. } => {
                                 if code == 97 || code == 108 {
                                     self.cancel_link_discovery();
-                                    self.overlay = ShelfOverlay::GameMenu { row: 1 };
+                                    self.overlay = self.link_entry.back();
                                 }
                             }
                             LinkMenu::Failed { .. } => {
                                 if code == 96 || code == 97 || code == 108 {
-                                    self.overlay = ShelfOverlay::GameMenu { row: 1 };
+                                    self.overlay = self.link_entry.back();
                                 }
                             }
                             LinkMenu::Linked { opened: true, role, .. } => match code {
@@ -1945,6 +1965,7 @@ impl Engine {
                                 96 => {
                                     match row {
                                         1 => {
+                                            self.link_entry = LinkEntry::GameMenu;
                                             if self.game.as_ref().is_some_and(GameSession::linked) {
                                                 // Reopen the connected adapter instead of
                                             // ENDing the Link when the Pause menu row
@@ -3218,7 +3239,7 @@ impl Engine {
         // Keep animation entirely in rendering: never delay controller input.
         let (kind, selected, count) = match self.overlay {
             ShelfOverlay::Menu { row } => (1u8, row, 6usize),
-            ShelfOverlay::Library { row } => (2u8, row, 5usize),
+            ShelfOverlay::Library { row } => (2u8, row, 6usize),
             ShelfOverlay::GameMenu { row } => (3u8, row, 4usize),
             ShelfOverlay::Multiplayer => (11u8, 0, 0usize),
             ShelfOverlay::Settings { row } => (4u8, row, 4usize),
@@ -4095,6 +4116,12 @@ mod ui_feedback_tests {
         for width in [linked_width, failed_width] {
             assert!((width as f32) + 15.0 < OUT_W as f32 - 60.0);
         }
+    }
+
+    #[test]
+    fn multiplayer_b_restores_exactly_the_opening_context() {
+        assert_eq!(LinkEntry::Shortcut.back(), ShelfOverlay::None);
+        assert_eq!(LinkEntry::GameMenu.back(), ShelfOverlay::GameMenu { row: 1 });
     }
 
     #[test]
