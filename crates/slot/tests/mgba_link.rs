@@ -180,6 +180,58 @@ fn painted(picture: &[u8], x: usize) -> u16 {
 /// peer-ROM option must affect ONLY the second GBA, without changing the
 /// local cartridge's boot path or normal same-ROM link behavior. This does
 /// not yet enable mixed-ROM network sessions (KMLB/3 still rejects them).
+/// Exercise the REAL mGBA two-ROM state path used by KMLB/4 after
+/// Host receives Join's own snapshot. The final combined SLK1 MUST
+/// deserialize into both independently constructed cores, even though
+/// each device has the opposite local-player role.
+#[test]
+fn host_and_join_can_both_accept_one_authoritative_mixed_rom_pair() {
+    let _g = common::core_lock();
+    let Some(dylib) = vendored() else { return };
+    let host_rom = rom("mgba-authoritative-host.gba", normal_rom());
+    let join_rom = rom("mgba-authoritative-join.gba", keys_rom());
+    let host_solo = single_state(&dylib, &host_rom, 15);
+    let join_solo = single_state(&dylib, &join_rom, 24);
+
+    let mut host = link_core(&dylib, 0);
+    host.set_option("mgba_link_peer_rom", join_rom.to_str().unwrap());
+    host.load(&host_rom).expect("host dual-ROM boot");
+    let host_seed = slot::link_state::with_local_player(
+        &host.serialize().unwrap(), 0, &host_solo).unwrap();
+    host.unserialize(&host_seed).expect("seed host own game");
+    let host_pair = host.serialize().unwrap();
+    drop(host);
+
+    let mut guest = link_core(&dylib, 1);
+    guest.set_option("mgba_link_peer_rom", host_rom.to_str().unwrap());
+    guest.load(&join_rom).expect("guest dual-ROM boot");
+    let guest_seed = slot::link_state::with_local_player(
+        &guest.serialize().unwrap(), 1, &join_solo).unwrap();
+    guest.unserialize(&guest_seed).expect("seed guest own game");
+    let guest_pair = guest.serialize().unwrap();
+    drop(guest);
+
+    let guest_own = slot::link_state::local(&guest_pair, 1).unwrap();
+    let both = slot::link_state::combine_players(&host_pair, &guest_own)
+        .expect("Host must preserve both different players");
+    assert_ne!(slot::link_state::local(&both, 0), slot::link_state::local(&both, 1));
+
+    for (role, local, other) in [
+        (0u8, &host_rom, &join_rom),
+        (1u8, &join_rom, &host_rom),
+    ] {
+        let mut core = link_core(&dylib, role);
+        core.set_option("mgba_link_peer_rom", other.to_str().unwrap());
+        core.load(local).expect("open fresh distinct GBA pair");
+        core.unserialize(&both).expect("both devices must accept one authoritative state");
+        for _ in 0..6 {
+            core.run_frame_linked(ButtonMask::default(), ButtonMask::default());
+        }
+        assert_eq!(core.video_xrgb8888().len(), (GBA_W * GBA_H * 4) as usize);
+        assert!(slot::link_state::is_pair(&core.serialize().unwrap()));
+    }
+}
+
 #[test]
 fn dual_cart_can_restore_each_players_solo_without_overwriting_remote_rom() {
     let _g = common::core_lock();
