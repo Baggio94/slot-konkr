@@ -91,6 +91,7 @@ enum Input {
     LinkNetworkReady(String),
     LinkDirectHost(String),
     LinkNetworkError(String),
+    LinkPeerRomConsent(bool),
     RaPrefetchHash(String, u32),
     ExternalReturn,
 }
@@ -1389,6 +1390,12 @@ impl Engine {
                         since: self.link_worked_at,
                     };
                 }
+                LinkProgress::PeerRomConsent => {
+                    // Both users must approve sharing their full cartridge
+                    // files before KMLB/4 transfers any ROM bytes.
+                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(18);
+                    set_message("Different GBA cartridges: approve private LAN ROM exchange on both devices.".into());
+                }
                 LinkProgress::Ready(wire, peer_rom) => {
                     self.cancel_link_discovery();
                     let role = if self.link_role == LinkRow::Host {
@@ -1447,6 +1454,16 @@ impl Engine {
 
     fn handle(&mut self, input: Input) {
         match input {
+            Input::LinkPeerRomConsent(allowed) => {
+                if let Some(starter) = self.link_starter.as_ref() {
+                    starter.approve_peer_rom(allowed);
+                    if !allowed {
+                        self.cancel_link_discovery();
+                        self.fail_multiplayer("You declined sharing ROM data with this peer",
+                            LinkFail::Cancelled);
+                    }
+                }
+            }
             Input::LinkNetworkReady(address) => {
                 if matches!(self.overlay, ShelfOverlay::Multiplayer) &&
                     matches!(self.link_phase, LinkMenu::Working {..}) {
@@ -4548,6 +4565,16 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkDiscoveryGame(
 
 /// Kotlin resolves the connected Wi-Fi interface and takes a MulticastLock
 /// before handing its IPv4 address to the independent Rust discovery worker.
+/// Android's user-visible confirmation for sharing a complete ROM with
+/// a trusted KMLB/4 mixed-cartridge peer. AGL never shows dialogs or blocks.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkPeerRomConsent(
+    _env: *mut c_void, _activity: *mut c_void, allowed: jboolean,
+) {
+    INPUT.lock().unwrap_or_else(|e| e.into_inner())
+        .push_back(Input::LinkPeerRomConsent(allowed != 0));
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkNetworkReady(
     mut env: JNIEnv<'_>, _this: JObject<'_>, ipv4: JString<'_>,
