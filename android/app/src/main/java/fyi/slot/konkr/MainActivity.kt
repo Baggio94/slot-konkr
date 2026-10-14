@@ -74,6 +74,7 @@ class MainActivity : Activity() {
         private const val ROM_ROOT = "rom_root_uri"
         private const val BIOS_ROOT = "bios_root_uri"
         private const val SAVE_ROOT = "saves_root_uri"
+        private const val SHARE_GBA_SAVES = "share_gba_saves"
         private const val STATE_ROOT = "states_root_uri"
         private const val ROM_CACHE_NAME = "rom-library-cache-v1.json"
         private const val ROM_CACHE_SCHEMA = 1
@@ -129,6 +130,7 @@ class MainActivity : Activity() {
     external fun nativePollRumbleStrength(): Int
     external fun nativeCoreForUri(uri: String): String
     external fun nativePollSaveFlush(): String?
+    external fun nativeSetShareSaves(enabled: Boolean)
     // The renderer requests LAN only when Host/Join is selected. It never
     // touches WifiManager, Android UI or permissions from the GL thread.
     external fun nativeLinkNetworkReady(ipv4: String)
@@ -497,6 +499,7 @@ class MainActivity : Activity() {
                     }
                 }
                 16 -> requestLinkWifi()
+                17 -> toggleShareGbaSaves()
             }
             // Multicast is required during discovery, not for ongoing TCP
             // emulation. Release on success, cancellation and timeout.
@@ -610,6 +613,8 @@ class MainActivity : Activity() {
         // A staged sign-out must finish before any native HTTP worker is started.
         val cleanSignOut = RaAccount.finishPendingSignOut(filesDir)
         nativeConfigure(filesDir.absolutePath, applicationInfo.nativeLibraryDir)
+        nativeSetShareSaves(getSharedPreferences(PREFS, MODE_PRIVATE)
+            .getBoolean(SHARE_GBA_SAVES, false))
         if (cleanSignOut && RaAccount.configuredUser(filesDir) != null) nativeRaAccountConfigured()
         cartSounds = CartSounds(this)
         view = object : GLSurfaceView(this) {
@@ -934,7 +939,9 @@ class MainActivity : Activity() {
                     else prefs.getString(SAVE_ROOT, null)?.let(Uri::parse)
                 val states = if (isIsolatedMultiplayerLab) null
                     else prefs.getString(STATE_ROOT, null)?.let(Uri::parse)
-                val shared = RetroArchStorage.target(this, rawUri, core, saves, states)
+                val shared = RetroArchStorage.target(this, rawUri, core, saves, states,
+                    shareGbaSaves = !isIsolatedMultiplayerLab &&
+                        prefs.getBoolean(SHARE_GBA_SAVES, false))
                 try {
                     RetroArchStorage.importBeforeLaunch(this@MainActivity, shared)
                 } catch (error: Exception) {
@@ -1393,6 +1400,30 @@ class MainActivity : Activity() {
             state == BatteryManager.BATTERY_STATUS_FULL
         nativeSystemStatus(clock, percent, charging)
 
+    }
+
+    /** OFF is the safe default, including upgrades from pre-option builds.
+     *  Never merge mGBA/gpSP state files; enabling opt-in affects only the
+     *  next ROM launch and refuses genuine two-core SRAM conflicts.
+     */
+    private fun toggleShareGbaSaves() {
+        if (nativeIsPlaying()) {
+            SlotToast.makeText(this, "Eject the cartridge before changing Save sharing.",
+                Toast.LENGTH_LONG).show()
+            return
+        }
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val enabled = !prefs.getBoolean(SHARE_GBA_SAVES, false)
+        if (!prefs.edit().putBoolean(SHARE_GBA_SAVES, enabled).commit()) {
+            SlotToast.makeText(this, "Unable to save Share Saves preference.",
+                Toast.LENGTH_LONG).show()
+            return
+        }
+        nativeSetShareSaves(enabled)
+        SlotToast.makeText(this,
+            if (enabled) "Share Saves ON: mGBA/gpSP SRAM only; conflicts are never overwritten."
+            else "Share Saves OFF: mGBA and gpSP saves kept separate.",
+            Toast.LENGTH_LONG).show()
     }
 
     private fun refreshLibrary() {
