@@ -58,7 +58,11 @@ pub fn link_carried(code: &str, title: &str) -> bool {
         || code.starts_with("AW2")
         || ["A3XE","A6BE","B4WE","B4BE","B4WP","B4BP",
             "BRBE","BRKE","BRBP","BRKP","BR5E","BR6E","BR5P","BR6P",
-            "A8BE","A9BE","AK8E","AK9E","AGSE","AGFE"].contains(&code)
+            "A8BE","A9BE","AK8E","AK9E","AGSE","AGFE",
+            "AREE","AE2E","BZ3E",
+            "AMAE","AMAP","AMAJ","AA2E","AA2P","AA2J",
+            "A3AE","A3AP","A3AJ","AX4E","AX4P","AX4J",
+            "A88E","A88P","A88J"].contains(&code)
 }
 
 fn pokemon(code: &str, title: &str) -> bool {

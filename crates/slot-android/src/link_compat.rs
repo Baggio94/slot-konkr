@@ -3,12 +3,19 @@
 //! core recipe, BIOS and mode. Each ROM retains its own SHA256 and SRAM.
 use crate::link_kind::LinkKind;
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum Family { Pokemon3, Bn3, Bn4, Bn5, Bn6, Medabots, MedabotsAx, GoldenSun }
+enum Family { Pokemon3, Bn1To2, Bn3, Bn4, Bn5, Bn6, Medabots, MedabotsAx, GoldenSun, MarioBros }
 fn family(code: &str) -> Option<Family> {
     if code.len()!=4 || !code.bytes().all(|c|c.is_ascii_uppercase()||c.is_ascii_digit()) {return None;}
     if matches!(code.as_bytes()[3],b'E'|b'P'|b'D'|b'F'|b'I'|b'S'|b'J') &&
         ["BPR","BPG","BPE","AXV","AXP"].iter().any(|x|code.starts_with(x)) {return Some(Family::Pokemon3);}
     match code {
+        // BN1 -> BN2 is one-directional Retro Chip Trader data exchange.
+        "AREE"|"AE2E"=>Some(Family::Bn1To2),
+        // Mario Bros. multicart works across all four Super Mario Advance
+        // titles and Mario & Luigi Superstar Saga, but NOT a multiboot guest.
+        "AMAE"|"AMAP"|"AMAJ"|"AA2E"|"AA2P"|"AA2J"|
+        "A3AE"|"A3AP"|"A3AJ"|"AX4E"|"AX4P"|"AX4J"|
+        "A88E"|"A88P"|"A88J"=>Some(Family::MarioBros),
         "A3XE"|"A6BE"=>Some(Family::Bn3),
         "B4WE"|"B4BE"|"B4WP"|"B4BP"=>Some(Family::Bn4),
         "BRBE"|"BRKE"|"BRBP"|"BRKP"=>Some(Family::Bn5),
@@ -25,8 +32,10 @@ fn rfu(code:&str)->bool {
 }
 /// Four-character DNS-SD grouping key; unknown titles retain exact game code.
 pub fn discovery_key(code:&str)->&str {
+    if code == "BZ3E" { return "BN4A"; } // Mega Man Zero 3 bonus transfer with BN4
     match family(code){
-        Some(Family::Pokemon3)=>"PK3A",Some(Family::Bn3)=>"BN3A",
+        Some(Family::Pokemon3)=>"PK3A",Some(Family::Bn1To2)=>"BN12",
+        Some(Family::MarioBros)=>"MARI",Some(Family::Bn3)=>"BN3A",
         Some(Family::Bn4)=>"BN4A",Some(Family::Bn5)=>"BN5A",
         Some(Family::Bn6)=>"BN6A",Some(Family::Medabots)=>"MDBT",
         Some(Family::MedabotsAx)=>"MDAX",Some(Family::GoldenSun)=>"GSUN",
@@ -39,6 +48,10 @@ pub fn discovery_key(code:&str)->&str {
 pub fn compatible_cross_title(a:[u8;4], b:[u8;4], mode:LinkKind)->bool {
     if a==b{return false;}
     let (Ok(a),Ok(b))=(std::str::from_utf8(&a),std::str::from_utf8(&b)) else{return false;};
+    // Bonus transfer: Mega Man Zero 3 <-> Battle Network 4 (both versions).
+    // Mode is strictly GBA Cable, never Wireless.
+    if mode==LinkKind::Cable && ((a=="BZ3E" && family(b)==Some(Family::Bn4))
+        || (b=="BZ3E" && family(a)==Some(Family::Bn4))) {return true;}
     let Some(group)=family(a) else{return false;};
     family(b)==Some(group) && (mode==LinkKind::Cable || (rfu(a)&&rfu(b)))
 }
@@ -60,6 +73,17 @@ pub fn compatible_cross_title(a:[u8;4], b:[u8;4], mode:LinkKind)->bool {
                               ("AGSE","AGFE",false)]{
             assert!(compatible_cross_title(id(a),id(b),LinkKind::Cable));
             assert_eq!(compatible_cross_title(id(a),id(b),LinkKind::Wireless),wireless);
+            assert_eq!(discovery_key(a),discovery_key(b));
+        }
+    }
+    #[test] fn retro_chip_trader_mario_bros_and_zero_three_crossovers(){
+        for (a,b) in [("AREE","AE2E"),("AMAE","AA2P"),("AA2E","A3AE"),
+                      ("A3AP","AX4E"),("AX4E","A88E"),
+                      ("B4WE","BZ3E"),("B4BE","BZ3E")] {
+            assert!(compatible_cross_title(id(a),id(b),LinkKind::Cable),
+                    "verified hardware link must be discoverable");
+            assert!(!compatible_cross_title(id(a),id(b),LinkKind::Wireless),
+                    "these cross-game transfers do not use Wireless Adapter");
             assert_eq!(discovery_key(a),discovery_key(b));
         }
     }
