@@ -3523,17 +3523,27 @@ impl Engine {
                 // and inconsistent input response on the physical KONKR.
                 // STANDARD and fast-forward are not changed.
                 let responsive = profile.responsive_pacing && !fast;
+                // A11: this is the *same* double-GBA lockstep on both ends,
+                // even for equal ROMs. One late packet must not make gameplay
+                // and audio permanently lose an emulated frame. Restrict
+                // recovery to mGBA Cable; gpSP and solo retain their policy.
+                let mgba_cable_pacing = session.linked()
+                    && session.core_kind() == Core::Mgba && !fast;
                 // Preserve a little more fractional game time in the
                 // opt-in DISPLAY SYNC mode ONLY. No extra libretro frames
                 // can run in any single callback; Beta 4 catch-up stays gone.
-                if profile.display_sync_pacing && responsive {
+                if mgba_cable_pacing {
+                    self.game_accum = crate::settings::frame_debt_mgba_cable(
+                        self.game_accum, f64::from(dt), period);
+                } else if profile.display_sync_pacing && responsive {
                     self.game_accum = crate::settings::frame_debt_display_sync(
                         self.game_accum, f64::from(dt), multiplier, period);
                 } else {
                     self.game_accum = crate::settings::frame_debt(
                         self.game_accum, f64::from(dt), multiplier, period, fast, responsive);
                 }
-                let frame_limit = if fast { usize::from(self.settings.ff_speed) * 4 }
+                let frame_limit = if mgba_cable_pacing { 2 }
+                    else if fast { usize::from(self.settings.ff_speed) * 4 }
                     else if responsive { 1 } else { 4 };
                 while self.game_accum >= period && stepped < frame_limit {
                     // Cable lockstep must not consume emulation time while
@@ -3541,7 +3551,14 @@ impl Engine {
                     // frame or perform speculative Run-Ahead on a held link.
                     if !session.advance(self.buttons, self.settings.turbo,
                         self.settings.rewind && !session.linked()) {
-                        self.game_accum = 0.0;
+                        // A waiting mGBA Cable frame is NOT an emulated frame.
+                        // Retain at most two frames of debt; only real remote
+                        // inputs can advance them later. Never preserve debt
+                        // after an actual Link fault or in solo/gpSP.
+                        self.game_accum = if mgba_cable_pacing
+                            && session.link_fault().is_none() {
+                            self.game_accum.min(period * 2.0)
+                        } else { 0.0 };
                         if let Some(fault) = session.link_fault() {
                             // Remote End Link and TCP loss can become a
                             // verified single-GBA SOLO instance after the
