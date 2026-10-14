@@ -1,3 +1,4 @@
+use crate::pokemon_flash::pokemon_flash_complete_bank_count;
 //! Native libretro mGBA / gpSP game session. All core calls occur on GLSurfaceView's GL thread.
 //! Android's SAF bridge materializes a **bounded private cache** copy of each selected ROM.
 use slot_retro::{ButtonMask, LibretroCore, RetroCore, LinkChannel};
@@ -55,43 +56,6 @@ fn mgba_flash_runahead_guard(rom: &Path, which: Core, platform: Platform) -> boo
     file.read_exact(&mut code).is_ok() && pokemon_gen3_flash_code(&code)
 }
 
-/// FireRed/LeafGreen/Ruby/Sapphire/Emerald write alternating 14-sector
-/// FLASH1M save banks. A save is durable only when *every* sector of at
-/// least one bank has a unique section ID 0..13, a matching generation
-/// counter, the 0x08012025 signature and the official additive checksum.
-/// Their data is zero-padded to 3968 bytes; summing the whole data region
-/// exactly matches pret/pokefirered's variable-section checksum.
-/// This is NOT applied to unrelated 128 KiB games or other save types.
-fn pokemon_flash_complete_bank_count(bytes: &[u8]) -> usize {
-    const BANK_SECTORS: usize = 14;
-    const SECTOR: usize = 4096;
-    const SIGNATURE: u32 = 0x0801_2025;
-    if bytes.len() != 128 * 1024 { return 0; }
-    (0usize..2).filter(|&bank| {
-        let mut seen = 0u16;
-        let mut counter = None;
-        for sector_index in 0..BANK_SECTORS {
-            let at = (bank * BANK_SECTORS + sector_index) * SECTOR;
-            let sector = &bytes[at..at + SECTOR];
-            let id = u16::from_le_bytes([sector[0xFF4], sector[0xFF5]]);
-            let expected = u16::from_le_bytes([sector[0xFF6], sector[0xFF7]]);
-            let signature = u32::from_le_bytes(sector[0xFF8..0xFFC].try_into().unwrap());
-            let generation = u32::from_le_bytes(sector[0xFFC..0x1000].try_into().unwrap());
-            if signature != SIGNATURE || id >= BANK_SECTORS as u16 ||
-                seen & (1 << id) != 0 || counter.is_some_and(|old| old != generation) {
-                return false;
-            }
-            let total = sector[..3968].chunks_exact(4).fold(0u32, |sum, chunk| {
-                sum.wrapping_add(u32::from_le_bytes(chunk.try_into().unwrap()))
-            });
-            let checksum = ((total >> 16) + (total & 0xFFFF)) as u16;
-            if checksum != expected { return false; }
-            seen |= 1 << id;
-            counter = Some(generation);
-        }
-        seen == (1 << BANK_SECTORS) - 1
-    }).count()
-}
 
 enum PendingUndo {
     Saved { stamp: String, evicted: Option<(String, Vec<u8>, Vec<u8>)> },
