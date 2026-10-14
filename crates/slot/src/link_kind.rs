@@ -20,6 +20,12 @@ const WIRELESS: [&str; 43] = [
     "BR5E", "BR6E", "BRBE", "BRKE", "BTME", "BTMJ", "BTMP",
 ];
 
+/// RFU requires actual GBA Wireless Adapter support. Excludes Ruby,
+/// Sapphire, Advance Wars, Mario Bros., ordinary Cable and bonus transfers.
+pub fn has_wireless_adapter(code: &str) -> bool {
+    WIRELESS.contains(&code)
+}
+
 pub fn link_kind(code: &str, title: &str, clean: bool) -> LinkKind {
     if pokemon(code, title) {
         let retail = clean
@@ -111,6 +117,14 @@ mod a6_serial_regressions {
         assert!(link_carried("AWRE", "ADVANCE WARS"));
         assert!(link_carried("AW2E", "ADVANCE WARS 2"));
         assert!(!link_carried("NONE", "UNSUPPORTED"));
+        assert!(!has_wireless_adapter("AXVE"));
+        assert!(!has_wireless_adapter("AXPE"));
+        assert!(!has_wireless_adapter("AWRE"));
+        assert!(!has_wireless_adapter("AMAE"));
+        assert!(has_wireless_adapter("BPRE"));
+        assert!(has_wireless_adapter("BPEE"));
+        assert!(has_wireless_adapter("BRBE"));
+        assert!(has_wireless_adapter("BR5E"));
         assert_eq!(link_kind("NONE", "UNSUPPORTED", true), LinkKind::Cable);
     }
 }

@@ -3652,7 +3652,8 @@ fn link_legend_profile(menu: LinkMenu, selectable_mode: bool) -> LinkLegendProfi
 /// A Link Mode toggle must never lie about actual physical/serial support.
 fn link_mode_can_switch(core: Core, chosen: LinkKind, code: &str,
                         title: &str, clean: bool) -> bool {
-    if core != Core::Gpsp || !link_kind::link_carried(code, title) { return false; }
+    if core != Core::Gpsp || !link_kind::link_carried(code, title)
+        || !link_kind::has_wireless_adapter(code) { return false; }
     let automatic = link_kind::link_kind(code, title, clean);
     let selected_serial = link_kind::serial_option(chosen, automatic, code, title);
     let opposite_serial = link_kind::serial_option(chosen.other(), automatic, code, title);

@@ -101,6 +101,12 @@ impl LabGreeting {
         Some(Self{game,backend:bytes[9],mode:bytes[10],rom_sha256,core_sha256,bios_sha256})
     }
     fn accepts(&self,other:&Self)->bool{
+        // A matching ROM hash must not make an impossible RFU adapter appear
+        // on an unsupported cartridge such as Ruby/Sapphire.
+        if self.mode==2 && (!crate::link_kind::has_wireless_adapter(
+            std::str::from_utf8(&self.game).unwrap_or(""))
+            || !crate::link_kind::has_wireless_adapter(
+            std::str::from_utf8(&other.game).unwrap_or(""))) { return false; }
         if self.backend!=other.backend || self.mode!=other.mode ||
             self.core_sha256!=other.core_sha256 || self.bios_sha256!=other.bios_sha256{return false;}
         if self.game==other.game{return self.rom_sha256==other.rom_sha256;}
@@ -622,6 +628,10 @@ mod lab_negotiation_tests {
         let mut ruby=other.clone();ruby.game=*b"AXVE";ruby.mode=2;
         let mut wireless_host=host.clone();wireless_host.mode=2;
         assert!(!wireless_host.accepts(&ruby));
+        let mut ruby_same=host.clone();
+        ruby_same.game=*b"AXVE";ruby_same.mode=2;
+        assert!(!ruby_same.accepts(&ruby_same),
+            "even identical Ruby ROMs cannot create GBA RFU hardware");
         // Identical header code with modified ROM content is NOT an approved pair.
         let mut patched=host.clone();patched.rom_sha256[0]^=1;
         assert!(!host.accepts(&patched));
