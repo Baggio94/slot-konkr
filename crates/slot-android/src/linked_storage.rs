@@ -82,8 +82,167 @@ pub fn fresh_session_for_core(root: &Path, core: &str, game_id: &str,
         "No unused Multiplayer session directory available"))
 }
 
+
+/** A single intended file replacement in a Link -> solo promotion.
+ * A None 'after' means leave the file alone (for cartridges without RTC).
+ * The expected value is the exact immutable pre-Link image, NOT the
+ * currently observed disk image.
+ */
+pub struct PromotionFile<'a> {
+    pub path: &'a Path,
+    pub expected: Option<&'a [u8]>,
+    pub after: Option<&'a [u8]>,
+}
+
+/// Never promote private linked progress over a solo save modified by
+/// RetroArch, Syncthing or another thread since the cable was connected.
+/// Stage an immutable, unique rollback generation before the first write.
+/// One failed atomic write rolls back already written destinations; the
+/// backup directory remains available even if the rollback itself fails.
+pub fn promote_player_files(backup_root: &Path,
+                            items: &[PromotionFile<'_>]) -> Result<PathBuf, String> {
+    if items.is_empty() || items.len() > 4 {
+        return Err("Link promotion needs 1..=4 owned files".into());
+    }
+    let mut previous = Vec::with_capacity(items.len());
+    for (i, item) in items.iter().enumerate() {
+        if items[..i].iter().any(|before| before.path == item.path) {
+            return Err("Duplicate destination in Link promotion".into());
+        }
+        let old = read_optional(item.path).map_err(|e|
+            format!("Cannot inspect original solo file {}: {e}", item.path.display()))?;
+        if old.as_deref() != item.expected {
+            return Err(format!(
+                "Solo save changed during Link ({}); private Link progress retained",
+                item.path.display()));
+        }
+        if item.after.is_some_and(|bytes| bytes.is_empty() || bytes.len() > MAX_LINK_BATTERY_SEED * 8) {
+            return Err("Refusing empty or oversized Link promotion".into());
+        }
+        previous.push(old);
+    }
+    let history = fresh_promotion_backup(backup_root)?;
+    // Store each original as an immutable copy, plus the promoted image.
+    // Even an originally absent file is described by the zero-length marker.
+    for (i, (item, old)) in items.iter().zip(&previous).enumerate() {
+        let label = format!("file-{i}");
+        let before = history.join(format!("{label}.before"));
+        let absent = history.join(format!("{label}.absent"));
+        match old {
+            Some(bytes) => slot_store::atomic_write(&before, bytes),
+            None => slot_store::atomic_write(&absent, b""),
+        }.map_err(|e| format!("Cannot stage Link rollback: {e}"))?;
+        if let Some(new) = item.after {
+            slot_store::atomic_write(&history.join(format!("{label}.after")), new)
+                .map_err(|e| format!("Cannot stage Link promotion data: {e}"))?;
+        }
+        slot_store::atomic_write(&history.join(format!("{label}.destination")),
+            item.path.to_string_lossy().as_bytes())
+            .map_err(|e| format!("Cannot stage Link destination record: {e}"))?;
+    }
+    let mut completed = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        let Some(after) = item.after else { continue };
+        // Recheck just before each mutation to guard against external edits
+        // made while writing the backups.
+        let now = read_optional(item.path).map_err(|e| e.to_string())?;
+        if now.as_deref() != item.expected {
+            let rollback = rollback_promotion(items, &previous, &completed);
+            return Err(format!("Solo save changed mid-promotion; rollback={rollback:?}, backup={}",
+                history.display()));
+        }
+        if let Err(error) = slot_store::atomic_write(item.path, after) {
+            let rollback = rollback_promotion(items, &previous, &completed);
+            return Err(format!("Cannot promote Link file {i}: {error}; rollback={rollback:?}, backup={}",
+                history.display()));
+        }
+        completed.push(i);
+    }
+    Ok(history)
+}
+
+fn read_optional(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+fn rollback_promotion(items: &[PromotionFile<'_>], previous: &[Option<Vec<u8>>],
+                      completed: &[usize]) -> Result<(), String> {
+    for &i in completed.iter().rev() {
+        match &previous[i] {
+            Some(old) => slot_store::atomic_write(items[i].path, old)
+                .map_err(|e| format!("Rollback of file {i} failed: {e}"))?,
+            None => match fs::remove_file(items[i].path) {
+                Ok(()) => (),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+                Err(e) => return Err(format!("Rollback delete file {i} failed: {e}")),
+            },
+        }
+    }
+    Ok(())
+}
+
+fn fresh_promotion_backup(root: &Path) -> Result<PathBuf, String> {
+    fs::create_dir_all(root).map_err(|e| format!("Cannot create Link backups: {e}"))?;
+    let epoch = SystemTime::now().duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?.as_nanos();
+    for i in 0..1024 {
+        let dir = root.join(format!("promotion-{epoch}-{i:03}"));
+        match fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),
+            Err(e) => return Err(format!("Cannot allocate Link rollback: {e}")),
+        }
+    }
+    Err("No fresh Link rollback generation available".into())
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn link_promotion_keeps_immutable_original_and_prevents_stale_writer() {
+        let base = fixture();
+        let solo = base.join("Saves/gpSP/LeafGreen.srm");
+        fs::create_dir_all(solo.parent().unwrap()).unwrap();
+        let old = vec![1u8; 131072];
+        let next = vec![2u8; 131072];
+        fs::write(&solo, &old).unwrap();
+        let path = promote_player_files(&base.join("Saves/LinkBackups"), &[
+            PromotionFile { path: &solo, expected: Some(&old), after: Some(&next) },
+        ]).unwrap();
+        assert_eq!(fs::read(&solo).unwrap(), next);
+        assert_eq!(fs::read(path.join("file-0.before")).unwrap(), old);
+        assert_eq!(fs::read(path.join("file-0.after")).unwrap(), next);
+        assert!(promote_player_files(&base.join("Saves/LinkBackups"), &[
+            PromotionFile { path: &solo, expected: Some(&old), after: Some(&old) },
+        ]).is_err());
+        assert_eq!(fs::read(&solo).unwrap(), next);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn link_promotion_is_all_or_nothing_on_preexisting_conflicts() {
+        let base = fixture();
+        let ram = base.join("Saves/mGBA/Cart.srm");
+        let state = base.join("Saves/Cart.mgba.state");
+        fs::create_dir_all(ram.parent().unwrap()).unwrap();
+        fs::write(&ram, b"ROM A saved").unwrap();
+        fs::write(&state, b"old state").unwrap();
+        let result = promote_player_files(&base.join("Saves/LinkBackups"), &[
+            PromotionFile { path: &ram, expected: Some(b"ROM A saved"), after: Some(b"new SRAM") },
+            PromotionFile { path: &state, expected: Some(b"stale state"), after: Some(b"new state") },
+        ]);
+        assert!(result.unwrap_err().contains("changed during Link"));
+        assert_eq!(fs::read(&ram).unwrap(), b"ROM A saved");
+        assert_eq!(fs::read(&state).unwrap(), b"old state");
+        fs::remove_dir_all(base).unwrap();
+    }
+
+
     use super::*;
 
     fn fixture() -> PathBuf {
