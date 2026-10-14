@@ -139,6 +139,7 @@ static REQUEST: Mutex<Option<String>> = Mutex::new(None);
 static LABEL_PICK_REQUEST: Mutex<Option<String>> = Mutex::new(None);
 static UI_ACTION: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
 static SAVE_SYNC: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+static SHARE_SAVES_ENABLED: AtomicBool = AtomicBool::new(false);
 static CART_SFX: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
 const CART_INSERT_SFX: i32 = 1;
 const CART_EJECT_SFX: i32 = 2;
@@ -302,7 +303,7 @@ enum ShelfOverlay {
     States,
 }
 
-const MENU_TEXT: [&str; 79] = [
+const MENU_TEXT: [&str; 81] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -382,6 +383,8 @@ const MENU_TEXT: [&str; 79] = [
     "",                                 // 76 retired: no middle-page helper text
     "",                                 // 77 retired: upstream shows A OK
     "Eject to play solo",               // 78
+    "Share Saves: OFF",                  // 79
+    "Share Saves: ON",                   // 80
 ];
 
 struct Engine {
@@ -2121,17 +2124,19 @@ impl Engine {
                             },
                             ShelfOverlay::Library { row } => match code {
                                 19 | 20 => {
-                                    let next = if code == 19 { (row + 4) % 5 } else { (row + 1) % 5 };
+                                    let next = if code == 19 { (row + 5) % 6 } else { (row + 1) % 6 };
                                     self.overlay = ShelfOverlay::Library { row: next };
                                 }
                                 96 => match row {
-                                    0..=4 => {
-                                        // ROM, BIOS, SRAM root, State root, Refresh.
+                                    0..=5 => {
+                                        // ROM, BIOS, SRAM root, State root,
+                                        // Share Saves OFF/ON, Refresh.
                                         let action = match row {
                                             0 => 1,
                                             1 => 4,
                                             2 => 5,
                                             3 => 6,
+                                            4 => 17,
                                             _ => 2,
                                         };
                                         UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
@@ -2903,7 +2908,8 @@ impl Engine {
                 self.draw_original_style_menu(0, &[1, 2, 3, 48, 25, 31], row, out);
             }
             ShelfOverlay::Library { row } => {
-                self.draw_original_style_menu(5, &[6, 24, 7, 8, 9], row, out);
+                let sharing = if SHARE_SAVES_ENABLED.load(Ordering::Acquire) { 80 } else { 79 };
+                self.draw_original_style_menu(5, &[6, 24, 7, 8, sharing, 9], row, out);
             }
             ShelfOverlay::Settings { row } => {
                 self.draw_original_style_menu(26, &[32, 33, 49, 58], row, out);
@@ -4611,6 +4617,15 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeCoreForUri(
                 .unwrap_or(Core::Mgba).as_str()
         }).unwrap_or("mgba");
     env.new_string(name).map_or(std::ptr::null_mut(), |s| s.into_raw())
+}
+
+/// Readable from the GL renderer without consulting Android preferences.
+/// Android persists the opt-in first and then updates this display flag.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetShareSaves(
+    _env: *mut c_void, _this: *mut c_void, enabled: jboolean,
+) {
+    SHARE_SAVES_ENABLED.store(enabled != 0, Ordering::Release);
 }
 
 #[unsafe(no_mangle)]
