@@ -641,6 +641,9 @@ struct Engine {
     // Unmodified upstream system names: 200ms in, 1200ms hold, 800ms out.
     platform_faces: [Printed; 3],
     recents_platform_face: Printed,
+    favorites_platform_face: Printed,
+    focus_seen: Option<(usize, String)>,
+    focus_dirty_since: Option<Instant>,
     platform_shown_at: Option<Instant>,
     selected_title_name: String,
     selected_title_face: Printed,
@@ -762,6 +765,13 @@ impl Engine {
         shelves.push(Shelf::new(if settings.show_recents {
             recent_carts
         } else { Vec::new() }));
+        // The v1.7 Favorites rack contains real GB/GBC/GBA carts in name order.
+        // URI identity keeps identical ROM filenames in distinct folders separate.
+        let favorite_ids=visuals_root.as_deref().map(crate::favorites::load)
+            .unwrap_or_default();
+        let favorite_carts=crate::favorites::carts(&favorite_ids,
+            &[&shelves[0].carts,&shelves[1].carts,&shelves[2].carts]);
+        shelves.push(Shelf::new(favorite_carts));
 
         // Same compact size for all three platforms, rasterised at 3x
         // resolution before downsampling to Slot's 720x480 design canvas.
@@ -776,6 +786,10 @@ impl Engine {
         let recents_platform_face=Printed::new(
             gpu.create_texture(recent_label.w,recent_label.h,&recent_label.rgba),
             recent_label.w);
+        let favorites_label=platform_name_face("FAVORITES");
+        let favorites_platform_face=Printed::new(
+            gpu.create_texture(favorites_label.w,favorites_label.h,&favorites_label.rgba),
+            favorites_label.w);
 
         let shadow = cart_shadow();
         let gba = gpu.create_texture(shadow.w, shadow.h, &shadow.rgba);
@@ -783,10 +797,16 @@ impl Engine {
         let gb = gpu.create_texture(shadow.w, shadow.h, &shadow.rgba);
         let shadow = gb_cart_shadow(GbShell::Rounded);
         let gbc = gpu.create_texture(shadow.w, shadow.h, &shadow.rgba);
+        // The exact original Slot 9x9 pixel star, bright yellow with dark rim.
+        let star=slot_ui::star_face(2, [0xf6,0xc3,0x2c]);
+        let star_tex=gpu.create_texture(star.w,star.h,&star.rgba);
         for shelf in &mut shelves {
             shelf.set_shadow(gba);
             shelf.set_gb_shadow(GbShell::Notched, gb);
             shelf.set_gb_shadow(GbShell::Rounded, gbc);
+            shelf.set_star(star_tex,star.w,star.h);
+            shelf.mark_starred(|cart|favorite_ids.iter()
+                .any(|uri|uri==cart.rom.to_string_lossy().as_ref()));
         }
 
         // Exactly the four Slot upstream SVG parts, original link_screen
@@ -975,7 +995,9 @@ impl Engine {
         let bolt_light_texture = gpu.create_texture(bolt.w, bolt.h, &bolt.rgba);
 
         // On a GBA-only library do not begin on an empty GB or GBC shelf.
-        let active = shelves.iter().position(|s| !s.carts.is_empty()).unwrap_or(0);
+        let saved_focus=visuals_root.as_deref().and_then(crate::selection::load);
+        let active=saved_focus.as_ref().and_then(|focus|restore_saved_focus(&mut shelves,focus))
+            .unwrap_or_else(||shelves.iter().position(|s|!s.carts.is_empty()).unwrap_or(0));
         let now = Instant::now();
         let has_multiple_systems = shelves.iter().filter(|s| !s.carts.is_empty()).count() > 1;
         Ok(Self {
@@ -1097,6 +1119,9 @@ impl Engine {
             letter_shown_at: None,
             platform_faces,
             recents_platform_face,
+            favorites_platform_face,
+            focus_seen: None,
+            focus_dirty_since: None,
             platform_shown_at: has_multiple_systems.then_some(now),
             selected_title_name: String::new(),
             selected_title_face: Printed::default(),
@@ -2701,9 +2726,12 @@ impl Engine {
                             UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(13);
                             return;
                         }
-                        // Y is intentionally reserved for the favourites toggle
-                        // in U2. No legacy per-game settings popup on the carousel.
-                        100 if !self.inserted => { return; }
+                        // Original Slot v1.7: Y silently toggles the star.
+                        // All per-ROM settings remain in Pause -> Settings.
+                        100 if !self.inserted => {
+                            self.toggle_favorite();
+                            return;
+                        }
                         108 if !self.inserted => {
                             self.shelves[self.active].release_hold();
                             self.overlay = ShelfOverlay::Menu { row: 0 };
@@ -3356,6 +3384,73 @@ impl Engine {
         PATHS.lock().unwrap_or_else(|e|e.into_inner())
             .as_ref().map(|(root,_)|root.clone())
     }
+    fn persist_focus_if_idle(&mut self) {
+        let current=self.shelves.get(self.active)
+            .and_then(|shelf|shelf.carts.get(shelf.index))
+            .map(|cart|(self.active,cart.rom.to_string_lossy().into_owned()));
+        if current!=self.focus_seen {
+            self.focus_seen=current;
+            self.focus_dirty_since=Some(Instant::now());
+        }
+        if self.focus_dirty_since.is_some_and(|since|since.elapsed().as_millis()>=500) {
+            self.focus_dirty_since=None;
+            if let Some((rack,uri))=self.focus_seen.as_ref() {
+                if let Some(root)=Self::recents_root() {
+                    let focus=crate::selection::Focus { rack:*rack,uri:uri.clone() };
+                    if let Err(err)=crate::selection::store(&root,&focus) {
+                        eprintln!("slot-konkr: last selection could not persist: {err}");
+                    }
+                }
+            }
+        }
+    }
+    fn toggle_favorite(&mut self) {
+        let Some(uri)=self.selected_rom_uri() else {return};
+        let Some(root)=Self::recents_root() else {return};
+        match crate::favorites::toggle(&root,&uri) {
+            Ok(_) => self.rebuild_favorites(),
+            Err(error)=>set_message(format!("Could not save favorite: {error}")),
+        }
+    }
+    fn rebuild_favorites(&mut self) {
+        let Some(root)=Self::recents_root() else {return};
+        let ids=crate::favorites::load(&root);
+        let carts=crate::favorites::carts(&ids,
+            &[&self.shelves[0].carts,&self.shelves[1].carts,&self.shelves[2].carts]);
+        let was_favorite=self.active==4;
+        self.cart_render.invalidate_shelf(4);
+        let moves=self.shelves[4].replace_carts_preserving_visuals(carts);
+        self.rekey_rack_visuals(4,&moves);
+        for shelf in &mut self.shelves {
+            shelf.mark_starred(|cart|ids.iter()
+                .any(|uri|uri==cart.rom.to_string_lossy().as_ref()));
+        }
+        if was_favorite && self.shelves[4].carts.is_empty() {
+            self.active=next_nonempty_shelf(&self.shelves,0,1);
+            self.platform_shown_at=Some(Instant::now());
+        }
+    }
+    // Preserve cart textures/material across Recents or Favorites reorder.
+    fn rekey_rack_visuals(&mut self, rack:usize, moves:&[(usize,usize)]) {
+        for (shelf,index,_) in &mut self.texture_cache {
+            if *shelf!=rack {continue;}
+            if let Some((_,new))=moves.iter().find(|(old,_)|*old==*index) {
+                *index=*new;
+            } else {
+                *shelf=usize::MAX;
+                *index=usize::MAX;
+            }
+        }
+        if let Some(material)=self.clear_material.as_mut() {
+            if material.key.0==rack {
+                if let Some((_,new))=moves.iter().find(|(old,_)|*old==material.key.1) {
+                    material.key.1=*new;
+                } else {
+                    material.key=(usize::MAX,usize::MAX);
+                }
+            }
+        }
+    }
     fn rebuild_recents(&mut self) {
         let Some(root)=Self::recents_root() else { return };
         let ids=crate::recents::load(&root);
@@ -3366,29 +3461,7 @@ impl Engine {
         self.cart_render.invalidate_shelf(3);
         let moves=self.shelves[3].replace_carts_preserving_visuals(
             if self.settings.show_recents { carts } else { Vec::new() });
-        // Preserve GPU handles for unchanged ROMs while retaining orphaned
-        // handles in the 42-slot recycler (sentinel entries are first victims).
-        for (shelf,index,_) in &mut self.texture_cache {
-            if *shelf != 3 { continue; }
-            if let Some((_,new))=moves.iter().find(|(old,_)|*old==*index) {
-                *index=*new;
-            } else {
-                *shelf=usize::MAX;
-                *index=usize::MAX;
-            }
-        }
-        // Material layers are tied to a ROM, not to its former rack index.
-        // Retain the three GPU handles when the same clear cart moves in
-        // Recents (including while inserting), but invalidate removed ROMs.
-        if let Some(material)=self.clear_material.as_mut() {
-            if material.key.0==3 {
-                if let Some((_,new))=moves.iter().find(|(old,_)|*old==material.key.1) {
-                    material.key.1=*new;
-                } else {
-                    material.key=(usize::MAX,usize::MAX);
-                }
-            }
-        }
+        self.rekey_rack_visuals(3,&moves);
         if was_recent && self.shelves[3].carts.is_empty() {
             self.active=next_nonempty_shelf(&self.shelves,0,1);
         }
@@ -4512,6 +4585,7 @@ impl Engine {
         self.shelves[self.active].update(dt);
         self.prepare_visible();
         self.refresh_selected_title();
+        self.persist_focus_if_idle();
         // Resolve the optional transparent material before mutably borrowing
         // the selected rack, otherwise Rust rejects the overlapping borrows.
         let (selected_clear_back, selected_clear_front) = self.clear_layers();
@@ -4568,8 +4642,11 @@ impl Engine {
                 let name = if let Some(since) = self.platform_shown_at {
                     let elapsed=since.elapsed().as_millis() as u64;
                     if platform_name_running(elapsed) {
-                        let face=if self.active==3 {self.recents_platform_face}
-                            else {self.platform_faces[self.active]};
+                        let face=match self.active {
+                                3=>self.recents_platform_face,
+                                4=>self.favorites_platform_face,
+                                index=>self.platform_faces[index],
+                            };
                         Some((face,elapsed,true))
                     } else {
                         self.platform_shown_at=None;
@@ -4831,6 +4908,25 @@ fn may_apply_library_update(game_active: bool, inserted: bool, awaiting: bool) -
 fn selected_prefetch_entry(shelves: &[Shelf], active: usize) -> Option<(usize, usize)> {
     let shelf = shelves.get(active)?;
     shelf.carts.get(shelf.index).map(|_| (active, shelf.index))
+}
+
+/// Restart on the exact platform + cart when possible; if a hidden/removed
+/// Recents or Favorites rack no longer contains it, recover the source cart.
+fn restore_saved_focus(shelves:&mut [Shelf], focus:&crate::selection::Focus)->Option<usize> {
+    let candidate=shelves.get(focus.rack).and_then(|shelf|
+        shelf.carts.iter().position(|cart|cart.rom.to_string_lossy()==focus.uri.as_str()));
+    if let Some(index)=candidate {
+        shelves[focus.rack].select(index);
+        return Some(focus.rack);
+    }
+    for rack in 0..3 {
+        if let Some(index)=shelves.get(rack).and_then(|shelf|
+            shelf.carts.iter().position(|cart|cart.rom.to_string_lossy()==focus.uri.as_str())) {
+            shelves[rack].select(index);
+            return Some(rack);
+        }
+    }
+    None
 }
 
 /// Preserve stable ROM identity and platform on a Cart Studio shelf rebuild.
