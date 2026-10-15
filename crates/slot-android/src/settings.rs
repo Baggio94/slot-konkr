@@ -81,14 +81,37 @@ const NAME: &str = "slot-konkr-settings.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Shader { Off, Lcd3x, Grid, Dot, Simpletex }
+pub enum Shader {
+    Off, Lcd3x, Grid, Dot, Simpletex,
+    LcdGridV2, LcdGridV2Gba, ZfastLcd, Lcd1x, SimpletexGba,
+    Agb001, Ags001, SharpBilinear,
+}
 impl Shader {
-    pub const GBA: [Self; 4] = [Self::Off, Self::Lcd3x, Self::Grid, Self::Dot];
+    // Exactly ten GBA RetroArch shaders plus Off, preserving the backward
+    // cycling shortcut (Left from Off selects Dot).
+    pub const GBA: [Self; 11] = [
+        Self::Off, Self::Lcd3x, Self::LcdGridV2, Self::LcdGridV2Gba,
+        Self::ZfastLcd, Self::Lcd1x, Self::SimpletexGba,
+        Self::Agb001, Self::Ags001, Self::SharpBilinear, Self::Dot,
+    ];
+    // GB/GBC options remain unchanged.
     pub const GB: [Self; 4] = [Self::Off, Self::Lcd3x, Self::Grid, Self::Simpletex];
     pub fn effect(self) -> ScreenEffect {
-        match self { Self::Off => ScreenEffect::None,
-            Self::Lcd3x => ScreenEffect::Lcd3x, Self::Grid => ScreenEffect::Grid,
-            Self::Dot => ScreenEffect::Dot, Self::Simpletex => ScreenEffect::Simpletex }
+        match self {
+            Self::Off => ScreenEffect::None,
+            Self::Lcd3x => ScreenEffect::Lcd3x,
+            Self::Grid => ScreenEffect::Grid,
+            Self::Dot => ScreenEffect::Dot,
+            Self::Simpletex => ScreenEffect::Simpletex,
+            Self::LcdGridV2 => ScreenEffect::LcdGridV2,
+            Self::LcdGridV2Gba => ScreenEffect::LcdGridV2Gba,
+            Self::ZfastLcd => ScreenEffect::ZfastLcd,
+            Self::Lcd1x => ScreenEffect::Lcd1x,
+            Self::SimpletexGba => ScreenEffect::SimpletexGba,
+            Self::Agb001 => ScreenEffect::Agb001,
+            Self::Ags001 => ScreenEffect::Ags001,
+            Self::SharpBilinear => ScreenEffect::SharpBilinear,
+        }
     }
     fn step(self, values: &[Self], right: bool) -> Self {
         let at = values.iter().position(|v| *v == self).unwrap_or(0);
@@ -188,6 +211,7 @@ impl Settings {
             })
             .map(|mut s| {
                 if !SPEEDS.contains(&s.ff_speed) { s.ff_speed = 2; }
+                if s.shader_gba == Shader::Grid { s.shader_gba = Shader::LcdGridV2; }
                 if !Shader::GBA.contains(&s.shader_gba) { s.shader_gba = Shader::Off; }
                 if !Shader::GB.contains(&s.shader_gb) { s.shader_gb = Shader::Off; }
                 if !Shader::GB.contains(&s.shader_gbc) { s.shader_gbc = Shader::Off; }
@@ -576,6 +600,26 @@ mod tests {
         assert!(s.ff_sound && s.rumble && s.rewind && s.turbo && s.eject_save);
         assert!(!s.gb_palettes);
         assert_eq!(s.shader_gba, Shader::Off);
+    }
+    #[test]
+    fn gba_has_ten_unique_serde_roundtripping_presets_plus_off() {
+        assert_eq!(Shader::GBA.len(),11);
+        assert_eq!(Shader::GB.len(),4);
+        for shader in Shader::GBA {
+            assert_eq!(Shader::GBA.iter().filter(|s| **s == shader).count(),1);
+            let json=serde_json::to_string(&shader).unwrap();
+            assert_eq!(serde_json::from_str::<Shader>(&json).unwrap(),shader);
+        }
+    }
+    #[test]
+    fn gba_grid_v2_migration_keeps_original_gb_gbc() {
+        let root=tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join(NAME),
+            r#"{"shader_gba":"grid","shader_gb":"grid","shader_gbc":"lcd3x"}"#).unwrap();
+        let s=Settings::load(root.path());
+        assert_eq!(s.shader_gba,Shader::LcdGridV2);
+        assert_eq!(s.shader_gb,Shader::Grid);
+        assert_eq!(s.shader_gbc,Shader::Lcd3x);
     }
     #[test]
     fn screen_gameplay_original_choices_cycle() {

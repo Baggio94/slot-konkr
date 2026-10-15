@@ -22,11 +22,19 @@ pub enum Toast {
     ShaderGrid,
     ShaderDot,
     ShaderSimpletex,
+    ShaderLcdGridV2,
+    ShaderLcdGridV2Gba,
+    ShaderZfastLcd,
+    ShaderLcd1x,
+    ShaderSimpletexGba,
+    ShaderAgb001,
+    ShaderAgs001,
+    ShaderSharpBilinear,
     Palette(GbPalette),
 }
 
 impl Toast {
-    const FIXED: [Toast; 14] = [
+    const FIXED: [Toast; 22] = [
         Toast::StateSaved,
         Toast::StateLoaded,
         Toast::NeedsGpsp,
@@ -41,6 +49,14 @@ impl Toast {
         Toast::ShaderGrid,
         Toast::ShaderDot,
         Toast::ShaderSimpletex,
+        Toast::ShaderLcdGridV2,
+        Toast::ShaderLcdGridV2Gba,
+        Toast::ShaderZfastLcd,
+        Toast::ShaderLcd1x,
+        Toast::ShaderSimpletexGba,
+        Toast::ShaderAgb001,
+        Toast::ShaderAgs001,
+        Toast::ShaderSharpBilinear,
     ];
 
     pub fn all() -> Vec<Toast> {
@@ -73,6 +89,14 @@ impl Toast {
             Toast::ShaderGrid => "Shader: Grid",
             Toast::ShaderDot => "Shader: Dot",
             Toast::ShaderSimpletex => "Shader: Simpletex",
+            Toast::ShaderLcdGridV2 => "Shader: LCD Grid V2",
+            Toast::ShaderLcdGridV2Gba => "Shader: LCD Grid V2 + GBA Color",
+            Toast::ShaderZfastLcd => "Shader: zfast LCD",
+            Toast::ShaderLcd1x => "Shader: LCD1x",
+            Toast::ShaderSimpletexGba => "Shader: Simpletex + GBA Color",
+            Toast::ShaderAgb001 => "Shader: AGB-001",
+            Toast::ShaderAgs001 => "Shader: AGS-001",
+            Toast::ShaderSharpBilinear => "Shader: Sharp Bilinear",
             Toast::Palette(p) => p.label(),
         }
     }

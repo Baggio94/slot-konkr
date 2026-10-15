@@ -33,3 +33,23 @@ pub fn lcd3x_mask() -> [[[f32; 3]; 3]; 3] {
     }
     mask
 }
+
+#[cfg(test)]
+mod gba_preset_tests {
+    use super::*;
+    #[test]
+    fn ten_unique_gpu_modes_compile_once_and_switch_by_uniform() {
+        let modes=[
+            ScreenEffect::Lcd3x,ScreenEffect::LcdGridV2,
+            ScreenEffect::LcdGridV2Gba,ScreenEffect::ZfastLcd,
+            ScreenEffect::Lcd1x,ScreenEffect::SimpletexGba,
+            ScreenEffect::Agb001,ScreenEffect::Ags001,
+            ScreenEffect::SharpBilinear,ScreenEffect::Dot
+        ];
+        let mut seen=std::collections::BTreeSet::new();
+        for e in modes {assert!(seen.insert(e.mode() as i32));}
+        assert_eq!(seen.len(),10);
+        assert_eq!(ScreenEffect::None.mode(),0.0);
+        assert_eq!(ScreenEffect::Grid.mode(),2.0);
+    }
+}

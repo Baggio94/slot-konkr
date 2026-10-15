@@ -914,7 +914,10 @@ impl Engine {
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO", "A/B",
                               "None", "Random", "Default", "DEFAULT BLUR",
-                              "Dark", "Light", "Low", "Medium", "High", "Custom"]
+                              "Dark", "Light", "Low", "Medium", "High", "Custom",
+                               "LCD Grid V2", "Grid V2 + GBA Color", "zfast LCD",
+                               "LCD1x", "Simpletex + GBA", "AGB-001",
+                               "AGS-001", "Sharp Bilinear"]
             .into_iter().map(|value| {
                 let face = quick_value_face(value, true);
                 let tex = gpu.create_texture(face.w, face.h, &face.rgba);
@@ -1246,6 +1249,14 @@ impl Engine {
                     crate::settings::Shader::Grid => Toast::ShaderGrid,
                     crate::settings::Shader::Dot => Toast::ShaderDot,
                     crate::settings::Shader::Simpletex => Toast::ShaderSimpletex,
+                     crate::settings::Shader::LcdGridV2 => Toast::ShaderLcdGridV2,
+                     crate::settings::Shader::LcdGridV2Gba => Toast::ShaderLcdGridV2Gba,
+                     crate::settings::Shader::ZfastLcd => Toast::ShaderZfastLcd,
+                     crate::settings::Shader::Lcd1x => Toast::ShaderLcd1x,
+                     crate::settings::Shader::SimpletexGba => Toast::ShaderSimpletexGba,
+                     crate::settings::Shader::Agb001 => Toast::ShaderAgb001,
+                     crate::settings::Shader::Ags001 => Toast::ShaderAgs001,
+                     crate::settings::Shader::SharpBilinear => Toast::ShaderSharpBilinear,
                 }, time);
             }
             100 => {
@@ -3673,6 +3684,10 @@ impl Engine {
         let shader = |shader| match shader {
             Shader::Off => 5, Shader::Lcd3x => 6, Shader::Grid => 7,
             Shader::Dot => 8, Shader::Simpletex => 9,
+             Shader::LcdGridV2 => 27, Shader::LcdGridV2Gba => 28,
+             Shader::ZfastLcd => 29, Shader::Lcd1x => 30,
+             Shader::SimpletexGba => 31, Shader::Agb001 => 32,
+             Shader::Ags001 => 33, Shader::SharpBilinear => 34,
         };
         match key {
             0 => shader(scoped.shader_gba),
