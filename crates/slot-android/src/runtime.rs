@@ -3489,6 +3489,11 @@ impl Engine {
         let moves=self.shelves[3].replace_carts_preserving_visuals(
             if self.settings.show_recents { carts } else { Vec::new() });
         self.rekey_rack_visuals(3,&moves);
+        // Restocking Recents must not erase Favorite stars: its Shelf rebuild
+        // necessarily reconstructs the per-cart starred flags from scratch.
+        let favorites=crate::favorites::load(&root);
+        self.shelves[3].mark_starred(|cart|favorites.iter()
+            .any(|uri|uri==cart.rom.to_string_lossy().as_ref()));
         if was_recent && self.shelves[3].carts.is_empty() {
             self.active=next_nonempty_shelf(&self.shelves,0,1);
         }
