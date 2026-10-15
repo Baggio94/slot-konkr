@@ -3051,7 +3051,7 @@ impl Engine {
             13 => if self.settings.show_wifi { 4 } else { 5 },
             14 => if self.settings.show_bluetooth { 4 } else { 5 },
             15 => if self.settings.show_integrations { 4 } else { 5 },
-            16 => match self.settings.wallpaper {
+            16 => match &self.settings.wallpaper {
                 crate::settings::WallpaperPick::None => 17,
                 crate::settings::WallpaperPick::Random => 18,
                 crate::settings::WallpaperPick::Default => 19,
