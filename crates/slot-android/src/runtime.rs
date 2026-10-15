@@ -3384,10 +3384,17 @@ impl Engine {
                 *index=usize::MAX;
             }
         }
-        // Reuse the three material allocations but never apply them to a
-        // different ROM after an index shuffle.
+        // Material layers are tied to a ROM, not to its former rack index.
+        // Retain the three GPU handles when the same clear cart moves in
+        // Recents (including while inserting), but invalidate removed ROMs.
         if let Some(material)=self.clear_material.as_mut() {
-            if material.key.0==3 {material.key=(usize::MAX,usize::MAX);}
+            if material.key.0==3 {
+                if let Some((_,new))=moves.iter().find(|(old,_)|*old==material.key.1) {
+                    material.key.1=*new;
+                } else {
+                    material.key=(usize::MAX,usize::MAX);
+                }
+            }
         }
         if was_recent && self.shelves[3].carts.is_empty() {
             self.active=next_nonempty_shelf(&self.shelves,0,1);
