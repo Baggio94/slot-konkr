@@ -3,6 +3,8 @@ name: KONKR Android preview
 on:
   workflow_dispatch:
   push:
+    # KONKR tags do not overlap the upstream Linux H700 v* release workflow.
+    tags: ['konkr-v*']
     # Follow the current development families instead of maintaining dozens of stale branch names.
     branches: [develop/konkr, 'feat/konkr-*', 'feat/kpa-*', 'integration/konkr-*', 'fix/konkr-*', 'release/konkr-*']
     paths:
@@ -219,13 +221,21 @@ jobs:
           if [[ "${GITHUB_REF:-}" == "refs/heads/feat/konkr-multiplayer-lab" ]]; then
             (cd android && gradle --no-daemon :app:assembleMultiplayerLab)
           fi
-          if [[ "${GITHUB_REF:-}" == refs/heads/release/* || "${GITHUB_REF:-}" == refs/heads/integration/konkr-rc4-next ]]; then
+          if [[ "${GITHUB_REF:-}" == refs/heads/release/* || "${GITHUB_REF:-}" == refs/heads/integration/konkr-rc4-next || "${GITHUB_REF:-}" == refs/tags/konkr-v* ]]; then
             if [ -z "$SLOT_KEYSTORE_BASE64" ]; then
               echo "::error::Persistent signing key is required for release candidates."
               exit 1
             fi
             (cd android && gradle --no-daemon :app:assembleRelease)
           fi
+      - name: Validate public tag against Android versionName
+        if: startsWith(github.ref, 'refs/tags/konkr-v')
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#konkr-v}"
+          built="$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' android/app/build.gradle.kts | head -1)"
+          test "$version" = "$built"
+          echo "KONKR Android version $built from tag $GITHUB_REF_NAME"
       - name: Verify native dynamic exports survived metadata stripping
         run: |
           set -euo pipefail
@@ -297,6 +307,26 @@ jobs:
           path: android/app/build/outputs/apk/multiplayerLab/app-multiplayerLab.apk
           if-no-files-found: error
 
+      - name: Verify public signed universal KONKR APK
+        if: startsWith(github.ref, 'refs/tags/konkr-v')
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          CERT="$("$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK")"
+          echo "$CERT" | grep -Fi '4f42b8f0ac98f6a0102804ab51020ea0e7e2de7685c6ce09400a744de0b0fa2f'
+          for abi in arm64-v8a x86_64; do
+            for core in slot_android mgba_libretro gpsp_libretro; do
+              unzip -Z -1 "$APK" | grep -Fx "lib/$abi/lib${core}.so"
+            done
+          done
+          sha256sum "$APK"
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/konkr-v')
+        with:
+          name: slot-konkr-public-signed-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
       - name: Verify RC4 release APK is signed with permanent certificate
         if: startsWith(github.ref, 'refs/heads/release/')
         run: |
@@ -335,7 +365,7 @@ jobs:
   # Linux host, not pass a test that silently skips when vendor/ is empty.
   # The Android arm64 core is separately built in debug-apk above.
   a6-a1-mgba-continuity:
-    if: github.ref == 'refs/heads/feat/konkr-multiplayer-lab'
+    if: github.ref == 'refs/heads/feat/konkr-multiplayer-lab' || startsWith(github.ref, 'refs/tags/konkr-v')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -368,3 +398,47 @@ jobs:
           cargo test -p slot --test mgba_link \
             live_solo_host_join_snapshots_resume_without_a_title_screen \
             -- --exact --nocapture
+
+  publish-konkr:
+    name: Publish KONKR Android release
+    if: startsWith(github.ref, 'refs/tags/konkr-v')
+    needs: [debug-apk, a6-a1-mgba-continuity]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: slot-konkr-public-signed-apk
+          path: release-assets
+      - name: Create signed APK release with SHA256
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#konkr-v}"
+          built="$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' android/app/build.gradle.kts | head -1)"
+          test "$version" = "$built"
+          apk="release-assets/slot-konkr-${version}-arm64-x86_64.apk"
+          mv release-assets/app-release.apk "$apk"
+          test -s "$apk"
+          (cd release-assets && sha256sum "$(basename "$apk")" > SHA256SUMS.txt)
+          flags=()
+          if [[ "$version" == *-rc.* || "$version" == *-beta.* ]]; then
+            flags=(--prerelease)
+          fi
+          printf '# slot. for KONKR Pocket Advance %s\n\n' "$version" > notes.md
+          printf 'Universal signed Android APK (ARM64 KONKR + x86_64 Mac AVD). Package fyi.slot.konkr.\n\n' >> notes.md
+          printf 'Includes GB/GBC/GBA, mGBA/gpSP, Cart Studio, Apps, RetroAchievements online/offline, SRAM and RetroArch save support, and game/core-dependent Cable/RFU multiplayer.\n\n' >> notes.md
+          printf 'Safety: normal install-r upgrades should retain data with matching signatures. Do not uninstall, clear app data, or overwrite saves to fix an installer mismatch.\n\n' >> notes.md
+          printf 'Multiplayer peer authentication is not encryption. Use a trusted LAN. No commercial ROMs or BIOS are included.\n\n' >> notes.md
+          printf 'Upstream and bundled emulation core sources, patches, licenses and build scripts are linked from the repository at this tag.\n\n' >> notes.md
+          if [[ "${#flags[@]}" -gt 0 ]]; then
+            printf 'PRE-RELEASE: controller, real-hardware save continuity, audio and frame pacing still require qualification.\n\n' >> notes.md
+          fi
+          printf 'Source commit: %s\n' "$GITHUB_SHA" >> notes.md
+          gh release create "$GITHUB_REF_NAME" "$apk" release-assets/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "slot. for KONKR Pocket Advance $version" \
+            --notes-file notes.md "${flags[@]}"
