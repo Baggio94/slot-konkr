@@ -351,10 +351,13 @@ thread_local! {
 enum LinkEntry { Shortcut, GameMenu }
 
 impl LinkEntry {
-    fn back(self) -> ShelfOverlay {
+    fn back(self, linked: bool, requires_relaunch: bool) -> ShelfOverlay {
         match self {
             Self::Shortcut => ShelfOverlay::None,
-            Self::GameMenu => ShelfOverlay::GameMenu { row: 1 },
+            Self::GameMenu => ShelfOverlay::GameMenu {
+                row: pause_rows(linked, requires_relaunch).iter()
+                    .position(|item| *item == PauseRow::Multiplayer).unwrap_or(0),
+            },
         }
     }
 }
@@ -1950,7 +1953,9 @@ impl Engine {
                             self.overlay = ShelfOverlay::None;
                         } else if !matches!(self.link_phase, LinkMenu::Unplug { .. }) {
                             self.cancel_link_discovery();
-                            self.overlay = self.link_entry.back();
+                            self.overlay = self.link_entry.back(
+                                        self.game.as_ref().is_some_and(GameSession::linked),
+                                        self.game.as_ref().is_some_and(GameSession::requires_relaunch));
                         }
                     }
                     return;
@@ -2006,8 +2011,10 @@ impl Engine {
                             } else {
                                 self.mode_last_tap=Some(Instant::now());
                                 self.overlay=match self.overlay {
-                                    ShelfOverlay::GameMenu { .. }=>ShelfOverlay::None,
-                                    ShelfOverlay::States=>ShelfOverlay::None,
+                                    ShelfOverlay::GameMenu { .. }
+                                    | ShelfOverlay::PauseSettings { .. }
+                                    | ShelfOverlay::PauseEmulationSettings { .. }
+                                    | ShelfOverlay::States => ShelfOverlay::None,
                                     _=>ShelfOverlay::GameMenu {row:0},
                                 };
                             }
@@ -2035,19 +2042,25 @@ impl Engine {
                                 96 => self.request_multiplayer_network(),
                                 97 | 108 => {
                                     self.cancel_link_discovery();
-                                    self.overlay = self.link_entry.back();
+                                    self.overlay = self.link_entry.back(
+                                        self.game.as_ref().is_some_and(GameSession::linked),
+                                        self.game.as_ref().is_some_and(GameSession::requires_relaunch));
                                 }
                                 _ => {}
                             },
                             LinkMenu::Working { .. } => {
                                 if code == 97 || code == 108 {
                                     self.cancel_link_discovery();
-                                    self.overlay = self.link_entry.back();
+                                    self.overlay = self.link_entry.back(
+                                        self.game.as_ref().is_some_and(GameSession::linked),
+                                        self.game.as_ref().is_some_and(GameSession::requires_relaunch));
                                 }
                             }
                             LinkMenu::Failed { .. } => {
                                 if code == 96 || code == 97 || code == 108 {
-                                    self.overlay = self.link_entry.back();
+                                    self.overlay = self.link_entry.back(
+                                        self.game.as_ref().is_some_and(GameSession::linked),
+                                        self.game.as_ref().is_some_and(GameSession::requires_relaunch));
                                 }
                             }
                             LinkMenu::Linked { opened: true, role, .. } => match code {
@@ -2084,7 +2097,9 @@ impl Engine {
                                         }
                                     }
                                 }
-                                97 | 108 => self.overlay = self.link_entry.back(),
+                                97 | 108 => self.overlay = self.link_entry.back(
+                                        self.game.as_ref().is_some_and(GameSession::linked),
+                                        self.game.as_ref().is_some_and(GameSession::requires_relaunch)),
                                 _ => {}
                             },
                             LinkMenu::Linked { opened: false, .. } | LinkMenu::Unplug { .. } => {}
@@ -2965,7 +2980,12 @@ impl Engine {
         }
         let Some(uri) = self.selected_rom_uri() else { return; };
         let core = self.selected_emulation_core();
-        let mut profile = self.current_emulation();
+        // Edit the persisted intent, not the safety-clamped effective profile.
+        // A core that temporarily disables speculative frames must not erase
+        // saved Run-Ahead preference when we change Show Stats / pacing.
+        let mut profile = self.game_emulation
+            .unwrap_or_else(|| EmulationProfile::from_settings(&self.settings));
+        profile.show_fps = profile.show_fps_override.unwrap_or(self.settings.show_fps);
         if !profile.change(key, right) { return; }
         if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             if let Err(error) = profile.save(root, &uri, core) {
@@ -4490,16 +4510,26 @@ mod ui_feedback_tests {
 
     #[test]
     fn eject_to_play_solo_is_an_action_not_a_noop() {
-        assert!(game_menu_ejects(0, true),
-            "post-multiplayer row 0 must perform the same ejection as row 2");
-        assert!(game_menu_ejects(2, true));
-        assert!(game_menu_ejects(2, false));
-        assert!(!game_menu_ejects(0, false),
-            "active solo row 0 must resume without ejecting");
-        assert!(!game_menu_ejects(1, true),
-            "end link action must not accidentally eject");
-        assert!(!game_menu_ejects(3, true),
-            "states action must not accidentally eject");
+        assert_eq!(pause_rows(false,false),
+            &[PauseRow::Resume,PauseRow::States,PauseRow::Multiplayer,
+                PauseRow::Settings,PauseRow::SaveEject]);
+        assert_eq!(pause_rows(true,false),
+            &[PauseRow::Resume,PauseRow::Multiplayer,PauseRow::Settings,
+                PauseRow::SaveEject]);
+        assert_eq!(pause_rows(false,true),
+            &[PauseRow::SaveEject,PauseRow::Multiplayer]);
+        for (linked,needs_eject) in [(false,false),(true,false),(false,true),(true,true)] {
+            for (index,item) in pause_rows(linked,needs_eject).iter().enumerate() {
+                assert_eq!(game_menu_ejects(index,linked,needs_eject),
+                    *item==PauseRow::SaveEject,
+                    "never save/eject from States, Settings or Multiplayer");
+            }
+        }
+        assert!(game_menu_ejects(0,true,true));
+        assert!(!game_menu_ejects(0,true,false));
+        assert_eq!(pause_row_text(PauseRow::SaveEject,true,true),78);
+        assert_eq!(pause_row_text(PauseRow::Settings,true,false),25);
+        assert!(!pause_rows(true,false).contains(&PauseRow::States));
     }
 
     #[test]
@@ -4578,8 +4608,13 @@ mod ui_feedback_tests {
 
     #[test]
     fn multiplayer_b_restores_exactly_the_opening_context() {
-        assert_eq!(LinkEntry::Shortcut.back(), ShelfOverlay::None);
-        assert_eq!(LinkEntry::GameMenu.back(), ShelfOverlay::GameMenu { row: 1 });
+        assert_eq!(LinkEntry::Shortcut.back(false,false), ShelfOverlay::None);
+        assert_eq!(LinkEntry::GameMenu.back(false,false),
+            ShelfOverlay::GameMenu { row: 2 });
+        assert_eq!(LinkEntry::GameMenu.back(true,false),
+            ShelfOverlay::GameMenu { row: 1 });
+        assert_eq!(LinkEntry::GameMenu.back(true,true),
+            ShelfOverlay::GameMenu { row: 1 });
     }
 
     #[test]
