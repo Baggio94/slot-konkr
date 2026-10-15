@@ -3377,7 +3377,7 @@ impl Engine {
         // handles in the 42-slot recycler (sentinel entries are first victims).
         for (shelf,index,_) in &mut self.texture_cache {
             if *shelf != 3 { continue; }
-            if let Some((_,new))=moves.iter().find(|(old,_)|old==index) {
+            if let Some((_,new))=moves.iter().find(|(old,_)|*old==*index) {
                 *index=*new;
             } else {
                 *shelf=usize::MAX;
