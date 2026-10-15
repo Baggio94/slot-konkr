@@ -16,6 +16,14 @@ pub enum ScreenEffect {
     Grid,
     Dot,
     Simpletex,
+    LcdGridV2,
+    LcdGridV2Gba,
+    ZfastLcd,
+    Lcd1x,
+    SimpletexGba,
+    Agb001,
+    Ags001,
+    SharpBilinear,
 }
 
 impl ScreenEffect {

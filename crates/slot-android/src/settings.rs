@@ -625,13 +625,19 @@ mod tests {
     }
     #[test]
     fn gba_grid_v2_migration_keeps_original_gb_gbc() {
-        let root=tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join(NAME),
+        let root=std::env::temp_dir().join(format!(
+            "slot-gba-shader-migration-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(NAME),
             r#"{"shader_gba":"grid","shader_gb":"grid","shader_gbc":"lcd3x"}"#).unwrap();
-        let s=Settings::load(root.path());
+        let s=Settings::load(&root);
         assert_eq!(s.shader_gba,Shader::LcdGridV2);
         assert_eq!(s.shader_gb,Shader::Grid);
         assert_eq!(s.shader_gbc,Shader::Lcd3x);
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn screen_gameplay_original_choices_cycle() {
