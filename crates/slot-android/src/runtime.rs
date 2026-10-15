@@ -476,6 +476,29 @@ const MENU_TEXT: [&str; 86] = [
     "Theme",                              // 85
 ];
 
+#[derive(Clone, Copy)]
+struct LiveGameOptions {
+    ff_speed: u8,
+    ff_sound: bool,
+    rewind: bool,
+    turbo: bool, // KONKR X/Y Buttons
+    rumble: bool,
+    eject_save: bool,
+}
+impl LiveGameOptions {
+    fn from_profile(global: &crate::settings::Settings, p: Option<EmulationProfile>) -> Self {
+        let ff_speed=p.and_then(|v|v.ff_speed_override).unwrap_or(global.ff_speed);
+        Self {
+            ff_speed,
+            ff_sound:p.and_then(|v|v.ff_sound_override).unwrap_or(global.ff_sound),
+            rewind:p.and_then(|v|v.rewind_override).unwrap_or(global.rewind),
+            turbo:p.and_then(|v|v.turbo_override).unwrap_or(global.turbo),
+            rumble:p.and_then(|v|v.rumble_override).unwrap_or(global.rumble),
+            eject_save:p.and_then(|v|v.eject_save_override).unwrap_or(global.eject_save),
+        }
+    }
+}
+
 struct Engine {
     gpu: Compositor,
     size: (u32, u32),
@@ -1104,10 +1127,10 @@ impl Engine {
         match code {
             96 | 97 => {
                 let key = if self.active == 0 { 0 } else { 1 };
-                self.change_setting(key, code == 96);
-                let shader = if self.active == 0 {
-                    self.settings.shader_gba
-                } else { self.settings.shader_gb };
+                if self.game.is_some() {
+                    self.change_game_screen_or_gameplay(key,code == 96);
+                } else { self.change_setting(key,code == 96); }
+                let shader = self.game_shader();
                 self.gpu.set_screen_effect(shader.effect());
                 self.hud.toast(match shader {
                     crate::settings::Shader::Off => Toast::ShaderOff,
@@ -1118,8 +1141,10 @@ impl Engine {
                 }, time);
             }
             100 => {
-                self.change_setting(2, true);
-                self.hud.toast(if self.settings.colour_correction {
+                if self.game.is_some() {
+                    self.change_game_screen_or_gameplay(2,true);
+                } else { self.change_setting(2,true); }
+                self.hud.toast(if self.game_settings().colour_correction {
                     Toast::ColourOn
                 } else { Toast::ColourOff }, time);
             }
@@ -1154,7 +1179,7 @@ impl Engine {
             }
             104 | 105 => {
                 // Also valid for GB-compatible .gbc ROMs (CGB flag bit 7 unset).
-                if self.settings.gb_palettes
+                if self.game_settings().gb_palettes
                     && self.game.as_ref().is_some_and(|g| g.can_change_gb_palette())
                 {
                     let index = if code == 105 {
@@ -1822,7 +1847,7 @@ impl Engine {
                 // The reversed cart animation will emit the original eject sound.
                 if self.progress > 0.0 || self.inserted { self.eject_sound_armed = true; }
                 if let Some(mut session) = self.game.take() {
-                    let saved = session.save(self.settings.eject_save);
+                    let saved = session.save(self.live_game_options().eject_save);
                     if saved && !session.is_link_sandbox() {
                         if let Some(uri) = self.requested_uri.as_deref() {
                             let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -2293,7 +2318,7 @@ impl Engine {
                     if self.game.as_ref().is_some_and(GameSession::linked)
                         && (code == 104 || code == 105) { return; }
                     if code == 104 {
-                        if !self.settings.rewind { return; }
+                        if !self.live_game_options().rewind { return; }
                         if pressed {
                             self.rewind_held = true;
                             self.rewind_accum = 0.0;
@@ -2334,7 +2359,7 @@ impl Engine {
                         AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
                         AUDIO_SPEED_PERMILLE.store(
                             if self.ff_latched || self.ff_held {
-                                i32::from(self.settings.ff_speed) * 1000
+                                i32::from(self.live_game_options().ff_speed) * 1000
                             } else { 1000 },
                             Ordering::Release);
                         self.hud.set_ff(match (self.ff_latched, self.ff_held) {
@@ -2832,16 +2857,17 @@ impl Engine {
             let rom_stem = self.shelves[self.active].carts
                 .get(self.shelves[self.active].index)
                 .map_or("", |cart| cart.stem.as_str());
+            let effective_settings = self.game_settings();
             let started = Instant::now();
             let resume_preference = NEXT_RESUME_MODE.swap(-1, Ordering::AcqRel);
             let wants_state = match resume_preference {
                 0 => false, 1 => true,
-                _ => self.settings.eject_save && !self.fresh_launch,
+                _ => effective_settings.eject_save && !self.fresh_launch,
             };
             match GameSession::open(Path::new(local), &core_file, &storage,
                 core, platform, wants_state,
-                rom_stem, self.settings.gb_palettes.then(|| self.settings.palette_name()),
-                self.settings.colour_correction,
+                rom_stem, effective_settings.gb_palettes.then(|| effective_settings.palette_name()),
+                effective_settings.colour_correction,
                 self.ra_service.as_ref()) {
                 Ok(session) => {
                     self.link_identity = if platform == Platform::Gba {
@@ -2967,6 +2993,16 @@ impl Engine {
             profile.apply_visual_and_gameplay(&mut effective, self.current_cart_platform());
         }
         effective
+    }
+    fn live_game_options(&self) -> LiveGameOptions {
+        LiveGameOptions::from_profile(&self.settings, self.game_emulation)
+    }
+    fn game_shader(&self) -> crate::settings::Shader {
+        if let Some(shader)=self.game_emulation.and_then(|p|p.screen_shader) {
+            return shader;
+        }
+        if self.active==0 { self.settings.shader_gba }
+        else { self.settings.shader_gb }
     }
 
     fn pause_screen_rows(&self) -> &'static [usize] {
@@ -3128,7 +3164,14 @@ impl Engine {
             }
         } else { return; }
         self.game_emulation = None;
-        self.game_accum = 0.0;
+        let globals=self.game_settings();
+        self.gpu.set_screen_effect(self.game_shader().effect());
+        if let Some(session)=self.game.as_mut() {
+            session.set_colour_correction(globals.colour_correction);
+            session.set_gb_palette_mode(globals.gb_palettes,globals.palette_name());
+        }
+        FF_AUDIO_ENABLED.store(globals.ff_sound,Ordering::Release);
+        self.reset_time_controls();
         AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
     fn persist_settings(&self) {
@@ -3990,6 +4033,8 @@ impl Engine {
             self.buttons |= ButtonMask::SELECT;
         }
         let profile = self.current_emulation();
+        let live=self.live_game_options(); // Copy, zero allocations on 60/120Hz callback
+        FF_AUDIO_ENABLED.store(live.ff_sound,Ordering::Release);
         // Android's frame callback changes GLSurfaceView renderMode only when
         // an active game explicitly selected DISPLAY SYNC. No engine work or
         // GL resource ownership ever moves away from the GL render thread.
@@ -4025,7 +4070,7 @@ impl Engine {
             } else {
                 // Original Slot offers 2/3/4/6x, independent of display Hz.
                 let fast = self.ff_held || self.ff_latched;
-                let multiplier = if fast { f64::from(self.settings.ff_speed) } else { 1.0 };
+                let multiplier = if fast { f64::from(live.ff_speed) } else { 1.0 };
                 let period = 1.0 / session.fps;
                 // RC4 Beta 5 restores Beta 3's less aggressive RESPONSIVE mode:
                 // never insert catch-up frames on a single display callback.
@@ -4054,7 +4099,7 @@ impl Engine {
                         self.game_accum, f64::from(dt), multiplier, period, fast, responsive);
                 }
                 let frame_limit = if mgba_cable_pacing { 2 }
-                    else if fast { usize::from(self.settings.ff_speed) * 4 }
+                    else if fast { usize::from(live.ff_speed) * 4 }
                     else if responsive { 1 } else { 4 };
                 // A13.1: revert the experimental second-frame budget.
                 // Real-world A13 KONKR/AVD tests suffered repeated Link
@@ -4064,8 +4109,8 @@ impl Engine {
                     // Cable lockstep must not consume emulation time while
                     // the remote frame has not arrived. NEVER invent a solo
                     // frame or perform speculative Run-Ahead on a held link.
-                    if !session.advance(self.buttons, self.settings.turbo,
-                        self.settings.rewind && !session.linked()) {
+                    if !session.advance(self.buttons, live.turbo,
+                        live.rewind && !session.linked()) {
                         // A waiting mGBA Cable frame is NOT an emulated frame.
                         // Retain at most two frames of debt; only real remote
                         // inputs can advance them later. Never preserve debt
@@ -4102,7 +4147,7 @@ impl Engine {
                     self.game_accum -= period;
                     stepped += 1;
                     let samples = session.take_audio();
-                    if (!fast || (self.settings.ff_sound &&
+                    if (!fast || (live.ff_sound &&
                         FF_AUDIO_SUPPORTED.load(Ordering::Acquire)))
                         && !samples.is_empty() {
                         let mut audio = AUDIO.lock().unwrap_or_else(|e| e.into_inner());
@@ -4116,7 +4161,7 @@ impl Engine {
                 && profile.run_ahead_frames > 0 {
                 // The normal frames and their audio are already consumed.
                 // Predicted video never advances the real saved/RA timeline.
-                session.prepare_runahead(self.buttons, self.settings.turbo,
+                session.prepare_runahead(self.buttons, live.turbo,
                     profile.run_ahead_frames);
             }
             if stepped > 0 && !self.rewind_held {
@@ -4136,7 +4181,7 @@ impl Engine {
                 }
                 self.gpu.upload_game(session.frame());
                 RUMBLE_STRENGTH.store(
-                    if self.settings.rumble && !self.rewind_held {
+                    if live.rumble && !self.rewind_held {
                         i32::from(session.rumble_strength())
                     } else { 0 },
                     Ordering::Release,
