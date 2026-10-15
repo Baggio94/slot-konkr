@@ -14,8 +14,8 @@ android {
         // Public Android candidate built from the consolidated Multiplayer Lab.
         // Same package ID and signing key: install -r must preserve user data.
         // U1 QA: monotonically higher than public RC1, normal package and signer.
-        versionCode = 91
-        versionName = "0.1.0-rc.2-u1visual"
+        versionCode = 92
+        versionName = "0.1.0-rc.2-u1pause"
         // One byte-identical APK on ARM64 KONKR and x86_64 Mac AVD.
         // Native libraries for BOTH ABIs are built/pinned by the same CI.
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }

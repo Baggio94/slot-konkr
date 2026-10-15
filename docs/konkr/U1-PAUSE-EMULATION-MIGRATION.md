@@ -27,3 +27,7 @@ This first pause-menu phase is intentionally narrow and is not a public release.
 Tests include action-based pause row model, conditional Multiplayer States
 hiding and exact menu back navigation. Device testing on Mac AVD and KONKR is
 still required. The public RC1 remains untouched.
+
+## Dedicated safe-to-update QA build
+
+The menus version is code **92**, versionName **0.1.0-rc.2-u1pause**. The CI artifact is `slot-konkr-0.1.0-rc2-u1pause-signed-apk` and is gated on the same pinned persistent signature and arm64-v8a/x86_64 native libraries as the public RC1. On physical KONKR or Mac AVD, update with `adb install -r`; NEVER uninstall or clear saves. The prior visual-only code91 remains downloadable from its earlier green workflow.
