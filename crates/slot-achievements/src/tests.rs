@@ -416,6 +416,39 @@ fn an_unopened_library_is_prepared_automatically_without_starting_sessions() {
 }
 
 #[test]
+fn sign_out_never_returns_ready_before_local_flush_and_both_workers_stop() {
+    let (controls, controls_rx) = mpsc::channel();
+    let (frames, _frame_rx) = mpsc::sync_channel(QUEUE_SIZE);
+    let (_, notices) = mpsc::channel();
+    let evaluator_stopped=Arc::new(AtomicBool::new(false));
+    let http_stopped=Arc::new(AtomicBool::new(false));
+    let http_shutdown=Arc::new(AtomicBool::new(false));
+    let flushed=Arc::new(AtomicBool::new(false));
+    let service=Service {
+        controls, frames, notices,
+        enabled:Arc::new(AtomicBool::new(true)),
+        current:Arc::new(AtomicU64::new(0)),
+        flushing:AtomicBool::new(false),
+        flushed:flushed.clone(),
+        status:Arc::new(Status::default()),
+        stopping:AtomicBool::new(false),
+        evaluator_stopped:evaluator_stopped.clone(),
+        http_shutdown:http_shutdown.clone(),
+        http_stopped:http_stopped.clone(),
+    };
+    assert!(!service.shutdown_ready());
+    assert!(!http_shutdown.load(Ordering::Acquire));
+    flushed.store(true,Ordering::Release);
+    assert!(!service.shutdown_ready());
+    assert!(http_shutdown.load(Ordering::Acquire));
+    assert!(matches!(controls_rx.try_recv(),Ok(Control::Shutdown)));
+    evaluator_stopped.store(true,Ordering::Release);
+    assert!(!service.shutdown_ready());
+    http_stopped.store(true,Ordering::Release);
+    assert!(service.shutdown_ready());
+}
+
+#[test]
 fn a_full_worker_queue_cannot_block_the_emulator() {
     let (controls, _controls_rx) = mpsc::channel();
     let (frames, _frames_rx) = mpsc::sync_channel(QUEUE_SIZE);
@@ -429,6 +462,10 @@ fn a_full_worker_queue_cannot_block_the_emulator() {
         flushing: AtomicBool::new(false),
         flushed: Arc::new(AtomicBool::new(false)),
         status: Arc::new(Status::default()),
+        stopping: AtomicBool::new(false),
+        evaluator_stopped: Arc::new(AtomicBool::new(false)),
+        http_shutdown: Arc::new(AtomicBool::new(false)),
+        http_stopped: Arc::new(AtomicBool::new(false)),
     };
     let mut core = service.wrap(Box::<TestCore>::default());
     let (done, completed) = mpsc::channel();
