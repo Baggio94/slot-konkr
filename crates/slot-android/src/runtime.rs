@@ -3008,8 +3008,9 @@ impl Engine {
     fn pause_screen_rows(&self) -> &'static [usize] {
         match self.current_cart_platform() {
             Platform::Gba => &[34,29],
-            Platform::Gb => &[35,29,36],
-            Platform::Gbc => &[35,29],
+            Platform::Gb if self.game.as_ref().is_some_and(
+                GameSession::can_change_gb_palette) => &[35,29,36],
+            Platform::Gb | Platform::Gbc => &[35,29],
         }
     }
     fn pause_screen_key(&self, row: usize) -> Option<usize> {
@@ -4682,6 +4683,26 @@ mod ui_feedback_tests {
         assert_eq!(link_legend_profile(LinkMenu::Unplug {
             role: LinkRow::Join, since: 500,
         }, true), H::None);
+    }
+
+    #[test]
+    fn paused_game_controls_inherit_globals_until_overridden() {
+        let mut settings=crate::settings::Settings::default();
+        settings.ff_speed=6;
+        settings.turbo=true; // KONKR original X/Y Buttons
+        let defaults=LiveGameOptions::from_profile(&settings,None);
+        assert_eq!(defaults.ff_speed,6);
+        assert!(defaults.turbo);
+        let mut profile=EmulationProfile::from_settings(&settings);
+        assert!(profile.change_visual_and_gameplay(&settings,Platform::Gba,7,true));
+        assert!(profile.change_visual_and_gameplay(&settings,Platform::Gba,4,true));
+        let scoped=LiveGameOptions::from_profile(&settings,Some(profile));
+        assert_ne!(scoped.ff_speed,defaults.ff_speed);
+        assert_eq!(scoped.turbo,!defaults.turbo);
+        assert_eq!(settings.ff_speed,6);
+        assert!(settings.turbo,"global X/Y Buttons must not be modified");
+        // A reset immediately restores the current Settings globals.
+        assert_eq!(LiveGameOptions::from_profile(&settings,None).ff_speed,6);
     }
 
     #[test]
