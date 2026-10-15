@@ -47,6 +47,17 @@ internal object RomLibrary {
     private data class Directory(val id: String, val depth: Int, val folder: String)
 
     /**
+     * Scope only if ALL three conventional top-level ROM folders are
+     * available. If any is absent, preserve the selected-tree recursive
+     * scan, so alternative user layouts never silently lose games.
+     */
+    internal fun scopedFolderNames(directories: Collection<String>): Set<String>? {
+        val names = directories.map { it.lowercase(Locale.ROOT) }.toSet()
+        val expected = setOf("gba", "gb", "gbc")
+        return expected.takeIf { names.containsAll(it) }
+    }
+
+    /**
      * Re-scan the selected tree, but avoid re-opening every ROM header when
      * its exact SAF URI, display name, size and last-modified time match our
      * previously persisted library index. Unknown provider metadata still
@@ -82,7 +93,41 @@ internal object RomLibrary {
         val rootId = DocumentsContract.getTreeDocumentId(treeUri)
         val pending = ArrayDeque<Directory>()
         val seen = HashSet<String>()
-        pending.add(Directory(rootId, 0, ""))
+        // One shallow SAF listing selects the three canonical systems.
+        // If any folder is absent, retain the legacy whole-tree walk.
+        val rootChildren = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, rootId)
+        val folderColumns = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE
+        )
+        val directFolders = LinkedHashMap<String, String>()
+        val topLevel = resolver.query(rootChildren, folderColumns, null, null, null)
+            ?: throw java.io.IOException("SAF root listing unavailable")
+        topLevel.use { cursor ->
+            val idIndex = cursor.getColumnIndexOrThrow(folderColumns[0])
+            val nameIndex = cursor.getColumnIndexOrThrow(folderColumns[1])
+            val mimeIndex = cursor.getColumnIndexOrThrow(folderColumns[2])
+            while (cursor.moveToNext()) {
+                if (cursor.getString(mimeIndex) != DocumentsContract.Document.MIME_TYPE_DIR)
+                    continue
+                val name = cursor.getString(nameIndex)?.lowercase(Locale.ROOT) ?: continue
+                val id = cursor.getString(idIndex) ?: continue
+                directFolders[name] = id
+            }
+        }
+        val scoped = scopedFolderNames(directFolders.keys)
+        if (scoped != null) {
+            // Retain the actual selected-tree URI as the SAF grant authority.
+            // Subdirectories are traversed recursively as before.
+            for (system in listOf("gba", "gb", "gbc")) {
+                pending.add(Directory(directFolders.getValue(system), 1, system))
+            }
+            android.util.Log.i("SlotKonkr", "ROM scan scope: gba+gb+gbc (skipping unrelated root folders)")
+        } else {
+            pending.add(Directory(rootId, 0, ""))
+            android.util.Log.i("SlotKonkr", "ROM scan scope: full selected tree (nonstandard layout)")
+        }
         val games = JSONArray()
         var directories = 0
         var truncated = false

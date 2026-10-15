@@ -106,7 +106,9 @@ class AppsActivity : Activity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(SlotUi.menuBackground)
-            setPadding(dp(22), dp(21), dp(22), dp(4))
+            setPadding(SlotUi.menuPixel(this@AppsActivity, 32),
+                SlotUi.menuPixel(this@AppsActivity, 33),
+                SlotUi.menuPixel(this@AppsActivity, 32), dp(4))
             isFocusableInTouchMode = true
         }
         setContentView(root)
@@ -116,7 +118,7 @@ class AppsActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         header.addView(SlotUi.menuHeading(this, "APPS"),
-            LinearLayout.LayoutParams(0, dp(54), 1f))
+            LinearLayout.LayoutParams(0, SlotUi.menuPixel(this, 24), 1f))
         homeButton = SlotUi.label(this, "Set as Home", 13f).apply {
             gravity = Gravity.CENTER
             setPadding(dp(15), dp(7), dp(15), dp(7))
@@ -125,10 +127,12 @@ class AppsActivity : Activity() {
             contentDescription = "Choose the default home launcher"
             setOnClickListener { chooseHome() }
         }
-        header.addView(homeButton, LinearLayout.LayoutParams(-2, dp(38)))
+        header.addView(homeButton, LinearLayout.LayoutParams(-2,
+            SlotUi.menuPixel(this, 24)))
         root.addView(header)
         // Match Slot's breathing room below the subdued Settings heading.
-        root.addView(View(this), LinearLayout.LayoutParams(-1, dp(10)))
+        root.addView(View(this), LinearLayout.LayoutParams(-1,
+            SlotUi.menuPixel(this, 26)))
 
         grid = GridView(this).apply {
             numColumns = COLUMNS
