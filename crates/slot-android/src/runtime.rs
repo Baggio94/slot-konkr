@@ -3920,10 +3920,7 @@ impl Engine {
                     SAMPLE_RATE.store(session.sample_rate, Ordering::Release);
                     self.game = Some(session);
                     self.game_accum = 0.0;
-                    let shader = if self.active == 0 {
-                        self.settings.shader_gba
-                    } else { self.settings.shader_gb };
-                    self.gpu.set_screen_effect(shader.effect());
+                    self.gpu.set_screen_effect(self.game_shader().effect());
                     // The exact Slot upstream geometry: GB/GBC 160x144
                     // is centred within the 240x160 libretro canvas.
                     let name = self.shelves[self.active].carts
