@@ -555,6 +555,7 @@ struct Engine {
     // A single account-scoped engine outlives individual games, allowing
     // queued offline awards to sync even after the cartridge is ejected.
     ra_service: Option<slot_achievements::Service>,
+    ra_signing_out: bool,
     buttons: u16,
     ff_held: bool,
     ff_latched: bool,
@@ -1039,6 +1040,7 @@ impl Engine {
             link_starter: None,
             link_art,
             ra_service: None,
+            ra_signing_out: false,
             buttons: 0,
             ff_held: false,
             ff_latched: false,
@@ -1808,12 +1810,18 @@ impl Engine {
                 }
             }
             Input::RaAccountConfigured => {
+                // A newly authenticated account may start a fresh worker.
+                self.ra_signing_out = false;
                 self.ensure_ra_service();
             }
             Input::RaPrefetchHash(hash, console) => {
-                self.ensure_ra_service();
-                if let Some(service) = self.ra_service.as_ref() {
-                    service.prefetch_rom_hash_for_console(&hash, console);
+                // In-flight Android SAF scans from the old account must not
+                // relaunch native networking during a hot logout.
+                if !self.ra_signing_out {
+                    self.ensure_ra_service();
+                    if let Some(service) = self.ra_service.as_ref() {
+                        service.prefetch_rom_hash_for_console(&hash, console);
+                    }
                 }
             }
             Input::RaNetworkAvailable => {
@@ -2963,7 +2971,7 @@ impl Engine {
     }
 
     fn ensure_ra_service(&mut self) {
-        if self.ra_service.is_some() { return; }
+        if self.ra_signing_out || self.ra_service.is_some() { return; }
         let root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
             .as_ref().map(|(root, _)| root.clone());
         if let Some(root) = root {
@@ -5833,6 +5841,27 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaFlushReady(
             Some(_) => 0,
             None => 1,
         }
+    })
+}
+
+/// Called only through GLSurfaceView.queueEvent AFTER the local flush barrier.
+/// The service cannot be dropped until BOTH its evaluator and HTTP worker
+/// acknowledge shutdown. Pending/badge/cache files remain untouched.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRaStopReady(
+    _env: *mut c_void, _activity: *mut c_void,
+) -> jboolean {
+    ENGINE.with(|holder| {
+        let mut guard = holder.borrow_mut();
+        let Some(engine) = guard.as_mut() else { return 1 };
+        if engine.game.is_some() || engine.pending_game.is_some() { return 0 }
+        engine.ra_signing_out = true;
+        let ready = engine.ra_service.as_ref()
+            .is_none_or(slot_achievements::Service::shutdown_ready);
+        if ready {
+            engine.ra_service.take();
+            1
+        } else { 0 }
     })
 }
 
