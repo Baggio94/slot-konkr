@@ -90,7 +90,7 @@ jobs:
       - name: Test KONKR 3:2 scaling
         run: cargo test -p slot-gfx --no-default-features --test konkr
       - name: Test original Slot v1.7 PNG and cartridge graphics
-        run: cargo test -p slot-ui --test cart_material --test upstream_v17_assets
+        run: cargo test -p slot-ui --test cart_material --test upstream_v17_assets --test native_resolution
       - name: Export authentic Slot keycap graphics for Android Apps
         run: |
           cargo run --locked -p slot-ui --example export_apps_legend -- android/app/src/main/assets/apps_controls

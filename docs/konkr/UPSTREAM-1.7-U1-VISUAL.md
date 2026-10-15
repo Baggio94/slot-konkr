@@ -30,3 +30,20 @@ Never replace an existing installed APK or clear app data to perform these tests
 ## QA artifact and version identity
 
 This branch has an isolated signed test version `0.1.0-rc.2-u1visual` (code 91), built by the KONKR Android CI on the feature branch. It uses the unchanged production app ID `fyi.slot.konkr` and **must pass the pinned persistent-signature SHA256 check** before upload. Both arm64-v8a and x86_64 native libraries must be present. The artifact is `slot-konkr-0.1.0-rc2-u1visual-signed-apk`, **not** a GitHub Release. Do not install any artifact from a failed CI run.
+
+## KONKR native-density texture pass
+
+The original v1.7.0 PNGs are unchanged on disk and in Git. Physical upload
+textures are resampled once via alpha-aware Mitchell cubic interpolation:
+GBA 480×283, GB/GBC 416×449, slot front/back 960×77, default wallpaper
+960×640. User-supplied HD wallpapers are decoded directly into 960×640,
+avoiding the former 720→960 double pass. All visual/animation coordinates
+remain official upstream 720×480 (KONKR framebuffer is native 960×640).
+GBA/GB/GBC libretro gameplay pixels and saves are unchanged.
+
+The original cart RGBA goes through the existing two asynchronous workers;
+the 42-entry texture cache policy remains, but VRAM per cart is about 1.78×
+larger. Measure memory, frame timing, and transparent-edge appearance on
+physical KONKR. No claim of invented extra detail in the original PNGs.
+CI checks sizes, uniform colours, transparent-alpha halos and untouched
+960×640 buffers in `slot-ui/tests/native_resolution.rs`.
