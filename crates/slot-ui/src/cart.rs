@@ -85,7 +85,7 @@ pub fn gb_shell_of(cart: &Cart) -> Option<GbShell> {
         Platform::Gb | Platform::Gbc => Some(match cart.shell.map(|c| c.outline) {
             Some(Outline::Notched) => GbShell::Notched,
             Some(Outline::Rounded) => GbShell::Rounded,
-            _ => match slot_store::gb::cached_class(&cart.rom) {
+            _ => match slot_store::gb::class(&cart.rom) {
                 Class::ColourOnly => GbShell::Rounded,
                 Class::Original | Class::DualMode => GbShell::Notched,
             },
