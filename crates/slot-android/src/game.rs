@@ -980,6 +980,14 @@ impl GameSession {
         }
     }
 
+    /// Per-game GB palette enable/disable is applied through mGBA's live core
+    /// options, without restarting libretro or touching ROM SRAM/RTC.
+    pub fn set_gb_palette_mode(&mut self, enabled: bool, name: &str) {
+        if !self.palette_live { return; }
+        self.core.set_option("mgba_gb_colors_preset", if enabled { "0" } else { "1" });
+        if enabled { self.core.set_option("mgba_gb_colors", name); }
+    }
+
     pub fn set_colour_correction(&mut self, enabled: bool) {
         let (key, value) = match self.core_kind {
             Core::Mgba => ("mgba_color_correction",
