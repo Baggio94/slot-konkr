@@ -1,5 +1,7 @@
 mod art;
 pub mod bitmaps;
+mod native_assets;
+pub use native_assets::{native_rgba, NATIVE_W, NATIVE_H};
 pub use art::cover;
 mod backdrop;
 mod barcode;
