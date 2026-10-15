@@ -5,17 +5,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RomLibraryCacheTest {
-    @Test fun canonicalRomFoldersAreOnlyScopedWhenAllThreeExist() {
-        val expect = setOf("gba", "gb", "gbc")
-        org.junit.Assert.assertEquals(expect, RomLibrary.scopedFolderNames(
-            listOf("GBA", "gb", "GbC", "PS2", "other")))
-        // Missing a platform must not hide other supported ROMs in custom layouts.
-        org.junit.Assert.assertEquals(null, RomLibrary.scopedFolderNames(
-            listOf("gba", "gb", "other")))
-        org.junit.Assert.assertEquals(null, RomLibrary.scopedFolderNames(
-            listOf("gba", "gbc")))
-        org.junit.Assert.assertEquals(null, RomLibrary.scopedFolderNames(
-            listOf("ROMs", "Nintendo")))
+    @Test fun scanAcceptsSupportedExtensionsIndependentOfParentFolder() {
+        for (ext in listOf("gba", "gb", "gbc", "GBA", "GBC")) {
+            assertTrue(RomLibrary.isSupportedRomExtension(ext))
+        }
+        for (ext in listOf("ps2", "psp", "zip", "7z", "sav", "")) {
+            assertFalse(RomLibrary.isSupportedRomExtension(ext))
+        }
     }
 
     @Test fun silentRefreshComparesActualChangesWithoutDependingOnIterationOrder() {

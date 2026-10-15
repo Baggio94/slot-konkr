@@ -37,21 +37,22 @@ internal class RaPanelDialog(
         activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen
     ) {
         override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-            if (event.keyCode == KeyEvent.KEYCODE_BUTTON_B) {
+            val keyCode = SlotEmulatorKeys.dialogKeyCode(event.keyCode)
+            if (keyCode == KeyEvent.KEYCODE_BUTTON_B) {
                 if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) dismiss()
                 return true
             }
-            when (event.keyCode) {
+            when (keyCode) {
                 KeyEvent.KEYCODE_BUTTON_START, KeyEvent.KEYCODE_BUTTON_X -> {
                     if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                        if (event.keyCode == KeyEvent.KEYCODE_BUTTON_START) onRefresh()
+                        if (keyCode == KeyEvent.KEYCODE_BUTTON_START) onRefresh()
                         else onSignOut()
                     }
                     return true
                 }
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
                     if (event.action == KeyEvent.ACTION_DOWN) {
-                        val dy = dp(if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 58 else -58)
+                        val dy = dp(if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 58 else -58)
                         scroll.smoothScrollBy(0, dy)
                     }
                     return true

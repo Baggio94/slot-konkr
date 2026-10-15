@@ -460,7 +460,7 @@ class AppsActivity : Activity() {
         when (mapped) {
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (event.action == KeyEvent.ACTION_DOWN) navigate(event.keyCode)
+                if (event.action == KeyEvent.ACTION_DOWN) navigate(mapped)
                 return true
             }
             KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER,

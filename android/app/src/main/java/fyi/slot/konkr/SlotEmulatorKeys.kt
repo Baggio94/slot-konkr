@@ -22,6 +22,18 @@ internal object SlotEmulatorKeys {
 
     fun translate(code: Int): Int? = if (!enabled()) null else mapping(code)
 
+    /**
+     * Dialogs and secondary activities do not pass through MainActivity's
+     * keyboard adapter. Translate Mac keys only while the user is NOT editing
+     * a text field, so Z/X remain typeable in RA passwords and manual IP forms.
+     * Hardware KONKR input is untouched.
+     */
+    fun dialogKeyCode(code: Int, editingText: Boolean = false): Int =
+        mappedDialogKeyCode(code, editingText, enabled())
+
+    internal fun mappedDialogKeyCode(code: Int, editingText: Boolean, emulator: Boolean): Int =
+        if (editingText || !emulator) code else mapping(code) ?: code
+
     /** Pure mapping so it can be covered by JVM unit tests. */
     internal fun mapping(code: Int): Int? = when (code) {
         KeyEvent.KEYCODE_Z -> KeyEvent.KEYCODE_BUTTON_A

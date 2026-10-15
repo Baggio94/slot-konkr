@@ -11,10 +11,10 @@ android {
         applicationId = "fyi.slot.konkr"
         minSdk = 31
         targetSdk = 32
-        // Isolated Multiplayer Lab preview: never confuse with the physical Beta5
-        // or the separate Beta6 diagnostic APK. No install without save backup.
-        versionCode = 89
-        versionName = "0.1.0-rc5-mlab-a14r2"
+        // Public Android candidate built from the consolidated Multiplayer Lab.
+        // Same package ID and signing key: install -r must preserve user data.
+        versionCode = 90
+        versionName = "0.1.0-rc.1"
         // One byte-identical APK on ARM64 KONKR and x86_64 Mac AVD.
         // Native libraries for BOTH ABIs are built/pinned by the same CI.
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }

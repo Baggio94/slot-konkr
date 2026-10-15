@@ -14,6 +14,21 @@ class SlotEmulatorKeysTest {
         assertEquals(KeyEvent.KEYCODE_BUTTON_Y, SlotEmulatorKeys.mapping(KeyEvent.KEYCODE_S))
     }
 
+    @Test fun modalKeyboardNeverSwallowsTypedCredentialsOrIpText() {
+        assertEquals(KeyEvent.KEYCODE_BUTTON_A,
+            SlotEmulatorKeys.mappedDialogKeyCode(KeyEvent.KEYCODE_Z, false, true))
+        assertEquals(KeyEvent.KEYCODE_BUTTON_B,
+            SlotEmulatorKeys.mappedDialogKeyCode(KeyEvent.KEYCODE_X, false, true))
+        assertEquals(KeyEvent.KEYCODE_Z,
+            SlotEmulatorKeys.mappedDialogKeyCode(KeyEvent.KEYCODE_Z, true, true))
+        assertEquals(KeyEvent.KEYCODE_X,
+            SlotEmulatorKeys.mappedDialogKeyCode(KeyEvent.KEYCODE_X, true, true))
+        assertEquals(KeyEvent.KEYCODE_Z,
+            SlotEmulatorKeys.mappedDialogKeyCode(KeyEvent.KEYCODE_Z, false, false))
+        assertEquals(KeyEvent.KEYCODE_DPAD_UP,
+            SlotEmulatorKeys.mappedDialogKeyCode(KeyEvent.KEYCODE_DPAD_UP, false, true))
+    }
+
     @Test fun menuAndNavigationKeepTheirDocumentedKeys() {
         assertEquals(KeyEvent.KEYCODE_BUTTON_START, SlotEmulatorKeys.mapping(KeyEvent.KEYCODE_ENTER))
         assertEquals(KeyEvent.KEYCODE_BUTTON_SELECT, SlotEmulatorKeys.mapping(KeyEvent.KEYCODE_SPACE))
