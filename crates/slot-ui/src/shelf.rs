@@ -455,3 +455,54 @@ fn shrink(offset: f32) -> f32 {
 fn recede_alpha(face_alpha: f32) -> f32 {
     (face_alpha / SIDE_ALPHA).clamp(0.0, 1.0)
 }
+
+#[cfg(test)]
+mod konkr_navigation_tests {
+    use super::*;
+
+    fn cart(name: &str) -> Cart {
+        Cart {
+            platform: slot_store::Platform::Gba,
+            stem: name.to_string(),
+            title: String::new(), code: String::new(),
+            rom: std::path::PathBuf::from(format!("{name}.gba")),
+            label: None, shell: None,
+        }
+    }
+
+    #[test]
+    fn vertical_letter_jump_repeats_on_native_clock_and_stops_on_release() {
+        let mut shelf = Shelf::new(vec![
+            cart("Apple"), cart("Apricot"), cart("Banana"), cart("Cherry"),
+        ]);
+        shelf.hold_down(0);
+        assert_eq!(shelf.carts[shelf.index].stem, "Banana");
+        assert!(!shelf.tick(399));
+        assert_eq!(shelf.carts[shelf.index].stem, "Banana");
+        assert!(shelf.tick(400));
+        assert_eq!(shelf.carts[shelf.index].stem, "Cherry");
+        shelf.release_down();
+        assert!(!shelf.tick(10_000));
+        assert_eq!(shelf.carts[shelf.index].stem, "Cherry");
+
+        shelf.hold_up(10_000);
+        assert_eq!(shelf.carts[shelf.index].stem, "Banana");
+        shelf.release_hold();
+        assert!(!shelf.tick(20_000));
+        assert_eq!(shelf.carts[shelf.index].stem, "Banana");
+    }
+
+    #[test]
+    fn held_letter_switch_cancels_old_horizontal_hold() {
+        let mut shelf = Shelf::new(vec![
+            cart("Apple"), cart("Banana"), cart("Cherry"),
+        ]);
+        shelf.hold_right(0);
+        assert_eq!(shelf.carts[shelf.index].stem, "Banana");
+        shelf.hold_down(50);
+        assert_eq!(shelf.carts[shelf.index].stem, "Cherry");
+        assert!(!shelf.tick(449));
+        assert!(shelf.tick(450));
+        assert_eq!(shelf.carts[shelf.index].stem, "Apple");
+    }
+}
