@@ -341,10 +341,16 @@ jobs:
           echo "$CERT" | grep -Fi '4f42b8f0ac98f6a0102804ab51020ea0e7e2de7685c6ce09400a744de0b0fa2f'
           shasum -a 256 "$APK"
       - uses: actions/upload-artifact@v4
-        if: startsWith(github.ref, 'refs/heads/release/')
+        if: startsWith(github.ref, 'refs/heads/release/') && !startsWith(github.ref, 'refs/heads/release/konkr-android-')
         with:
           name: slot-konkr-rc4-release-apk
           path: android/app/build/outputs/apk/release/app-release.apk
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/heads/release/konkr-android-')
+        with:
+          name: slot-konkr-0.1.0-rc1-signed-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
 
       - name: Verify signed RC5 beta APK for RC4 install-over tests
         if: github.ref == 'refs/heads/integration/konkr-rc4-next'
