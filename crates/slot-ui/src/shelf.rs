@@ -372,6 +372,11 @@ impl Shelf {
         (OUT_W as f32 / 2.0 + offset * w - w * scale / 2.0, scale)
     }
 
+    /// True while spring-driven shelf scrolling is visibly in flight.
+    pub fn is_scrolling(&self) -> bool {
+        (self.scroll_target()-self.scroll).abs()>0.03 || self.vel.abs()>0.05
+    }
+
     pub fn update(&mut self, dt: f32) {
         let accel = -2.0 * OMEGA * self.vel - OMEGA * OMEGA * (self.scroll - self.scroll_target());
         self.vel += accel * dt;

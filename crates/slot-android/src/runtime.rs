@@ -182,7 +182,10 @@ static RA_STATUS: Mutex<Option<String>> = Mutex::new(None);
 const RA_NOTICE_LIMIT: usize = 8;
 // Up to 96 prepared cartridge faces (~70 MiB worst-case native RGBA artwork).
 // KONKR has 4 GiB shared RAM; the LRU still reuses existing GLES textures.
-const CART_TEXTURE_CACHE_CAPACITY: usize = 96;
+const CART_TEXTURE_CACHE_CAPACITY: usize = 160;
+const CART_IDLE_PREFETCH_CAP: usize = 155;
+const CART_IDLE_GRACE: Duration = Duration::from_millis(400);
+const CART_GPU_UPLOAD_BUDGET: Duration = Duration::from_millis(2);
 
 fn ra_notice_payload(title: &str, detail: &str, earned: bool, badge: Option<&Path>) -> String {
     let clean = |value: &str, limit: usize| -> String {
@@ -540,6 +543,7 @@ struct Engine {
     library_version: u64,
     emulator_key_latch: EmulatorKeyLatch,
     texture_cache: VecDeque<(usize, usize, slot_gfx::TexId)>,
+    last_cart_navigation: Instant,
     cart_render: CartRender,
     clear_material: Option<ClearMaterial>,
     game: Option<GameSession>,
@@ -1033,7 +1037,8 @@ impl Engine {
             library_version,
             emulator_key_latch: EmulatorKeyLatch::default(),
             texture_cache: VecDeque::new(),
-            cart_render: CartRender::start()?,
+            last_cart_navigation: now,
+            cart_render: CartRender::start(visuals_root.as_deref())?,
             clear_material: None,
             game: None,
             pending_game: None,
@@ -2813,6 +2818,7 @@ impl Engine {
                                 self.progress = 0.0;
                                 self.letter_shown_at = None;
                                 self.platform_shown_at = Some(Instant::now());
+                                self.last_cart_navigation = Instant::now();
                             }
                             return;
                         }
@@ -2858,6 +2864,9 @@ impl Engine {
                     return;
                 }
                 let ms = self.born.elapsed().as_millis() as u64;
+                if !self.inserted && pressed && matches!(code,19|20|21|22) {
+                    self.last_cart_navigation=Instant::now();
+                }
                 let shelf = &mut self.shelves[self.active];
                 let before = shelf.index;
                 match (code, pressed) {
@@ -2902,7 +2911,15 @@ impl Engine {
     // separation on Android: no slow PNG decode/embossing on the GLES thread.
     // GPU texture uploads stay on their GL owner and are bounded per frame.
     fn prepare_visible(&mut self) {
-        for _ in 0..2 {
+        // During scrolling cap uploads to one per frame and never work on
+        // background disk tasks on the OpenGL thread.
+        let quiet=self.last_cart_navigation.elapsed()>=CART_IDLE_GRACE
+            && !self.shelves[self.active].is_scrolling()
+            && matches!(self.overlay,ShelfOverlay::None);
+        let limit=if quiet {2} else {1};
+        let upload_started=Instant::now();
+        for _ in 0..limit {
+            if upload_started.elapsed()>=CART_GPU_UPLOAD_BUDGET {break}
             let Some(((shelf_id,index),face,layers))=self.cart_render.ready() else {break};
             let Some(shelf)=self.shelves.get(shelf_id) else {continue};
             if index>=shelf.carts.len(){continue}
@@ -2976,9 +2993,23 @@ impl Engine {
                 priority.push((sid,shelf.index));
             }
         }
+        if quiet {
+            // Fill the 160-entry LRU while idle, not while the D-pad is
+            // moving. Active system first; other systems around their focus.
+            for (sid,shelf) in self.shelves.iter().enumerate() {
+                let radius=if sid==shelf_id {80} else {16};
+                for index in shelf.around(radius) {
+                    if priority.len()>=CART_IDLE_PREFETCH_CAP {break}
+                    if !priority.contains(&(sid,index)) {priority.push((sid,index));}
+                }
+                if priority.len()>=CART_IDLE_PREFETCH_CAP {break}
+            }
+        }
         self.cart_render.prioritize(&priority);
         for (sid, index) in priority {
-            let wants_material=sid==self.active && index==selected &&
+            // Clear-cart composite is expensive: delay its three material
+            // uploads until the carousel has settled.
+            let wants_material=quiet && sid==self.active && index==selected &&
                 self.shelves[sid].carts.get(index).is_some_and(slot_ui::is_clear) &&
                 self.clear_material.map(|m|m.key)!=Some((sid,index));
             if self.shelves[sid].face(index).is_some() {

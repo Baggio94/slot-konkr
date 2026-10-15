@@ -2,6 +2,8 @@
 //! Like upstream Slot's CartFaces, CPU raster happens in bounded workers,
 //! while texture creation and uploads remain on the GLES owner thread.
 use std::collections::{HashSet, VecDeque};
+use std::path::Path;
+use crate::cart_disk_cache::DiskCache;
 use std::sync::{mpsc::{self, Receiver, TryRecvError}, Arc, Condvar, Mutex};
 use std::thread;
 
@@ -35,12 +37,32 @@ pub(crate) struct CartRender {
 }
 
 impl CartRender {
-    pub(crate) fn start() -> Result<Self, String> {
+    pub(crate) fn start(cache_root: Option<&Path>) -> Result<Self, String> {
         let (ready, finished) = mpsc::channel::<ResultFace>();
         let work = Arc::new((Mutex::new(WorkQueue::default()), Condvar::new()));
+        // Disk writes and LZ4 compression never block the GL owner or its two
+        // raster workers. A bounded channel drops only optional cache writes.
+        let disk_cache = cache_root.map(|root|Arc::new(DiskCache::new(root)));
+        let writer = disk_cache.as_ref().and_then(|cache| {
+            let (tx,rx)=mpsc::sync_channel::<(String,CartFace)>(8);
+            let cache=Arc::clone(cache);
+            thread::Builder::new().name("slot-kpa-cart-disk".into())
+                .spawn(move || {
+                    cache.trim();
+                    let mut written=0usize;
+                    while let Ok((key,face))=rx.recv() {
+                        if cache.write(&key,&face).is_ok() {
+                            written+=1;
+                            if written%16==0 {cache.trim();}
+                        }
+                    }
+                }).ok().map(|_|tx)
+        });
         for index in 0..2 {
             let source = Arc::clone(&work);
             let sink = ready.clone();
+            let disk = disk_cache.clone();
+            let writer = writer.clone();
             thread::Builder::new()
                 .name(format!("slot-kpa-cart-{index}"))
                 .spawn(move || {
@@ -57,10 +79,21 @@ impl CartRender {
                         let Some((key, cart, include_material)) = job else { break };
                         // No PNG decoding occurs on the GLES thread. At most
                         // two previously started jobs can become obsolete.
-                        let original = cart_face_with_material(&cart, None);
-                        let (rgba, w, h) = slot_ui::native_rgba(
-                            &original.rgba, original.w, original.h);
-                        let pixels = CartFace { rgba, w, h };
+                        // An unchanged cartridge can be restored from LZ4 on
+                        // either raster worker, avoiding PNG/emboss/upscale on
+                        // subsequent launches; never access disk on the GL thread.
+                        let disk_key=disk.as_ref().map(|cache|cache.key(&cart));
+                        let cached=match (disk.as_ref(),disk_key.as_deref()) {
+                            (Some(cache),Some(key)) => cache.read(key),
+                            _ => None,
+                        };
+                        let needs_write=cached.is_none();
+                        let pixels=cached.unwrap_or_else(|| {
+                            let original=cart_face_with_material(&cart,None);
+                            let (rgba,w,h)=slot_ui::native_rgba(
+                                &original.rgba,original.w,original.h);
+                            CartFace {rgba,w,h}
+                        });
                         let layers = if include_material && is_clear(&cart) {
                             let original = [
                                 cart_interior(&cart),
@@ -72,7 +105,19 @@ impl CartRender {
                                 CartFace{rgba,w,h}
                             }))
                         } else {None};
+                        // Clone only on cache miss. Hand the face to the GL
+                        // uploader before best-effort persistence is queued.
+                        let save=if needs_write {
+                            writer.as_ref().zip(disk_key).map(|(writer,name)| {
+                                (writer.clone(),name,CartFace {
+                                    rgba:pixels.rgba.clone(),w:pixels.w,h:pixels.h
+                                })
+                            })
+                        } else {None};
                         if sink.send((key,pixels,layers)).is_err() { break }
+                        if let Some((writer,name,face))=save {
+                            let _=writer.try_send((name,face));
+                        }
                     }
                 })
                 .map_err(|e| format!("Cannot start cartridge renderer: {e}"))?;
@@ -112,6 +157,9 @@ impl CartRender {
             keep
         });
         for work in dropped { self.pending.remove(&work); }
+        // In-flight obsolete results can no longer clog GPU uploads after a
+        // rapid system switch. The workers may finish, but ready() discards it.
+        self.pending.retain(|(key,_)|desired.contains(key));
         queue.jobs.make_contiguous().sort_by_key(|job| {
             desired.iter().position(|key|*key==job.0.0).unwrap_or(usize::MAX)
         });
@@ -120,10 +168,10 @@ impl CartRender {
     pub(crate) fn request(&mut self, key: Key, cart: &Cart, include_material: bool) {
         let Some(epoch) = self.epochs.get(key.0).copied() else { return };
         let work = (key, epoch);
-        if self.pending.len() >= 8 || self.pending.contains(&work) { return }
+        if self.pending.len() >= 16 || self.pending.contains(&work) { return }
         let (lock, notify) = &*self.work;
         let mut queue=lock.lock().unwrap_or_else(|e|e.into_inner());
-        if queue.closing || queue.jobs.len() >= 8 { return }
+        if queue.closing || queue.jobs.len() >= 16 { return }
         let rank=self.wanted.iter().position(|item|*item==key).unwrap_or(usize::MAX);
         let at=queue.jobs.iter().position(|item| {
             self.wanted.iter().position(|k|*k==item.0.0)

@@ -14,8 +14,8 @@ android {
         // Public Android candidate built from the consolidated Multiplayer Lab.
         // Same package ID and signing key: install -r must preserve user data.
         // QA code101: ten GBA RetroArch shaders; no data/schema reset.
-        versionCode = 101
-        versionName = "0.1.0-rc.2-stabilization-qa101"
+        versionCode = 102
+        versionName = "0.1.0-rc.2-stabilization-qa102"
         // One byte-identical APK on ARM64 KONKR and x86_64 Mac AVD.
         // Native libraries for BOTH ABIs are built/pinned by the same CI.
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
