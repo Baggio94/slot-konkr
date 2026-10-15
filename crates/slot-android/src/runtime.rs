@@ -369,6 +369,7 @@ enum ShelfOverlay {
     GameplaySettings { row: usize },
     EmulationSettings { row: usize },
     InterfaceSettings { row: usize },
+    GeneralSettings { row: usize },
     GameEmulationSettings { row: usize },
     About,
     Scraping,
@@ -379,7 +380,7 @@ enum ShelfOverlay {
     States,
 }
 
-const MENU_TEXT: [&str; 81] = [
+const MENU_TEXT: [&str; 86] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -461,6 +462,11 @@ const MENU_TEXT: [&str; 81] = [
     "Eject to play solo",               // 78
     "Share mGBA/gpSP Saves",            // 79
     "",                                  // 80 retired: value rendered at right
+    "General",                            // 81, official Slot v1.7 menu
+    "GENERAL",                            // 82
+    "Wallpaper",                          // 83
+    "Wallpaper Tint",                     // 84
+    "Theme",                              // 85
 ];
 
 struct Engine {
@@ -525,6 +531,7 @@ struct Engine {
     video_mode: VideoMode,
     wallpaper_texture: Option<slot_gfx::TexId>,
     wallpaper_personal: bool,
+    wallpaper_name_face: Option<(slot_gfx::TexId, u32, u32)>,
     /// Live rear/front v1.7.0 slot textures. Always draw in proper depth order.
     slot_faces: Option<(slot_gfx::TexId, slot_gfx::TexId)>,
     custom_wallpaper_present: bool,
@@ -791,12 +798,23 @@ impl Engine {
         let setting_values = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
-                              "DISPLAY SYNC", "TURBO", "A/B"]
+                              "DISPLAY SYNC", "TURBO", "A/B",
+                              "None", "Random", "Default", "DEFAULT BLUR",
+                              "Dark", "Light", "Low", "Medium", "High", "Custom"]
             .into_iter().map(|value| {
                 let face = quick_value_face(value, true);
                 let tex = gpu.create_texture(face.w, face.h, &face.rgba);
                 (tex, face.w, face.h)
             }).collect();
+        let wallpaper_name_face = match &settings.wallpaper {
+            crate::settings::WallpaperPick::File(_) => {
+                let name = settings.wallpaper.label();
+                let short: String = name.chars().take(18).collect();
+                let face = quick_value_face(&short, true);
+                Some((gpu.create_texture(face.w, face.h, &face.rgba), face.w, face.h))
+            }
+            _ => None,
+        };
         let emulation_core_labels = Core::ALL.map(|core| {
             let face = quick_value_face(core.text(), true);
             (gpu.create_texture(face.w, face.h, &face.rgba), face.w, face.h)
@@ -929,6 +947,7 @@ impl Engine {
             video_mode: VideoMode::Actual,
             wallpaper_texture,
             wallpaper_personal,
+            wallpaper_name_face,
             slot_faces,
             custom_wallpaper_present,
             setting_values,
@@ -1684,6 +1703,7 @@ impl Engine {
                         }
                     }
                     self.reload_wallpaper(Some(&root));
+                    self.refresh_wallpaper_name();
                 }
             }
             Input::ReloadCartLabel { uri } => {
@@ -2333,16 +2353,36 @@ impl Engine {
                             },
                             ShelfOverlay::Settings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::Settings {
-                                    row: move_menu_row(row, code, 4),
+                                    row: move_menu_row(row, code, 5),
                                 },
                                 96 => match row {
                                     0 => self.overlay = ShelfOverlay::ScreenSettings { row: 0 },
                                     1 => self.overlay = ShelfOverlay::GameplaySettings { row: 0 },
                                     2 => self.overlay = ShelfOverlay::EmulationSettings { row: 0 },
                                     3 => self.overlay = ShelfOverlay::InterfaceSettings { row: 0 },
+                                    4 => self.overlay = ShelfOverlay::GeneralSettings { row: 0 },
                                     _ => return,
                                 },
                                 97 => self.overlay = ShelfOverlay::Menu { row: 4 },
+                                108 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
+                            ShelfOverlay::GeneralSettings { row } => match code {
+                                19 | 20 => self.overlay = ShelfOverlay::GeneralSettings {
+                                    row: move_menu_row(row, code,
+                                        if self.show_general_tint() { 3 } else { 2 }),
+                                },
+                                21 | 22 | 96 => {
+                                    let right = code != 21;
+                                    if row == 0 {
+                                        self.cycle_wallpaper(right);
+                                    } else if row == 1 && self.show_general_tint() {
+                                        self.cycle_wallpaper_tint(right);
+                                    } else {
+                                        self.cycle_appearance();
+                                    }
+                                },
+                                97 => self.overlay = ShelfOverlay::Settings { row: 4 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -2931,13 +2971,33 @@ impl Engine {
         // but never draws it, avoiding repeated GL allocations on toggling.
     }
 
+    fn refresh_wallpaper_name(&mut self) {
+        let crate::settings::WallpaperPick::File(_) = &self.settings.wallpaper
+            else { return };
+        let name = self.settings.wallpaper.label();
+        let short: String = name.chars().take(18).collect();
+        let face = quick_value_face(&short, true);
+        self.wallpaper_name_face = Some(
+            if let Some((tex, _, _)) = self.wallpaper_name_face {
+                self.gpu.update_texture(tex, face.w, face.h, &face.rgba);
+                (tex, face.w, face.h)
+            } else {
+                (self.gpu.create_texture(face.w, face.h, &face.rgba), face.w, face.h)
+            });
+    }
+
     fn cycle_wallpaper(&mut self, right: bool) {
         let root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
             .as_ref().map(|(root,_)|root.clone());
         let Some(root) = root.as_deref() else { return };
         self.settings.wallpaper = self.settings.wallpaper.step(root, right);
         self.reload_wallpaper(Some(root));
+        self.refresh_wallpaper_name();
         self.persist_settings();
+    }
+
+    fn show_general_tint(&self) -> bool {
+        self.wallpaper_personal
     }
 
     fn cycle_wallpaper_tint(&mut self, right: bool) {
@@ -2991,6 +3051,21 @@ impl Engine {
             13 => if self.settings.show_wifi { 4 } else { 5 },
             14 => if self.settings.show_bluetooth { 4 } else { 5 },
             15 => if self.settings.show_integrations { 4 } else { 5 },
+            16 => match self.settings.wallpaper {
+                crate::settings::WallpaperPick::None => 17,
+                crate::settings::WallpaperPick::Random => 18,
+                crate::settings::WallpaperPick::Default => 19,
+                crate::settings::WallpaperPick::Blur => 20,
+                crate::settings::WallpaperPick::File(_) => 26,
+            },
+            17 => match self.settings.wallpaper_tint {
+                crate::settings::WallpaperTint::Off => 5,
+                crate::settings::WallpaperTint::Low => 23,
+                crate::settings::WallpaperTint::Medium => 24,
+                crate::settings::WallpaperTint::High => 25,
+            },
+            18 => if self.settings.appearance == crate::settings::Appearance::Light
+                { 22 } else { 21 },
             _ => 5,
         }
     }
@@ -3020,8 +3095,14 @@ impl Engine {
     fn draw_setting_values(&self, row: usize, keys: &[usize], out: &mut Vec<Draw>) {
         let top = settings_row_top(keys.len());
         for (index, key) in keys.iter().copied().enumerate() {
-            if key > 15 { continue; } // Reset-to-global has no value.
-            let (tex, width, height) = self.setting_values[self.setting_value(key)];
+            if key > 18 { continue; } // Reset-to-global has no value.
+            let (tex, width, height) =
+                if key == 16 && matches!(self.settings.wallpaper,
+                    crate::settings::WallpaperPick::File(_)) {
+                    self.wallpaper_name_face.unwrap_or(self.setting_values[26])
+                } else {
+                    self.setting_values[self.setting_value(key)]
+                };
             let y = top + index as f32 * QUICK_PITCH + 8.0;
             let scale = 0.79;
             let w = width as f32 * scale;
@@ -3160,7 +3241,16 @@ impl Engine {
                 self.draw_library_share_value(row, out);
             }
             ShelfOverlay::Settings { row } => {
-                self.draw_original_style_menu(26, &[32, 33, 49, 58], row, out);
+                self.draw_original_style_menu(26, &[32, 33, 49, 58, 81], row, out);
+            }
+            ShelfOverlay::GeneralSettings { row } => {
+                if self.show_general_tint() {
+                    self.draw_original_style_menu(82, &[83, 84, 85], row, out);
+                    self.draw_setting_values(row, &[16, 17, 18], out);
+                } else {
+                    self.draw_original_style_menu(82, &[83, 85], row, out);
+                    self.draw_setting_values(row, &[16, 18], out);
+                }
             }
             ShelfOverlay::InterfaceSettings { row } => {
                 if self.custom_wallpaper_present {
@@ -3469,7 +3559,9 @@ impl Engine {
             ShelfOverlay::Library { row } => (2u8, row, 6usize),
             ShelfOverlay::GameMenu { row } => (3u8, row, 4usize),
             ShelfOverlay::Multiplayer => (11u8, 0, 0usize),
-            ShelfOverlay::Settings { row } => (4u8, row, 4usize),
+            ShelfOverlay::Settings { row } => (4u8, row, 5usize),
+            ShelfOverlay::GeneralSettings { row } =>
+                (12u8, row, if self.show_general_tint() { 3 } else { 2 }),
             ShelfOverlay::InterfaceSettings { row } => (10u8, row, if self.custom_wallpaper_present { 5 } else { 4 }),
             ShelfOverlay::EmulationSettings { row } => (8u8, row, 3usize),
             ShelfOverlay::GameEmulationSettings { row } => (9u8, row, 4usize),
