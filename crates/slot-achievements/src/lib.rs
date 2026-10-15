@@ -147,7 +147,9 @@ impl Service {
         let worker_enabled = enabled.clone();
         let evaluator_stopped = Arc::new(AtomicBool::new(false));
         let http_shutdown = Arc::new(AtomicBool::new(false));
-        let http_stopped = Arc::new(AtomicBool::new(false));
+        // No HTTP thread exists until initialization reaches network startup.
+        // Early configuration failure must not strand the shutdown barrier.
+        let http_stopped = Arc::new(AtomicBool::new(true));
         let eval_done = evaluator_stopped.clone();
         let network_stop = http_shutdown.clone();
         let network_done = http_stopped.clone();
@@ -343,6 +345,9 @@ fn run(
     let network_stop = http_shutdown.clone();
     let network_done = http_stopped.clone();
     status.set(SyncStatus::Syncing);
+    // The pending HTTPS worker must explicitly acknowledge exit before the
+    // old account's token can be deleted.
+    http_stopped.store(false, Ordering::Release);
     if std::thread::Builder::new()
         .name("slot-ra-http".into())
         .spawn(move || {
