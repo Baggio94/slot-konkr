@@ -3458,16 +3458,20 @@ impl Engine {
 
     fn refresh_selected_title(&mut self) {
         if !self.settings.show_titles || self.game.is_some() {return;}
+        // Original v1.7 shelf Game Titles use label_text() (cleaned
+        // filename), NOT the GBA internal ROM header. Reuse the same value
+        // and Slot's native fit/ellipsis, without arbitrary 39-char clipping.
         let name=self.shelves.get(self.active)
             .and_then(|s|s.carts.get(s.index))
-            .map(|cart|if cart.title.is_empty(){cart.stem.as_str()}else{cart.title.as_str()})
-            .unwrap_or("");
+            .map(slot_ui::label_text).unwrap_or_default();
         if name==self.selected_title_name {return;}
-        self.selected_title_name=name.into();
-        if name.is_empty(){return;}
-        let display: String=name.chars().take(39).collect();
-        let image=slot_ui::title_line_face(&display);
-        if image.w==0 || image.h==0 {return;}
+        self.selected_title_name=name.clone();
+        if name.is_empty(){self.selected_title_face=Printed::default();return;}
+        let image=slot_ui::title_line_face(&name);
+        if image.w==0 || image.h==0 {
+            self.selected_title_face=Printed::default();
+            return;
+        }
         let tex=if let Some(tex)=self.selected_title_texture {
             self.gpu.update_texture(tex,image.w,image.h,&image.rgba);
             tex
