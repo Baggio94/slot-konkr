@@ -604,7 +604,7 @@ impl Engine {
         let wallpaper_texture = visuals_root.as_deref()
             .and_then(|root| crate::wallpaper::pick(root, 0))
             .as_deref().and_then(slot_ui::wallpaper_face)
-            .or_else(|| slot_ui::default_background().map(str::to_owned))
+            .or_else(|| slot_ui::default_background().map(|rgba| rgba.to_vec()))
             .map(|rgba| gpu.create_texture(OUT_W, OUT_H, &rgba));
         // Preserve existing Config/theme.txt custom colours as an opt-out.
         let custom_colours = visuals_root.as_deref()
@@ -1627,7 +1627,7 @@ impl Engine {
                     let wallpaper = crate::wallpaper::pick(&root, 0)
                         .as_deref().and_then(slot_ui::wallpaper_face);
                     self.wallpaper_texture = wallpaper.or_else(||
-                    slot_ui::default_background().map(str::to_owned)).map(|rgba| {
+                    slot_ui::default_background().map(|rgba| rgba.to_vec())).map(|rgba| {
                         if let Some(tex) = self.wallpaper_texture {
                             self.gpu.update_texture(tex, OUT_W, OUT_H, &rgba);
                             tex
