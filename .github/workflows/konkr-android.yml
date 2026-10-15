@@ -89,8 +89,10 @@ jobs:
         run: cargo test -p slot-achievements -p slot-retro
       - name: Test KONKR 3:2 scaling
         run: cargo test -p slot-gfx --no-default-features --test konkr
-      - name: Test original Slot cartridge fidelity
-        run: cargo test -p slot-ui --test cart_material
+      - name: Test original Slot v1.7 PNG graphics and wallpaper
+        run: |
+          cargo test -p slot-ui --test cart_material --test upstream_v17_assets
+          cargo test -p slot --test wallpaper
       - name: Export authentic Slot keycap graphics for Android Apps
         run: |
           cargo run --locked -p slot-ui --example export_apps_legend -- android/app/src/main/assets/apps_controls
