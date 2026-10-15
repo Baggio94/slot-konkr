@@ -3110,14 +3110,16 @@ impl Engine {
 
     fn screen_rows(platform: Platform)-> &'static [usize] {
         match platform {
-            Platform::Gba=>&[34,29,90],
+            // Upstream v1.7 hides GBA bezel on an unframed 3:2 panel:
+            // GBA already fills KONKR's native 960x640 display.
+            Platform::Gba=>&[34,29],
             Platform::Gbc=>&[88,29,90],
             Platform::Gb=>&[89,29,36,90],
         }
     }
     fn screen_keys(platform:Platform)-> &'static [usize] {
         match platform {
-            Platform::Gba=>&[0,22,25],
+            Platform::Gba=>&[0,22],
             Platform::Gbc=>&[21,23,26],
             Platform::Gb=>&[1,24,3,27],
         }
@@ -4914,6 +4916,13 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 mod ui_feedback_tests {
     use super::*;
 
+    #[test]
+    fn gba_three_two_screen_hides_no_op_bezel_but_keeps_gb_gbc() {
+        assert_eq!(Engine::screen_rows(Platform::Gba), &[34,29]);
+        assert_eq!(Engine::screen_keys(Platform::Gba), &[0,22]);
+        assert_eq!(Engine::screen_rows(Platform::Gbc), &[88,29,90]);
+        assert_eq!(Engine::screen_rows(Platform::Gb), &[89,29,36,90]);
+    }
     #[test]
     fn ordinary_cart_scrolling_does_not_restart_name_fade() {
         // A no-name-transition title is drawn at alpha 1 immediately;
