@@ -1,7 +1,7 @@
 //! Build-time-only export of EXACT Slot core-picker keycap faces for the
 //! Android Apps drawer. Reuse the upstream drawing/font code, not an Android
 //! imitation with different fonts or Unicode arrow glyphs.
-use slot_ui::{arrows_hint_face, hint_face, word_face, UndoFace};
+use slot_ui::{arrows_hint_face, hint_face, quick_value_face, UndoFace};
 use std::{fs::{self, File}, io::BufWriter, path::PathBuf};
 
 fn write_png(out: &PathBuf, face: &UndoFace) -> Result<(), Box<dyn std::error::Error>> {
@@ -28,10 +28,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("refresh.png", hint_face("START", "Refresh")),
         ("sign-out.png", hint_face("X", "Sign Out")),
         // Pixel-identical to Rust's Library/Settings heading textures.
-        ("heading-apps.png", word_face("APPS")),
-        ("heading-ra.png", word_face("RETROACHIEVEMENTS")),
+        ("heading-apps.png", quick_value_face("APPS", true)),
+        ("heading-ra.png", quick_value_face("RETROACHIEVEMENTS", true)),
     ] {
-        assert!(face.w > 20 && face.h == 24, "Slot legend generation failed");
+        let expected_height = if filename.starts_with("heading-") { 40 } else { 24 };
+        assert!(face.w > 20 && face.h == expected_height,
+            "Slot legend / native heading generation failed");
         assert_eq!(face.rgba.len(), (face.w * face.h * 4) as usize);
         write_png(&destination.join(filename), &face)?;
         println!("{}: {}×{} (upstream Slot pixels)", filename, face.w, face.h);

@@ -118,7 +118,7 @@ class AppsActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         header.addView(SlotUi.menuHeading(this, "APPS"),
-            LinearLayout.LayoutParams(0, SlotUi.menuPixel(this, 24), 1f))
+            LinearLayout.LayoutParams(0, SlotUi.menuPixel(this, 32), 1f))
         homeButton = SlotUi.label(this, "Set as Home", 13f).apply {
             gravity = Gravity.CENTER
             setPadding(dp(15), dp(7), dp(15), dp(7))
@@ -128,11 +128,11 @@ class AppsActivity : Activity() {
             setOnClickListener { chooseHome() }
         }
         header.addView(homeButton, LinearLayout.LayoutParams(-2,
-            SlotUi.menuPixel(this, 24)))
+            SlotUi.menuPixel(this, 32)))
         root.addView(header)
         // Match Slot's breathing room below the subdued Settings heading.
         root.addView(View(this), LinearLayout.LayoutParams(-1,
-            SlotUi.menuPixel(this, 26)))
+            SlotUi.menuPixel(this, 18)))
 
         grid = GridView(this).apply {
             numColumns = COLUMNS

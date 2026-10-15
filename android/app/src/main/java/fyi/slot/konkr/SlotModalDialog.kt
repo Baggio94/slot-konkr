@@ -115,9 +115,9 @@ internal class SlotModalDialog(
 
     init {
         root.addView(SlotUi.menuHeading(activity, title),
-            LinearLayout.LayoutParams(-1, SlotUi.menuPixel(activity, 24)))
+            LinearLayout.LayoutParams(-1, SlotUi.menuPixel(activity, 32)))
         root.addView(View(activity), LinearLayout.LayoutParams(-1,
-            SlotUi.menuPixel(activity, 27)))
+            SlotUi.menuPixel(activity, 19)))
         if (message.isNotBlank()) {
             body.addView(SlotUi.label(activity, message, 15f, SlotUi.muted,
                 upper = false).apply {

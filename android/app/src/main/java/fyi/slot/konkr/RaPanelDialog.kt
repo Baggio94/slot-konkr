@@ -129,9 +129,9 @@ internal class RaPanelDialog(
             setBackgroundColor(SlotUi.menuBackground)
         }
         root.addView(SlotUi.menuHeading(activity, "RETROACHIEVEMENTS"),
-            LinearLayout.LayoutParams(-1, SlotUi.menuPixel(activity, 24)))
+            LinearLayout.LayoutParams(-1, SlotUi.menuPixel(activity, 32)))
         root.addView(View(activity), LinearLayout.LayoutParams(-1,
-            SlotUi.menuPixel(activity, 26)))
+            SlotUi.menuPixel(activity, 18)))
         scroll = ScrollView(activity).apply {
             isFillViewport = false
             isFocusable = false

@@ -5,9 +5,9 @@ remain unchanged. No automatic save export or destructive ROM operations.
 
 ## 1. Native header parity
 - Apps and RetroAchievements headings are now EXACT PNG textures from the
-  Rust slot-ui word_face generator, with alpha 0.68.
-- Both placed at (32, 33) in the 720×480 Slot coordinate system, with a
-  24px-tall native heading, using screen-width scaling.
+  Rust slot-ui quick_value_face generator, geometry ×0.79, alpha 0.68.
+- Both placed at (32, 33) in the 720×480 Slot coordinate system, with the
+  same 40×0.79=31.6px texture height and screen-width scaling as Settings.
 - Android-only Set as Home, RA statistics, shortcuts and controller logic
   remain available.
 
