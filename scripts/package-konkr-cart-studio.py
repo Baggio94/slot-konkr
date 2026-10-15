@@ -214,9 +214,15 @@ function observeAndroidCarts(s) {
     # Shell configuration writes are part of the same total. A final
     # progress callback is required even when only shells were edited.
     js = checked_replace(js,
-        "      // A write that went through says nothing; one that didn't, all of it, says so. Not over a card",
+        "      // One that didn't, all of it, says so. Not over a card opened while this one was writing.",
         """      writeProgress(carts.length + shells.length, carts.length + shells.length);
-      // A write that went through says nothing; one that didn't, all of it, says so. Not over a card""")
+      // One that didn't, all of it, says so. Not over a card opened while this one was writing.""")
+    # The official reminder is for a physical card removed from a computer.
+    # Android writes via its scoped SAF bridge and must not imply the user
+    # needs to eject a physical SD card. Keep the reminder for web users.
+    js = checked_replace(js,
+        "        $('eject').hidden = !(count.written || count.shells);",
+        "        $('eject').hidden = window.AndroidStudio || !(count.written || count.shells);")
     js = checked_replace(js,
         "        if (problems.length) banner(problems.join(' '));",
         """        if (problems.length) {
