@@ -368,7 +368,7 @@ jobs:
   # Linux host, not pass a test that silently skips when vendor/ is empty.
   # The Android arm64 core is separately built in debug-apk above.
   a6-a1-mgba-continuity:
-    if: github.ref == 'refs/heads/feat/konkr-multiplayer-lab' || startsWith(github.ref, 'refs/tags/konkr-v')
+    if: github.ref == 'refs/heads/feat/konkr-multiplayer-lab' || startsWith(github.ref, 'refs/tags/konkr-v') || startsWith(github.ref, 'refs/heads/release/konkr-android-')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
