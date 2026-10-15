@@ -4,6 +4,7 @@
 mod library;
 mod settings;
 mod emulation;
+mod pokemon_flash;
 // Directly compile the original Cart Studio No-Intro DAT matching code and tests.
 // Pinned verbatim at third_party/slot-cart-studio, never reinterpret CRCs.
 #[allow(dead_code)]
@@ -26,6 +27,7 @@ mod core_legend;
 // The original Slot TCP framing and cartridge-specific link selection are
 // shared directly; only the Linux Wi-Fi radio driver is replaced on Android.
 mod link_net;
+mod trusted_link;
 #[path = "../../slot/src/link_kind.rs"]
 mod link_kind;
 // Fork's LAN/mDNS wire format remains interoperable across devices.
@@ -33,6 +35,10 @@ mod link_mdns;
 mod link_lan;
 mod multiplayer;
 mod link_rom;
+mod link_compat;
+// Every mGBA Link attempt gets a fresh session namespace, preserving historical
+// Host/Join progress and never writing into the solo/RetroArch save root.
+mod linked_storage;
 // Single-threaded libretro link session adapter: core never runs from a socket worker.
 mod link_play;
 // Compile Slot's exact mechanical plug and wireless adapter renderer from

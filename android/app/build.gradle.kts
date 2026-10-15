@@ -11,11 +11,13 @@ android {
         applicationId = "fyi.slot.konkr"
         minSdk = 31
         targetSdk = 32
-        // First combined beta based on RC4. Incrementing versionCode allows
-        // an install-over when signed with the same permanent certificate.
-        versionCode = 69
-        versionName = "0.1.0-rc5-beta5"
-        ndk { abiFilters += listOf("arm64-v8a") }
+        // Public Android candidate built from the consolidated Multiplayer Lab.
+        // Same package ID and signing key: install -r must preserve user data.
+        versionCode = 90
+        versionName = "0.1.0-rc.1"
+        // One byte-identical APK on ARM64 KONKR and x86_64 Mac AVD.
+        // Native libraries for BOTH ABIs are built/pinned by the same CI.
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
 
     // This APK is distributed directly for KONKR Android 12 (not via Google
@@ -23,6 +25,18 @@ android {
     // suppress only Play's expired-target submission check, not other lint.
     lint {
         disable += "ExpiredTargetSdkVersion"
+    }
+
+    // An install-alongside standalone QA app. This NEVER replaces the
+    // physical console's fyi.slot.konkr beta or reads its app-private saves.
+    // Its own package is fyi.slot.konkr.lab, with a separate HOME-free manifest.
+    buildTypes {
+        create("multiplayerLab") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".lab"
+            versionNameSuffix = "-sidecar"
+            matchingFallbacks += listOf("debug")
+        }
     }
 
     // A stable signing key can be provided by GitHub Actions secrets or a
@@ -43,6 +57,11 @@ android {
         }
         buildTypes {
             getByName("debug") {
+                signingConfig = signingConfigs.getByName("slotPersistent")
+            }
+            getByName("multiplayerLab") {
+                // Same update-stable certificate when secrets are available,
+                // but a distinct app ID even if those secrets are absent.
                 signingConfig = signingConfigs.getByName("slotPersistent")
             }
             getByName("release") {

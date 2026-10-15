@@ -2222,6 +2222,7 @@ dependencies = [
  "libc",
  "lz4_flex",
  "png 0.17.16",
+ "ring",
  "serde",
  "serde_json",
  "slot-achievements",

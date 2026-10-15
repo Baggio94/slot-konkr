@@ -33,7 +33,7 @@ use slot_ui::{
     CHIP_U, CHIP_V, CHIP_W, CHIP_H, HOP_LIFT, TURN_PAD, SHADOW_W, SHADOW_H,
     CART_W, hint_face, arrows_hint_face, title_face, photo_face, Polaroids, Printed, HINT_H, HINT_EDGE,
     draw_footer, draw_slot_name, draw_platform_name, word_face, platform_name_face,
-    icon_face, Icon, BOLT_PX, HUD_INK,
+    icon_face, badge_face, menu_face, Icon, LinkBadge, BOLT_PX, HUD_INK,
     Hud, HudKind, FfState, Toast, toast_face, QUICK_PITCH, opening, edge, centred_hints, LEGEND_GAP,
     sticker_face_konkr, StickerFields, STICKER_W, STICKER_H, quick_caret_face,
 };
@@ -91,6 +91,7 @@ enum Input {
     LinkNetworkReady(String),
     LinkDirectHost(String),
     LinkNetworkError(String),
+    LinkPeerRomConsent(i32),
     RaPrefetchHash(String, u32),
     ExternalReturn,
 }
@@ -139,6 +140,10 @@ static REQUEST: Mutex<Option<String>> = Mutex::new(None);
 static LABEL_PICK_REQUEST: Mutex<Option<String>> = Mutex::new(None);
 static UI_ACTION: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
 static SAVE_SYNC: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+static SHARE_SAVES_ENABLED: AtomicBool = AtomicBool::new(false);
+// -1 = preserve ordinary Slot rule, 0 = start from SRAM, 1 = user chose
+// existing destination-core state in the explicit Share Saves dialogue.
+static NEXT_RESUME_MODE: AtomicI32 = AtomicI32::new(-1);
 static CART_SFX: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
 const CART_INSERT_SFX: i32 = 1;
 const CART_EJECT_SFX: i32 = 2;
@@ -201,6 +206,10 @@ static AUDIO: Mutex<VecDeque<i16>> = Mutex::new(VecDeque::new());
 static PLAYING: AtomicBool = AtomicBool::new(false);
 static SAMPLE_RATE: AtomicI32 = AtomicI32::new(0);
 static DISPLAY_SYNC: AtomicBool = AtomicBool::new(false);
+// Read-only GL-owned library swap gate for Kotlin's background scanner.
+static LIBRARY_UPDATE_SAFE: AtomicBool = AtomicBool::new(false);
+// A12 diagnostic A/B. Default keeps A11 recovery; flag file selects legacy.
+static MGBA_CABLE_RECOVERY: AtomicBool = AtomicBool::new(true);
 // Android AudioTrack time-stretches 2x game audio while preserving pitch.
 // Expose the current transport speed separately from libretro's sample rate.
 static AUDIO_SPEED_PERMILLE: AtomicI32 = AtomicI32::new(1000);
@@ -215,6 +224,11 @@ static PERF_ACTIVE: AtomicBool = AtomicBool::new(false);
 static SHELF_INDICATOR_FLAGS: AtomicI32 = AtomicI32::new(0);
 // Read-only lifecycle bit polled by Kotlin; never touch WifiManager on GL.
 static LINK_NEEDS_MULTICAST: AtomicBool = AtomicBool::new(false);
+// Read-only four-character game code for the optional Mac AVD DNS-SD bridge.
+// The actual Lab/2 peer handshake still validates SHA-256 of ROM, core, BIOS.
+static LINK_DISCOVERY_GAME: Mutex<Option<String>> = Mutex::new(None);
+// Authenticated peer key fingerprint, never a user-supplied device name.
+static LINK_PEER_LABEL: Mutex<Option<String>> = Mutex::new(None);
 
 #[derive(Clone)]
 struct SystemStatus {
@@ -245,14 +259,104 @@ fn select_chord_bit(code: i32) -> u16 {
     }
 }
 
+/// Upstream slot-input: SELECT held, then HOME/MODE opens the Link menu.
+/// Consume both the press and its release, otherwise HOME also opens the
+/// regular game menu (or cancels the Link picker on release).
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum SelectHomeAction { Pass, OpenLink, Swallow }
+
+fn select_home_action(
+    pressed: bool,
+    select_held: bool,
+    in_game: bool,
+    may_open: bool,
+    home_consumed: &mut bool,
+) -> SelectHomeAction {
+    if *home_consumed {
+        if !pressed { *home_consumed = false; }
+        return SelectHomeAction::Swallow;
+    }
+    if pressed && select_held && in_game && may_open {
+        *home_consumed = true;
+        return SelectHomeAction::OpenLink;
+    }
+    SelectHomeAction::Pass
+}
+
 fn set_message(message: String) {
     *MESSAGE.lock().unwrap_or_else(|e| e.into_inner()) = Some(message);
 }
 
 
+// A12 GL-thread-only diagnostic; no extra simulation step or GPU readback.
+// Native draw duration is measured BEFORE GLSurfaceView's EGL buffer swap.
+struct A12DrawProbe {
+    started: Instant,
+    callbacks: u64,
+    steps0: u64,
+    steps1: u64,
+    steps2: u64,
+    native_us_max: u64,
+    over_16ms: u64,
+    over_33ms: u64,
+}
+impl A12DrawProbe {
+    fn new() -> Self {
+        Self { started: Instant::now(), callbacks: 0, steps0: 0,
+            steps1: 0, steps2: 0, native_us_max: 0,
+            over_16ms: 0, over_33ms: 0 }
+    }
+    fn record(&mut self, steps: usize, us: u64, recovery: bool) {
+        self.callbacks += 1;
+        match steps {
+            0 => self.steps0 += 1,
+            1 => self.steps1 += 1,
+            _ => self.steps2 += 1,
+        }
+        self.native_us_max = self.native_us_max.max(us);
+        if us > 16_667 { self.over_16ms += 1; }
+        if us > 33_333 { self.over_33ms += 1; }
+        let span = self.started.elapsed();
+        if span >= Duration::from_secs(5) {
+            crate::game::log_launch_timing(&format!(
+                "Link display pacing: recovery={} callbacks={} emu_fps={:.1} steps0={} steps1={} steps2={} native_us_max={} native_over_16ms={} native_over_33ms={}",
+                if recovery { "a11" } else { "legacy" }, self.callbacks,
+                (self.steps1 + 2 * self.steps2) as f64 / span.as_secs_f64(),
+                self.steps0, self.steps1, self.steps2, self.native_us_max,
+                self.over_16ms, self.over_33ms));
+            *self = Self::new();
+        }
+    }
+}
+thread_local! {
+    static A12_DRAW_PROBE: RefCell<Option<A12DrawProbe>> = const { RefCell::new(None) };
+}
+fn a12_draw_sample(linked: bool, steps: usize, native_us: u64, recovery: bool) {
+    A12_DRAW_PROBE.with(|probe| {
+        let mut probe = probe.borrow_mut();
+        if linked {
+            probe.get_or_insert_with(A12DrawProbe::new).record(steps, native_us, recovery);
+        } else {
+            *probe = None;
+        }
+    });
+}
+
 // All engine / OpenGL work occurs on GLSurfaceView's dedicated GL thread.
 thread_local! {
     static ENGINE: RefCell<Option<Engine>> = const { RefCell::new(None) };
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum LinkEntry { Shortcut, GameMenu }
+
+impl LinkEntry {
+    fn back(self) -> ShelfOverlay {
+        match self {
+            Self::Shortcut => ShelfOverlay::None,
+            Self::GameMenu => ShelfOverlay::GameMenu { row: 1 },
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -275,7 +379,7 @@ enum ShelfOverlay {
     States,
 }
 
-const MENU_TEXT: [&str; 79] = [
+const MENU_TEXT: [&str; 81] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -344,17 +448,19 @@ const MENU_TEXT: [&str; 79] = [
     "Show app status icons",            // 65
     "Multiplayer",                      // 66
     "End Link",                         // 67
-    "MULTIPLAYER",                      // 68
-    "Host",                             // 69
-    "Join",                             // 70
-    "Cable",                            // 71
-    "Wireless",                         // 72
-    "Searching for a player...",       // 73
-    "Connected!",                       // 74
-    "Connection failed",               // 75
-    "Choose the other console's role", // 76
-    "Press A to retry",                 // 77
+    "",                                 // 68 retired: old non-Slot Multiplayer title
+    "",                                 // 69 retired: LinkRow::text() is upstream
+    "",                                 // 70 retired: LinkRow::text() is upstream
+    "",                                 // 71 retired: no extraneous mode heading
+    "",                                 // 72 retired: no extraneous mode heading
+    "",                                 // 73 retired: LinkStep::line() is upstream
+    "",                                 // 74 retired: upstream says Linked
+    "",                                 // 75 retired: LinkFail::line() is upstream
+    "",                                 // 76 retired: no middle-page helper text
+    "",                                 // 77 retired: upstream shows A OK
     "Eject to play solo",               // 78
+    "Share mGBA/gpSP Saves",            // 79
+    "",                                  // 80 retired: value rendered at right
 ];
 
 struct Engine {
@@ -369,6 +475,8 @@ struct Engine {
     exiting_screen: bool,
     eject_hold_remaining: f32,
     select_down_at: Option<Instant>,
+    // HOME release must not close the Link screen opened by SELECT + HOME.
+    select_home_consumed: bool,
     select_chorded: bool,
     select_forwarded: bool,
     select_tap_frames: u8,
@@ -384,7 +492,11 @@ struct Engine {
     link_identity: Option<crate::link_rom::GbaIdentity>,
     link_role: LinkRow,
     link_mode: LinkKind,
+    // Optional mode chosen from original Slot's SELECT Mode key. Reset on
+    // each new cartridge; keep it when returning from a cancelled link menu.
+    link_mode_override: Option<LinkKind>,
     link_phase: LinkMenu,
+    link_entry: LinkEntry,
     link_worked_at: u64,
     link_starter: Option<LinkStarter>,
     link_art: LinkSprites,
@@ -427,7 +539,15 @@ struct Engine {
     shelf_status_faces: [(slot_gfx::TexId, u32, u32); 8],
     shelf_status_start: (slot_gfx::TexId, u32),
     game_menu_hints: [(slot_gfx::TexId, u32); 3],
+    // Same centered role, progress and failure faces as original slot.
+    link_role_faces: [(slot_gfx::TexId, u32, u32); 2],
+    link_step_faces: [(slot_gfx::TexId, u32, u32); 2],
+    link_fail_faces: [(slot_gfx::TexId, u32, u32); 3],
+    link_connected_face: (slot_gfx::TexId, u32, u32),
     link_hints: [(slot_gfx::TexId, u32); 3],
+    link_switch_hints: [(slot_gfx::TexId, u32); 4],
+    link_connected_hints: [(slot_gfx::TexId, u32); 2],
+    link_failed_hints: [(slot_gfx::TexId, u32); 1],
     board_texture: Option<slot_gfx::TexId>,
     chip_texture: slot_gfx::TexId,
     picker: Option<CorePicker>,
@@ -572,12 +692,46 @@ impl Engine {
             let tex = gpu.create_texture(face.w, face.h, &face.rgba);
             (tex, face.w)
         });
+        let make_link_text = |gpu: &mut Compositor, label: &str| {
+            // Identical font, 30px scale, ink, centering and side padding
+            // to original slot/src/frontend.rs menu_faces(), not our
+            // Android Settings quick_value_face fallback.
+            let face = menu_face(label);
+            (gpu.create_texture(face.w, face.h, &face.rgba), face.w, face.h)
+        };
+        let link_role_faces = LinkRow::ALL
+            .map(|role| make_link_text(&mut gpu, role.text()));
+        let link_step_faces = LinkStep::ALL
+            .map(|step| make_link_text(&mut gpu, step.line()));
+        let link_fail_faces = LinkFail::SHOWN
+            .map(|failure| make_link_text(&mut gpu, failure.line()));
+        let link_connected_face = make_link_text(&mut gpu, "Linked");
         let link_hints = [
-            ("B", "Cancel"), ("LEFT/RIGHT", "Swap"), ("A", "Link"),
-        ].map(|(key, label)| {
-            let face = hint_face(key, label);
-            let tex = gpu.create_texture(face.w, face.h, &face.rgba);
-            (tex, face.w)
+            hint_face("B", "Cancel"),
+            arrows_hint_face("Swap"),
+            hint_face("A", "Link"),
+        ].map(|face| {
+            (gpu.create_texture(face.w, face.h, &face.rgba), face.w)
+        });
+        // State-specific original Slot legends; never advertise an active
+        // Connect button when already linked or after a failed handshake.
+        let link_connected_hints = [("B", "Back"), ("A", "End Link")]
+            .map(|(key, label)| {
+                let face = hint_face(key, label);
+                (gpu.create_texture(face.w, face.h, &face.rgba), face.w)
+            });
+        let link_failed_hints = [hint_face("A", "OK")].map(|face| {
+            (gpu.create_texture(face.w, face.h, &face.rgba), face.w)
+        });
+        // Upstream has SELECT Mode in the picker when Cable/RFU is truly
+        // switchable. Reuse exactly its hint and arrow primitives.
+        let link_switch_hints = [
+            hint_face("B", "Cancel"),
+            hint_face("SELECT", "Mode"),
+            arrows_hint_face("Swap"),
+            hint_face("A", "Link"),
+        ].map(|face| {
+            (gpu.create_texture(face.w, face.h, &face.rgba), face.w)
         });
         let setting_values = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
@@ -646,6 +800,16 @@ impl Engine {
             gpu.create_texture(face.w, face.h, &face.rgba)
         }).collect();
         hud.set_icons(icons);
+        // Exact upstream slot. Link badge glyphs, colour and 24px halo.
+        // The HUD already places these in the top-right of the game image,
+        // but Android previously never populated its link texture atlas.
+        let link_faces = LinkBadge::FACES.into_iter().map(|badge| {
+            let glyph = badge.badge().expect("only visible LinkBadge variants");
+            let colour = badge.colour().expect("visible LinkBadge has a colour");
+            let face = badge_face(glyph, slot_ui::HUD_ICON_PX, colour);
+            gpu.create_texture(face.w, face.h, &face.rgba)
+        }).collect();
+        hud.set_link_faces(link_faces);
         let bolt = icon_face(Icon::Charging, BOLT_PX, HUD_INK);
         let bolt_texture = gpu.create_texture(bolt.w, bolt.h, &bolt.rgba);
 
@@ -665,6 +829,7 @@ impl Engine {
             exiting_screen: false,
             eject_hold_remaining: 0.0,
             select_down_at: None,
+            select_home_consumed: false,
             select_chorded: false,
             select_forwarded: false,
             select_tap_frames: 0,
@@ -680,7 +845,9 @@ impl Engine {
             link_identity: None,
             link_role: LinkRow::Host,
             link_mode: LinkKind::Cable,
+            link_mode_override: None,
             link_phase: LinkMenu::Pick(LinkRow::Host),
+            link_entry: LinkEntry::GameMenu,
             link_worked_at: 0,
             link_starter: None,
             link_art,
@@ -721,7 +888,14 @@ impl Engine {
             shelf_status_faces,
             shelf_status_start,
             game_menu_hints,
+            link_role_faces,
+            link_step_faces,
+            link_fail_faces,
+            link_connected_face,
             link_hints,
+            link_switch_hints,
+            link_connected_hints,
+            link_failed_hints,
             board_texture: None,
             chip_texture,
             picker: None,
@@ -802,6 +976,7 @@ impl Engine {
         self.rewind_accum = 0.0;
         self.game_accum = 0.0;
         self.select_down_at = None;
+        self.select_home_consumed = false;
         self.select_chorded = false;
         self.select_forwarded = false;
         self.select_tap_frames = 0;
@@ -909,6 +1084,7 @@ impl Engine {
     fn cancel_link_discovery(&mut self) {
         if let Some(starter) = self.link_starter.take() { starter.cancel(); }
         LINK_NEEDS_MULTICAST.store(false, Ordering::Release);
+        *LINK_DISCOVERY_GAME.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     fn enter_multiplayer_menu(&mut self) {
@@ -922,24 +1098,34 @@ impl Engine {
             return;
         }
         let game = self.game.as_ref().expect("checked above");
-        if game.core_kind() != Core::Gpsp {
-            set_message("GBA Multiplayer requires gpSP. Eject, select gpSP as core, then relaunch.".into());
-            return;
-        }
-        if !game.wireless_capable() {
-            set_message("This gpSP build did not register its GBA Link interface".into());
-            return;
-        }
         let identity = self.link_identity.as_ref().expect("checked above");
-        if !link_kind::link_carried(&identity.code, &identity.title) {
-            set_message("No verified gpSP serial/RFU mode for this GBA cartridge".into());
-            return;
+        if game.core_kind() == Core::Mgba {
+            // Slot original lockstep uses Cable only. The core is reopened
+            // in dual-GBA mode after the network connection succeeds.
+            self.link_mode = LinkKind::Cable;
+        } else {
+            if !game.wireless_capable() {
+                set_message("This gpSP build did not register its GBA Link interface".into());
+                return;
+            }
+            if !link_kind::link_carried(&identity.code, &identity.title) {
+                crate::game::log_launch_timing(&format!(
+                    "Multiplayer unsupported protocol: game_code={}, title={}, clean_header={}",
+                    identity.code, identity.title, identity.clean_header
+                ));
+                set_message("This GBA game's link protocol is not yet verified in gpSP. Try Pokemon FireRed or Emerald.".into());
+                return;
+            }
+            let automatic = link_kind::link_kind(&identity.code, &identity.title,
+                identity.clean_header);
+            self.link_mode = self.link_mode_override.unwrap_or_else(||
+                link_kind::preferred_mode(&identity.code, &identity.title,
+                    identity.clean_header));
+            if !link_kind::gpsp_runtime_mode_supported(&identity.code, self.link_mode) {
+                set_message("This gpSP core cannot emulate this cartridge's GBA Cable protocol. Try mGBA Cable with identical ROMs.".into());
+                return;
+            }
         }
-        // gpSP resolves gpsp_serial=auto at cartridge LOAD. Match the
-        // upstream game's actual expected auto mode, not the chosen core.
-        // Switching cables without reloading gpSP would be cosmetic only.
-        self.link_mode = link_kind::link_kind(&identity.code, &identity.title,
-            identity.clean_header);
         self.cancel_link_discovery();
         self.link_role = LinkRow::Host;
         self.link_phase = LinkMenu::Pick(self.link_role);
@@ -948,10 +1134,88 @@ impl Engine {
         self.overlay = ShelfOverlay::Multiplayer;
     }
 
+    /// Upstream SELECT Mode is only offered if its two values produce
+    /// genuinely different gpSP serial hardware configurations. mGBA is
+    /// intentionally Cable-only with this Android dual-GBA Lab backend.
+    fn link_mode_switchable(&self) -> bool {
+        let Some(identity) = self.link_identity.as_ref() else { return false };
+        let Some(game) = self.game.as_ref() else { return false };
+        link_mode_can_switch(game.core_kind(), self.link_mode,
+            &identity.code, &identity.title, identity.clean_header)
+    }
+
+    /// Original Slot/fork reload the gpSP core when SELECT changes the
+    /// serial hardware. Never begin a connection with a cosmetic mode that
+    /// differs from the live libretro serial implementation.
+    fn ensure_gpsp_link_serial(&mut self) -> Result<(), String> {
+        let game = self.game.as_ref().ok_or("No running GBA game")?;
+        if game.core_kind() != Core::Gpsp { return Ok(()); }
+        let identity = self.link_identity.as_ref().ok_or("No valid GBA ROM identity")?;
+        let automatic = link_kind::link_kind(&identity.code, &identity.title,
+            identity.clean_header);
+        let wanted = link_kind::serial_option(self.link_mode, automatic,
+            &identity.code, &identity.title);
+        let previous = game.loaded_serial();
+        if wanted == previous { return Ok(()); }
+
+        let (storage, library) = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .clone().ok_or("Slot storage not mounted")?;
+        let (rom, stem) = (game.rom_path().to_path_buf(), game.rom_stem().to_owned());
+        let core_file = library.join("libgpsp_libretro.so");
+        // An atomic private state+SRAM+RTC snapshot is required BEFORE the
+        // existing core is dropped. The one-shot marker makes the reloaded
+        // core prefer this state over a stale RetroArch auto-save.
+        self.game.as_mut().ok_or("Game disappeared before serial switch")?
+            .preserve_solo_for_link()?;
+        drop(self.game.take());
+        let resume = |serial| GameSession::open_gpsp_serial(
+            &rom, &core_file, &storage, &stem, self.settings.colour_correction,
+            self.ra_service.as_ref(), serial);
+        let replacement = match resume(wanted) {
+            Ok(game) => game,
+            Err(error) => {
+                // Reopen the last known working mode if the requested one
+                // fails, retaining the pre-switch state and battery data.
+                match resume(previous) {
+                    Ok(original) => {
+                        SAMPLE_RATE.store(original.sample_rate, Ordering::Release);
+                        self.game = Some(original);
+                        return Err(format!("Cannot activate gpSP {wanted}: {error}; previous mode restored"));
+                    }
+                    Err(recovery) => {
+                        SAMPLE_RATE.store(0, Ordering::Release);
+                        PLAYING.store(false, Ordering::Release);
+                        self.handle(Input::Exit);
+                        return Err(format!("gpSP Link mode failed: {error}; recovery requires cartridge relaunch ({recovery})"));
+                    }
+                }
+            }
+        };
+        SAMPLE_RATE.store(replacement.sample_rate, Ordering::Release);
+        AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        RUMBLE_STRENGTH.store(0, Ordering::Release);
+        self.game_accum = 0.0;
+        self.buttons = 0;
+        self.game = Some(replacement);
+        crate::game::log_launch_timing(&format!(
+            "gpSP serial reload: {previous} -> {wanted} (upstream Link hardware selection)"));
+        Ok(())
+    }
+
     fn request_multiplayer_network(&mut self) {
         if !matches!(self.overlay, ShelfOverlay::Multiplayer) { return; }
         if matches!(self.link_phase, LinkMenu::Working {..} | LinkMenu::Linked {..}) { return; }
+        if let Err(error) = self.ensure_gpsp_link_serial() {
+            if self.game.is_some() {
+                self.fail_multiplayer(&error, LinkFail::Radio);
+            } else {
+                set_message(error);
+            }
+            return;
+        }
         self.cancel_link_discovery();
+        *LINK_DISCOVERY_GAME.lock().unwrap_or_else(|e| e.into_inner()) =
+            self.link_identity.as_ref().map(|identity| crate::link_compat::discovery_key(&identity.code).to_owned());
         let now = self.link_millis();
         self.link_worked_at = now;
         self.link_phase = LinkMenu::Working {
@@ -961,13 +1225,219 @@ impl Engine {
         UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(16);
     }
 
+    /// A Lab session must negotiate exact backend, mode, ROM revision,
+    /// compiled core and BIOS before touching the current solo timeline.
+    /// The worker hashes all files; the GL/render thread only passes paths.
+    fn link_config(&self) -> Result<crate::multiplayer::LinkConfig, String> {
+        let session = self.game.as_ref().ok_or("No running game")?;
+        let identity = self.link_identity.as_ref().ok_or("No GBA Link identity")?;
+        let (storage, library) = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .clone().ok_or("Slot storage not mounted")?;
+        let kind = session.core_kind();
+        let backend = match kind {
+            Core::Mgba => crate::multiplayer::Backend::MgbaSlotCable,
+            Core::Gpsp => crate::multiplayer::Backend::GpspNetpacket,
+        };
+        Ok(crate::multiplayer::LinkConfig {
+            game: identity.code.clone(),
+            rom: session.rom_path().to_path_buf(),
+            core_file: library.join(format!("lib{}_libretro.so", kind.as_str())),
+            bios_file: storage.join("BIOS/gba_bios.bin"),
+            backend,
+            mode: self.link_mode,
+            trusted_dir: storage.join("TrustedLinkDevices"),
+        })
+    }
+
     fn fail_multiplayer(&mut self, reason: &str, failure: LinkFail) {
         self.cancel_link_discovery();
+        // No link has been established: never display a false connected icon.
+        self.hud.set_link(LinkBadge::Off);
         self.link_phase = LinkMenu::Failed {
             role: self.link_role, fail: failure,
             worked: self.link_worked_at, since: self.link_millis(),
         };
         set_message(format!("Multiplayer: {reason}"));
+    }
+
+    fn begin_link_session(&mut self, role: LinkRole,
+                          wire: crate::link_net::TcpLink,
+                          peer_rom: Option<PathBuf>) -> Result<(), String> {
+        let game = self.game.as_ref().ok_or("No game active")?;
+        if game.core_kind() == Core::Gpsp {
+            if game.linked() || game.is_link_sandbox() {
+                return Err("gpSP Link requires a fresh private session".into());
+            }
+            let (storage, library) = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+                .clone().ok_or("Slot storage is not mounted")?;
+            let (rom, stem, serial) = (game.rom_path().to_path_buf(),
+                game.rom_stem().to_owned(), game.loaded_serial());
+            let core_file = library.join("libgpsp_libretro.so");
+            // Close solo only AFTER its exact state/SRAM/RTC are durable.
+            // A live gpSP core keeps the solo libretro GET_SAVE_DIRECTORY;
+            // redirecting Slot's own save paths is insufficient isolation.
+            let solo_snapshot = self.game.as_mut().ok_or("No game active")?
+                .preserve_solo_for_link()?;
+            drop(self.game.take());
+            let mut private = match GameSession::open_gpsp_linked(
+                &rom, &core_file, &storage, &stem,
+                self.settings.colour_correction, role, &solo_snapshot, serial) {
+                Ok(game) => game,
+                Err(error) => {
+                    let recovery = self.restore_gpsp_solo_after_link_failure(
+                        &rom, &core_file, &storage, &stem, serial, &solo_snapshot);
+                    return Err(link_boot_failure("Cannot initialize private gpSP Link",
+                        &error, recovery));
+                }
+            };
+            if let Err(error) = private.begin_multiplayer(role, self.link_mode, Box::new(wire)) {
+                drop(private);
+                let recovery = self.restore_gpsp_solo_after_link_failure(
+                    &rom, &core_file, &storage, &stem, serial, &solo_snapshot);
+                return Err(link_boot_failure("Cannot begin private gpSP Link",
+                    &error, recovery));
+            }
+            SAMPLE_RATE.store(private.sample_rate, Ordering::Release);
+            AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            RUMBLE_STRENGTH.store(0, Ordering::Release);
+            self.game_accum = 0.0;
+            self.buttons = 0;
+            self.game = Some(private);
+            return Ok(());
+        }
+        if self.link_mode != LinkKind::Cable || game.linked() || game.is_link_sandbox() {
+            return Err("mGBA Link requires a fresh Cable session".into());
+        }
+        let (storage, library) = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .clone().ok_or("Slot storage is not mounted".to_owned())?;
+        let rom = game.rom_path().to_path_buf();
+        let stem = game.rom_stem().to_owned();
+        let core_file = library.join("libmgba_libretro.so");
+        // Save the current solo state/ram/RTC atomically BEFORE replacing
+        // the core. Failure stops link without losing the solo instance.
+        let solo_snapshot = self.game.as_mut()
+            .ok_or("No game active".to_owned())?
+            .preserve_solo_for_link()?;
+        // The exact private solo snapshot is passed in-memory; the linked
+        // engine loads it as both GBA halves before Host/Join state exchange.
+        // The existing solo core remains alive until its checkpoint is durable.
+        drop(self.game.take());
+        let mut linked = match GameSession::open_mgba_linked(&rom, &core_file,
+            &storage, &stem, self.settings.colour_correction, role,
+            &solo_snapshot, peer_rom.as_deref()) {
+            Ok(session) => session,
+            Err(error) => {
+                let recovery = self.restore_solo_after_link_failure(
+                    &rom, &core_file, &storage, &stem, &solo_snapshot);
+                return Err(link_boot_failure("Cannot initialize mGBA Link",
+                    &error, recovery));
+            }
+        };
+        if let Err(error) = linked.begin_multiplayer(role, LinkKind::Cable, Box::new(wire)) {
+            drop(linked);
+            let recovery = self.restore_solo_after_link_failure(
+                &rom, &core_file, &storage, &stem, &solo_snapshot);
+            return Err(link_boot_failure("Cannot begin mGBA Link",
+                &error, recovery));
+        }
+        SAMPLE_RATE.store(linked.sample_rate, Ordering::Release);
+        AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.game_accum = 0.0;
+        self.buttons = 0;
+        self.game = Some(linked);
+        Ok(())
+    }
+
+    /// An explicit unplug is a core transition, not a cartridge ejection.
+    /// Capture the live LOCAL player's GBA, destroy its private Link core,
+    /// verify a fresh non-Link emulator before modifying any solo save,
+    /// and promote an immutable, conflict-checked battery/state generation.
+    fn return_link_to_solo(&mut self) -> Result<(), String> {
+        let linked = self.game.as_mut().ok_or("No Link game to unplug")?;
+        let which = linked.core_kind();
+        let serial = linked.loaded_serial();
+        let rom = linked.rom_path().to_path_buf();
+        let stem = linked.rom_stem().to_owned();
+        let rejoin = linked.prepare_solo_rejoin()?;
+        let (storage, library) = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .clone().ok_or("Slot storage not configured")?;
+        // libretro cores cannot safely have two independent active instances
+        // in this single process. Store the complete private snapshot before
+        // dropping the Link instance, never write to solo until verified.
+        linked.end_multiplayer();
+        drop(self.game.take());
+        let dylib = library.join(format!("lib{}_libretro.so", which.as_str()));
+        let mut solo = match which {
+            Core::Mgba => GameSession::open(&rom, &dylib, &storage,
+                which, Platform::Gba, false, &stem, None,
+                self.settings.colour_correction, self.ra_service.as_ref()),
+            Core::Gpsp => GameSession::open_gpsp_solo_unresumed(
+                &rom, &dylib, &storage, &stem,
+                self.settings.colour_correction, self.ra_service.as_ref(), serial),
+        }?;
+        solo.restore_local_after_link(&rejoin)?;
+        let backup = solo.commit_rejoined_solo(&rejoin)?;
+        crate::game::log_launch_timing(&format!(
+            "Link -> SOLO validated for {} in {}, immutable backup={}",
+            which.text(), stem, backup.display()));
+        SAMPLE_RATE.store(solo.sample_rate, Ordering::Release);
+        AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        RUMBLE_STRENGTH.store(0, Ordering::Release);
+        self.game_accum = 0.0;
+        self.buttons = 0;
+        self.reset_time_controls();
+        self.game = Some(solo);
+        // Kotlin may now export current SOLO SRAM and the newly regenerated
+        // compatible RetroArch auto-state. It must not export private Link
+        // session files, nor mix FireRed with LeafGreen.
+        if let Some(uri) = self.requested_uri.as_deref() {
+            let event = serde_json::json!({
+                "uri": uri, "core": which.as_str(),
+            }).to_string();
+            SAVE_SYNC.lock().unwrap_or_else(|e| e.into_inner()).push_back(event);
+        }
+        Ok(())
+    }
+
+    fn restore_gpsp_solo_after_link_failure(&mut self, rom: &Path,
+                                             core_file: &Path, storage: &Path,
+                                             stem: &str, serial: &'static str,
+                                             snapshot: &[u8]) -> Result<(), String> {
+        // A successful core open is NOT evidence of a successful state
+        // resume: libretro can reject the saved state and start at the title.
+        // Re-apply the in-memory checkpoint and fail closed if it is rejected.
+        let result = (|| {
+            let mut game = GameSession::open_gpsp_serial(rom, core_file, storage, stem,
+                self.settings.colour_correction, self.ra_service.as_ref(), serial)?;
+            game.restore_checkpoint_after_link_failure(snapshot)?;
+            SAMPLE_RATE.store(game.sample_rate, Ordering::Release);
+            self.game = Some(game);
+            Ok(())
+        })();
+        if result.is_err() {
+            SAMPLE_RATE.store(0, Ordering::Release);
+            PLAYING.store(false, Ordering::Release);
+        }
+        result
+    }
+
+    fn restore_solo_after_link_failure(&mut self, rom: &Path,
+                                       core_file: &Path, storage: &Path,
+                                       stem: &str, snapshot: &[u8]) -> Result<(), String> {
+        let result = (|| {
+            let mut game = GameSession::open(rom, core_file, storage,
+                Core::Mgba, Platform::Gba, true, stem, None,
+                self.settings.colour_correction, self.ra_service.as_ref())?;
+            game.restore_checkpoint_after_link_failure(snapshot)?;
+            SAMPLE_RATE.store(game.sample_rate, Ordering::Release);
+            self.game = Some(game);
+            Ok(())
+        })();
+        if result.is_err() {
+            SAMPLE_RATE.store(0, Ordering::Release);
+            PLAYING.store(false, Ordering::Release);
+        }
+        result
     }
 
     fn poll_multiplayer(&mut self) {
@@ -981,15 +1451,23 @@ impl Engine {
                         since: self.link_worked_at,
                     };
                 }
-                LinkProgress::Ready(wire) => {
+                LinkProgress::PeerRomConsent(label) => {
+                    *LINK_PEER_LABEL.lock().unwrap_or_else(|e| e.into_inner()) = Some(label);
+                    // Kotlin displays a Slot-styled choice and returns the
+                    // decision asynchronously; GL stays nonblocking.
+                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(18);
+                }
+                LinkProgress::Ready(wire, peer_rom) => {
                     self.cancel_link_discovery();
                     let role = if self.link_role == LinkRow::Host {
                         LinkRole::Host
                     } else { LinkRole::Join };
-                    let joined = self.game.as_mut().ok_or_else(|| "No game active".to_owned())
-                        .and_then(|game| game.begin_multiplayer(role, self.link_mode, Box::new(wire)));
+                    let joined = self.begin_link_session(role, wire, peer_rom);
                     match joined {
                         Ok(()) => {
+                            // Host purple / Join grey, permanently shown in
+                            // the exact upstream top-right in-game HUD.
+                            self.hud.set_link(link_badge_for(self.link_role, false));
                             self.link_phase = LinkMenu::Linked {
                                 role: self.link_role,
                                 worked: self.link_worked_at,
@@ -1003,36 +1481,66 @@ impl Engine {
                     let fail = match reason {
                         crate::multiplayer::Failure::NoNetwork => LinkFail::Radio,
                         crate::multiplayer::Failure::NobodyCame => LinkFail::NobodyCame,
+                        crate::multiplayer::Failure::IncompatiblePeer => LinkFail::PeerVanished,
                         crate::multiplayer::Failure::Cancelled => LinkFail::Cancelled,
                         crate::multiplayer::Failure::PeerVanished => LinkFail::PeerVanished,
                     };
-                    self.fail_multiplayer(&format!("{reason:?}"), fail);
+                    let details = if reason == crate::multiplayer::Failure::IncompatiblePeer {
+                        "Peer refused Link: check compatible cartridges, same build, BIOS and Cable/RFU mode (mGBA KMLB/4, gpSP KMLB/3)."
+                    } else {
+                        match reason {
+                            crate::multiplayer::Failure::NobodyCame => "No compatible Host found. Ensure Host is waiting on the same LAN.",
+                            crate::multiplayer::Failure::NoNetwork => "A usable Wi-Fi or emulator bridge network is required.",
+                            crate::multiplayer::Failure::Cancelled => "Connection cancelled.",
+                            _ => "Multiplayer peer disappeared or connection failed.",
+                        }
+                    };
+                    self.fail_multiplayer(details, fail);
                 }
             }
         }
-        if let LinkMenu::Linked { since, .. } = self.link_phase {
-            if self.link_millis().saturating_sub(since) >= 1000 {
-                self.overlay = ShelfOverlay::None;
-                self.game_accum = 0.0;
-                self.buttons = 0;
-            }
+        if link_menu_auto_closes(self.link_phase, self.link_millis()) {
+            self.overlay = ShelfOverlay::None;
+            self.game_accum = 0.0;
+            self.buttons = 0;
+        }
+        if link_unplug_complete(self.link_phase, self.link_millis()) {
+            // A successfully rebuilt solo cartridge resumes *in place*.
+            // A failed conversion remains in the fail-closed Eject menu.
+            self.overlay = if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
+                ShelfOverlay::GameMenu { row: 0 }
+            } else { ShelfOverlay::None };
         }
     }
 
     fn handle(&mut self, input: Input) {
         match input {
+            Input::LinkPeerRomConsent(choice) => {
+                if let Some(starter) = self.link_starter.as_ref() {
+                    let decision = match choice {
+                        1 => crate::trusted_link::PeerPermission::AllowOnce,
+                        2 => crate::trusted_link::PeerPermission::Remember,
+                        _ => crate::trusted_link::PeerPermission::Reject,
+                    };
+                    starter.approve_peer_rom(decision);
+                    if choice != 1 && choice != 2 {
+                        self.cancel_link_discovery();
+                        self.fail_multiplayer("You declined sharing ROM data with this peer",
+                            LinkFail::Cancelled);
+                    }
+                }
+            }
             Input::LinkNetworkReady(address) => {
                 if matches!(self.overlay, ShelfOverlay::Multiplayer) &&
                     matches!(self.link_phase, LinkMenu::Working {..}) {
                     let start = address.parse::<Ipv4Addr>()
                         .map_err(|_| "Invalid Wi-Fi IPv4 address".to_string())
                         .and_then(|ip| {
-                            let code = self.link_identity.as_ref()
-                                .ok_or_else(|| "Game identity missing".to_owned())?;
+                            let config = self.link_config()?;
                             let role = if self.link_role == LinkRow::Host {
                                 LinkRole::Host
                             } else { LinkRole::Join };
-                            LinkStarter::spawn(role, ip, &code.code).map_err(|e| e.to_string())
+                            LinkStarter::spawn(role, ip, config).map_err(|e| e.to_string())
                         });
                     match start {
                         Ok(starter) => self.link_starter = Some(starter),
@@ -1055,9 +1563,8 @@ impl Engine {
                             .map_err(|_| "Invalid emulator local IPv4".to_owned())?;
                         let host = host.parse::<Ipv4Addr>()
                             .map_err(|_| "Invalid KONKR host IPv4".to_owned())?;
-                        let id = self.link_identity.as_ref()
-                            .ok_or_else(|| "No GBA game identity".to_owned())?;
-                        LinkStarter::spawn_direct_join(local, host, &id.code)
+                        let config = self.link_config()?;
+                        LinkStarter::spawn_direct_join(local, host, config)
                             .map_err(|e| e.to_string())
                     })();
                     match result {
@@ -1139,6 +1646,7 @@ impl Engine {
                 self.mode_down_at = None;
                 self.mode_last_tap = None;
                 self.home_launch_held = false;
+                self.select_home_consumed = false;
                 self.a_down_at = None;
                 self.polaroids = None;
                 // Android calls Reset onPause. Retain the *native menu* behind
@@ -1146,7 +1654,7 @@ impl Engine {
                 // the user briefly sees the cartridge carousel again.
                 if !self.external_pending {
                     self.overlay = if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
-                        ShelfOverlay::GameMenu { row: 2 }
+                        ShelfOverlay::GameMenu { row: 0 }
                     } else { ShelfOverlay::None };
                 }
                 self.picker = None;
@@ -1158,11 +1666,20 @@ impl Engine {
                 self.emulator_key_latch.reset();
                 self.cancel_link_discovery();
                 if let Some(session) = self.game.as_mut() { session.end_multiplayer(); }
-                if matches!(self.overlay, ShelfOverlay::Multiplayer) {
+                self.hud.set_link(LinkBadge::Off);
+                // Android can go to sleep while a linked game is fullscreen,
+                // not just while its Multiplayer menu is visible. The peer
+                // has now been disconnected and continuing in-game would
+                // accidentally run a private Link core as SOLO. Always
+                // resume through the safe Eject-to-solo menu in this case.
+                if suspend_returns_to_eject_menu(
+                    self.game.as_ref().is_some_and(GameSession::requires_relaunch),
+                    matches!(self.overlay, ShelfOverlay::Multiplayer)) {
                     self.overlay = ShelfOverlay::GameMenu { row: 0 };
+                    self.game_accum = 0.0;
                 }
                 if let Some(session) = self.game.as_mut() {
-                    if session.save(true) {
+                    if session.save(true) && !session.is_link_sandbox() {
                         if let Some(uri) = self.requested_uri.as_deref() {
                             let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
                             let core = paths.as_ref().map(|(storage, _)| {
@@ -1177,6 +1694,7 @@ impl Engine {
                 AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
             }
             Input::Exit => {
+                self.hud.set_link(LinkBadge::Off);
                 self.emulator_key_latch.reset();
                 self.cancel_link_discovery();
                 self.link_identity = None;
@@ -1192,7 +1710,7 @@ impl Engine {
                 if self.progress > 0.0 || self.inserted { self.eject_sound_armed = true; }
                 if let Some(mut session) = self.game.take() {
                     let saved = session.save(self.settings.eject_save);
-                    if saved {
+                    if saved && !session.is_link_sandbox() {
                         if let Some(uri) = self.requested_uri.as_deref() {
                             let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
                             let core = paths.as_ref().map(|(storage, _)| {
@@ -1216,10 +1734,12 @@ impl Engine {
                 self.fresh_launch = false;
                 self.mode_down_at = None;
                 self.mode_last_tap = None;
+                self.select_home_consumed = false;
                 self.polaroids = None;
                 self.requested_uri = None;
                 self.prepared_rom = None;
                 self.link_identity = None;
+                self.link_mode_override = None;
                 self.game_emulation = None;
                 *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = None;
             }
@@ -1274,10 +1794,56 @@ impl Engine {
                 }
             }
             Input::Key(code, pressed) => {
+                if code == 110 {
+                    match select_home_action(
+                        pressed,
+                        self.select_down_at.is_some(),
+                        self.game.is_some(),
+                        matches!(self.overlay, ShelfOverlay::None | ShelfOverlay::GameMenu { .. }),
+                        &mut self.select_home_consumed,
+                    ) {
+                        SelectHomeAction::Swallow => return,
+                        SelectHomeAction::OpenLink => {
+                            // The SELECT+HOME gesture belongs to Slot, not to
+                            // libretro or Android's normal HOME handler.
+                            self.select_down_at = None;
+                            self.select_chorded = true;
+                            self.select_forwarded = false;
+                            self.select_tap_frames = 0;
+                            self.buttons = 0;
+                            self.mode_down_at = None;
+                            self.mode_last_tap = None;
+                            self.game_accum = 0.0;
+                            if self.game.as_ref().is_some_and(GameSession::linked) {
+                                self.link_entry = LinkEntry::Shortcut;
+                                // Upstream SELECT+MENU reopens the animated
+                                // linked adapter and A=End Link / B=Back.
+                                self.link_phase = LinkMenu::Linked {
+                                    role: self.link_role,
+                                    worked: self.link_worked_at,
+                                    since: self.link_millis(),
+                                    opened: true,
+                                };
+                                self.overlay = ShelfOverlay::Multiplayer;
+                            } else {
+                                self.enter_multiplayer_menu();
+                                if matches!(self.overlay, ShelfOverlay::Multiplayer) {
+                                    self.link_entry = LinkEntry::Shortcut;
+                                }
+                            }
+                            return;
+                        }
+                        SelectHomeAction::Pass => {}
+                    }
+                }
                 if code == 110 && matches!(self.overlay, ShelfOverlay::Multiplayer) {
                     if !pressed {
-                        self.cancel_link_discovery();
-                        self.overlay = ShelfOverlay::GameMenu { row: 1 };
+                        if matches!(self.link_phase, LinkMenu::Linked { opened: true, .. }) {
+                            self.overlay = ShelfOverlay::None;
+                        } else if !matches!(self.link_phase, LinkMenu::Unplug { .. }) {
+                            self.cancel_link_discovery();
+                            self.overlay = self.link_entry.back();
+                        }
                     }
                     return;
                 }
@@ -1317,8 +1883,8 @@ impl Engine {
                             if self.game.is_some() { self.handle(Input::Exit); }
                         } else if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
                             self.mode_last_tap = None;
-                            self.overlay = ShelfOverlay::GameMenu { row: 2 };
-                            set_message("Eject and relaunch to play solo".into());
+                            self.overlay = ShelfOverlay::GameMenu { row: 0 };
+                            set_message("Press A to eject and relaunch in solo".into());
                         } else if self.game.is_some() {
                             let is_double=self.mode_last_tap.take()
                                 .is_some_and(|t|t.elapsed().as_millis()<360);
@@ -1344,20 +1910,76 @@ impl Engine {
                 }
                 if self.game.is_some() && matches!(self.overlay, ShelfOverlay::Multiplayer) {
                     if pressed {
-                        match code {
-                            21 | 22 if matches!(self.link_phase, LinkMenu::Pick(_)
-                                | LinkMenu::Failed {..}) => {
-                                self.link_role = if self.link_role == LinkRow::Host {
-                                    LinkRow::Join
-                                } else { LinkRow::Host };
-                                self.link_phase = LinkMenu::Pick(self.link_role);
+                        match self.link_phase {
+                            LinkMenu::Pick(_) => match code {
+                                109 if self.link_mode_switchable() => {
+                                    self.link_mode = self.link_mode.other();
+                                    self.link_mode_override = Some(self.link_mode);
+                                    // The actual gpSP option is applied by an
+                                    // atomic core reload before linking.
+                                }
+                                21 | 22 => {
+                                    self.link_role = if self.link_role == LinkRow::Host {
+                                        LinkRow::Join
+                                    } else { LinkRow::Host };
+                                    self.link_phase = LinkMenu::Pick(self.link_role);
+                                }
+                                96 => self.request_multiplayer_network(),
+                                97 | 108 => {
+                                    self.cancel_link_discovery();
+                                    self.overlay = self.link_entry.back();
+                                }
+                                _ => {}
+                            },
+                            LinkMenu::Working { .. } => {
+                                if code == 97 || code == 108 {
+                                    self.cancel_link_discovery();
+                                    self.overlay = self.link_entry.back();
+                                }
                             }
-                            96 => self.request_multiplayer_network(),
-                            97 | 108 => {
-                                self.cancel_link_discovery();
-                                self.overlay = ShelfOverlay::GameMenu { row: 1 };
+                            LinkMenu::Failed { .. } => {
+                                if code == 96 || code == 97 || code == 108 {
+                                    self.overlay = self.link_entry.back();
+                                }
                             }
-                            _ => {}
+                            LinkMenu::Linked { opened: true, role, .. } => match code {
+                                96 => {
+                                    // End Link is a virtual unplug, not a
+                                    // cartridge ejection. Solo save states and
+                                    // Polaroids become available ONLY after
+                                    // a verified one-GBA recovery + promotion.
+                                    match self.return_link_to_solo() {
+                                        Ok(()) => {
+                                            self.hud.set_link(LinkBadge::Off);
+                                            // The physical unplug animation is the success cue.
+                                            // No additional transient toast over gameplay.
+                                            self.link_phase = LinkMenu::Unplug {
+                                                role, since: self.link_millis(),
+                                            };
+                                            self.game_accum = 0.0;
+                                            self.buttons = 0;
+                                        }
+                                        Err(reason) => {
+                                            // Never continue in a stale Link
+                                            // core and never overwrite solo
+                                            // progress following recovery error.
+                                            if let Some(game) = self.game.as_mut() {
+                                                game.end_multiplayer();
+                                            }
+                                            set_message(format!("Link recovery unsafe: {reason}. Original solo progress preserved."));
+                                            self.hud.set_link(link_badge_for(role, true));
+                                            if self.game.is_some() {
+                                                self.overlay = ShelfOverlay::GameMenu { row: 0 };
+                                            } else {
+                                                self.handle(Input::Exit);
+                                            }
+                                        }
+                                    }
+                                }
+                                97 | 108 => self.overlay = self.link_entry.back(),
+                                _ => {}
+                            },
+                            LinkMenu::Linked { opened: false, .. } | LinkMenu::Unplug { .. } => {}
                         }
                     }
                     return;
@@ -1420,27 +2042,38 @@ impl Engine {
                                         row: move_menu_row(row, code, 4),
                                     };
                                 }
+                                // Both "Save & Eject" (row 2) and the
+                                // post-link "Eject to play solo" (row 0)
+                                // must use the SAME save/eject lifecycle.
+                                // Never render an action which only prints
+                                // an error and leaves the user trapped.
+                                96 if game_menu_ejects(row, self.game.as_ref()
+                                    .is_some_and(GameSession::requires_relaunch)) => {
+                                    self.handle(Input::Exit);
+                                }
                                 96 => {
                                     match row {
                                         1 => {
+                                            self.link_entry = LinkEntry::GameMenu;
                                             if self.game.as_ref().is_some_and(GameSession::linked) {
-                                                if let Some(game) = self.game.as_mut() {
-                                                    game.end_multiplayer();
-                                                }
-                                                set_message("Multiplayer disconnected".into());
+                                                // Reopen the connected adapter instead of
+                                            // ENDing the Link when the Pause menu row
+                                            // 'Multiplayer' is selected.
+                                            self.link_phase = LinkMenu::Linked {
+                                                role: self.link_role,
+                                                worked: self.link_worked_at,
+                                                since: self.link_millis(),
+                                                opened: true,
+                                            };
+                                            self.overlay = ShelfOverlay::Multiplayer;
                                             } else { self.enter_multiplayer_menu(); }
                                         }
-                                        2 => self.handle(Input::Exit),
                                         3 => {
                                             if self.game.as_ref().is_some_and(|g| g.linked() || g.requires_relaunch()) {
                                                 set_message("Relaunch the cartridge before using Save States".into());
                                             } else { self.open_polaroids(); }
                                         }
-                                        _ => {
-                                            if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
-                                                set_message("Multiplayer ended. Eject to return to solo.".into());
-                                            } else { self.overlay = ShelfOverlay::None; }
-                                        }
+                                        _ => self.overlay = ShelfOverlay::None,
                                     }
                                 }
                                 97 => {
@@ -1601,17 +2234,25 @@ impl Engine {
                             },
                             ShelfOverlay::Library { row } => match code {
                                 19 | 20 => {
-                                    let next = if code == 19 { (row + 4) % 5 } else { (row + 1) % 5 };
+                                    let next = if code == 19 { (row + 5) % 6 } else { (row + 1) % 6 };
                                     self.overlay = ShelfOverlay::Library { row: next };
                                 }
+                                // Identical left/right + A toggle to Settings.
+                                // Keep the selected row and refresh value in place.
+                                21 | 22 | 96 if row == 4 => {
+                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
+                                        .push_back(17);
+                                }
                                 96 => match row {
-                                    0..=4 => {
-                                        // ROM, BIOS, SRAM root, State root, Refresh.
+                                    0..=5 => {
+                                        // ROM, BIOS, SRAM root, State root,
+                                        // Share Saves OFF/ON, Refresh.
                                         let action = match row {
                                             0 => 1,
                                             1 => 4,
                                             2 => 5,
                                             3 => 6,
+                                            4 => 17,
                                             _ => 2,
                                         };
                                         UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
@@ -2011,8 +2652,13 @@ impl Engine {
                 .get(self.shelves[self.active].index)
                 .map_or("", |cart| cart.stem.as_str());
             let started = Instant::now();
+            let resume_preference = NEXT_RESUME_MODE.swap(-1, Ordering::AcqRel);
+            let wants_state = match resume_preference {
+                0 => false, 1 => true,
+                _ => self.settings.eject_save && !self.fresh_launch,
+            };
             match GameSession::open(Path::new(local), &core_file, &storage,
-                core, platform, self.settings.eject_save && !self.fresh_launch,
+                core, platform, wants_state,
                 rom_stem, self.settings.gb_palettes.then(|| self.settings.palette_name()),
                 self.settings.colour_correction,
                 self.ra_service.as_ref()) {
@@ -2020,6 +2666,7 @@ impl Engine {
                     self.link_identity = if platform == Platform::Gba {
                         crate::link_rom::identify(Path::new(local)).ok()
                     } else { None };
+                    self.link_mode_override = None;
                     // Create libretro on the same GL thread, but defer audio
                     // and CRT presentation until Slot's seated hold completes.
                     crate::game::log_launch_timing(&format!(
@@ -2167,6 +2814,11 @@ impl Engine {
         });
     }
     fn change_game_emulation(&mut self, key: usize, right: bool) {
+        if key == 12 && self.game.as_ref().is_some_and(|game|
+            game.mgba_flash_runahead_blocked()) {
+            set_message("Run-Ahead is disabled for Pokemon Gen III with mGBA to protect Flash saves. gpSP is unchanged.".into());
+            return;
+        }
         let Some(uri) = self.selected_rom_uri() else { return; };
         let core = self.selected_emulation_core();
         let mut profile = self.current_emulation();
@@ -2240,6 +2892,28 @@ impl Engine {
             14 => if self.settings.show_bluetooth { 4 } else { 5 },
             15 => if self.settings.show_integrations { 4 } else { 5 },
             _ => 5,
+        }
+    }
+
+    /// Exact Settings ON/OFF texture and carets on Library row 4.
+    fn draw_library_share_value(&self, row: usize, out: &mut Vec<Draw>) {
+        let which = if SHARE_SAVES_ENABLED.load(Ordering::Acquire) { 4 } else { 5 };
+        let (tex, width, height) = self.setting_values[which];
+        let y = settings_row_top(6) + 4.0 * QUICK_PITCH + 8.0;
+        let scale = 0.79f32;
+        let w = width as f32 * scale;
+        let right = OUT_W as f32 - 34.0;
+        let selected = row == 4;
+        let x = right - w - if selected { 22.0 } else { 0.0 };
+        out.push(Draw::Tex { x, y, w, h: height as f32 * scale, tex,
+            alpha: if selected { 1.0 } else { 0.62 } });
+        if selected {
+            let (left, lw, lh) = self.setting_carets[0];
+            let (right_tex, rw, rh) = self.setting_carets[1];
+            out.push(Draw::Tex { x: x - lw as f32 - 8.0, y,
+                w: lw as f32, h: lh as f32, tex: left, alpha: 1.0 });
+            out.push(Draw::Tex { x: right - rw as f32, y,
+                w: rw as f32, h: rh as f32, tex: right_tex, alpha: 1.0 });
         }
     }
 
@@ -2329,37 +3003,49 @@ impl Engine {
         }
     }
 
-    /// The original Slot cable plug/wireless adapter and their exact motion
-    /// curves are reused without forking them. Only text and the KONKR
-    /// controller keycap legend are native additions.
+    /// Exact upstream Slot Link menu composition: no additional Android
+    /// title, mode label or bottom bar. Cable plug and wireless adapter sprites
+    /// are identical to original and fork, as are progress/failure messages.
     fn draw_multiplayer(&self, out: &mut Vec<Draw>) {
         out.push(Draw::Rect {
             x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
             colour: opening(),
         });
-        let now = self.link_millis();
         link_screen::draw_link_art(self.link_phase, self.link_mode,
-            now, &self.link_art, out);
-        self.text_fit(68, 30.0, 20.0, 610.0, 0.9, out);
-        self.text_fit(if self.link_mode == LinkKind::Cable { 71 } else { 72 },
-            30.0, 71.0, 140.0, 0.75, out);
-        self.text_fit(if self.link_role == LinkRow::Host { 69 } else { 70 },
-            300.0, 61.0, 110.0, 1.0, out);
-        let status = match self.link_phase {
-            LinkMenu::Pick(_) => 76,
-            LinkMenu::Working { .. } => 73,
-            LinkMenu::Linked { .. } => 74,
-            LinkMenu::Failed { .. } => 77,
-            LinkMenu::Unplug { .. } => 75,
+            self.link_millis(), &self.link_art, out);
+        let text = match self.link_phase {
+            LinkMenu::Pick(role) => Some(self.link_role_faces[role.index()]),
+            LinkMenu::Working { step, .. } => Some(self.link_step_faces[step.index()]),
+            LinkMenu::Linked { .. } => Some(self.link_connected_face),
+            LinkMenu::Failed { fail, .. } => fail.shown()
+                .and_then(|i| self.link_fail_faces.get(i).copied()),
+            LinkMenu::Unplug { .. } => None,
         };
-        self.text_fit(status, 178.0, 119.0, 465.0, 0.8, out);
-        out.push(Draw::Rect {
-            x: 0.0, y: 420.0, w: OUT_W as f32, h: 60.0,
-            colour: opening(),
-        });
-        for (tex, w, x) in centred_hints(&self.link_hints, 15.0) {
-            out.push(Draw::Tex { x, y: 427.0, w: w as f32,
-                h: HINT_H as f32, tex, alpha: 1.0 });
+        if let Some((tex, w, h)) = text {
+            out.push(Draw::Tex {
+                x: link_heading_x(w),
+                y: LINK_TEXT_Y, w: w as f32, h: h as f32,
+                tex, alpha: 1.0,
+            });
+        }
+        let hints: &[(slot_gfx::TexId, u32)] =
+            match link_legend_profile(self.link_phase, self.link_mode_switchable()) {
+                LinkLegendProfile::PickerWithMode => &self.link_switch_hints,
+                LinkLegendProfile::Picker => &self.link_hints,
+                LinkLegendProfile::Searching => &self.link_hints[..1],
+                LinkLegendProfile::ConnectedMenu => &self.link_connected_hints,
+                LinkLegendProfile::Failed => &self.link_failed_hints,
+                LinkLegendProfile::None => &[],
+            };
+        let seen = |w: u32| w.saturating_sub(HINT_EDGE) as f32;
+        let mut x = link_legend_start(hints);
+        for &(tex, w) in hints {
+            out.push(Draw::Tex {
+                x, y: LINK_LEGEND_Y,
+                w: w as f32, h: HINT_H as f32,
+                tex, alpha: 1.0,
+            });
+            x += (seen(w) + LINK_LEGEND_GAP).round();
         }
     }
 
@@ -2370,7 +3056,8 @@ impl Engine {
                 self.draw_original_style_menu(0, &[1, 2, 3, 48, 25, 31], row, out);
             }
             ShelfOverlay::Library { row } => {
-                self.draw_original_style_menu(5, &[6, 24, 7, 8, 9], row, out);
+                self.draw_original_style_menu(5, &[6, 24, 7, 8, 79, 9], row, out);
+                self.draw_library_share_value(row, out);
             }
             ShelfOverlay::Settings { row } => {
                 self.draw_original_style_menu(26, &[32, 33, 49, 58], row, out);
@@ -2679,7 +3366,7 @@ impl Engine {
         // Keep animation entirely in rendering: never delay controller input.
         let (kind, selected, count) = match self.overlay {
             ShelfOverlay::Menu { row } => (1u8, row, 6usize),
-            ShelfOverlay::Library { row } => (2u8, row, 5usize),
+            ShelfOverlay::Library { row } => (2u8, row, 6usize),
             ShelfOverlay::GameMenu { row } => (3u8, row, 4usize),
             ShelfOverlay::Multiplayer => (11u8, 0, 0usize),
             ShelfOverlay::Settings { row } => (4u8, row, 4usize),
@@ -2825,11 +3512,62 @@ impl Engine {
         }
         if self.game.is_some() && matches!(self.overlay,
             ShelfOverlay::GameMenu { .. } | ShelfOverlay::Multiplayer) {
-            // Rendering the pause menu does not borrow an active libretro session
-            // or advance the core, so input and audio stay frozen.
+            // Coordinate the pause with the remote game. Without this
+            // the other Cable peer times out and gpSP RFU can drift.
+            if let Some(game) = self.game.as_mut() { game.set_link_paused(true); }
+            // No libretro frames are evaluated while a native overlay is
+            // visible. Poll transport atomics here as well; otherwise a remote
+            // End Link or a broken socket is invisible until the local player
+            // closes the menu, potentially leaving a permanent "Linked" UI.
+            if let Some(fault) = self.game.as_ref().and_then(GameSession::link_fault) {
+                // Peer End/EOF returns to SOLO in-place; don't display
+                // a misleading transient link-ended banner over gameplay.
+                if !matches!(fault,
+                    crate::link_play::LinkError::PeerEnded |
+                    crate::link_play::LinkError::Disconnected) {
+                    self.hud.toast(link_fault_toast(fault),
+                        self.born.elapsed().as_millis() as u64);
+                }
+                self.ff_held = false;
+                self.ff_latched = false;
+                self.rewind_held = false;
+                self.hud.set_ff(FfState::Off);
+                AUDIO_SPEED_PERMILLE.store(1000, Ordering::Release);
+                let rejoined = if matches!(fault,
+                    crate::link_play::LinkError::PeerEnded |
+                    crate::link_play::LinkError::Disconnected) {
+                    self.return_link_to_solo()
+                } else {
+                    Err(format!("Unsafe Link transport: {fault:?}"))
+                };
+                match rejoined {
+                    Ok(()) => {
+                        // Peer unplugged; this cartridge keeps its local
+                        // SRAM and full solo state without an app eject.
+                        self.hud.set_link(LinkBadge::Off);
+                        self.overlay = ShelfOverlay::None;
+                    }
+                    Err(reason) => {
+                        if let Some(game) = self.game.as_mut() { game.end_multiplayer(); }
+                        self.hud.set_link(link_badge_for(self.link_role, true));
+                        if self.game.is_some() {
+                            self.overlay = ShelfOverlay::GameMenu { row: 0 };
+                        } else { self.handle(Input::Exit); }
+                        set_message(format!("Multiplayer stopped: {reason}"));
+                    }
+                }
+            }
             self.game_accum = 0.0;
             let mut commands = vec![Draw::Game];
             self.draw_overlay(&mut commands);
+            // The original Slot app draws the HUD AFTER draw_game_menu()
+            // (app.rs), including during its Linked animation. The four
+            // cyan/purple chain badges are already loaded into our Hud but
+            // used to disappear behind the Multiplayer overlay because we
+            // skipped this final HUD pass. Keep the exact upstream z-order.
+            if matches!(self.overlay, ShelfOverlay::Multiplayer) {
+                self.hud.draw(self.born.elapsed().as_millis() as u64, &mut commands);
+            }
             self.gpu.fit(self.size);
             self.gpu.begin_frame();
             self.gpu.draw_list(&commands);
@@ -2849,11 +3587,16 @@ impl Engine {
         // GL resource ownership ever moves away from the GL render thread.
         DISPLAY_SYNC.store(self.game.is_some() && profile.display_sync_pacing,
             Ordering::Release);
+        let a12_native_started = Instant::now();
         if let Some(session) = self.game.as_mut() {
+            // Resume only after the remote has also left its pause menu;
+            // LinkPlay::frame holds either core while peer_paused is true.
+            session.set_link_paused(false);
             // In-game HUD replaces the shelf chrome; never let the upper
             // Android indicators remain visible on the first game frame.
             SHELF_INDICATOR_FLAGS.store(0, Ordering::Release);
             let mut stepped = 0;
+            let mut peer_unplugged = None;
             if self.rewind_held {
                 // Rewind is mutually exclusive with forward libretro frames.
                 // Restore up to 3 historical snapshots per render frame and
@@ -2882,36 +3625,68 @@ impl Engine {
                 // and inconsistent input response on the physical KONKR.
                 // STANDARD and fast-forward are not changed.
                 let responsive = profile.responsive_pacing && !fast;
+                // A11: this is the *same* double-GBA lockstep on both ends,
+                // even for equal ROMs. One late packet must not make gameplay
+                // and audio permanently lose an emulated frame. Restrict
+                // recovery to mGBA Cable; gpSP and solo retain their policy.
+                let mgba_cable_pacing = session.linked()
+                    && session.core_kind() == Core::Mgba && !fast
+                    && MGBA_CABLE_RECOVERY.load(Ordering::Acquire);
                 // Preserve a little more fractional game time in the
                 // opt-in DISPLAY SYNC mode ONLY. No extra libretro frames
                 // can run in any single callback; Beta 4 catch-up stays gone.
-                if profile.display_sync_pacing && responsive {
+                if mgba_cable_pacing {
+                    self.game_accum = crate::settings::frame_debt_mgba_cable(
+                        self.game_accum, f64::from(dt), period);
+                } else if profile.display_sync_pacing && responsive {
                     self.game_accum = crate::settings::frame_debt_display_sync(
                         self.game_accum, f64::from(dt), multiplier, period);
                 } else {
                     self.game_accum = crate::settings::frame_debt(
                         self.game_accum, f64::from(dt), multiplier, period, fast, responsive);
                 }
-                let frame_limit = if fast { usize::from(self.settings.ff_speed) * 4 }
+                let frame_limit = if mgba_cable_pacing { 2 }
+                    else if fast { usize::from(self.settings.ff_speed) * 4 }
                     else if responsive { 1 } else { 4 };
+                // A13.1: revert the experimental second-frame budget.
+                // Real-world A13 KONKR/AVD tests suffered repeated Link
+                // wait_peer stalls and severe AudioTrack starvation.
+                // A12's A11 bounded-debt/2-frame policy was smoother.
                 while self.game_accum >= period && stepped < frame_limit {
                     // Cable lockstep must not consume emulation time while
                     // the remote frame has not arrived. NEVER invent a solo
                     // frame or perform speculative Run-Ahead on a held link.
                     if !session.advance(self.buttons, self.settings.turbo,
                         self.settings.rewind && !session.linked()) {
-                        self.game_accum = 0.0;
+                        // A waiting mGBA Cable frame is NOT an emulated frame.
+                        // Retain at most two frames of debt; only real remote
+                        // inputs can advance them later. Never preserve debt
+                        // after an actual Link fault or in solo/gpSP.
+                        self.game_accum = if mgba_cable_pacing
+                            && session.link_fault().is_none() {
+                            self.game_accum.min(period * 2.0)
+                        } else { 0.0 };
                         if let Some(fault) = session.link_fault() {
-                            // Fail closed on link loss: pause the game instead
-                            // of silently continuing a divergent solo timeline.
-                            session.end_multiplayer();
+                            // Remote End Link and TCP loss can become a
+                            // verified single-GBA SOLO instance after the
+                            // live session's final frame has been drawn.
+                            // Invalid/corrupt frames remain fail-closed.
+                            if matches!(fault, crate::link_play::LinkError::PeerEnded |
+                                crate::link_play::LinkError::Disconnected) {
+                                peer_unplugged = Some(fault);
+                            } else {
+                                session.end_multiplayer();
+                                self.hud.set_link(link_badge_for(self.link_role, true));
+                                self.hud.toast(link_fault_toast(fault),
+                                    self.born.elapsed().as_millis() as u64);
+                                self.overlay = ShelfOverlay::GameMenu { row: 0 };
+                                set_message(format!("Multiplayer paused: {fault:?}"));
+                            }
                             self.ff_held = false;
                             self.ff_latched = false;
                             self.rewind_held = false;
                             self.hud.set_ff(FfState::Off);
                             AUDIO_SPEED_PERMILLE.store(1000, Ordering::Release);
-                            self.overlay = ShelfOverlay::GameMenu { row: 0 };
-                            set_message(format!("Multiplayer paused: {fault:?}"));
                         }
                         break;
                     }
@@ -2965,6 +3740,26 @@ impl Engine {
             self.hud.draw(self.born.elapsed().as_millis() as u64, &mut commands);
             self.gpu.draw_list(&commands);
             self.gpu.end_frame(self.size);
+            a12_draw_sample(session.linked() && session.core_kind() == Core::Mgba,
+                stepped, a12_native_started.elapsed().as_micros() as u64,
+                MGBA_CABLE_RECOVERY.load(Ordering::Acquire));
+            if let Some(_fault) = peer_unplugged {
+                // Silent, verified solo return on intentional unplug or TCP EOF.
+                match self.return_link_to_solo() {
+                    Ok(()) => {
+                        self.hud.set_link(LinkBadge::Off);
+                        self.overlay = ShelfOverlay::None;
+                    }
+                    Err(reason) => {
+                        if let Some(game) = self.game.as_mut() { game.end_multiplayer(); }
+                        self.hud.set_link(link_badge_for(self.link_role, true));
+                        if self.game.is_some() {
+                            self.overlay = ShelfOverlay::GameMenu { row: 0 };
+                        } else { self.handle(Input::Exit); }
+                        set_message(format!("Unable to recover Link player: {reason}"));
+                    }
+                }
+            }
             return;
         }
 
@@ -3107,6 +3902,129 @@ impl Engine {
     }
 }
 
+/// Do not report an unsuccessful core reopen as "solo restored".
+/// Always surface the genuine checkpoint error to the user: the durable
+/// solo state and battery files remain on disk for safe cartridge relaunch.
+/// Match the upstream Eject-first rule even if Android onPause occurs
+/// outside the Multiplayer menu. Pure so its fullscreen branch cannot
+/// silently regress when editing the lifecycle handling.
+fn suspend_returns_to_eject_menu(requires_relaunch: bool,
+                                 menu_is_multiplayer: bool) -> bool {
+    requires_relaunch || menu_is_multiplayer
+}
+
+fn link_boot_failure(context: &str, error: &str,
+                     recovery: Result<(), String>) -> String {
+    match recovery {
+        Ok(()) => format!("{context}: {error}; original solo progress restored"),
+        Err(cause) => format!("{context}: {error}; solo recovery failed: {cause}. Eject/relaunch the cartridge; saved progress remains on disk"),
+    }
+}
+
+// The source-of-truth coordinates and width accounting from upstream
+// BrandonKowalski/slot app.rs: draw_game_menu(). Do not replace the
+// original 720x480 centred keycaps with the Android Settings footer or
+// a second full-width black rectangle at y=420.
+const LINK_TEXT_Y: f32 = 44.0;
+const LINK_LEGEND_Y: f32 = 422.0;
+const LINK_LEGEND_GAP: f32 = 40.0;
+
+fn link_heading_x(width: u32) -> f32 {
+    ((OUT_W as f32 - width as f32) / 2.0).round()
+}
+
+fn link_legend_start(hints: &[(slot_gfx::TexId, u32)]) -> f32 {
+    let total = hints.iter().map(|(_, w)| w.saturating_sub(HINT_EDGE) as f32)
+        .sum::<f32>() + LINK_LEGEND_GAP * hints.len().saturating_sub(1) as f32;
+    ((OUT_W as f32 - total) / 2.0).round()
+}
+
+/// Original Slot / fork draw_game_menu() picks exactly these groups of
+/// bottom keycaps. Keep selection separate from the GL scene so changes
+/// cannot accidentally show A Link while searching/linked or conceal
+/// SELECT Mode on a real gpSP RFU/Cable switchable title.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum LinkLegendProfile {
+    PickerWithMode, // B CANCEL | SELECT MODE | arrows SWAP | A LINK
+    Picker,         // B CANCEL | arrows SWAP | A LINK
+    Searching,      // B CANCEL
+    ConnectedMenu,  // B BACK | A END LINK (only reopened overlay)
+    Failed,         // A OK
+    None,           // initial LINKED / animated Unplug
+}
+
+fn link_legend_profile(menu: LinkMenu, selectable_mode: bool) -> LinkLegendProfile {
+    match menu {
+        LinkMenu::Pick(_) if selectable_mode => LinkLegendProfile::PickerWithMode,
+        LinkMenu::Pick(_) => LinkLegendProfile::Picker,
+        LinkMenu::Working { .. } => LinkLegendProfile::Searching,
+        LinkMenu::Linked { opened: true, .. } => LinkLegendProfile::ConnectedMenu,
+        LinkMenu::Linked { opened: false, .. } | LinkMenu::Unplug { .. } =>
+            LinkLegendProfile::None,
+        LinkMenu::Failed { .. } => LinkLegendProfile::Failed,
+    }
+}
+
+/// A Link Mode toggle must never lie about actual physical/serial support.
+fn link_mode_can_switch(core: Core, chosen: LinkKind, code: &str,
+                        title: &str, clean: bool) -> bool {
+    if core != Core::Gpsp || !link_kind::link_carried(code, title)
+        || !link_kind::has_wireless_adapter(code)
+        || !link_kind::gpsp_runtime_mode_supported(code, chosen)
+        || !link_kind::gpsp_runtime_mode_supported(code, chosen.other()) { return false; }
+    let automatic = link_kind::link_kind(code, title, clean);
+    let selected_serial = link_kind::serial_option(chosen, automatic, code, title);
+    let opposite_serial = link_kind::serial_option(chosen.other(), automatic, code, title);
+    selected_serial != opposite_serial
+}
+
+/// Route the post-link primary label to the same Input::Exit path as
+/// Save & Eject. In active solo play the primary menu item stays Resume.
+fn game_menu_ejects(row: usize, requires_relaunch: bool) -> bool {
+    row == 2 || (row == 0 && requires_relaunch)
+}
+
+/// The original Slot HUD distinguishes a remote end and a BIOS mismatch.
+fn link_fault_toast(fault: crate::link_play::LinkError) -> Toast {
+    match fault {
+        crate::link_play::LinkError::BiosMismatch => Toast::BiosMismatch,
+        crate::link_play::LinkError::PeerEnded
+        | crate::link_play::LinkError::Disconnected
+        | crate::link_play::LinkError::InvalidState
+        | crate::link_play::LinkError::Timeout => Toast::PeerEnded,
+    }
+}
+
+/// Map the negotiated on-wire role to upstream Slot Link icon variants.
+fn link_badge_for(role: LinkRow, disconnected: bool) -> LinkBadge {
+    match (role, disconnected) {
+        (LinkRow::Host, false) => LinkBadge::Hosting,
+        (LinkRow::Join, false) => LinkBadge::Joined,
+        (LinkRow::Host, true) => LinkBadge::HostingLost,
+        (LinkRow::Join, true) => LinkBadge::JoinedLost,
+    }
+}
+
+/// Only the initial "Linked" seating animation is self-dismissing.
+/// Reopening from SELECT+HOME must keep End Link/Back visible until input.
+fn link_menu_auto_closes(phase: LinkMenu, now: u64) -> bool {
+    matches!(phase, LinkMenu::Linked { since, opened: false, .. }
+        if now.saturating_sub(since) >= 1000)
+}
+
+/// Use the exact 260ms Slot link adapter unplug animation.
+fn link_unplug_complete(phase: LinkMenu, now: u64) -> bool {
+    // Upstream: the hardware withdraws in 260ms, then holds the screen
+    // another 160ms before exiting the Link menu (420ms total).
+    matches!(phase, LinkMenu::Unplug { since, .. }
+        if now.saturating_sub(since) >= 420)
+}
+
+/// A library refresh may never terminate an inserted or pending game.
+fn may_apply_library_update(game_active: bool, inserted: bool, awaiting: bool) -> bool {
+    !game_active && !inserted && !awaiting
+}
+
 /// A clean install has three shelves but zero cartridges. Never enqueue
 /// nonexistent artwork for the first draw (or after clearing the library).
 fn selected_prefetch_entry(shelves: &[Shelf], active: usize) -> Option<(usize, usize)> {
@@ -3196,6 +4114,220 @@ mod ui_feedback_tests {
     use super::*;
 
     #[test]
+    fn legacy_multiplayer_heading_helper_mode_and_footer_text_cannot_come_back() {
+        // Our previous integration/konkr-rc4-next rendered indices 68..77
+        // as extra MULTIPLAYER/CABLE/CHOOSE... overlays, together with an
+        // arbitrary 60px black footer and LEFT/RIGHT text keycap.
+        // They remain reserved index slots so unrelated menus are stable,
+        // but no legacy Multiplayer string can be rendered from MENU_TEXT.
+        assert!(MENU_TEXT[68..=77].iter().all(|label| label.is_empty()));
+        assert_eq!(MENU_TEXT[66], "Multiplayer"); // still a game menu action
+        assert_eq!(MENU_TEXT[67], "End Link");
+        assert_eq!(MENU_TEXT[78], "Eject to play solo");
+    }
+
+    #[test]
+    fn original_slot_link_title_and_bottom_keycaps_use_exact_canvas_geometry() {
+        assert_eq!(OUT_W, 720);
+        assert_eq!(OUT_H, 480);
+        assert_eq!(LINK_TEXT_Y, 44.0);
+        assert_eq!(LINK_LEGEND_Y, 422.0);
+        assert_eq!(LINK_LEGEND_GAP, 40.0);
+        for width in [88, 100, 120, 216, 300] {
+            let x = link_heading_x(width);
+            assert!(((x + width as f32 * 0.5) - 360.0).abs() <= 0.5);
+        }
+        // The old HOST was hard-coded to x=300 regardless of typography;
+        // this rule always centres both translated role title glyph widths.
+        assert_eq!(link_heading_x(120), 300.0);
+        assert_eq!(link_heading_x(216), 252.0);
+    }
+
+    #[test]
+    fn android_suspend_forces_eject_menu_when_a_live_link_ended_fullscreen() {
+        assert!(!suspend_returns_to_eject_menu(false, false),
+            "an ordinary solo game can resume without a modal");
+        assert!(suspend_returns_to_eject_menu(false, true),
+            "discovery interrupted onPause must leave Multiplayer");
+        assert!(suspend_returns_to_eject_menu(true, false),
+            "linked gameplay interrupted fullscreen must require Eject");
+        assert!(suspend_returns_to_eject_menu(true, true));
+    }
+
+    #[test]
+    fn link_boot_failures_never_pretend_solo_recovery_succeeded() {
+        let ok = link_boot_failure("gpSP Link", "cannot connect", Ok(()));
+        assert!(ok.contains("original solo progress restored"));
+        let unsafe_state = link_boot_failure("mGBA Link", "invalid peer",
+            Err("saved state was rejected".into()));
+        assert!(unsafe_state.contains("solo recovery failed"));
+        assert!(unsafe_state.contains("saved state was rejected"));
+        assert!(unsafe_state.contains("Eject/relaunch"));
+        assert!(!unsafe_state.contains("progress restored"));
+    }
+
+    #[test]
+    fn multiplayer_bottom_legends_match_all_original_slot_screen_states() {
+        use LinkLegendProfile as H;
+        assert_eq!(link_legend_profile(LinkMenu::Pick(LinkRow::Host), true),
+            H::PickerWithMode);
+        assert_eq!(link_legend_profile(LinkMenu::Pick(LinkRow::Join), true),
+            H::PickerWithMode);
+        assert_eq!(link_legend_profile(LinkMenu::Pick(LinkRow::Host), false),
+            H::Picker);
+        assert_eq!(link_legend_profile(LinkMenu::Working {
+            role: LinkRow::Host, step: LinkStep::Waiting, since: 100,
+        }, true), H::Searching);
+        assert_eq!(link_legend_profile(LinkMenu::Linked {
+            role: LinkRow::Host, worked: 100, since: 500, opened: false,
+        }, true), H::None);
+        assert_eq!(link_legend_profile(LinkMenu::Linked {
+            role: LinkRow::Join, worked: 100, since: 500, opened: true,
+        }, true), H::ConnectedMenu);
+        assert_eq!(link_legend_profile(LinkMenu::Failed {
+            role: LinkRow::Join, fail: LinkFail::PeerVanished,
+            worked: 100, since: 500,
+        }, true), H::Failed);
+        assert_eq!(link_legend_profile(LinkMenu::Unplug {
+            role: LinkRow::Join, since: 500,
+        }, true), H::None);
+    }
+
+    #[test]
+    fn eject_to_play_solo_is_an_action_not_a_noop() {
+        assert!(game_menu_ejects(0, true),
+            "post-multiplayer row 0 must perform the same ejection as row 2");
+        assert!(game_menu_ejects(2, true));
+        assert!(game_menu_ejects(2, false));
+        assert!(!game_menu_ejects(0, false),
+            "active solo row 0 must resume without ejecting");
+        assert!(!game_menu_ejects(1, true),
+            "end link action must not accidentally eject");
+        assert!(!game_menu_ejects(3, true),
+            "states action must not accidentally eject");
+    }
+
+    #[test]
+    fn slot_select_mode_only_allows_real_gpsp_serial_hardware_changes() {
+        // Retail FireRed defaults to RFU. SELECT switches to real Cable
+        // serial mode, which triggers a fresh gpSP boot before Join/Host.
+        assert!(link_mode_can_switch(Core::Gpsp, LinkKind::Wireless,
+            "BPRE", "POKEMON FIRE", true));
+        assert!(link_mode_can_switch(Core::Gpsp, LinkKind::Cable,
+            "BPRE", "POKEMON FIRE", true));
+        assert_eq!(link_kind::serial_option(LinkKind::Wireless,
+            LinkKind::Wireless, "BPRE", "POKEMON FIRE"), "auto");
+        assert_eq!(link_kind::serial_option(LinkKind::Cable,
+            LinkKind::Wireless, "BPRE", "POKEMON FIRE"), "mul_poke");
+        assert!(!link_mode_can_switch(Core::Mgba, LinkKind::Cable,
+            "BPRE", "POKEMON FIRE", true));
+        assert!(!link_mode_can_switch(Core::Gpsp, LinkKind::Cable,
+            "NONE", "UNKNOWN", false));
+        assert!(!link_mode_can_switch(Core::Gpsp, LinkKind::Wireless,
+            "BRBE", "MEGAMAN BN5", true),
+            "gpSP RFU-only Battle Network must not offer a fake Cable mode");
+    }
+
+    #[test]
+    fn link_failures_use_upstream_toasts_not_invented_link_sounds() {
+        use crate::link_play::LinkError;
+        assert_eq!(link_fault_toast(LinkError::BiosMismatch), Toast::BiosMismatch);
+        for fault in [LinkError::PeerEnded, LinkError::Disconnected,
+                      LinkError::InvalidState, LinkError::Timeout] {
+            assert_eq!(link_fault_toast(fault), Toast::PeerEnded);
+        }
+        assert_eq!(Toast::LinkEnded.text(), "Link ended");
+    }
+
+    #[test]
+    fn multiplayer_badges_match_original_host_join_broken_and_off() {
+        assert_eq!(link_badge_for(LinkRow::Host, false), LinkBadge::Hosting);
+        assert_eq!(link_badge_for(LinkRow::Join, false), LinkBadge::Joined);
+        assert_eq!(link_badge_for(LinkRow::Host, true), LinkBadge::HostingLost);
+        assert_eq!(link_badge_for(LinkRow::Join, true), LinkBadge::JoinedLost);
+        for variant in LinkBadge::FACES {
+            assert!(variant.badge().is_some());
+            assert!(variant.colour().is_some());
+            assert!(variant.face_index().is_some());
+        }
+        assert!(LinkBadge::Off.badge().is_none());
+        assert!(LinkBadge::Off.face_index().is_none());
+    }
+
+    #[test]
+    fn linked_reopen_stays_visible_and_unplug_uses_original_timing() {
+        let first = LinkMenu::Linked {
+            role: LinkRow::Host, worked: 100, since: 200, opened: false,
+        };
+        let reopened = LinkMenu::Linked {
+            role: LinkRow::Host, worked: 100, since: 200, opened: true,
+        };
+        assert!(!link_menu_auto_closes(first, 1199));
+        assert!(link_menu_auto_closes(first, 1200));
+        assert!(!link_menu_auto_closes(reopened, 20000));
+        let unplug = LinkMenu::Unplug { role: LinkRow::Join, since: 500 };
+        assert!(!link_unplug_complete(unplug, 919));
+        assert!(link_unplug_complete(unplug, 920));
+        assert!(!link_unplug_complete(first, 10000));
+    }
+
+    #[test]
+    fn connected_link_keycaps_fit_konkr_screen() {
+        let linked_width = slot_ui::hint_width("B", "Back")
+            + slot_ui::hint_width("A", "End Link");
+        let failed_width = slot_ui::hint_width("A", "OK");
+        for width in [linked_width, failed_width] {
+            assert!((width as f32) + 15.0 < OUT_W as f32 - 60.0);
+        }
+    }
+
+    #[test]
+    fn multiplayer_b_restores_exactly_the_opening_context() {
+        assert_eq!(LinkEntry::Shortcut.back(), ShelfOverlay::None);
+        assert_eq!(LinkEntry::GameMenu.back(), ShelfOverlay::GameMenu { row: 1 });
+    }
+
+    #[test]
+    fn select_home_opens_link_once_then_consumes_repeat_and_release() {
+        let mut consumed = false;
+        assert_eq!(select_home_action(true, true, true, true, &mut consumed),
+            SelectHomeAction::OpenLink);
+        assert!(consumed);
+        // Android may issue HOME auto-repeat while SELECT is still held.
+        assert_eq!(select_home_action(true, true, true, true, &mut consumed),
+            SelectHomeAction::Swallow);
+        assert_eq!(select_home_action(false, false, true, true, &mut consumed),
+            SelectHomeAction::Swallow);
+        assert!(!consumed);
+        assert_eq!(select_home_action(false, false, true, true, &mut consumed),
+            SelectHomeAction::Pass);
+    }
+
+    #[test]
+    fn select_home_never_hijacks_shelf_menu_or_state_browser() {
+        let mut consumed = false;
+        for (select, playing, menu_allowed) in [
+            (false, true, true),
+            (true, false, true),
+            (true, true, false),
+        ] {
+            assert_eq!(select_home_action(true, select, playing, menu_allowed,
+                &mut consumed), SelectHomeAction::Pass);
+            assert!(!consumed);
+        }
+    }
+
+    #[test]
+    fn home_alone_keeps_original_quick_menu_and_long_eject_paths() {
+        let mut consumed = false;
+        assert_eq!(select_home_action(true, false, true, true, &mut consumed),
+            SelectHomeAction::Pass);
+        assert_eq!(select_home_action(false, false, true, true, &mut consumed),
+            SelectHomeAction::Pass);
+        assert!(!consumed);
+    }
+
+    #[test]
     fn avd_short_tap_is_held_until_one_actual_core_frame() {
         let mut latch = EmulatorKeyLatch::default();
         latch.press(ButtonMask::A);
@@ -3223,6 +4355,14 @@ mod ui_feedback_tests {
         assert_eq!(latch.on_emulated_frame(), ButtonMask::A);
         latch.reset();
         assert_eq!(latch.waiting_for_frame, 0);
+    }
+
+    #[test]
+    fn background_library_swap_waits_for_idle_carousel() {
+        assert!(may_apply_library_update(false, false, false));
+        assert!(!may_apply_library_update(true, false, false));
+        assert!(!may_apply_library_update(false, true, false));
+        assert!(!may_apply_library_update(false, false, true));
     }
 
     #[test]
@@ -3399,6 +4539,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
 ) -> u8 {
     ENGINE.with(|holder| {
         let started = Instant::now();
+        LIBRARY_UPDATE_SAFE.store(false, Ordering::Release);
         *holder.borrow_mut() = None;
         *RA_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = None;
         RA_NOTICES.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -3411,6 +4552,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
         match Engine::new(version, snapshot.as_deref()) {
             Ok(engine) => {
                 *holder.borrow_mut() = Some(engine);
+                LIBRARY_UPDATE_SAFE.store(true, Ordering::Release);
                 crate::game::log_launch_timing(&format!(
                     "Cold renderer ready in {}ms", started.elapsed().as_millis()));
                 1
@@ -3472,10 +4614,13 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
     _activity: *mut c_void,
 ) {
     ENGINE.with(|holder| {
+        let safe = holder.borrow().as_ref().is_some_and(|e|
+            may_apply_library_update(e.game.is_some(), e.inserted, e.awaiting_game));
+        LIBRARY_UPDATE_SAFE.store(safe, Ordering::Release);
         let current = holder.borrow().as_ref().map(|engine| engine.library_version);
         let updated = {
             let state = LIBRARY.lock().unwrap_or_else(|err| err.into_inner());
-            if current.is_some_and(|version| version != state.version) {
+            if safe && current.is_some_and(|version| version != state.version) {
                 Some((state.version, state.entries.clone()))
             } else {
                 None
@@ -3510,10 +4655,20 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
                 Err(error) => eprintln!("slot-konkr: could not reload library: {error}"),
             }
         }
-        if let Some(engine) = holder.borrow_mut().as_mut() {
-            engine.draw();
-        }
+        if let Some(engine) = holder.borrow_mut().as_mut() { engine.draw(); }
+        let now_safe = holder.borrow().as_ref().is_some_and(|e|
+            may_apply_library_update(e.game.is_some(), e.inserted, e.awaiting_game));
+        LIBRARY_UPDATE_SAFE.store(now_safe, Ordering::Release);
     });
+}
+
+/// The UI only stages library updates while the renderer is idle; the
+/// renderer itself independently enforces that invariant before rebuilding.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeCanRefreshLibrary(
+    _env: *mut c_void, _activity: *mut c_void,
+) -> jboolean {
+    if LIBRARY_UPDATE_SAFE.load(Ordering::Acquire) { 1 } else { 0 }
 }
 
 #[unsafe(no_mangle)]
@@ -3555,8 +4710,41 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetShelfStatus(
         .push_back(Input::ShelfStatus(safe));
 }
 
+/// AVD Mac bridge receives only the four-character ROM header code. It
+/// never handles gameplay, filenames, save data or the peer's fingerprints.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkDiscoveryGame(
+    env: JNIEnv<'_>, _activity: JObject<'_>,
+) -> jstring {
+    let code = LINK_DISCOVERY_GAME.lock()
+        .unwrap_or_else(|e| e.into_inner()).clone();
+    code.and_then(|value| env.new_string(value).ok())
+        .map_or(std::ptr::null_mut(), |value| value.into_raw())
+}
+
 /// Kotlin resolves the connected Wi-Fi interface and takes a MulticastLock
 /// before handing its IPv4 address to the independent Rust discovery worker.
+/// Android's user-visible confirmation for sharing a complete ROM with
+/// a trusted KMLB/4 mixed-cartridge peer. AGL never shows dialogs or blocks.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkPeerRomDecision(
+    _env: *mut c_void, _activity: *mut c_void, choice: i32,
+) {
+    INPUT.lock().unwrap_or_else(|e| e.into_inner())
+        .push_back(Input::LinkPeerRomConsent(choice));
+}
+
+/// Safe short fingerprint derived from an authenticated Ed25519 public key;
+/// no peer strings or ROM data reach the Android dialog.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkPeerLabel(
+    env: JNIEnv<'_>, _activity: JObject<'_>,
+) -> jstring {
+    LINK_PEER_LABEL.lock().unwrap_or_else(|e| e.into_inner())
+        .as_ref().and_then(|value| env.new_string(value).ok())
+        .map_or(std::ptr::null_mut(), |value| value.into_raw())
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkNetworkReady(
     mut env: JNIEnv<'_>, _this: JObject<'_>, ipv4: JString<'_>,
@@ -3708,6 +4896,25 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeCoreForUri(
     env.new_string(name).map_or(std::ptr::null_mut(), |s| s.into_raw())
 }
 
+/// Readable from the GL renderer without consulting Android preferences.
+/// Android persists the opt-in first and then updates this display flag.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetShareSaves(
+    _env: *mut c_void, _this: *mut c_void, enabled: jboolean,
+) {
+    SHARE_SAVES_ENABLED.store(enabled != 0, Ordering::Release);
+}
+
+/// Set only after Android's destination-core Save State dialogue has been
+/// answered, and consume exactly once at the matching ROM load.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetNextResumeMode(
+    _env: *mut c_void, _this: *mut c_void, mode: jint,
+) {
+    NEXT_RESUME_MODE.store(if matches!(mode, -1..=1) {mode} else {-1},
+        Ordering::Release);
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollSaveFlush(
     env: JNIEnv<'_>, _this: JObject<'_>,
@@ -3855,6 +5062,26 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeFastAudioSupported
 ) {
     FF_AUDIO_SUPPORTED.store(supported != 0, Ordering::Release);
     if supported == 0 { AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear(); }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetMgbaLinkRecoveryEnabled(
+    _env: *mut c_void, _this: *mut c_void, enabled: jboolean,
+) {
+    MGBA_CABLE_RECOVERY.store(enabled != 0, Ordering::Release);
+    crate::game::log_launch_timing(if enabled != 0 {
+        "A12 Link recovery setting: a11"
+    } else {
+        "A12 Link recovery setting: legacy"
+    });
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeAudioQueuedShorts(
+    _env: *mut c_void, _this: *mut c_void,
+) -> jint {
+    AUDIO.lock().unwrap_or_else(|e| e.into_inner())
+        .len().min(i32::MAX as usize) as jint
 }
 
 #[unsafe(no_mangle)]

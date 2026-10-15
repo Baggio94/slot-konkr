@@ -13,6 +13,13 @@ pub trait LinkChannel: Send {
 
     fn send_end(&mut self) {}
 
+    /// Out-of-band pause/resume; not a cartridge serial packet.
+    /// Legacy mock implementations use a no-op by default.
+    fn set_paused(&mut self, _paused: bool) {}
+
+    /// Updated by the network reader even while the GL emulation is paused.
+    fn peer_paused(&self) -> bool { false }
+
     fn peer_ended(&self) -> bool {
         false
     }

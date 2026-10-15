@@ -105,8 +105,10 @@ class AppsActivity : Activity() {
         // main thread before the first Apps frame can be presented.
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(SlotUi.background)
-            setPadding(dp(22), dp(10), dp(22), dp(4))
+            setBackgroundColor(SlotUi.menuBackground)
+            setPadding(SlotUi.menuPixel(this@AppsActivity, 32),
+                SlotUi.menuPixel(this@AppsActivity, 33),
+                SlotUi.menuPixel(this@AppsActivity, 32), dp(4))
             isFocusableInTouchMode = true
         }
         setContentView(root)
@@ -115,7 +117,8 @@ class AppsActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        header.addView(text("APPS", 19f), LinearLayout.LayoutParams(0, dp(48), 1f))
+        header.addView(SlotUi.menuHeading(this, "APPS"),
+            LinearLayout.LayoutParams(0, SlotUi.menuPixel(this, 32), 1f))
         homeButton = SlotUi.label(this, "Set as Home", 13f).apply {
             gravity = Gravity.CENTER
             setPadding(dp(15), dp(7), dp(15), dp(7))
@@ -124,11 +127,12 @@ class AppsActivity : Activity() {
             contentDescription = "Choose the default home launcher"
             setOnClickListener { chooseHome() }
         }
-        header.addView(homeButton, LinearLayout.LayoutParams(-2, dp(38)))
+        header.addView(homeButton, LinearLayout.LayoutParams(-2,
+            SlotUi.menuPixel(this, 32)))
         root.addView(header)
-        root.addView(View(this).apply {
-            setBackgroundColor(SlotUi.rule)
-        }, LinearLayout.LayoutParams(-1, dp(1)))
+        // Match Slot's breathing room below the subdued Settings heading.
+        root.addView(View(this), LinearLayout.LayoutParams(-1,
+            SlotUi.menuPixel(this, 18)))
 
         grid = GridView(this).apply {
             numColumns = COLUMNS
@@ -456,7 +460,7 @@ class AppsActivity : Activity() {
         when (mapped) {
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (event.action == KeyEvent.ACTION_DOWN) navigate(event.keyCode)
+                if (event.action == KeyEvent.ACTION_DOWN) navigate(mapped)
                 return true
             }
             KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER,

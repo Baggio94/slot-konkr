@@ -1,5 +1,17 @@
 # Changelog
 
+## KONKR Android 0.1.0-rc.1 — first complete public candidate
+
+- Consolidates the Android adaptation developed through Lab A14r2 into a single ARM64/x86_64 APK.
+- Includes GBA/GB/GBC, mGBA/gpSP, Cart Studio, Apps, RetroAchievements online/offline, RetroArch save compatibility, Undo/Polaroids and game/core-dependent Link Cable/RFU.
+- Mac emulator Z/X keys now work in Slot-owned dialogs, while remaining typeable in editable text fields; fixed Apps navigation to use translated arrow codes.
+- Restored full recursive ROM scanning for any selected folder organization without losing incremental header reuse, silent updates or protection against game interruption.
+- Candidate requires real KONKR and Mac AVD controller, save, audio and timing verification before stable promotion.
+- Android tags use konkr-v* and do not trigger the old Linux/H700 release process.
+
+### Historical original Slot changelog
+
+
 ## [1.5.0](https://github.com/BrandonKowalski/slot/releases/tag/v1.5.0)
 
 - Rumble regression fixed.

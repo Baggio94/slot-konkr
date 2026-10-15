@@ -22,6 +22,8 @@ import java.util.Locale
  */
 internal object SlotUi {
     val background: Int = Color.rgb(23, 22, 25)
+    // The same dark opening palette used for native Library / Settings.
+    val menuBackground: Int = Color.rgb(8, 8, 11)
     val surface: Int = Color.rgb(37, 36, 43)
     val selected: Int = Color.rgb(68, 66, 77)
     val ink: Int = Color.rgb(246, 244, 239)
@@ -62,6 +64,44 @@ internal object SlotUi {
         includeFontPadding = false
         setTextColor(color)
         gravity = Gravity.CENTER_VERTICAL
+    }
+
+    /** Native menus paint quick_value_face at (32, 33), with .79
+     * geometry scale and .68 alpha, on a 720×480 canvas. Keep the real
+     * Rust rasterization and transparent side padding, not Android text.
+     */
+    fun menuPixel(context: Context, px: Int): Int =
+        (px * context.resources.displayMetrics.widthPixels / 720f + .5f).toInt()
+
+    fun menuHeading(context: Context, title: String): View {
+        val asset = when (title.uppercase(Locale.ROOT)) {
+            "APPS" -> "heading-apps.png"
+            "RETROACHIEVEMENTS" -> "heading-ra.png"
+            "SAVE CONFLICT" -> "heading-save-conflict.png"
+            "SAVE STATE" -> "heading-save-state.png"
+            "SIGN OUT" -> "heading-sign-out.png"
+            "LINK — SHARE CARTRIDGE" -> "heading-link-consent.png"
+            "MULTIPLAYER — DIRECT JOIN" -> "heading-direct-join.png"
+            else -> null
+        }
+        val image = asset?.let { file ->
+            runCatching {
+                context.assets.open("apps_controls/$file").use {
+                    BitmapFactory.decodeStream(it)
+                }
+            }.getOrNull()
+        }
+        if (image == null) return label(context, title, 16f, muted)
+        return android.widget.FrameLayout(context).apply {
+            addView(ImageView(context).apply {
+                setImageBitmap(image)
+                scaleType = ImageView.ScaleType.FIT_XY
+                alpha = .68f
+            }, android.widget.FrameLayout.LayoutParams(
+                menuPixel(context, (image.width * .79f).toInt()),
+                menuPixel(context, (image.height * .79f).toInt()),
+                Gravity.START or Gravity.TOP))
+        }
     }
 
     fun button(context: Context, value: String, onClick: () -> Unit): TextView =

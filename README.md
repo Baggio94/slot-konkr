@@ -1,115 +1,41 @@
-<div align="center">
+# slot. for KONKR Pocket Advance
 
-<img src=".github/resources/banner.png" width="100%" alt="slot. A bespoke, Game Boy-centric frontend for the Anbernic RG SP.">
+An Android adaptation of [slot. by Brandon Kowalski](https://github.com/BrandonKowalski/slot), drawing on the [pvaibhav fork](https://github.com/pvaibhav/slot), for the **KONKR Pocket Advance** running Android 12 (960 × 640, 3:2). This fork is maintained separately from the Linux/H700 frontend.
 
-<a href="LICENSE"><img src="https://img.shields.io/github/license/BrandonKowalski/slot?style=for-the-badge&labelColor=242429&color=4d4d57" height="36" alt="License"></a>
-<a href="https://github.com/BrandonKowalski/slot/stargazers"><img src="https://img.shields.io/github/stars/BrandonKowalski/slot?style=for-the-badge&labelColor=242429&color=4d4d57" height="36" alt="Stars"></a>
-<a href="https://github.com/BrandonKowalski/slot/releases"><img src="https://img.shields.io/github/downloads/BrandonKowalski/slot/total?style=for-the-badge&labelColor=242429&color=4d4d57" height="36" alt="Downloads"></a>
-<a href="https://slot-cfw.fyi"><img src="https://img.shields.io/badge/Guide-slot--cfw.fyi-4d4d57?style=for-the-badge&labelColor=242429" height="36" alt="Guide"></a>
-<a href="CHANGELOG.md"><img src="https://img.shields.io/badge/Changelog-4d4d57?style=for-the-badge&labelColor=242429" height="36" alt="Changelog"></a>
+**Release line: 0.1.0**. The initial 0.1.0-rc.1 is a full-featured, publicly testable candidate, not yet a verified stable release on every physical device.
 
-</div>
+## Supported consoles and platforms
 
----
+- **Game Boy Advance, Game Boy Color and Game Boy**, using uncompressed **.gba, .gbc, .gb** cartridge files.
+- KONKR Pocket Advance **ARM64**: primary physical test device.
+- Mac-hosted Android emulator **x86_64**: desktop QA target using the same universal APK.
+- Does not contain copyrighted games, commercial ROM sets, Nintendo BIOS or private save data.
 
-# What is slot?
+## Features included in the Android port
 
-A bespoke, Game Boy-centric frontend for the Anbernic RG SP.
+- Faithful Slot cartridge carousel, system shelves, core picker, cartridge insertion/ejection visuals and sounds, screen options, customized labels and **Cart Studio**.
+- Built-in **mGBA and gpSP**, game/core options, fast forward, rewind, Run-Ahead where safe, controller navigation and Slot-inspired menus.
+- **Save RAM and RTC**, save states, Undo and Polaroids, RetroArch-compatible SRAM and state import/export including RZIP v1, conservative conflict resolution.
+- **Share mGBA/gpSP Saves**: opt-in transfer of GBA SRAM only, disabled by default. Individual save states and RTC files are not merged between cores.
+- **RetroAchievements**: account status, online achievements, offline persistence/sync and in-game popups.
+- **Multiplayer**: Link Cable and game/core-supported Wireless/RFU, Host/Join, local discovery and IP fallback, compatible peer checks and consent-controlled ROM sharing. Tested mGBA Cable FireRed↔LeafGreen between Mac AVD and physical KONKR; not every game/core/mode pair is supported.
+- Android Apps launcher and optional launcher HOME role, status icons, Slot-styled dialogs and input shortcuts.
+- Cached library instantly shown at boot; quiet background refresh, changed-ROM detection, reuse of headers and safety while games run. Scans the **whole selected ROM tree** recursively and indexes supported GB/GBC/GBA cartridge files wherever they appear.
 
-Has support for GBA, GBC, and GB titles only.
+## Install and upgrades
 
-> [!IMPORTANT]
-> ROMs must be unzipped. slot does not read `.zip` or `.7z` files.
+Get the **signed universal Android APK** from [this fork's Releases](https://github.com/Baggio94/slot-konkr/releases). The asset name includes **arm64-x86_64.apk**. Install the normal package **fyi.slot.konkr**, not the isolated Multiplayer Lab package.
 
-A full user guide can be found at [slot-cfw.fyi](https://slot-cfw.fyi).
+Android Storage Access Framework lets you select your ROM directory and a BIOS folder where applicable. On a Mac Android emulator, the keyboard mapping is **Z → A**, **X → B**, **Enter → Start**, **Space → Select**, **Tab → Home/Mode**, arrows → D-pad. Z/X work in Slot-owned dialog menus but remain normal letters while editing account credentials or other text fields.
 
-Release notes can be found in the [changelog](CHANGELOG.md).
+A normal same-certificate update with **adb install -r** preserves application data. Never uninstall the existing app, clear app data or overwrite SRAM to work around a signing mismatch. Check signing compatibility and the package identity instead.
 
----
+Multiplayer ROM sharing is for **trusted local networks**: public-key peer identity authenticates devices but does not encrypt transferred content. The application does not guarantee every multiplayer mode or achievement set works for every ROM.
 
-# What does it look like?
+## Source, licensing, and attribution
 
-<p align="center">
-<img src=".github/resources/screenshots/carousel.gif" width="48%" alt="Scrolling the cart carousel across the Game Boy Advance, Game Boy and Game Boy Color shelves">
-<img src=".github/resources/screenshots/core-picker.gif" width="48%" alt="Flipping a cart to its circuit board to choose mGBA or gpSP">
-</p>
+Original Slot by **Brandon Kowalski**; its Rust UI and Link inspiration, including the work in **pvaibhav/slot**, are preserved and credited. See [LICENSE](LICENSE), [licenses/](licenses/) and pinned [mGBA/gpSP build scripts](scripts/) and [mGBA patches](cores/mgba/). All upstream and third-party licenses continue to apply. Android APK distribution requires corresponding source and notices for included cores.
 
-<p align="center">
-<img src=".github/resources/screenshots/link.gif" width="96.5%" alt="Two SPs racing in Mario Kart over the emulated link">
-</p>
+Developer information: [Android release checklist](docs/konkr/RELEASE-READINESS-0.1.0.md), [Android release notes](docs/konkr/RELEASE-NOTES-0.1.0.md), [development PR #29](https://github.com/Baggio94/slot-konkr/pull/29).
 
----
-
-# Supported Devices
-
-| Device | Supported | Since Version |
-| --- | --- | --- |
-| Anbernic RG SP | Yes | Always |
-| Anbernic RG34XX | Untested | N/A |
-| Anbernic RG34XXSP | Untested | N/A |
-| Anbernic RG35XXSP | Yes | 1.5.0 |
-
-The RG34XX will likely work from 1.4.0. The RG34XXSP may not map its sticks correctly.
-
-If you have one of the Untested devices, or have tried slot on a device not listed, please [open an issue on GitHub](https://github.com/BrandonKowalski/slot/issues) and let me know how it went.
-
----
-
-# AI Disclosure
-
-The Rust frontend was put together by Claude Opus. I reviewed everything that was
-produced. All documentation is 100% free-range, meatbag prose.
-
-The project is extremely low stakes. I wanted a bespoke frontend for my RG SP and thought
-that something that evokes the feeling of using my GBA SP as a kid would be pretty neat.
-
-Use it, don't use it, I don't care.
-
-Figured I should share the end result of all the wasted water. ✌🏻
-
----
-
-## KONKR Pocket Advance Android port (experimental)
-
-The Android fork is maintained on `feat/konkr-save-parity` and currently
-targets GB/GBC/GBA games on KONKR Pocket Advance. The Linux upstream remains
-the visual/interaction reference. Android uses the Storage Access Framework
-to select ROM/BIOS and optional shared RetroArch saves/state directories.
-
-### Library and save behaviour
-
-- The first ROM scan is stored in an app-private atomic cache. Reopening the
-  app restores the cartridge shelf immediately; use **Library → Refresh Library**
-  after adding, deleting or moving ROMs.
-- Manual Polaroids remain in the original Slot state history. Saving also
-  exports the first unused RetroArch numbered `.state` slot if a states
-  folder was selected. An auto-state is stored separately.
-- The original SVG silhouettes and molded details are preserved. The KONKR
-  Android rendering uses a subtle deterministic satin finish, applied before
-  drawing the original cartridge labels.
-- Android uses the original Slot insert/eject PCM and screen-power timings.
-  Feedback, buttons and icon resources are taken from the upstream UI.
-- **Experimental**: external slot import, gpSP parity and long-term save
-  compatibility should be verified on real handheld hardware.
-
-### Reproducible Android signing (required for in-place updates)
-
-GitHub Actions uses a different temporary debug key on each hosted runner,
-so such unsigned-configuration debug builds cannot be upgraded in place.
-One-time setup by a repository administrator on a trusted Mac/Linux machine:
-
-1. Install Java `keytool` and GitHub CLI `gh`, then `gh auth login`.
-2. Run `bash scripts/configure-konkr-signing.sh` from this branch.
-3. This creates a permanent PKCS#12 key under
-   `~/.config/slot-konkr-signing/` and saves its encrypted contents and
-   credentials as GitHub Actions secrets.
-4. Keep a secure backup of the local signing directory. Never commit,
-   publish or send its contents.
-5. Run the Android workflow again after configuration. All subsequent APKs
-   must use this *same* key (and a higher `versionCode`) to support
-   `adb install -r`.
-
-The first permanently signed build will still require a clean reinstall
-from a previously *differently signed* debug APK. Back up private app data
-first if it matters.
-
+**Android release tags are prefixed konkr-v**, such as konkr-v0.1.0-rc.1 and konkr-v0.1.0. The separate upstream Linux/H700 release process still uses v* tags.

@@ -155,6 +155,16 @@ pub fn frame_debt(prev: f64, elapsed: f64, speed: f64, period: f64,
     (prev + elapsed * speed).min(max)
 }
 
+/// A11: linked mGBA Cable can legitimately stall while awaiting a real
+/// remote input frame. Unlike solo RESPONSIVE, its lost emulation time must
+/// not be discarded, or the PCM producer permanently falls behind AudioTrack.
+/// The 2.5-frame cap avoids runaway catch-up after a long AVD/Wi-Fi hitch.
+/// The runtime may emulate at most TWO frames in one GL callback and each
+/// still requires confirmed local AND peer inputs: never predict link traffic.
+pub fn frame_debt_mgba_cable(prev: f64, elapsed: f64, period: f64) -> f64 {
+    (prev + elapsed.max(0.0)).min(period * 2.5)
+}
+
 /// DISPLAY SYNC pacing: retain up to 0.95 frame of fractional carryover
 /// after each simulation step, tolerating occasional 60Hz callback jitter.
 /// The engine still executes a maximum of ONE real core frame per callback,
@@ -167,6 +177,32 @@ pub fn frame_debt_display_sync(prev: f64, elapsed: f64, speed: f64,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mgba_cable_preserves_bounded_debt_while_peer_frame_is_missing() {
+        let frame = 1.0 / 59.7275;
+        let mut debt = frame_debt_mgba_cable(0.0, frame, frame);
+        assert!((debt - frame).abs() < 1e-9);
+        // A missing peer input blocks the real frame: do not consume debt.
+        debt = frame_debt_mgba_cable(debt, frame, frame);
+        assert!((debt - 2.0 * frame).abs() < 1e-9);
+        debt = frame_debt_mgba_cable(debt, 0.20, frame);
+        assert!((debt - 2.5 * frame).abs() < 1e-9);
+        // Represent TWO successful lockstep frames, only after peer data.
+        for _ in 0..2 { debt -= frame; }
+        assert!((debt - 0.5 * frame).abs() < 1e-9);
+        assert_eq!(frame_debt_mgba_cable(0.0, -1.0, frame), 0.0);
+    }
+
+    #[test]
+    fn mgba_cable_recovery_does_not_change_solo_responsive() {
+        let frame = 1.0 / 59.7275;
+        let solo = frame_debt(0.0, 0.1, 1.0, frame, false, true);
+        let linked = frame_debt_mgba_cable(0.0, 0.1, frame);
+        assert!((solo - 1.5 * frame).abs() < 1e-9);
+        assert!((linked - 2.5 * frame).abs() < 1e-9);
+    }
+
     #[test]
     fn responsive_pacing_rejects_backlog_without_touching_standard() {
         let frame = 1.0 / 59.7275;

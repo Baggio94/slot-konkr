@@ -32,13 +32,14 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
 import android.widget.EditText
-import android.app.AlertDialog
 import android.net.Uri
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import java.net.Inet4Address
+import java.net.InetSocketAddress
+import java.net.Socket
 import org.json.JSONObject
 import org.json.JSONArray
 import java.util.concurrent.ConcurrentHashMap
@@ -72,6 +73,7 @@ class MainActivity : Activity() {
         private const val ROM_ROOT = "rom_root_uri"
         private const val BIOS_ROOT = "bios_root_uri"
         private const val SAVE_ROOT = "saves_root_uri"
+        private const val SHARE_GBA_SAVES = "share_gba_saves"
         private const val STATE_ROOT = "states_root_uri"
         private const val ROM_CACHE_NAME = "rom-library-cache-v1.json"
         private const val ROM_CACHE_SCHEMA = 1
@@ -106,7 +108,10 @@ class MainActivity : Activity() {
     external fun nativeExitGame()
     external fun nativeSuspend()
     external fun nativeIsPlaying(): Boolean
+    external fun nativeCanRefreshLibrary(): Boolean
     external fun nativeAudioSampleRate(): Int
+    external fun nativeAudioQueuedShorts(): Int
+    external fun nativeSetMgbaLinkRecoveryEnabled(enabled: Boolean)
     external fun nativeDisplaySyncEnabled(): Boolean
     external fun nativeAudioSpeedPermille(): Int
     external fun nativeFastAudioSupported(supported: Boolean)
@@ -127,10 +132,15 @@ class MainActivity : Activity() {
     external fun nativePollRumbleStrength(): Int
     external fun nativeCoreForUri(uri: String): String
     external fun nativePollSaveFlush(): String?
+    external fun nativeSetShareSaves(enabled: Boolean)
+    external fun nativeSetNextResumeMode(mode: Int)
     // The renderer requests LAN only when Host/Join is selected. It never
     // touches WifiManager, Android UI or permissions from the GL thread.
+    external fun nativeLinkPeerRomDecision(choice: Int)
+    external fun nativeLinkPeerLabel(): String?
     external fun nativeLinkNetworkReady(ipv4: String)
     external fun nativeLinkDirectHost(addressPair: String)
+    external fun nativeLinkDiscoveryGame(): String?
     external fun nativeLinkNetworkError(reason: String)
     external fun nativeLinkNeedsMulticast(): Boolean
 
@@ -138,12 +148,30 @@ class MainActivity : Activity() {
     private var pendingCartStudioUri: String? = null
     private lateinit var cartSounds: CartSounds
     private val scanner = Executors.newSingleThreadExecutor()
+    private data class PendingLibraryIndex(
+        val root: Uri, val json: String, val prepared: String,
+        val serial: Int, val quiet: Boolean
+    )
+    private var pendingLibraryIndex: PendingLibraryIndex? = null
+    private lateinit var libraryRefreshIndicator: SlotLibraryRefreshIndicator
     private val raLoginWorker = Executors.newSingleThreadExecutor()
     private val raSmartWorker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "slot-ra-smart-cache").apply { priority = Thread.MIN_PRIORITY }
     }
     private val raSmartRunning = AtomicBoolean(false)
     private val gameLoader = Executors.newSingleThreadExecutor()
+    // AVD-only; querying the Mac Bonjour bridge must never block GL/UI,
+    // Android AudioTrack, normal ROM loading or real KONKR Wi-Fi discovery.
+    private val linkBridgeWorker = Executors.newFixedThreadPool(2)
+    // Reject delayed results if the user cancelled and reopened the same
+    // game's Host/Join menu before an older Mac discovery request finished.
+    private val linkBridgeGeneration = AtomicInteger()
+    // Independent physical QA package. It may read the same ROM and BIOS
+    // folders, but MUST NOT import from or write to a selected RetroArch
+    // Saves/States SAF folder belonging to the user's daily Slot installation.
+    private val isIsolatedMultiplayerLab: Boolean
+        get() = packageName == "fyi.slot.konkr.lab"
+
     private val activeTargets = ConcurrentHashMap<String, RetroArchStorage.Target>()
     private val uiHandler = Handler(Looper.getMainLooper())
     private val audioRunning = AtomicBoolean(false)
@@ -233,6 +261,121 @@ class MainActivity : Activity() {
         catch (error: RuntimeException) { Log.w(TAG, "Link multicast release failed", error) }
     }
 
+    /** The AVD cannot receive the KONKR's LAN multicast. A Mac-side bridge
+     *  discovers the original Slot mDNS advertisement and exposes its IPv4
+     *  only through adb reverse tcp:7222 -> 127.0.0.1:7222. Host game/core
+     *  SHA-256, BIOS, backend and serial mode are STILL checked by native
+     *  Slot's strict KMLB v2 TCP handshake before any core state changes.
+     *
+     *  If the bridge is absent/times out, retain the original manual-IP
+     *  dialog. No new Android permission or public socket is required.
+     */
+    private fun tryLinkMacBridge(local: String, game: String) {
+        val generation = linkBridgeGeneration.incrementAndGet()
+        linkBridgeWorker.execute {
+            val host = try {
+                Socket().use { socket ->
+                    socket.connect(InetSocketAddress("127.0.0.1", 7222), 500)
+                    socket.soTimeout = 9000
+                    val out = socket.getOutputStream()
+                    out.write("FIND $game\n".toByteArray(Charsets.US_ASCII))
+                    out.flush()
+                    socket.getInputStream().bufferedReader(Charsets.US_ASCII).readLine()?.trim()
+                }
+            } catch (_: Exception) { null }
+            runOnUiThread {
+                if (isDestroyed || !resumed || 
+                    generation != linkBridgeGeneration.get() ||
+                    nativeLinkDiscoveryGame() != game) {
+                    return@runOnUiThread // Cancelled or a different cartridge
+                }
+                if (host != null && validLinkIpv4(host)) {
+                    Log.i(TAG, "Mac bridge found Slot Link host for $game")
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                        .putString("slot_link_host_ipv4", host).apply()
+                    nativeLinkDirectHost("$local,$host")
+                } else {
+                    // Typical absence: Mac helper not running, host not yet
+                    // advertising, firewall, or emulator not ADB-reversed.
+                    promptManualLinkJoin(local)
+                }
+            }
+        }
+    }
+
+    private fun validLinkIpv4(host: String): Boolean {
+        val octets = host.split('.')
+        return octets.size == 4 && octets.all { part ->
+            part.isNotEmpty() && part.length <= 3 &&
+                part.all(Char::isDigit) && (part.toIntOrNull() ?: -1) in 0..255
+        } && host != "0.0.0.0" && !host.startsWith("127.") &&
+            !host.startsWith("169.254.") && !host.startsWith("224.")
+    }
+
+    private fun promptManualLinkJoin(local: String) {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        var joined = false
+        val dialog = SlotModalDialog(
+            this,
+            "MULTIPLAYER — DIRECT JOIN",
+            "Mac discovery unavailable. Enter the KONKR host Wi-Fi IPv4 address.",
+            onDismiss = {
+                if (!joined) nativeLinkNetworkError("Direct Join cancelled")
+            }
+        )
+        val field = dialog.addInput("KONKR IP ADDRESS", "192.168.1.20").apply {
+            inputType = android.text.InputType.TYPE_CLASS_PHONE
+            typeface = SlotUi.font(this@MainActivity)
+            setText(prefs.getString("slot_link_host_ipv4", ""))
+        }
+        dialog.addButton("CANCEL") { dialog.dismiss() }
+        dialog.addButton("JOIN") {
+            val host = field.text.toString().trim()
+            if (!validLinkIpv4(host)) {
+                dialog.setError("Enter a valid LAN IPv4 address, such as 192.168.68.79.")
+            } else {
+                joined = true
+                prefs.edit().putString("slot_link_host_ipv4", host).apply()
+                dialog.dismiss()
+                nativeLinkDirectHost("$local,$host")
+            }
+        }
+        dialog.show()
+    }
+
+    /** The peer has proven possession of an installation-bound Ed25519 key
+     * before this UI appears. A14 never trusts IPs or legacy lab flags.
+     * Keys are remembered only by Rust after a verified ROM exchange.
+     */
+    private fun showPeerCartridgeConsent() {
+        if (!resumed || isDestroyed || isFinishing) {
+            nativeLinkPeerRomDecision(0)
+            return
+        }
+        val answered = AtomicBoolean(false)
+        fun reply(choice: Int) {
+            if (answered.compareAndSet(false, true)) nativeLinkPeerRomDecision(choice)
+        }
+        try {
+            val peer = nativeLinkPeerLabel().orEmpty().take(36)
+                .ifBlank { "UNRECOGNIZED DEVICE" }
+            val dialog = SlotModalDialog(
+                this,
+                "LINK — SHARE CARTRIDGE",
+                "Share this ROM with $peer over local Wi-Fi? " +
+                    "Only allow a device you trust.",
+                onDismiss = { reply(0) }
+            )
+            dialog.addButton("CANCEL") { reply(0); dialog.dismiss() }
+            dialog.addButton("ALLOW ONCE") { reply(1); dialog.dismiss() }
+            dialog.addButton("REMEMBER DEVICE") { reply(2); dialog.dismiss() }
+            dialog.show()
+        } catch (error: Exception) {
+            Log.w(TAG, "Cannot show Slot peer permission", error)
+            reply(0)
+        }
+    }
+
     private fun requestLinkWifi() {
         if (!resumed) {
             nativeLinkNetworkError("Return to Slot before starting Multiplayer")
@@ -251,38 +394,12 @@ class MainActivity : Activity() {
         if (fingerprint.startsWith("generic") || fingerprint.contains("sdk_gphone") ||
             hardware.contains("ranchu") || hardware.contains("goldfish")) {
             releaseLinkMulticast()
-            val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-            var joined = false
-            val dialog = SlotModalDialog(
-                this,
-                "MULTIPLAYER — DIRECT JOIN",
-                "Start HOST on the physical KONKR. Enter its Wi-Fi IPv4 address.",
-                onDismiss = {
-                    if (!joined) nativeLinkNetworkError("Direct Join cancelled")
-                }
-            )
-            val field = dialog.addInput("KONKR IP ADDRESS", "192.168.1.20").apply {
-                inputType = android.text.InputType.TYPE_CLASS_PHONE
-                typeface = SlotUi.font(this@MainActivity)
-                setText(prefs.getString("slot_link_host_ipv4", ""))
+            val game = nativeLinkDiscoveryGame()
+            if (game != null && game.matches(Regex("[A-Z0-9]{4}"))) {
+                tryLinkMacBridge(address, game)
+            } else {
+                promptManualLinkJoin(address)
             }
-            dialog.addButton("CANCEL") { dialog.dismiss() }
-            dialog.addButton("JOIN") {
-                val host = field.text.toString().trim()
-                val octets = host.split('.')
-                if (octets.size != 4 || octets.any { octet ->
-                        octet.isEmpty() || octet.any { !it.isDigit() } ||
-                            octet.length > 3 || (octet.toIntOrNull() ?: -1) !in 0..255
-                    }) {
-                    dialog.setError("Enter a valid IPv4 address, such as 192.168.1.20.")
-                } else {
-                    joined = true
-                    prefs.edit().putString("slot_link_host_ipv4", host).apply()
-                    dialog.dismiss()
-                    nativeLinkDirectHost("$address,$host")
-                }
-            }
-            dialog.show()
             return
         }
         try {
@@ -323,6 +440,9 @@ class MainActivity : Activity() {
     }
     private val pulse = object : Runnable {
         override fun run() {
+            // Changed ROM indexes are applied only when the GL engine is
+            // back on its idle carousel, never during a game or its launch.
+            publishPendingLibraryIfIdle()
             pollSystemStatus()
             if (::shelfStatus.isInitialized) {
                 val flags = nativeShelfIndicatorFlags()
@@ -426,6 +546,8 @@ class MainActivity : Activity() {
                     }
                 }
                 16 -> requestLinkWifi()
+                17 -> toggleShareGbaSaves()
+                18 -> showPeerCartridgeConsent()
             }
             // Multicast is required during discovery, not for ongoing TCP
             // emulation. Release on success, cancellation and timeout.
@@ -539,6 +661,12 @@ class MainActivity : Activity() {
         // A staged sign-out must finish before any native HTTP worker is started.
         val cleanSignOut = RaAccount.finishPendingSignOut(filesDir)
         nativeConfigure(filesDir.absolutePath, applicationInfo.nativeLibraryDir)
+        // App-private A12 A/B marker; no save or ROM folders are touched.
+        val a12Recovery = !File(filesDir, "a12-mgba-legacy-pacing.flag").exists()
+        nativeSetMgbaLinkRecoveryEnabled(a12Recovery)
+        Log.i(TAG, "A12 recovery mode: " + if (a12Recovery) "a11" else "legacy")
+        nativeSetShareSaves(getSharedPreferences(PREFS, MODE_PRIVATE)
+            .getBoolean(SHARE_GBA_SAVES, false))
         if (cleanSignOut && RaAccount.configuredUser(filesDir) != null) nativeRaAccountConfigured()
         cartSounds = CartSounds(this)
         view = object : GLSurfaceView(this) {
@@ -547,6 +675,15 @@ class MainActivity : Activity() {
                 preserveEGLContextOnPause = true
                 setRenderer(object : Renderer {
                     var ready = false
+                    private var probeStartNs = 0L
+                    private var lastDrawNs = 0L
+                    private var callbacks = 0
+                    private var gapOver25ms = 0
+                    private var gapOver40ms = 0
+                    private var gapUsMax = 0L
+                    private var nativeUsMax = 0L
+                    private var nativeOver16ms = 0
+                    private var nativeOver33ms = 0
                     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
                         ready = nativeSurfaceCreated()
                         if (!ready) Log.e(TAG, "Slot GLES initialization failed")
@@ -559,8 +696,12 @@ class MainActivity : Activity() {
                         if (ready) nativeSurfaceChanged(width, height)
                     }
                     override fun onDrawFrame(gl: GL10?) {
+                        val a12StartedNs = SystemClock.elapsedRealtimeNanos()
+                        var a12NativeUs = 0L
                         if (ready) {
+                            val beginNativeNs = SystemClock.elapsedRealtimeNanos()
                             nativeDrawFrame()
+                            a12NativeUs = (SystemClock.elapsedRealtimeNanos() - beginNativeNs) / 1000L
                             // Notify the existing AudioTrack worker that libretro
                             // may have produced samples. Never block GL on audio.
                             if (audioRunning.get() && nativeIsPlaying() &&
@@ -576,6 +717,41 @@ class MainActivity : Activity() {
                             GLES20.glClearColor(0f, 0f, 0f, 1f)
                             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
                         }
+                        // Diagnostic-only. EGL swaps after this callback returns:
+                        // callback gaps are not true presentation timestamps.
+                        if (ready && nativeIsPlaying()) {
+                            if (probeStartNs == 0L) probeStartNs = a12StartedNs
+                            if (lastDrawNs != 0L) {
+                                val gapUs = (a12StartedNs - lastDrawNs) / 1000L
+                                gapUsMax = maxOf(gapUsMax, gapUs)
+                                if (gapUs > 25_000L) gapOver25ms++
+                                if (gapUs > 40_000L) gapOver40ms++
+                            }
+                            lastDrawNs = a12StartedNs
+                            callbacks++
+                            nativeUsMax = maxOf(nativeUsMax, a12NativeUs)
+                            if (a12NativeUs > 16_667L) nativeOver16ms++
+                            if (a12NativeUs > 33_333L) nativeOver33ms++
+                            val spanNs = SystemClock.elapsedRealtimeNanos() - probeStartNs
+                            if (spanNs >= 5_000_000_000L) {
+                                val fpsX10 = callbacks.toLong() * 10_000_000_000L / spanNs
+                                Log.i(TAG, "GL callback pacing: callbacks=$callbacks fps_x10=$fpsX10 " +
+                                    "gap_over_25ms=$gapOver25ms gap_over_40ms=$gapOver40ms " +
+                                    "gap_us_max=$gapUsMax native_us_max=$nativeUsMax " +
+                                    "native_over_16ms=$nativeOver16ms native_over_33ms=$nativeOver33ms")
+                                probeStartNs = a12StartedNs
+                                callbacks = 0
+                                gapOver25ms = 0
+                                gapOver40ms = 0
+                                gapUsMax = 0L
+                                nativeUsMax = 0L
+                                nativeOver16ms = 0
+                                nativeOver33ms = 0
+                            }
+                        } else {
+                            probeStartNs = 0L
+                            lastDrawNs = 0L
+                        }
                     }
                 })
                 renderMode = RENDERMODE_CONTINUOUSLY
@@ -588,6 +764,7 @@ class MainActivity : Activity() {
         val frame = FrameLayout(this)
         frame.addView(view, FrameLayout.LayoutParams(-1, -1))
         shelfStatus = SlotStatusIndicators(this, frame)
+        libraryRefreshIndicator = SlotLibraryRefreshIndicator(this, frame)
         // There is no Android status view: the native Slot renderer owns all
         // shelf messages and controller hints, even during ROM rescanning.
         performanceHud = TextView(this).apply {
@@ -640,7 +817,11 @@ class MainActivity : Activity() {
             if (contentResolver.persistedUriPermissions.any {
                     it.uri == uri && it.isReadPermission
                 }) {
-                if (!restoreCachedLibrary(uri)) scanFolder(uri)
+                if (restoreCachedLibrary(uri)) {
+                    // Use the same fast cached boot as before; verify the SAF
+                    // tree off-thread behind the splash with no UI delay.
+                    scanFolder(uri, quiet = true)
+                } else scanFolder(uri)
             } else {
                 nativeSetShelfStatus(shelfPermissionExpired)
             }
@@ -806,6 +987,76 @@ class MainActivity : Activity() {
         }
     }
 
+    private enum class SharedGbaChoice { MGBA, GPSP, CANCEL }
+
+    /** Three-way conflict arbitration. Nothing is written to either
+     * cartridge while the dialog is open; Cancel must abort ROM launch.
+     */
+    private fun askSharedGbaConflict(): SharedGbaChoice {
+        val ready = CountDownLatch(1)
+        val selected = java.util.concurrent.atomic.AtomicReference(SharedGbaChoice.CANCEL)
+        runOnUiThread {
+            if (isDestroyed || isFinishing) { ready.countDown(); return@runOnUiThread }
+            try {
+                val dialog = SlotModalDialog(this, "SAVE CONFLICT",
+                    "mGBA and gpSP saves differ. Choose which progress to keep. " +
+                        "Both original saves are backed up.",
+                    onDismiss = { ready.countDown() })
+                // Default to the safe action: accidental A never changes SRAM.
+                dialog.addButton("CANCEL") { dialog.dismiss() }
+                dialog.addButton("KEEP mGBA SAVE") {
+                    selected.set(SharedGbaChoice.MGBA)
+                    dialog.dismiss()
+                }
+                dialog.addButton("KEEP gpSP SAVE") {
+                    selected.set(SharedGbaChoice.GPSP)
+                    dialog.dismiss()
+                }
+                dialog.show()
+            } catch (error: Exception) {
+                Log.e(TAG, "Cannot open shared-save choice", error)
+                ready.countDown()
+            }
+        }
+        return if (ready.await(120L, TimeUnit.SECONDS)) selected.get()
+            else SharedGbaChoice.CANCEL
+    }
+
+    private enum class CoreStateChoice { EXISTING, SHARED, CANCEL }
+
+    /** This dialog is deliberately rare: only Share Saves ON, actual core
+     *  change, and an existing destination-core auto-state. The ROM loader
+     *  worker waits while the UI thread remains free to handle the answer.
+     */
+    private fun askCoreSwitchResume(core: String): CoreStateChoice {
+        val ready = CountDownLatch(1)
+        val selected = java.util.concurrent.atomic.AtomicReference(CoreStateChoice.CANCEL)
+        runOnUiThread {
+            if (isDestroyed || isFinishing) { ready.countDown(); return@runOnUiThread }
+            try {
+                val dialog = SlotModalDialog(this, "SAVE STATE",
+                    "The $core state may be older than the shared cartridge save. " +
+                        "Choose which progress to load.",
+                    onDismiss = { ready.countDown() })
+                dialog.addButton("CANCEL") { dialog.dismiss() }
+                dialog.addButton("SHARED CARTRIDGE SAVE") {
+                    selected.set(CoreStateChoice.SHARED)
+                    dialog.dismiss()
+                }
+                dialog.addButton("EXISTING $core STATE") {
+                    selected.set(CoreStateChoice.EXISTING)
+                    dialog.dismiss()
+                }
+                dialog.show()
+            } catch (error: Exception) {
+                Log.e(TAG, "Cannot open core-state choice", error)
+                ready.countDown()
+            }
+        }
+        return if (ready.await(120L, TimeUnit.SECONDS)) selected.get()
+            else CoreStateChoice.CANCEL
+    }
+
     private fun loadGameFromSaf(rawUri: String) {
         val uri = try { Uri.parse(rawUri) } catch (_: Exception) {
             nativeGameError(rawUri, "Invalid ROM URI")
@@ -856,26 +1107,112 @@ class MainActivity : Activity() {
                 val savedCore = nativeCoreForUri(rawUri)
                 val core = if (savedCore == "gpsp" && ext == "gba") "gpSP" else "mGBA"
                 val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-                val saves = prefs.getString(SAVE_ROOT, null)?.let(Uri::parse)
-                val states = prefs.getString(STATE_ROOT, null)?.let(Uri::parse)
-                val shared = RetroArchStorage.target(this, rawUri, core, saves, states)
+                // Side-by-side Multiplayer QA always uses its private
+                // fyi.slot.konkr.lab/files/Saves and States. Never mirror,
+                // overwrite or import the production RetroArch SAF folders.
+                val saves = if (isIsolatedMultiplayerLab) null
+                    else prefs.getString(SAVE_ROOT, null)?.let(Uri::parse)
+                val states = if (isIsolatedMultiplayerLab) null
+                    else prefs.getString(STATE_ROOT, null)?.let(Uri::parse)
+                val shared = RetroArchStorage.target(this, rawUri, core, saves, states,
+                    shareGbaSaves = !isIsolatedMultiplayerLab &&
+                        prefs.getBoolean(SHARE_GBA_SAVES, false))
                 try {
                     RetroArchStorage.importBeforeLaunch(this@MainActivity, shared)
-                } catch (error: Exception) {
-                    Log.w(TAG, "RetroArch SAF import skipped, keeping private saves", error)
-                    runOnUiThread {
-                        if (!isDestroyed) SlotToast.makeText(this@MainActivity,
-                            if (error is RetroArchStorage.SaveConflict) error.message
-                                ?: "Different core saves preserved; sharing paused."
-                            else "Couldn't load existing saves. Check your Saves and Save State folders.",
-                            Toast.LENGTH_LONG).show()
+                } catch (error: RetroArchStorage.SaveConflict) {
+                    Log.w(TAG, "Conflicting mGBA/gpSP SRAM needs explicit choice", error)
+                    when (val choice = askSharedGbaConflict()) {
+                        SharedGbaChoice.CANCEL -> {
+                            nativeGameError(rawUri, "Shared save selection cancelled")
+                            return@execute
+                        }
+                        SharedGbaChoice.MGBA, SharedGbaChoice.GPSP -> {
+                            val source = if (choice == SharedGbaChoice.MGBA)
+                                "mGBA" else "gpSP"
+                            RetroArchStorage.resolveSharedGbaConflict(
+                                this@MainActivity, shared, source)
+                            RetroArchStorage.importBeforeLaunch(this@MainActivity, shared)
+                        }
+                    }
+                }
+                // Share Saves never silently chooses an old same-core state
+                // over freshly imported cross-core SRAM. A direct same-core
+                // launch has no dialogue and behaves exactly as before.
+                val previous = if (ext == "gba")
+                    prefs.getString("last_gba_core_$digest", null) else null
+                val switched = ext == "gba" && shared.shareGbaSaves &&
+                    previous != null && previous != core
+                var resumeChoice = -1 // Existing default Slot behavior.
+                if (switched) {
+                    val exists = RetroArchStorage.hasCoreAutoState(this@MainActivity, shared)
+                    if (RetroArchStorage.shouldOfferCoreResume(
+                            shared.shareGbaSaves, previous, core, exists)) {
+                        when (askCoreSwitchResume(core)) {
+                            CoreStateChoice.CANCEL -> {
+                                nativeGameError(rawUri, "Core switch cancelled")
+                                return@execute
+                            }
+                            CoreStateChoice.EXISTING -> {
+                                // Do not delete the one-shot SRAM guard until
+                                // an explicitly requested external RetroArch
+                                // state has actually been decoded and staged.
+                                // Existing protected generations remain higher
+                                // priority than stale external auto-states.
+                                RetroArchStorage.importExplicitExistingState(
+                                    this@MainActivity, shared)
+                                val lower = if (core == "mGBA") "mgba" else "gpsp"
+                                // The previous SRAM-first attempt may have
+                                // allocated a generation but never written a
+                                // state (e.g. Android killed the app before
+                                // Save & Eject). Explicitly choosing the OLD
+                                // state must not be masked by that empty
+                                // redirect. Completed generations stay valid.
+                                val genIndex = File(filesDir,
+                                    "Saves/$digest.$lower.state-generation.active")
+                                if (genIndex.isFile) {
+                                    val name = genIndex.readText()
+                                    val valid = name.startsWith("$digest.$lower.gen-") &&
+                                        name.matches(Regex("[a-zA-Z0-9.-]{1,180}"))
+                                    val genState = File(filesDir, "Saves/$name.state")
+                                    if (!valid) error("Invalid protected state generation")
+                                    if (!genState.isFile) {
+                                        if (!genIndex.delete()) {
+                                            error("Cannot select existing state over empty generation")
+                                        }
+                                        val hold = File(filesDir,
+                                            "Saves/$digest.$lower.state-export-protected")
+                                        if (hold.isFile && !hold.delete()) {
+                                            error("Cannot clear empty generation export guard")
+                                        }
+                                    }
+                                }
+                                val skipped = File(filesDir,
+                                    "Saves/$digest.$lower.skip-resume.once")
+                                if (skipped.isFile && !skipped.delete()) {
+                                    error("Cannot restore existing state while SRAM guard is active")
+                                }
+                                resumeChoice = 1
+                            }
+                            CoreStateChoice.SHARED -> {
+                                val lower = if (core == "mGBA") "mgba" else "gpsp"
+                                RetroArchStorage.stage(File(filesDir,
+                                    "Saves/$digest.$lower.skip-resume.once"), byteArrayOf(1))
+                                resumeChoice = 0
+                            }
+                        }
+                    } else {
+                        // No old state on the new core: start from shared
+                        // SRAM, not a state from the previous emulator.
+                        resumeChoice = 0
                     }
                 }
                 activeTargets[rawUri] = shared
                 val readyAt = SystemClock.elapsedRealtime()
                 Log.i(TAG, "Slot launch preparation: ROM cache=${romReadyAt - launchStart}ms, " +
                     "RetroArch import=${readyAt - romReadyAt}ms, total=${readyAt - launchStart}ms")
+                nativeSetNextResumeMode(resumeChoice)
                 nativeGameReady(rawUri, target.absolutePath)
+                if (ext == "gba") prefs.edit().putString("last_gba_core_$digest", core).apply()
             } catch (error: Exception) {
                 Log.e(TAG, "Could not prepare ROM", error)
                 nativeGameError(rawUri, error.message ?: "Cannot open ROM")
@@ -904,11 +1241,26 @@ class MainActivity : Activity() {
         if (!audioRunning.compareAndSet(false, true)) return
         audioFrameSignal.drainPermits()
         audioThread = Thread({
+            // Android's streaming AudioTrack is fed from this app-owned
+            // worker. Prefer the platform's documented audio scheduling
+            // priority so transient GL/Wi-Fi activity cannot preempt the
+            // PCM writer unnecessarily. Do NOT change the playback buffer
+            // or add latency to hide actual missing linked game frames.
+            try {
+                android.os.Process.setThreadPriority(
+                    android.os.Process.THREAD_PRIORITY_AUDIO)
+                Log.i(TAG, "Audio worker: THREAD_PRIORITY_AUDIO enabled")
+            } catch (error: Exception) {
+                Log.w(TAG, "Audio priority unavailable; using default worker priority", error)
+            }
             var player: AudioTrack? = null
             var rate = 0
             var requestedSpeed = 0
             var observedUnderruns = 0
             var audioProbeAt = 0L
+            var emptyAudioReads = 0
+            var playedShorts = 0L
+            var audioBufferBytes = 0
             try {
                 while (audioRunning.get()) {
                     val wanted = nativeAudioSampleRate()
@@ -928,6 +1280,9 @@ class MainActivity : Activity() {
                         }
                         // Preserve the validated low-latency legacy AudioTrack buffer.
                         val bufferBytes = maxOf(16384, minBytes * 2)
+                        audioBufferBytes = bufferBytes
+                        Log.i(TAG, "Audio diagnostic: rate=$wanted Hz, " +
+                            "minBuffer=$minBytes bytes, allocated=$bufferBytes bytes")
                         player = AudioTrack.Builder()
                             .setAudioAttributes(AudioAttributes.Builder()
                                 .setUsage(AudioAttributes.USAGE_GAME)
@@ -942,6 +1297,8 @@ class MainActivity : Activity() {
                         rate = wanted
                         requestedSpeed = 0
                         observedUnderruns = 0
+                        emptyAudioReads = 0
+                        playedShorts = 0L
                         audioProbeAt = SystemClock.elapsedRealtime()
                         player.play()
                     } else if (player.playState != AudioTrack.PLAYSTATE_PLAYING) {
@@ -975,6 +1332,7 @@ class MainActivity : Activity() {
                     }
                     val samples = nativeReadAudio()
                     if (samples.isEmpty()) {
+                        emptyAudioReads++
                         // Event-driven wakeup instead of sleeping blindly for 8ms:
                         // GLSurfaceView signals after each libretro callback.
                         // The 30ms timeout is a safety fallback for paused frames.
@@ -991,6 +1349,8 @@ class MainActivity : Activity() {
                     val written = player.write(samples, 0, samples.size, AudioTrack.WRITE_BLOCKING)
                     if (written < 0) {
                         Log.w(TAG, "AudioTrack write error: $written")
+                    } else {
+                        playedShorts += written.toLong()
                     }
                     // Diagnostic only; do not modify audio queue, buffer size or
                     // event-driven wakeup. A rise here distinguishes Android
@@ -1002,7 +1362,24 @@ class MainActivity : Activity() {
                             Log.i(TAG, "AudioTrack underruns: +${underflows - observedUnderruns}" +
                                 " over 5s (total=$underflows, rate=$wanted Hz)")
                         }
+                        if (underflows > observedUnderruns) {
+                            Log.i(TAG, "Audio diagnostic: rate=$wanted, " +
+                                "bufferBytes=$audioBufferBytes, " +
+                                "writtenShorts=$playedShorts over 5s, " +
+                                "emptyReads=$emptyAudioReads, " +
+                                "underrunDelta=${underflows - observedUnderruns}")
+                        }
+                        val spanMs = (probeNow - audioProbeAt).coerceAtLeast(1L)
+                        val expected = wanted.toLong() * 2L * spanMs / 1000L
+                        // Report even when there are no underruns, to isolate
+                        // PCM producer starvation from AudioTrack HAL behaviour.
+                        Log.i(TAG, "A12 PCM pacing: rate=$wanted span_ms=$spanMs " +
+                            "written_shorts=$playedShorts expected_shorts=$expected " +
+                            "empty_reads=$emptyAudioReads queued_shorts=${nativeAudioQueuedShorts()} " +
+                            "underruns=${underflows - observedUnderruns}")
                         observedUnderruns = underflows
+                        playedShorts = 0L
+                        emptyAudioReads = 0
                         audioProbeAt = probeNow
                     }
                 }
@@ -1124,23 +1501,19 @@ class MainActivity : Activity() {
                 if (isDestroyed) return@runOnUiThread
                 val message = when {
                     pending == null ->
-                        "The pending-awards journal couldn't be verified. " +
-                            "It will NOT be deleted. Only the account token will be removed. " +
-                            "Reconnect as $username to attempt recovery and syncing."
+                        "Pending awards couldn't be checked. They stay on this device. " +
+                            "Reconnect as $username to try syncing them."
                     pending > 0 ->
-                        "$pending achievements await upload for $username. " +
-                            "They will stay on this device, owned by this account. " +
-                            "Sign in to $username again to sync them later. " +
-                            "Delayed RA uploads may have server time limits."
+                        "$pending awards await upload for $username. " +
+                            "They stay on this device. Sign in again to sync them; " +
+                            "delayed uploads may expire."
                     else ->
-                        "Sign out of $username? Cached games and local achievements " +
-                            "will remain on the device."
+                        "Sign out of $username? Local awards and cached games stay."
                 }
                 val confirm = SlotModalDialog(
                     this,
-                    "SIGN OUT — KEEP LOCAL ACHIEVEMENTS",
-                    "$message\n\nReconnecting requires Internet. Slot. closes to stop " +
-                        "the previous account's achievement worker safely."
+                    "SIGN OUT",
+                    "$message\n\nSlot closes after sign-out to stop the old account safely."
                 )
                 confirm.addButton("STAY SIGNED IN") { confirm.dismiss() }
                 confirm.addButton("SIGN OUT & CLOSE") {
@@ -1232,9 +1605,8 @@ class MainActivity : Activity() {
         val login = SlotModalDialog(
             this,
             "RETROACHIEVEMENTS",
-            "Connect directly to RetroAchievements using HTTPS. " +
-                "Your password is never stored; only the returned account token " +
-                "is kept in app-private storage. GBA uses Casual (softcore).",
+            "Sign in securely over HTTPS. Your password is not stored. " +
+                "GBA achievements use Casual mode.",
             onDismiss = { nativeExternalReturn() }
         )
         val username = login.addInput("USERNAME", "RetroAchievements username")
@@ -1299,6 +1671,30 @@ class MainActivity : Activity() {
 
     }
 
+    /** OFF is the safe default, including upgrades from pre-option builds.
+     *  Never merge mGBA/gpSP state files; enabling opt-in affects only the
+     *  next ROM launch and refuses genuine two-core SRAM conflicts.
+     */
+    private fun toggleShareGbaSaves() {
+        if (nativeIsPlaying()) {
+            SlotToast.makeText(this, "Eject the cartridge before changing Save sharing.",
+                Toast.LENGTH_LONG).show()
+            return
+        }
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val enabled = !prefs.getBoolean(SHARE_GBA_SAVES, false)
+        if (!prefs.edit().putBoolean(SHARE_GBA_SAVES, enabled).commit()) {
+            SlotToast.makeText(this, "Unable to save Share Saves preference.",
+                Toast.LENGTH_LONG).show()
+            return
+        }
+        nativeSetShareSaves(enabled)
+        SlotToast.makeText(this,
+            if (enabled) "Share Saves ON: mGBA/gpSP SRAM only; conflicts are never overwritten."
+            else "Share Saves OFF: mGBA and gpSP saves kept separate.",
+            Toast.LENGTH_LONG).show()
+    }
+
     private fun refreshLibrary() {
         val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)
         if (saved == null) {
@@ -1317,6 +1713,12 @@ class MainActivity : Activity() {
 
     private fun openSharedFolderPicker(requestCode: Int) {
         check(requestCode == SAVE_REQUEST || requestCode == STATE_REQUEST)
+        if (isIsolatedMultiplayerLab) {
+            SlotToast.makeText(this,
+                "Multiplayer Lab: external save folders disabled to protect Slot saves.",
+                Toast.LENGTH_LONG).show()
+            return
+        }
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or
                 Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
@@ -1655,36 +2057,37 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Load a previously indexed SAF ROM shelf without enumerating ROMs again.
-     * The cache never grants access: the persisted SAF permission is checked by
-     * the caller and opening an individual ROM still uses ContentResolver.
-     */
-    private fun restoreCachedLibrary(root: Uri): Boolean {
+    /** Read only a cache that belongs to this persisted SAF tree. */
+    private fun cachedLibraryGames(root: Uri): String? {
         val file = File(filesDir, ROM_CACHE_NAME)
-        if (!file.isFile || file.length() !in 1L..ROM_CACHE_MAX_BYTES.toLong()) return false
+        if (!file.isFile || file.length() !in 1L..ROM_CACHE_MAX_BYTES.toLong()) return null
         return try {
             val metadata = JSONObject(file.readText(Charsets.UTF_8))
             if (metadata.optInt("schema") != ROM_CACHE_SCHEMA ||
-                metadata.optString("root") != root.toString()) return false
-            val games = metadata.optJSONArray("games") ?: return false
-            val count = setStudioOverrides(games.toString())
+                metadata.optString("root") != root.toString()) null
+            else metadata.optJSONArray("games")?.toString()
+        } catch (error: Exception) {
+            Log.w(TAG, "Invalid ROM cache; scanning without replacing it first", error)
+            null
+        }
+    }
+
+    /** Reuse cached labels immediately without rescanning on the UI thread. */
+    private fun restoreCachedLibrary(root: Uri): Boolean {
+        val games = cachedLibraryGames(root) ?: return false
+        return try {
+            val count = setStudioOverrides(games)
             if (count < 0) return false
-            if (count == 0) {
-                nativeSetShelfStatus(shelfEmpty)
-            } else {
-                nativeSetShelfStatus(shelfNone)
-            }
-            Log.i(TAG, "Restored $count cached ROMs without a SAF rescan")
+            nativeSetShelfStatus(if (count == 0) shelfEmpty else shelfNone)
+            Log.i(TAG, "Restored $count cached ROMs without SAF rescan")
             true
         } catch (error: Exception) {
-            Log.w(TAG, "ROM library cache invalid; performing a fresh scan", error)
+            Log.w(TAG, "Cached library unavailable; scanning", error)
             false
         }
     }
 
-    /** Commit the complete ROM index only after native import succeeds.
-     * AtomicFile keeps the previous shelf intact on a failed/partial refresh.
-     */
+    /** AtomicFile retains the previous library if the write fails. */
     private fun storeCachedLibrary(root: Uri, json: String) {
         val payload = JSONObject()
             .put("schema", ROM_CACHE_SCHEMA)
@@ -1692,7 +2095,7 @@ class MainActivity : Activity() {
             .put("games", JSONArray(json))
             .toString().toByteArray(Charsets.UTF_8)
         if (payload.size > ROM_CACHE_MAX_BYTES) {
-            Log.w(TAG, "ROM library cache too large; future launches will rescan")
+            Log.w(TAG, "ROM library cache exceeds safe limit")
             return
         }
         val atomic = AtomicFile(File(filesDir, ROM_CACHE_NAME))
@@ -1706,46 +2109,115 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun scanFolder(uri: Uri) {
+    /** The scanner never publishes directly. This method runs on the UI
+     * thread only. Rust also rechecks the idle state at the exact GL swap,
+     * guarding against a cartridge inserted between the two callbacks.
+     */
+    private fun publishPendingLibraryIfIdle() {
+        val next = pendingLibraryIndex ?: return
+        if (scanSerial.get() != next.serial) {
+            pendingLibraryIndex = null
+            libraryRefreshIndicator.hide()
+            return
+        }
+        if (!resumed || !nativeCanRefreshLibrary()) return
+        val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)
+        if (saved != next.root.toString()) {
+            pendingLibraryIndex = null
+            libraryRefreshIndicator.hide()
+            return
+        }
+        pendingLibraryIndex = null
+        libraryRefreshIndicator.show()
+        val count = try { nativeSetLibrary(next.prepared) } catch (error: Exception) {
+            Log.e(TAG, "Changed ROM library could not be applied", error)
+            -1
+        }
+        if (count < 0) {
+            libraryRefreshIndicator.hide()
+            nativeSetShelfStatus(shelfImportError)
+            return
+        }
+        nativeSetShelfStatus(if (count == 0) shelfEmpty else shelfNone)
+        // Index persistence and RA diagnostics remain on background workers.
+        scanner.execute {
+            if (scanSerial.get() != next.serial) return@execute
+            try {
+                storeCachedLibrary(next.root, next.json)
+                startRaSmartCache()
+            } catch (error: Exception) {
+                Log.w(TAG, "ROM cache write failed; displayed shelf is intact", error)
+            }
+        }
+        if (!next.quiet) {
+            SlotToast.makeText(this, "Library updated: $count carts",
+                Toast.LENGTH_SHORT).show()
+        }
+        // Brief subtle spinner only for a changed library; never for
+        // unchanged boot scans and never while a game is active.
+        uiHandler.postDelayed({
+            if (::libraryRefreshIndicator.isInitialized && !isDestroyed &&
+                pendingLibraryIndex == null) libraryRefreshIndicator.hide()
+        }, 700L)
+    }
+
+    private fun scanFolder(uri: Uri, quiet: Boolean = false) {
         val serial = scanSerial.incrementAndGet()
-        nativeSetShelfStatus(shelfScanning)
+        pendingLibraryIndex = null
+        if (::libraryRefreshIndicator.isInitialized) libraryRefreshIndicator.hide()
+        if (!quiet) nativeSetShelfStatus(shelfScanning)
         scanner.execute {
             try {
-                val result = RomLibrary.scan(this, uri)
+                val previous = cachedLibraryGames(uri)
+                val result = RomLibrary.scan(this, uri, previous)
                 if (scanSerial.get() != serial) return@execute
-                val count = setStudioOverrides(result.json)
-                if (count >= 0) {
-                    try {
-                        storeCachedLibrary(uri, result.json)
-                        startRaSmartCache()
-                    } catch (error: Exception) {
-                        Log.w(TAG, "Cannot cache ROM library; games remain available", error)
+                // A bounded/incomplete SAF scan is not evidence that a ROM
+                // was removed. Fail closed, retaining the previous shelf.
+                if (result.truncated) {
+                    Log.w(TAG, "Incomplete SAF ROM listing: retaining existing index")
+                    runOnUiThread {
+                        if (!isDestroyed && scanSerial.get() == serial && !quiet) {
+                            nativeSetShelfStatus(shelfNone)
+                            SlotToast.makeText(this,
+                                "ROM scan incomplete. Existing games kept.",
+                                Toast.LENGTH_LONG).show()
+                        }
                     }
+                    return@execute
                 }
+                if (previous != null && RomLibrary.sameIndex(previous, result.json)) {
+                    Log.i(TAG, "ROM library unchanged: " + result.count +
+                        " carts; no renderer rebuild")
+                    runOnUiThread {
+                        if (!isDestroyed && scanSerial.get() == serial && !quiet) {
+                            nativeSetShelfStatus(if (result.count == 0) shelfEmpty else shelfNone)
+                            SlotToast.makeText(this, "Library already up to date.",
+                                Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    return@execute
+                }
+                // Process artwork metadata before handing a changed index
+                // to the UI. No game/ROM bytes or state files are touched.
+                val prepared = CartStudioCatalog.withOverrides(this, result.json)
                 runOnUiThread {
                     if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
-                    if (count < 0) {
-                        nativeSetShelfStatus(shelfImportError)
-                    } else if (count == 0) {
-                        nativeSetShelfStatus(shelfEmpty)
-                    } else {
-                        nativeSetShelfStatus(shelfNone)
-                        val note = if (result.truncated) " (limited to 5000)" else ""
-                        SlotToast.makeText(this, "Library ready: " + count + " carts" + note, Toast.LENGTH_LONG).show()
-                    }
+                    pendingLibraryIndex = PendingLibraryIndex(
+                        uri, result.json, prepared, serial, quiet)
+                    publishPendingLibraryIfIdle()
                 }
             } catch (error: Exception) {
-                Log.e(TAG, "SAF cartridge scan failed", error)
+                Log.e(TAG, "SAF ROM scan failed; previous cache retained", error)
                 runOnUiThread {
-                    if (!isDestroyed && scanSerial.get() == serial) {
+                    if (!isDestroyed && scanSerial.get() == serial && !quiet)
                         nativeSetShelfStatus(shelfReadError)
-                    }
                 }
             }
         }
     }
 
     override fun onDestroy() {
+        linkBridgeGeneration.incrementAndGet()
         releaseLinkMulticast()
         Choreographer.getInstance().removeFrameCallback(vsyncCallback)
         raConnectivity?.let { manager ->
@@ -1754,10 +2226,13 @@ class MainActivity : Activity() {
         }
         raConnectivity = null
         scanSerial.incrementAndGet()
+        pendingLibraryIndex = null
+        if (::libraryRefreshIndicator.isInitialized) libraryRefreshIndicator.hide()
         scanner.shutdownNow()
         raLoginWorker.shutdownNow()
         raSmartWorker.shutdownNow()
         gameLoader.shutdownNow()
+        linkBridgeWorker.shutdownNow()
         uiHandler.removeCallbacks(pulse)
         if (::raAchievementOverlay.isInitialized) raAchievementOverlay.destroy()
         if (::shelfStatus.isInitialized) shelfStatus.close()
@@ -1768,6 +2243,7 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         resumed = false
+        linkBridgeGeneration.incrementAndGet()
         // Rust nativeSuspend aborts discovery/linked play; never keep a
         // multicast lock across Android background sleep.
         releaseLinkMulticast()

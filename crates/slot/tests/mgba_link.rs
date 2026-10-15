@@ -176,6 +176,125 @@ fn painted(picture: &[u8], x: usize) -> u16 {
     u16::from(pixel[2] >> 3) | u16::from(pixel[1] >> 3) << 5 | u16::from(pixel[0] >> 3) << 10
 }
 
+/// First native feasibility gate for mixed cartridges. The additional
+/// peer-ROM option must affect ONLY the second GBA, without changing the
+/// local cartridge's boot path or normal same-ROM link behavior. This does
+/// not yet enable mixed-ROM network sessions (KMLB/3 still rejects them).
+/// Exercise the REAL mGBA two-ROM state path used by KMLB/4 after
+/// Host receives Join's own snapshot. The final combined SLK1 MUST
+/// deserialize into both independently constructed cores, even though
+/// each device has the opposite local-player role.
+#[test]
+fn host_and_join_can_both_accept_one_authoritative_mixed_rom_pair() {
+    let _g = common::core_lock();
+    let Some(dylib) = vendored() else { return };
+    let host_rom = rom("mgba-authoritative-host.gba", normal_rom());
+    let join_rom = rom("mgba-authoritative-join.gba", keys_rom());
+    let host_solo = single_state(&dylib, &host_rom, 15);
+    let join_solo = single_state(&dylib, &join_rom, 24);
+
+    let mut host = link_core(&dylib, 0);
+    host.set_option("mgba_link_peer_rom", join_rom.to_str().unwrap());
+    host.load(&host_rom).expect("host dual-ROM boot");
+    let host_seed = slot::link_state::with_local_player(
+        &host.serialize().unwrap(), 0, &host_solo).unwrap();
+    host.unserialize(&host_seed).expect("seed host own game");
+    let host_pair = host.serialize().unwrap();
+    drop(host);
+
+    let mut guest = link_core(&dylib, 1);
+    guest.set_option("mgba_link_peer_rom", host_rom.to_str().unwrap());
+    guest.load(&join_rom).expect("guest dual-ROM boot");
+    let guest_seed = slot::link_state::with_local_player(
+        &guest.serialize().unwrap(), 1, &join_solo).unwrap();
+    guest.unserialize(&guest_seed).expect("seed guest own game");
+    let guest_pair = guest.serialize().unwrap();
+    drop(guest);
+
+    let guest_own = slot::link_state::local(&guest_pair, 1).unwrap();
+    let both = slot::link_state::combine_players(&host_pair, &guest_own)
+        .expect("Host must preserve both different players");
+    assert_ne!(slot::link_state::local(&both, 0), slot::link_state::local(&both, 1));
+
+    for (role, local, other) in [
+        (0u8, &host_rom, &join_rom),
+        (1u8, &join_rom, &host_rom),
+    ] {
+        let mut core = link_core(&dylib, role);
+        core.set_option("mgba_link_peer_rom", other.to_str().unwrap());
+        core.load(local).expect("open fresh distinct GBA pair");
+        core.unserialize(&both).expect("both devices must accept one authoritative state");
+        for _ in 0..6 {
+            core.run_frame_linked(ButtonMask::default(), ButtonMask::default());
+        }
+        assert_eq!(core.video_xrgb8888().len(), (GBA_W * GBA_H * 4) as usize);
+        assert!(slot::link_state::is_pair(&core.serialize().unwrap()));
+    }
+}
+
+#[test]
+fn dual_cart_can_restore_each_players_solo_without_overwriting_remote_rom() {
+    let _g = common::core_lock();
+    let Some(dylib) = vendored() else { return };
+    let host_rom = rom("mgba-dual-state-host.gba", normal_rom());
+    let guest_rom = rom("mgba-dual-state-guest.gba", keys_rom());
+    for (role, own_rom, peer_rom) in [
+        (0u8, &host_rom, &guest_rom),
+        (1u8, &guest_rom, &host_rom),
+    ] {
+        let own = single_state(&dylib, own_rom, 12);
+        let mut paired = link_core(&dylib, role);
+        paired.set_option("mgba_link_peer_rom", peer_rom.to_str().unwrap());
+        paired.load(own_rom).expect("load two distinct ROMs");
+        let fresh = paired.serialize().expect("snapshot before first linked frame");
+        assert!(slot::link_state::is_pair(&fresh));
+        let other_role = 1 - role;
+        let before_other = slot::link_state::local(&fresh, other_role)
+            .expect("fresh peer cartridge state");
+        let seeded = slot::link_state::with_local_player(&fresh, role, &own)
+            .expect("only own checkpoint may replace local GBA");
+        assert_eq!(slot::link_state::local(&seeded, other_role).unwrap(), before_other);
+        paired.unserialize(&seeded)
+            .expect("real patched mGBA must accept distinct peer and own solo state");
+        let verified = paired.serialize().expect("verified dual ROM state");
+        assert!(slot::link_state::local(&verified, role).is_some());
+        assert!(slot::link_state::local(&verified, other_role).is_some());
+        paired.run_frame_linked(ButtonMask::default(), ButtonMask::default());
+        assert_eq!(paired.video_xrgb8888().len(), (GBA_W * GBA_H * 4) as usize);
+    }
+}
+
+#[test]
+fn gba_pair_can_boot_a_distinct_explicit_peer_cartridge() {
+    let _g = common::core_lock();
+    let Some(dylib) = vendored() else { return };
+    let local = rom("mgba-mixed-peer-local.gba", normal_rom());
+    let remote = rom("mgba-mixed-peer-remote.gba", keys_rom());
+    let mut mixed = link_core(&dylib, 0);
+    mixed.set_option("mgba_link_peer_rom", remote.to_str().expect("valid peer path"));
+    mixed.load(&local).expect("two distinct GBA cartridges must boot");
+    for _ in 0..15 {
+        mixed.run_frame_linked(ButtonMask(0), ButtonMask(0));
+    }
+    let mixed_pair = mixed.serialize().expect("distinct peers need paired states");
+    let mixed_local = slot::link_state::local(&mixed_pair, 0).expect("local GBA");
+    let mixed_peer = slot::link_state::local(&mixed_pair, 1).expect("different peer GBA");
+    drop(mixed);
+
+    let mut same = link_core(&dylib, 0);
+    same.load(&local).expect("same-ROM pairing must remain supported");
+    for _ in 0..15 {
+        same.run_frame_linked(ButtonMask(0), ButtonMask(0));
+    }
+    let same_pair = same.serialize().expect("same-ROM states");
+    let same_local = slot::link_state::local(&same_pair, 0).expect("same local GBA");
+    let same_peer = slot::link_state::local(&same_pair, 1).expect("same peer GBA");
+    assert_eq!(mixed_local, same_local,
+        "changing peer ROM must never replace the user's own local GBA");
+    assert_ne!(mixed_peer, same_peer,
+        "peer ROM option must actually load different game data in GBA #2");
+}
+
 #[test]
 fn a_pair_restored_in_multiplayer_mode_talks_from_the_first_transfer() {
     let _g = common::core_lock();
@@ -373,6 +492,122 @@ fn a_link_state_of_two_single_gba_states_restores_each_player_where_they_were() 
             core.video_xrgb8888() == want.as_slice(),
             "player {player}'s GBA did not carry on from player {player}'s state"
         );
+    }
+}
+
+/// A6 A1 feasibility gate: two players leave DISTINCT in-progress solo
+/// machines, exchange the actual Host-pair/Join-single snapshots used by
+/// Android LinkPlay, and continue at the same game frame on both screens.
+/// No commercial ROM or external save is needed (the test builds its ROM).
+#[test]
+fn live_solo_host_join_snapshots_resume_without_a_title_screen() {
+    let _g = common::core_lock();
+    let Some(dylib) = vendored() else { return };
+    let rom = rom("a6-live-solo-to-linked.gba", common::gba_rom());
+
+    let mut solo = single_core(&dylib);
+    solo.load(&rom).expect("load solo GBA");
+    let mut snapshots = Vec::new();
+    for extra_frames in [10, 40] {
+        for _ in 0..extra_frames {
+            solo.run_frame(ButtonMask::default());
+        }
+        snapshots.push(solo.serialize().expect("snapshot active solo GBA"));
+    }
+    drop(solo);
+    assert!(!snapshots[0].starts_with(b"SLK1"));
+    assert!(!snapshots[1].starts_with(b"SLK1"));
+    assert_ne!(snapshots[0], snapshots[1], "the two progress snapshots must differ");
+
+    // Android's LinkPlay protocol starts with Host's local double-core
+    // snapshot plus Join's own single-core snapshot. No Host-only
+    // authoritative state and no replacement of Join's progress.
+    let host_bootstrap = slot::link_state::pair(&snapshots[0]);
+    assert!(slot::link_state::same_bios(&host_bootstrap, &snapshots[1]));
+    let combined = slot::link_state::combine_players(&host_bootstrap, &snapshots[1])
+        .expect("Host/Join snapshots should compose into a valid SLK1 pair");
+    assert_eq!(slot::link_state::local(&combined, 0).as_deref(), Some(snapshots[0].as_slice()));
+    assert_eq!(slot::link_state::local(&combined, 1).as_deref(), Some(snapshots[1].as_slice()));
+
+    let mut expected = Vec::new();
+    for before in &snapshots {
+        let mut core = single_core(&dylib);
+        core.load(&rom).expect("load solo comparator");
+        core.unserialize(before).expect("restore solo comparator");
+        for _ in 0..8 {
+            core.run_frame(ButtonMask::default());
+        }
+        expected.push(core.video_xrgb8888().to_vec());
+    }
+    assert_ne!(expected[0], expected[1], "different snapshots must paint different frames");
+
+    let mut joined_hashes = Vec::new();
+    for role in [0u8, 1] {
+        let mut core = link_core(&dylib, role);
+        core.load(&rom).expect("load two-GBA engine");
+        core.unserialize(&combined)
+            .expect("two-GBA engine must load the two live solo snapshots");
+        for _ in 0..8 {
+            core.run_frame_linked(ButtonMask::default(), ButtonMask::default());
+        }
+        assert_eq!(core.video_xrgb8888(), expected[role as usize],
+            "linked player {role} returned to title / lost in-progress solo image");
+        joined_hashes.push(fnv1a(&core.serialize().expect("snapshot linked engine")));
+    }
+    assert_eq!(joined_hashes[0], joined_hashes[1],
+        "Host and Join must compute identical SLK1 states after linked frames");
+}
+
+/// Detaching a Link cable must keep the LOCAL player's single-GBA state,
+/// never the peer's nor the SLK1 wrapper. This is the first feasibility
+/// regression for returning from a linked mGBA core to a genuine solo core.
+#[test]
+fn end_link_local_player_snapshot_can_resume_in_unlinked_mgba() {
+    let _g = common::core_lock();
+    let Some(dylib) = vendored() else { return };
+    let rom = rom("mgba-link-unplug-to-solo.gba", common::gba_rom());
+
+    let mut standalone = single_core(&dylib);
+    standalone.load(&rom).expect("load solo");
+    let mut starts = Vec::new();
+    for frames in [12, 32] {
+        for _ in 0..frames {
+            standalone.run_frame(ButtonMask::default());
+        }
+        starts.push(standalone.serialize().expect("solo state"));
+    }
+    drop(standalone);
+    let paired = slot::link_state::combine_players(
+        &slot::link_state::pair(&starts[0]), &starts[1])
+        .expect("distinct players must make a valid link state");
+
+    for player in [0u8, 1u8] {
+        let mut linked = link_core(&dylib, player);
+        linked.load(&rom).expect("load linked instance");
+        linked.unserialize(&paired).expect("resume linked machines");
+        for _ in 0..10 {
+            linked.run_frame_linked(ButtonMask::default(), ButtonMask::default());
+        }
+        let final_pair = linked.serialize().expect("serialize both linked GBAs");
+        assert!(slot::link_state::is_pair(&final_pair));
+        let own = slot::link_state::local(&final_pair, player)
+            .expect("the requested player must have a one-GBA state");
+        let peer = slot::link_state::local(&final_pair, 1 - player)
+            .expect("the other player must have a different one-GBA state");
+        assert!(!slot::link_state::is_pair(&own),
+            "never feed a two-GBA state into a solo emulator");
+        assert_ne!(own, peer, "players must retain distinct live progress");
+        drop(linked);
+
+        let mut solo = single_core(&dylib);
+        solo.load(&rom).expect("load a clean solo GBA after unplug");
+        solo.unserialize(&own)
+            .expect("local linked GBA must be loadable by a non-linked core");
+        solo.run_frame(ButtonMask::default());
+        assert_eq!(solo.video_xrgb8888().len(), (GBA_W * GBA_H * 4) as usize,
+            "the unlinked GBA must resume rendering without ejecting its ROM");
+        let resume = solo.serialize().expect("solo after unplug");
+        assert!(!slot::link_state::is_pair(&resume));
     }
 }
 
