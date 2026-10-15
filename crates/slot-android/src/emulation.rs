@@ -58,6 +58,11 @@ impl EmulationProfile {
     /// Settings.json or any other game's configured defaults.
     pub fn apply_visual_and_gameplay(&self, settings: &mut Settings, platform: Platform) {
         if let Some(shader)=self.screen_shader {
+            // Non-destructive migration for GBA per-game profiles saved before
+            // the official LCD Grid V2 replaced Slot's old Grid entry.
+            let shader=if platform==Platform::Gba && shader==Shader::Grid {
+                Shader::LcdGridV2
+            } else { shader };
             settings.set_shader_for(platform,shader);
         }
         if let Some(value)=self.colour_correction_override {
@@ -192,6 +197,19 @@ impl EmulationProfile {
 }
 
 #[cfg(test)]
+
+    #[test]
+    fn old_per_game_gba_grid_becomes_grid_v2_without_changing_gb() {
+        let profile=super::EmulationProfile {
+            screen_shader: Some(super::Shader::Grid), ..Default::default()
+        };
+        let mut gba=super::Settings::default();
+        profile.apply_visual_and_gameplay(&mut gba,super::Platform::Gba);
+        assert_eq!(gba.shader_gba,super::Shader::LcdGridV2);
+        let mut gb=super::Settings::default();
+        profile.apply_visual_and_gameplay(&mut gb,super::Platform::Gb);
+        assert_eq!(gb.shader_gb,super::Shader::Grid);
+    }
 mod tests {
     use super::*;
 
