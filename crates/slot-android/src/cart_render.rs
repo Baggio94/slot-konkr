@@ -11,7 +11,7 @@ use slot_ui::{cart_face_with_material, cart_face, cart_interior, cart_backing,
 
 type Key = (usize, usize);
 type WorkKey = (Key, u64);
-type Job = (WorkKey, Cart);
+type Job = (WorkKey, Cart, bool);
 /// Three source-faithful clear-cart textures for a *selected* cartridge:
 /// original back, PCB, translucent front/label. Side carts keep one face.
 pub(crate) type Layers = [CartFace; 3];
@@ -44,7 +44,7 @@ impl CartRender {
                             let receiver = source.lock().unwrap_or_else(|e| e.into_inner());
                             receiver.recv()
                         };
-                        let Ok((key, cart)) = job else { break };
+                        let Ok((key, cart, include_material)) = job else { break };
                         // All heavy PNG decode, cropping, compositing and native artwork
                         // resampling happens here, never on the GLES render loop.
                         let original = cart_face_with_material(&cart, None);
@@ -52,7 +52,12 @@ impl CartRender {
                         let (rgba, w, h) = slot_ui::native_rgba(
                             &original.rgba, original.w, original.h);
                         let pixels = CartFace { rgba, w, h };
-                        let layers = if is_clear(&cart) {
+                        // Side-car previews need just the single composited
+                        // image. Computing three 960p materials for every
+                        // prefetched transparent cart spikes CPU and memory
+                        // during fast D-pad scrolling. Build them only when
+                        // the current selection explicitly needs depth.
+                        let layers = if include_material && is_clear(&cart) {
                             let original = [
                                 cart_interior(&cart),
                                 cart_backing(gb_shell_of(&cart)),
@@ -82,11 +87,11 @@ impl CartRender {
         }
     }
 
-    pub(crate) fn request(&mut self, key: Key, cart: &Cart) {
+    pub(crate) fn request(&mut self, key: Key, cart: &Cart, include_material: bool) {
         let Some(epoch) = self.epochs.get(key.0).copied() else { return };
         let work = (key, epoch);
         if self.pending.len() >= 8 || self.pending.contains(&work) { return }
-        match self.submit.try_send((work, cart.clone())) {
+        match self.submit.try_send((work, cart.clone(), include_material)) {
             Ok(()) => { self.pending.insert(work); }
             Err(TrySendError::Full(_)) => {} // retry next frame; never block input
             Err(TrySendError::Disconnected(_)) => {}

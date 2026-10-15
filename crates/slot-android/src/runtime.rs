@@ -2921,7 +2921,7 @@ impl Engine {
             // shelf instead of indexing carts[0] and aborting the GL thread.
             let Some(cart) = self.shelves.get(sid).and_then(|shelf| shelf.carts.get(index))
             else { continue; };
-            self.cart_render.request((sid, index), cart);
+            self.cart_render.request((sid, index), cart, wants_material);
         }
     }
 
