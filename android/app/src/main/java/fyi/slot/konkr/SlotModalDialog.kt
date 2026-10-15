@@ -5,7 +5,6 @@ import android.app.Dialog
 import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
-import android.os.Handler
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -19,9 +18,12 @@ import android.widget.ScrollView
 import android.widget.TextView
 
 /**
- * Small Slot-themed Android form/confirmation shell. Uses Android EditTexts
- * only for secure IME input while every owned visual pixel comes from SlotUi.
- * No token, username or password is ever printed or emitted to Logcat.
+ * Single native-Slot-style confirmation / form surface for application-owned
+ * dialogs. A vertical selected-row list, authentic font and controller legend
+ * match Slot's menus. Android-owned permission and IME screens stay native.
+ *
+ * B cancels; D-pad navigates all fields/actions; A selects (or edits a field).
+ * Sensitive confirmations default to the first, caller-provided safe action.
  */
 internal class SlotModalDialog(
     private val activity: Activity,
@@ -33,35 +35,55 @@ internal class SlotModalDialog(
     private val buttons = ArrayList<TextView>()
     private val secretFields = ArrayList<EditText>()
     private val fields = ArrayList<EditText>()
-    private val dialog = object : Dialog(activity) {
+    private val dialog = object : Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen) {
         override fun dispatchKeyEvent(event: KeyEvent): Boolean {
             when (event.keyCode) {
-                KeyEvent.KEYCODE_BUTTON_B -> {
-                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && !busy) dismiss()
+                KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK -> {
+                    if (event.action == KeyEvent.ACTION_DOWN &&
+                        event.repeatCount == 0 && !busy) dismiss()
                     return true
                 }
-                KeyEvent.KEYCODE_BUTTON_A -> {
-                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (event.action == KeyEvent.ACTION_DOWN &&
+                        event.repeatCount == 0 && !busy) {
+                        moveFocus(if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1)
+                    }
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    // Preserve editing/cursor semantics when IME has focus.
+                    if (currentFocus is EditText) return super.dispatchKeyEvent(event)
+                    if (event.action == KeyEvent.ACTION_DOWN &&
+                        event.repeatCount == 0 && !busy) {
+                        moveFocus(if (event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1)
+                    }
+                    return true
+                }
+                KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER -> {
+                    if (event.action == KeyEvent.ACTION_DOWN &&
+                        event.repeatCount == 0 && !busy) {
                         val focus = currentFocus
                         if (focus is EditText) {
                             focus.requestFocus()
-                            val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                            val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE)
+                                as? InputMethodManager
                             imm?.showSoftInput(focus, InputMethodManager.SHOW_IMPLICIT)
-                        } else if (focus?.isClickable == true && !busy) {
-                            focus.performClick()
+                        } else {
+                            (focus as? TextView)?.takeIf { it in buttons && it.isEnabled }
+                                ?.performClick()
                         }
                     }
                     return true
                 }
-                KeyEvent.KEYCODE_BACK -> if (busy) return true
             }
             return super.dispatchKeyEvent(event)
         }
     }
     private val root = LinearLayout(activity).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(26), dp(16), dp(26), dp(13))
-        background = SlotUi.plate(activity, SlotUi.background)
+        setPadding(SlotUi.menuPixel(activity, 32), SlotUi.menuPixel(activity, 33),
+            SlotUi.menuPixel(activity, 32), dp(9))
+        setBackgroundColor(SlotUi.menuBackground)
     }
     private val body = LinearLayout(activity).apply {
         orientation = LinearLayout.VERTICAL
@@ -72,29 +94,41 @@ internal class SlotModalDialog(
         isFillViewport = false
     }
     private val actions = LinearLayout(activity).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER
+        orientation = LinearLayout.VERTICAL
     }
-    private val errorText = SlotUi.label(activity, "", 11.5f, SlotUi.error, upper = false).apply {
+    private val errorText = SlotUi.label(activity, "", 12f, SlotUi.error, upper = false).apply {
         visibility = View.GONE
         setPadding(0, dp(8), 0, 0)
     }
 
+    private fun focusTargets(): List<View> =
+        (fields + buttons).filter { it.isEnabled && it.visibility == View.VISIBLE }
+
+    private fun moveFocus(delta: Int) {
+        val items = focusTargets()
+        if (items.isEmpty()) return
+        val active = items.indexOf(dialog.currentFocus)
+        val next = if (active < 0) 0
+            else (active + delta + items.size) % items.size
+        items[next].requestFocus()
+    }
+
     init {
-        root.addView(SlotUi.label(activity, title, 21f), LinearLayout.LayoutParams(-1, dp(38)))
-        root.addView(View(activity).apply { setBackgroundColor(SlotUi.rule) },
-            LinearLayout.LayoutParams(-1, dp(1)))
-        body.addView(SlotUi.label(activity, message, 12.5f, SlotUi.muted, upper = false).apply {
-            setPadding(0, dp(16), 0, dp(10))
-        })
+        root.addView(SlotUi.menuHeading(activity, title),
+            LinearLayout.LayoutParams(-1, SlotUi.menuPixel(activity, 24)))
+        root.addView(View(activity), LinearLayout.LayoutParams(-1,
+            SlotUi.menuPixel(activity, 27)))
+        if (message.isNotBlank()) {
+            body.addView(SlotUi.label(activity, message, 15f, SlotUi.muted,
+                upper = false).apply {
+                setPadding(0, 0, 0, dp(14))
+                maxLines = 5
+            })
+        }
         body.addView(errorText)
         scroll.addView(body, android.widget.FrameLayout.LayoutParams(-1, -2))
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        root.addView(View(activity).apply { setBackgroundColor(SlotUi.rule) },
-            LinearLayout.LayoutParams(-1, dp(1)))
-        root.addView(actions, LinearLayout.LayoutParams(-1, dp(56)).apply {
-            topMargin = dp(9)
-        })
+        root.addView(actions, LinearLayout.LayoutParams(-1, -2))
         val legend = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -102,9 +136,8 @@ internal class SlotModalDialog(
         legend.addView(SlotUi.nativeHint(activity, "A", "SELECT"))
         legend.addView(SlotUi.nativeHint(activity, "B", "BACK"),
             LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(35) })
-        root.addView(legend, LinearLayout.LayoutParams(-1, dp(27)))
-        // Request no Android title/decorations BEFORE setContentView; the
-        // custom Slot heading and four-sided plate are the only chrome.
+        root.addView(legend, LinearLayout.LayoutParams(-1,
+            SlotUi.menuPixel(activity, 53)))
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         dialog.setContentView(root)
         dialog.setCanceledOnTouchOutside(false)
@@ -115,30 +148,35 @@ internal class SlotModalDialog(
     }
 
     fun addInput(label: String, hint: String, password: Boolean = false): EditText {
-        body.addView(SlotUi.label(activity, label, 12.5f, SlotUi.ink),
-            LinearLayout.LayoutParams(-1, dp(28)).apply {
-                topMargin = dp(6)
-            })
+        body.addView(SlotUi.label(activity, label, 13f, SlotUi.muted),
+            LinearLayout.LayoutParams(-1, dp(27)).apply { topMargin = dp(4) })
         val field = SlotUi.field(activity, hint, password)
         field.contentDescription = label
-        body.addView(field, LinearLayout.LayoutParams(-1, dp(49)).apply {
+        body.addView(field, LinearLayout.LayoutParams(-1, dp(48)).apply {
             bottomMargin = dp(10)
         })
         fields.add(field)
         if (password) secretFields.add(field)
-        // Validation / HTTPS errors belong AFTER the last field, near actions,
-        // not hidden above the username when the keyboard scrolls the dialog.
         body.removeView(errorText)
         body.addView(errorText)
         return field
     }
 
     fun addButton(label: String, onClick: () -> Unit): TextView {
-        val button = SlotUi.button(activity, label, onClick)
-        val params = LinearLayout.LayoutParams(0, dp(43), 1f).apply {
-            if (buttons.isNotEmpty()) leftMargin = dp(12)
+        val button = SlotUi.label(activity, label, 16f, SlotUi.muted).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), 0, dp(12), 0)
+            isFocusable = true
+            isClickable = true
+            contentDescription = label
+            setOnFocusChangeListener { view, focused ->
+                view.setBackgroundColor(if (focused) SlotUi.selected else Color.TRANSPARENT)
+                setTextColor(if (focused) SlotUi.ink else SlotUi.muted)
+            }
+            setOnClickListener { if (!busy) onClick() }
         }
-        actions.addView(button, params)
+        actions.addView(button, LinearLayout.LayoutParams(-1,
+            SlotUi.menuPixel(activity, 52)))
         buttons.add(button)
         return button
     }
@@ -148,29 +186,26 @@ internal class SlotModalDialog(
         errorText.visibility = if (message.isBlank()) View.GONE else View.VISIBLE
     }
 
-    fun setBusy(busy: Boolean) {
-        this.busy = busy
-        buttons.forEach { it.isEnabled = !busy; it.alpha = if (busy) .52f else 1f }
-        dialog.setCancelable(!busy)
+    fun setBusy(value: Boolean) {
+        busy = value
+        buttons.forEach { it.isEnabled = !value; it.alpha = if (value) .52f else 1f }
+        dialog.setCancelable(!value)
     }
 
     fun show() {
         dialog.show()
         dialog.window?.apply {
             setWindowAnimations(R.style.SlotWindowAnimation)
-            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-            setDimAmount(.74f)
+            setBackgroundDrawable(ColorDrawable(SlotUi.menuBackground))
+            addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
             setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-            val metrics = activity.resources.displayMetrics
-            setLayout((metrics.widthPixels * .77f).toInt().coerceAtMost(dp(720)),
-                (metrics.heightPixels * .78f).toInt())
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT)
             decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or
                 View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         }
-        // Start at the username field for first login; A summons the system
-        // keyboard, B always returns. Don't pop the IME until explicitly asked.
+        // Safe first choice on confirmations; first editable field on forms.
         (fields.firstOrNull() ?: buttons.firstOrNull())?.requestFocus()
     }
 
