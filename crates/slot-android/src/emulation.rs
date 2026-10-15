@@ -197,21 +197,20 @@ impl EmulationProfile {
 }
 
 #[cfg(test)]
-
-    #[test]
-    fn old_per_game_gba_grid_becomes_grid_v2_without_changing_gb() {
-        let profile=super::EmulationProfile {
-            screen_shader: Some(super::Shader::Grid), ..Default::default()
-        };
-        let mut gba=super::Settings::default();
-        profile.apply_visual_and_gameplay(&mut gba,super::Platform::Gba);
-        assert_eq!(gba.shader_gba,super::Shader::LcdGridV2);
-        let mut gb=super::Settings::default();
-        profile.apply_visual_and_gameplay(&mut gb,super::Platform::Gb);
-        assert_eq!(gb.shader_gb,super::Shader::Grid);
-    }
 mod tests {
     use super::*;
+    #[test]
+    fn old_per_game_gba_grid_becomes_grid_v2_without_changing_gb() {
+        let profile=EmulationProfile {
+            screen_shader: Some(Shader::Grid), ..Default::default()
+        };
+        let mut gba=Settings::default();
+        profile.apply_visual_and_gameplay(&mut gba,Platform::Gba);
+        assert_eq!(gba.shader_gba,Shader::LcdGridV2);
+        let mut gb=Settings::default();
+        profile.apply_visual_and_gameplay(&mut gb,Platform::Gb);
+        assert_eq!(gb.shader_gb,Shader::Grid);
+    }
 
     #[test]
     fn legacy_globals_inherited_until_game_is_customized() {
