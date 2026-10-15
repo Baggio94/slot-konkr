@@ -387,7 +387,7 @@ enum ShelfOverlay {
     States,
 }
 
-const MENU_TEXT: [&str; 86] = [
+const MENU_TEXT: [&str; 88] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -474,6 +474,8 @@ const MENU_TEXT: [&str; 86] = [
     "Wallpaper",                          // 83
     "Wallpaper Tint",                     // 84
     "Theme",                              // 85
+    "Recents",                            // 86
+    "Game Titles",                        // 87
 ];
 
 #[derive(Clone, Copy)]
@@ -621,7 +623,12 @@ struct Engine {
     letter_shown_at: Option<Instant>,
     // Unmodified upstream system names: 200ms in, 1200ms hold, 800ms out.
     platform_faces: [Printed; 3],
+    recents_platform_face: Printed,
     platform_shown_at: Option<Instant>,
+    selected_title_name: String,
+    selected_title_face: Printed,
+    selected_title_texture: Option<slot_gfx::TexId>,
+    selected_title_since: Option<Instant>,
 }
 
 /// The upstream wallpaper.deck expects Config/ to exist on an SD card.
@@ -724,6 +731,15 @@ impl Engine {
             }
             shelves.push(Shelf::new(carts));
         }
+        // Fourth rack mirrors Slot's ten most recently launched ROMs.
+        // Do not modify the three platform shelves or their ROM roots.
+        let recent_ids=visuals_root.as_deref().map(crate::recents::load)
+            .unwrap_or_default();
+        let recent_carts=crate::recents::carts(&recent_ids,
+            &[&shelves[0].carts, &shelves[1].carts, &shelves[2].carts]);
+        shelves.push(Shelf::new(if settings.show_recents {
+            recent_carts
+        } else { Vec::new() }));
 
         // Same compact size for all three platforms, rasterised at 3x
         // resolution before downsampling to Slot's 720x480 design canvas.
@@ -733,6 +749,11 @@ impl Engine {
             let tex = gpu.create_texture(face.w, face.h, &face.rgba);
             Printed::new(tex, face.w)
         });
+
+        let recent_label = platform_name_face("RECENTS");
+        let recents_platform_face=Printed::new(
+            gpu.create_texture(recent_label.w,recent_label.h,&recent_label.rgba),
+            recent_label.w);
 
         let shadow = cart_shadow();
         let gba = gpu.create_texture(shadow.w, shadow.h, &shadow.rgba);
@@ -1047,7 +1068,12 @@ impl Engine {
             letter_face: Printed::default(),
             letter_shown_at: None,
             platform_faces,
+            recents_platform_face,
             platform_shown_at: has_multiple_systems.then_some(now),
+            selected_title_name: String::new(),
+            selected_title_face: Printed::default(),
+            selected_title_texture: None,
+            selected_title_since: None,
         })
     }
 
@@ -1126,7 +1152,7 @@ impl Engine {
         let time = self.born.elapsed().as_millis() as u64;
         match code {
             96 | 97 => {
-                let key = if self.active == 0 { 0 } else { 1 };
+                let key = if self.current_cart_platform() == Platform::Gba { 0 } else { 1 };
                 if self.game.is_some() {
                     self.change_game_screen_or_gameplay(key,code == 96);
                 } else { self.change_setting(key,code == 96); }
@@ -2372,7 +2398,7 @@ impl Engine {
                     // Slot original: GB/GBC L1 = Stretch, R1 = Actual.
                     // On GBA the shoulder buttons remain owned by the core.
                     // SELECT+shoulder save/load is handled below and takes priority.
-                    if self.active != 0 && self.buttons & ButtonMask::SELECT == 0
+                    if self.current_cart_platform() != Platform::Gba && self.buttons & ButtonMask::SELECT == 0
                         && (code == 102 || code == 103) {
                         if pressed {
                             self.set_video_mode(if code == 102 {
@@ -2479,18 +2505,10 @@ impl Engine {
                             },
                             ShelfOverlay::GeneralSettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::GeneralSettings {
-                                    row: move_menu_row(row, code,
-                                        if self.show_general_tint() { 3 } else { 2 }),
+                                    row: move_menu_row(row, code, self.general_rows().len()),
                                 },
                                 21 | 22 | 96 => {
-                                    let right = code != 21;
-                                    if row == 0 {
-                                        self.cycle_wallpaper(right);
-                                    } else if row == 1 && self.show_general_tint() {
-                                        self.cycle_wallpaper_tint(right);
-                                    } else {
-                                        self.cycle_appearance();
-                                    }
+                                    self.cycle_general_row(row,code!=21,code==96);
                                 },
                                 97 => self.overlay = ShelfOverlay::Settings { row: 4 },
                                 108 => self.overlay = ShelfOverlay::None,
@@ -2498,18 +2516,9 @@ impl Engine {
                             },
                             ShelfOverlay::InterfaceSettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::InterfaceSettings {
-                                    row: move_menu_row(row, code,
-                                        if self.custom_wallpaper_present { 5 } else { 4 }),
+                                    row: move_menu_row(row, code, 3),
                                 },
                                 21 | 22 if row < 3 => self.change_setting(row + 13, code == 22),
-                                96 if row == 3 => {
-                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(8);
-                                }
-                                96 if row == 4 && self.custom_wallpaper_present => {
-                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(10);
-                                    self.custom_wallpaper_present = false;
-                                    self.overlay = ShelfOverlay::InterfaceSettings { row: 3 };
-                                }
                                 97 => self.overlay = ShelfOverlay::Settings { row: 3 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
@@ -3001,7 +3010,7 @@ impl Engine {
         if let Some(shader)=self.game_emulation.and_then(|p|p.screen_shader) {
             return shader;
         }
-        if self.active==0 { self.settings.shader_gba }
+        if self.current_cart_platform()==Platform::Gba { self.settings.shader_gba }
         else { self.settings.shader_gb }
     }
 
@@ -3223,6 +3232,98 @@ impl Engine {
         self.persist_settings();
     }
 
+    fn recents_root() -> Option<PathBuf> {
+        PATHS.lock().unwrap_or_else(|e|e.into_inner())
+            .as_ref().map(|(root,_)|root.clone())
+    }
+    fn rebuild_recents(&mut self) {
+        let Some(root)=Self::recents_root() else { return };
+        let ids=crate::recents::load(&root);
+        let carts=crate::recents::carts(&ids,
+            &[&self.shelves[0].carts,&self.shelves[1].carts,&self.shelves[2].carts]);
+        let was_recent=self.active==3;
+        let selected=self.shelves.get(3)
+            .and_then(|s|s.carts.get(s.index))
+            .map(|c|c.rom.clone());
+        self.shelves[3]=Shelf::new(if self.settings.show_recents {carts} else {Vec::new()});
+        if let Some(uri)=selected {
+            if let Some(i)=self.shelves[3].carts.iter().position(|c|c.rom==uri) {
+                self.shelves[3].select(i);
+            }
+        }
+        if was_recent && self.shelves[3].carts.is_empty() {
+            self.active=next_nonempty_shelf(&self.shelves,0,1);
+        }
+    }
+    fn record_recent(&mut self) {
+        let Some(root)=Self::recents_root() else { return };
+        let Some(uri)=self.selected_rom_uri() else { return };
+        let next=crate::recents::append_previous(&crate::recents::load(&root),&uri);
+        if let Err(err)=crate::recents::store(&root,&next) {
+            eprintln!("slot-konkr: unable to update recents rack: {err}");
+        } else {
+            self.rebuild_recents();
+        }
+    }
+    fn general_rows(&self) -> Vec<usize> {
+        let mut rows=vec![83]; // Wallpaper
+        if self.show_general_tint(){rows.push(84);}
+        rows.extend_from_slice(&[85,86,87,43]);
+        if self.custom_wallpaper_present {rows.push(45);}
+        rows
+    }
+    fn cycle_general_row(&mut self, row: usize, right: bool, confirm: bool) {
+        let Some(which)=self.general_rows().get(row).copied() else {return};
+        match which {
+            83 => self.cycle_wallpaper(right),
+            84 => self.cycle_wallpaper_tint(right),
+            85 => self.cycle_appearance(),
+            86 => {
+                self.settings.show_recents=!self.settings.show_recents;
+                self.rebuild_recents();
+                self.persist_settings();
+            }
+            87 => {
+                self.settings.show_titles=!self.settings.show_titles;
+                self.selected_title_name.clear();
+                self.persist_settings();
+            }
+            43 if confirm => UI_ACTION.lock().unwrap_or_else(|e|e.into_inner()).push_back(8),
+            45 if confirm => {
+                UI_ACTION.lock().unwrap_or_else(|e|e.into_inner()).push_back(10);
+                self.custom_wallpaper_present=false;
+                self.overlay=ShelfOverlay::GeneralSettings {
+                    row: row.saturating_sub(1),
+                };
+            }
+            _ => {}
+        }
+    }
+    /// Rasterise only when the selected game changes; no repeated label
+    /// processing on 60/120Hz draw callbacks.
+    fn refresh_selected_title(&mut self) {
+        if !self.settings.show_titles || self.game.is_some() {return;}
+        let name=self.shelves.get(self.active)
+            .and_then(|s|s.carts.get(s.index))
+            .map(|cart|if cart.title.is_empty(){cart.stem.as_str()}else{cart.title.as_str()})
+            .unwrap_or("");
+        if name==self.selected_title_name {return;}
+        self.selected_title_name=name.into();
+        if name.is_empty(){self.selected_title_since=None;return;}
+        let display: String=name.chars().take(39).collect();
+        let image=word_face(&display);
+        let tex=if let Some(tex)=self.selected_title_texture {
+            self.gpu.update_texture(tex,image.w,image.h,&image.rgba);
+            tex
+        }else{
+            let tex=self.gpu.create_texture(image.w,image.h,&image.rgba);
+            self.selected_title_texture=Some(tex);
+            tex
+        };
+        self.selected_title_face=Printed::new(tex,image.w);
+        self.selected_title_since=Some(Instant::now());
+    }
+
     fn show_general_tint(&self) -> bool {
         self.wallpaper_personal
     }
@@ -3305,6 +3406,8 @@ impl Engine {
             },
             18 => if self.settings.appearance == crate::settings::Appearance::Light
                 { 22 } else { 21 },
+            19 => if self.settings.show_recents {4}else{5},
+            20 => if self.settings.show_titles {4}else{5},
             _ => 5,
         }
     }
@@ -3334,7 +3437,7 @@ impl Engine {
     fn draw_setting_values(&self, row: usize, keys: &[usize], out: &mut Vec<Draw>) {
         let top = settings_row_top(keys.len());
         for (index, key) in keys.iter().copied().enumerate() {
-            if key > 18 { continue; } // Reset-to-global has no value.
+            if key > 20 { continue; } // Action-only rows have no value.
             let (tex, width, height) =
                 if key == 16 && matches!(self.settings.wallpaper,
                     crate::settings::WallpaperPick::File(_)) {
@@ -3489,22 +3592,16 @@ impl Engine {
                 self.draw_original_style_menu(26, &[32, 33, 49, 58, 81], row, out);
             }
             ShelfOverlay::GeneralSettings { row } => {
-                if self.show_general_tint() {
-                    self.draw_original_style_menu(82, &[83, 84, 85], row, out);
-                    self.draw_setting_values(row, &[16, 17, 18], out);
-                } else {
-                    self.draw_original_style_menu(82, &[83, 85], row, out);
-                    self.draw_setting_values(row, &[16, 18], out);
-                }
+                let rows=self.general_rows();
+                self.draw_original_style_menu(82,&rows,row,out);
+                let keys:Vec<usize>=rows.iter().map(|id|match id {
+                    83=>16,84=>17,85=>18,86=>19,87=>20,_=>usize::MAX
+                }).collect();
+                self.draw_setting_values(row,&keys,out);
             }
             ShelfOverlay::InterfaceSettings { row } => {
-                if self.custom_wallpaper_present {
-                    self.draw_original_style_menu(59, &[63, 64, 65, 43, 45], row, out);
-                    self.draw_setting_values(row, &[13, 14, 15, usize::MAX, usize::MAX], out);
-                } else {
-                    self.draw_original_style_menu(59, &[63, 64, 65, 43], row, out);
-                    self.draw_setting_values(row, &[13, 14, 15, usize::MAX], out);
-                }
+                self.draw_original_style_menu(59, &[63, 64, 65], row, out);
+                self.draw_setting_values(row, &[13, 14, 15], out);
             }
             ShelfOverlay::EmulationSettings { row } => {
                 self.draw_original_style_menu(50, &[51, 52, 55], row, out);
@@ -3824,8 +3921,8 @@ impl Engine {
             ShelfOverlay::Multiplayer => (11u8, 0, 0usize),
             ShelfOverlay::Settings { row } => (4u8, row, 5usize),
             ShelfOverlay::GeneralSettings { row } =>
-                (12u8, row, if self.show_general_tint() { 3 } else { 2 }),
-            ShelfOverlay::InterfaceSettings { row } => (10u8, row, if self.custom_wallpaper_present { 5 } else { 4 }),
+                (12u8, row, self.general_rows().len()),
+            ShelfOverlay::InterfaceSettings { row } => (10u8, row, 3usize),
             ShelfOverlay::EmulationSettings { row } => (8u8, row, 3usize),
             ShelfOverlay::PauseEmulationSettings { row } => (9u8, row, 3usize),
             ShelfOverlay::ScreenSettings { row } => (5u8, row, 4usize),
@@ -3926,6 +4023,7 @@ impl Engine {
                     self.buttons = 0;
                     SAMPLE_RATE.store(session.sample_rate, Ordering::Release);
                     self.game = Some(session);
+                    self.record_recent();
                     self.game_accum = 0.0;
                     self.gpu.set_screen_effect(self.game_shader().effect());
                     // The exact Slot upstream geometry: GB/GBC 160x144
@@ -4224,6 +4322,7 @@ impl Engine {
         self.shelves[self.active].tick(ms);
         self.shelves[self.active].update(dt);
         self.prepare_visible();
+        self.refresh_selected_title();
         let shelf = &mut self.shelves[self.active];
 
         // Original Slot: 450ms seating + 280ms hold. Start the original
@@ -4279,18 +4378,27 @@ impl Engine {
                     if platform_name_running(elapsed_ms) {
                         let alpha = slot_name_alpha(elapsed_ms);
                         if alpha > 0.0 {
-                            draw_platform_name(self.platform_faces[self.active], alpha, &mut commands);
+                            let face=if self.active==3 {self.recents_platform_face}
+                                else {self.platform_faces[self.active]};
+                            draw_platform_name(face,alpha,&mut commands);
                         }
                     } else {
                         self.platform_shown_at = None;
                     }
                 }
                 if self.platform_shown_at.is_none() {
-                    if let Some(since) = self.letter_shown_at {
-                        let ms = since.elapsed().as_millis();
-                        if ms < 1500 {
-                            let alpha = ((1500 - ms) as f32 / 250.0).min(1.0);
-                            draw_slot_name(self.letter_face, alpha, &mut commands);
+                    if self.settings.show_titles {
+                        if let Some(since)=self.selected_title_since {
+                            let elapsed=since.elapsed().as_millis() as u64;
+                            if platform_name_running(elapsed) {
+                                draw_slot_name(self.selected_title_face,slot_name_alpha(elapsed),&mut commands);
+                            }
+                        }
+                    } else if let Some(since)=self.letter_shown_at {
+                        let elapsed=since.elapsed().as_millis();
+                        if elapsed<1500 {
+                            let alpha=((1500-elapsed) as f32/250.0).min(1.0);
+                            draw_slot_name(self.letter_face,alpha,&mut commands);
                         }
                     }
                 }
