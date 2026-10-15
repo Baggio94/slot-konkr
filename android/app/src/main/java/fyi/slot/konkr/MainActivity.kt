@@ -32,7 +32,6 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
 import android.widget.EditText
-import android.app.AlertDialog
 import android.net.Uri
 import android.net.ConnectivityManager
 import android.net.Network
@@ -319,7 +318,7 @@ class MainActivity : Activity() {
         val dialog = SlotModalDialog(
             this,
             "MULTIPLAYER — DIRECT JOIN",
-            "Mac LAN discovery unavailable. Enter the KONKR HOST Wi-Fi IPv4 address.",
+            "Mac discovery unavailable. Enter the KONKR host Wi-Fi IPv4 address.",
             onDismiss = {
                 if (!joined) nativeLinkNetworkError("Direct Join cancelled")
             }
@@ -363,13 +362,13 @@ class MainActivity : Activity() {
             val dialog = SlotModalDialog(
                 this,
                 "LINK — SHARE CARTRIDGE",
-                "Send this game's ROM to $peer over local Wi-Fi?\n" +
-                    "Only continue if you trust this device.",
+                "Share this ROM with $peer over local Wi-Fi? " +
+                    "Only allow a device you trust.",
                 onDismiss = { reply(0) }
             )
+            dialog.addButton("CANCEL") { reply(0); dialog.dismiss() }
             dialog.addButton("ALLOW ONCE") { reply(1); dialog.dismiss() }
             dialog.addButton("REMEMBER DEVICE") { reply(2); dialog.dismiss() }
-            dialog.addButton("CANCEL") { reply(0); dialog.dismiss() }
             dialog.show()
         } catch (error: Exception) {
             Log.w(TAG, "Cannot show Slot peer permission", error)
@@ -998,20 +997,26 @@ class MainActivity : Activity() {
         val selected = java.util.concurrent.atomic.AtomicReference(SharedGbaChoice.CANCEL)
         runOnUiThread {
             if (isDestroyed || isFinishing) { ready.countDown(); return@runOnUiThread }
-            AlertDialog.Builder(this)
-                .setTitle("Choose shared game save")
-                .setMessage("mGBA and gpSP contain different game progress. " +
-                    "Choose which cartridge save to share. Both original files " +
-                    "will be backed up before anything is replaced.")
-                .setPositiveButton("Keep mGBA") { _, _ ->
-                    selected.set(SharedGbaChoice.MGBA); ready.countDown()
+            try {
+                val dialog = SlotModalDialog(this, "SAVE CONFLICT",
+                    "mGBA and gpSP saves differ. Choose which progress to keep. " +
+                        "Both original saves are backed up.",
+                    onDismiss = { ready.countDown() })
+                // Default to the safe action: accidental A never changes SRAM.
+                dialog.addButton("CANCEL") { dialog.dismiss() }
+                dialog.addButton("KEEP mGBA SAVE") {
+                    selected.set(SharedGbaChoice.MGBA)
+                    dialog.dismiss()
                 }
-                .setNeutralButton("Keep gpSP") { _, _ ->
-                    selected.set(SharedGbaChoice.GPSP); ready.countDown()
+                dialog.addButton("KEEP gpSP SAVE") {
+                    selected.set(SharedGbaChoice.GPSP)
+                    dialog.dismiss()
                 }
-                .setNegativeButton("Cancel") { _, _ -> ready.countDown() }
-                .setOnCancelListener { ready.countDown() }
-                .show()
+                dialog.show()
+            } catch (error: Exception) {
+                Log.e(TAG, "Cannot open shared-save choice", error)
+                ready.countDown()
+            }
         }
         return if (ready.await(120L, TimeUnit.SECONDS)) selected.get()
             else SharedGbaChoice.CANCEL
@@ -1028,21 +1033,25 @@ class MainActivity : Activity() {
         val selected = java.util.concurrent.atomic.AtomicReference(CoreStateChoice.CANCEL)
         runOnUiThread {
             if (isDestroyed || isFinishing) { ready.countDown(); return@runOnUiThread }
-            AlertDialog.Builder(this)
-                .setTitle("Continue with $core?")
-                .setMessage("An existing $core save state may contain older progress " +
-                    "than the shared cartridge save. Which progress should be used?")
-                .setPositiveButton("Shared cartridge save") { _, _ ->
-                    selected.set(CoreStateChoice.SHARED); ready.countDown()
+            try {
+                val dialog = SlotModalDialog(this, "SAVE STATE",
+                    "The $core state may be older than the shared cartridge save. " +
+                        "Choose which progress to load.",
+                    onDismiss = { ready.countDown() })
+                dialog.addButton("CANCEL") { dialog.dismiss() }
+                dialog.addButton("SHARED CARTRIDGE SAVE") {
+                    selected.set(CoreStateChoice.SHARED)
+                    dialog.dismiss()
                 }
-                .setNeutralButton("Existing $core state") { _, _ ->
-                    selected.set(CoreStateChoice.EXISTING); ready.countDown()
+                dialog.addButton("EXISTING $core STATE") {
+                    selected.set(CoreStateChoice.EXISTING)
+                    dialog.dismiss()
                 }
-                .setNegativeButton("Cancel") { _, _ ->
-                    ready.countDown()
-                }
-                .setOnCancelListener { ready.countDown() }
-                .show()
+                dialog.show()
+            } catch (error: Exception) {
+                Log.e(TAG, "Cannot open core-state choice", error)
+                ready.countDown()
+            }
         }
         return if (ready.await(120L, TimeUnit.SECONDS)) selected.get()
             else CoreStateChoice.CANCEL
@@ -1492,23 +1501,19 @@ class MainActivity : Activity() {
                 if (isDestroyed) return@runOnUiThread
                 val message = when {
                     pending == null ->
-                        "The pending-awards journal couldn't be verified. " +
-                            "It will NOT be deleted. Only the account token will be removed. " +
-                            "Reconnect as $username to attempt recovery and syncing."
+                        "Pending awards couldn't be checked. They stay on this device. " +
+                            "Reconnect as $username to try syncing them."
                     pending > 0 ->
-                        "$pending achievements await upload for $username. " +
-                            "They will stay on this device, owned by this account. " +
-                            "Sign in to $username again to sync them later. " +
-                            "Delayed RA uploads may have server time limits."
+                        "$pending awards await upload for $username. " +
+                            "They stay on this device. Sign in again to sync them; " +
+                            "delayed uploads may expire."
                     else ->
-                        "Sign out of $username? Cached games and local achievements " +
-                            "will remain on the device."
+                        "Sign out of $username? Local awards and cached games stay."
                 }
                 val confirm = SlotModalDialog(
                     this,
-                    "SIGN OUT — KEEP LOCAL ACHIEVEMENTS",
-                    "$message\n\nReconnecting requires Internet. Slot. closes to stop " +
-                        "the previous account's achievement worker safely."
+                    "SIGN OUT",
+                    "$message\n\nSlot closes after sign-out to stop the old account safely."
                 )
                 confirm.addButton("STAY SIGNED IN") { confirm.dismiss() }
                 confirm.addButton("SIGN OUT & CLOSE") {
@@ -1600,9 +1605,8 @@ class MainActivity : Activity() {
         val login = SlotModalDialog(
             this,
             "RETROACHIEVEMENTS",
-            "Connect directly to RetroAchievements using HTTPS. " +
-                "Your password is never stored; only the returned account token " +
-                "is kept in app-private storage. GBA uses Casual (softcore).",
+            "Sign in securely over HTTPS. Your password is not stored. " +
+                "GBA achievements use Casual mode.",
             onDismiss = { nativeExternalReturn() }
         )
         val username = login.addInput("USERNAME", "RetroAchievements username")
