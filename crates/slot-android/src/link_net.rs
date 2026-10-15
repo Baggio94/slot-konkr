@@ -102,8 +102,9 @@ impl LabGreeting {
     fn bytes(&self) -> [u8; LAB_GREETING_LEN] {
         let mut bytes = [0u8; LAB_GREETING_LEN];
         bytes[..4].copy_from_slice(b"KMLB");
-        bytes[4] = if self.backend == 1 { 4 } else { 3 };
-        // KMLB/4: mGBA dual-cartridge transfer, no fallback to KMLB/3.
+        bytes[4] = if self.backend == 1 { 5 } else { 3 };
+        // KMLB/5: signed device identity precedes mGBA mixed-ROM KMLB/4 transfer.
+        // Refuse legacy v4 peers instead of mixing framed setup traffic.
         // gpSP KMLB/3 remains unchanged; both formats reject old peers.
         bytes[5..9].copy_from_slice(&self.game);
         bytes[9] = self.backend;
@@ -115,7 +116,7 @@ impl LabGreeting {
     }
     fn decode(bytes:&[u8])->Option<Self>{
         if bytes.len()!=LAB_GREETING_LEN || &bytes[0..4]!=b"KMLB" ||
-            !matches!((bytes[4], bytes[9]), (4, 1) | (3, 2)) {return None;}
+            !matches!((bytes[4], bytes[9]), (5, 1) | (3, 2)) {return None;}
         let mut game=[0;4]; game.copy_from_slice(&bytes[5..9]);
         let mut rom_sha256=[0;32];rom_sha256.copy_from_slice(&bytes[11..43]);
         let mut core_sha256=[0;32];core_sha256.copy_from_slice(&bytes[43..75]);
@@ -1010,11 +1011,13 @@ mod lab_negotiation_tests {
         assert!(mgba.accepts(&mgba_other));
         let mut incompatible=mgba_other.clone();incompatible.game=*b"BRBE";
         assert!(!mgba.accepts(&incompatible));
-        assert_eq!(mgba.bytes()[4],4);
+        assert_eq!(mgba.bytes()[4],5);
         assert_eq!(host.bytes()[4],3);
         // Legacy framing/version can never be accepted in KMLB/3.
         let mut legacy=host.bytes();legacy[4]=2;
         assert!(LabGreeting::decode(&legacy).is_none());
+        let mut mixed_old=mgba.bytes();mixed_old[4]=4;
+        assert!(LabGreeting::decode(&mixed_old).is_none());
     }
     #[test]
     fn stalled_reader_has_bounded_memory_and_disconnects_instead_of_dropping_frames() {

@@ -136,7 +136,8 @@ class MainActivity : Activity() {
     external fun nativeSetNextResumeMode(mode: Int)
     // The renderer requests LAN only when Host/Join is selected. It never
     // touches WifiManager, Android UI or permissions from the GL thread.
-    external fun nativeLinkPeerRomConsent(allowed: Boolean)
+    external fun nativeLinkPeerRomDecision(choice: Int)
+    external fun nativeLinkPeerLabel(): String?
     external fun nativeLinkNetworkReady(ipv4: String)
     external fun nativeLinkDirectHost(addressPair: String)
     external fun nativeLinkDiscoveryGame(): String?
@@ -336,44 +337,36 @@ class MainActivity : Activity() {
         dialog.show()
     }
 
-    /** Mixed-ROM mGBA can only work if each emulator has both cartridges.
-     * This is a full ROM image transfer, not just gamepad traffic. Require
-     * explicit approval on BOTH devices after identity negotiation.
-     * Same-ROM Link and gpSP RFU/Cable never prompt.
+    /** The peer has proven possession of an installation-bound Ed25519 key
+     * before this UI appears. A14 never trusts IPs or legacy lab flags.
+     * Keys are remembered only by Rust after a verified ROM exchange.
      */
     private fun showPeerCartridgeConsent() {
-        // A13: preauthorization is ONLY for an explicitly provisioned
-        // private Multiplayer Lab device. It suppresses per-session prompts,
-        // not the KMLB/4 SHA/header/core/BIOS handshake or LAN restrictions.
-        // No automatic full-ROM sharing for unprovisioned installations.
-        if (File(filesDir, "a13-trusted-mixed-rom.flag").isFile) {
-            Log.i(TAG, "A13: mixed-ROM transfer preauthorized for this test device")
-            nativeLinkPeerRomConsent(true)
-            return
-        }
         if (!resumed || isDestroyed || isFinishing) {
-            nativeLinkPeerRomConsent(false)
+            nativeLinkPeerRomDecision(0)
             return
         }
         val answered = AtomicBoolean(false)
-        fun reply(allow: Boolean) {
-            if (answered.compareAndSet(false, true)) nativeLinkPeerRomConsent(allow)
+        fun reply(choice: Int) {
+            if (answered.compareAndSet(false, true)) nativeLinkPeerRomDecision(choice)
         }
         try {
-            AlertDialog.Builder(this)
-                .setTitle("Connect different GBA games?")
-                .setMessage("To run two different cartridges with mGBA Cable, " +
-                    "slot. must send this device's full game ROM to the other " +
-                    "device over your local network and receive the other ROM. " +
-                    "The received copy is kept privately, not added to your library. " +
-                    "Only allow this when you trust the other device.")
-                .setPositiveButton("Allow once") { _, _ -> reply(true) }
-                .setNegativeButton("Cancel") { _, _ -> reply(false) }
-                .setOnCancelListener { reply(false) }
-                .show()
+            val peer = nativeLinkPeerLabel().orEmpty().take(36)
+                .ifBlank { "UNRECOGNIZED DEVICE" }
+            val dialog = SlotModalDialog(
+                this,
+                "LINK — SHARE CARTRIDGE",
+                "Send this game's ROM to $peer over local Wi-Fi?\n" +
+                    "Only continue if you trust this device.",
+                onDismiss = { reply(0) }
+            )
+            dialog.addButton("ALLOW ONCE") { reply(1); dialog.dismiss() }
+            dialog.addButton("REMEMBER DEVICE") { reply(2); dialog.dismiss() }
+            dialog.addButton("CANCEL") { reply(0); dialog.dismiss() }
+            dialog.show()
         } catch (error: Exception) {
-            Log.w(TAG, "Cannot show mixed-ROM sharing confirmation", error)
-            reply(false)
+            Log.w(TAG, "Cannot show Slot peer permission", error)
+            reply(0)
         }
     }
 

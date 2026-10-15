@@ -91,7 +91,7 @@ enum Input {
     LinkNetworkReady(String),
     LinkDirectHost(String),
     LinkNetworkError(String),
-    LinkPeerRomConsent(bool),
+    LinkPeerRomConsent(i32),
     RaPrefetchHash(String, u32),
     ExternalReturn,
 }
@@ -225,6 +225,8 @@ static LINK_NEEDS_MULTICAST: AtomicBool = AtomicBool::new(false);
 // Read-only four-character game code for the optional Mac AVD DNS-SD bridge.
 // The actual Lab/2 peer handshake still validates SHA-256 of ROM, core, BIOS.
 static LINK_DISCOVERY_GAME: Mutex<Option<String>> = Mutex::new(None);
+// Authenticated peer key fingerprint, never a user-supplied device name.
+static LINK_PEER_LABEL: Mutex<Option<String>> = Mutex::new(None);
 
 #[derive(Clone)]
 struct SystemStatus {
@@ -1241,6 +1243,7 @@ impl Engine {
             bios_file: storage.join("BIOS/gba_bios.bin"),
             backend,
             mode: self.link_mode,
+            trusted_dir: storage.join("TrustedLinkDevices"),
         })
     }
 
@@ -1446,13 +1449,11 @@ impl Engine {
                         since: self.link_worked_at,
                     };
                 }
-                LinkProgress::PeerRomConsent => {
-                    // Both users must approve sharing their full cartridge
-                    // files before KMLB/4 transfers any ROM bytes.
+                LinkProgress::PeerRomConsent(label) => {
+                    *LINK_PEER_LABEL.lock().unwrap_or_else(|e| e.into_inner()) = Some(label);
+                    // Kotlin displays a Slot-styled choice and returns the
+                    // decision asynchronously; GL stays nonblocking.
                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(18);
-                    // A13: no transient Android toast for normal ROM negotiation.
-                    // Without explicit local preauthorization Kotlin retains its
-                    // one-time private ROM transfer consent dialog.
                 }
                 LinkProgress::Ready(wire, peer_rom) => {
                     self.cancel_link_discovery();
@@ -1512,10 +1513,15 @@ impl Engine {
 
     fn handle(&mut self, input: Input) {
         match input {
-            Input::LinkPeerRomConsent(allowed) => {
+            Input::LinkPeerRomConsent(choice) => {
                 if let Some(starter) = self.link_starter.as_ref() {
-                    starter.approve_peer_rom(allowed);
-                    if !allowed {
+                    let decision = match choice {
+                        1 => crate::trusted_link::PeerPermission::AllowOnce,
+                        2 => crate::trusted_link::PeerPermission::Remember,
+                        _ => crate::trusted_link::PeerPermission::Reject,
+                    };
+                    starter.approve_peer_rom(decision);
+                    if choice != 1 && choice != 2 {
                         self.cancel_link_discovery();
                         self.fail_multiplayer("You declined sharing ROM data with this peer",
                             LinkFail::Cancelled);
@@ -4663,11 +4669,22 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkDiscoveryGame(
 /// Android's user-visible confirmation for sharing a complete ROM with
 /// a trusted KMLB/4 mixed-cartridge peer. AGL never shows dialogs or blocks.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkPeerRomConsent(
-    _env: *mut c_void, _activity: *mut c_void, allowed: jboolean,
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkPeerRomDecision(
+    _env: *mut c_void, _activity: *mut c_void, choice: i32,
 ) {
     INPUT.lock().unwrap_or_else(|e| e.into_inner())
-        .push_back(Input::LinkPeerRomConsent(allowed != 0));
+        .push_back(Input::LinkPeerRomConsent(choice));
+}
+
+/// Safe short fingerprint derived from an authenticated Ed25519 public key;
+/// no peer strings or ROM data reach the Android dialog.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkPeerLabel(
+    env: JNIEnv<'_>, _activity: JObject<'_>,
+) -> jstring {
+    LINK_PEER_LABEL.lock().unwrap_or_else(|e| e.into_inner())
+        .as_ref().and_then(|value| env.new_string(value).ok())
+        .map_or(std::ptr::null_mut(), |value| value.into_raw())
 }
 
 #[unsafe(no_mangle)]

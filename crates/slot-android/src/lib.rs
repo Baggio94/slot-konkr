@@ -27,6 +27,7 @@ mod core_legend;
 // The original Slot TCP framing and cartridge-specific link selection are
 // shared directly; only the Linux Wi-Fi radio driver is replaced on Android.
 mod link_net;
+mod trusted_link;
 #[path = "../../slot/src/link_kind.rs"]
 mod link_kind;
 // Fork's LAN/mDNS wire format remains interoperable across devices.

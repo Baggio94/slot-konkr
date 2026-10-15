@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use crate::link_lan::{self, Advertiser, HostInfo, Multicast};
 use crate::link_net::{Cancel, TcpLink, LabGreeting};
+use crate::trusted_link::{self, PeerPermission};
 use crate::link_kind::LinkKind;
 
 const PORT: u16 = 7211;
@@ -29,7 +30,7 @@ pub enum Progress {
     Looking,
     /// Both devices must explicitly approve transmitting their ROM image
     /// to the other player. Only emitted for mixed-ROM mGBA Cable.
-    PeerRomConsent,
+    PeerRomConsent(String),
     Ready(TcpLink, Option<PathBuf>),
     Failed(Failure),
 }
@@ -95,6 +96,7 @@ pub struct LinkConfig {
     pub bios_file: PathBuf,
     pub backend: Backend,
     pub mode: LinkKind,
+    pub trusted_dir: PathBuf,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -199,7 +201,7 @@ impl LinkConfig {
 }
 
 fn connect(role: Role, local: Ipv4Addr, config: &LinkConfig,
-           cancel: &Cancel, ui: &Sender<Progress>, approval: &Receiver<bool>)
+           cancel: &Cancel, ui: &Sender<Progress>, approval: &Receiver<PeerPermission>)
     -> io::Result<(TcpLink, Option<PathBuf>)> {
     if local.is_unspecified() || local.is_loopback() || local.is_multicast()
         || local.is_link_local() || local.is_broadcast() {
@@ -233,7 +235,7 @@ fn connect(role: Role, local: Ipv4Addr, config: &LinkConfig,
         }
     }?;
     let peer_path = stage_mgba_peer(&mut link, &fingerprint, config,
-        cancel, ui, approval)?;
+        role == Role::Host, cancel, ui, approval)?;
     Ok((link, peer_path))
 }
 
@@ -241,27 +243,45 @@ fn connect(role: Role, local: Ipv4Addr, config: &LinkConfig,
 /// has been fully exchanged, SHA-verified and published inside the private
 /// app cache. The GL thread never hashes, copies or downloads ROM data.
 fn stage_mgba_peer(link: &mut TcpLink, local: &LabGreeting,
-                   config: &LinkConfig, cancel: &Cancel,
-                   ui: &Sender<Progress>, approval: &Receiver<bool>)
+                   config: &LinkConfig, is_host: bool, cancel: &Cancel,
+                   ui: &Sender<Progress>, approval: &Receiver<PeerPermission>)
     -> io::Result<Option<PathBuf>> {
     if config.backend == Backend::MgbaSlotCable &&
         link.peer_identity().is_some_and(|peer| peer.game != local.game) {
-        ui.send(Progress::PeerRomConsent).map_err(|_|
-            io::Error::new(io::ErrorKind::Interrupted, "UI no longer accepts peer ROM consent"))?;
-        let deadline = std::time::Instant::now() + Duration::from_secs(60);
-        loop {
-            if cancel.is_cancelled() || std::time::Instant::now() >= deadline {
-                return Err(io::Error::new(io::ErrorKind::Interrupted,
-                    "Peer ROM consent timed out or was cancelled"));
-            }
-            match approval.recv_timeout(Duration::from_millis(200)) {
-                Ok(true) => break,
-                Ok(false) | Err(mpsc::RecvTimeoutError::Disconnected) =>
+        // A14: cryptographic proof BEFORE consent; neither ROM is sent at
+        // this stage. Trusted keys are installation-specific, not LAN IPs.
+        let identity = trusted_link::authenticate_peer(link, &config.trusted_dir,
+            local, is_host, cancel)?;
+        let trusted = trusted_link::is_trusted(&config.trusted_dir, &identity.public_key)?;
+        let mut remember = false;
+        if !trusted {
+            ui.send(Progress::PeerRomConsent(identity.label)).map_err(|_|
+                io::Error::new(io::ErrorKind::Interrupted,
+                    "UI no longer accepts peer ROM consent"))?;
+            let deadline = std::time::Instant::now() + Duration::from_secs(60);
+            loop {
+                if cancel.is_cancelled() || std::time::Instant::now() >= deadline {
                     return Err(io::Error::new(io::ErrorKind::Interrupted,
-                        "Remote ROM exchange not authorized")),
-                Err(mpsc::RecvTimeoutError::Timeout) => (),
+                        "Peer ROM consent timed out or was cancelled"));
+                }
+                match approval.recv_timeout(Duration::from_millis(200)) {
+                    Ok(PeerPermission::AllowOnce) => break,
+                    Ok(PeerPermission::Remember) => { remember = true; break; },
+                    Ok(PeerPermission::Reject) |
+                    Err(mpsc::RecvTimeoutError::Disconnected) =>
+                        return Err(io::Error::new(io::ErrorKind::Interrupted,
+                            "Local ROM exchange was not authorized")),
+                    Err(mpsc::RecvTimeoutError::Timeout) => (),
+                }
             }
         }
+        let transferred = link.exchange_mgba_peer_rom(local, &config.rom, cancel)?;
+        // Never persist trust merely for opening a socket or clicking a
+        // button. The signed peer MUST complete the verified ROM exchange.
+        if remember {
+            trusted_link::remember_peer(&config.trusted_dir, &identity.public_key)?;
+        }
+        return Ok(transferred);
     }
     match config.backend {
         Backend::MgbaSlotCable => link.exchange_mgba_peer_rom(local, &config.rom, cancel),
@@ -293,6 +313,7 @@ mod cross_abi_fingerprint_tests {
             game: "BPRE".into(), rom: rom.clone(), core_file: mac,
             bios_file: bios.clone(), backend: Backend::MgbaSlotCable,
             mode: LinkKind::Cable,
+            trusted_dir: root.join("trusted-devices"),
         };
         let mut right = left.clone();
         right.core_file = konkr;
@@ -320,7 +341,7 @@ mod cross_abi_fingerprint_tests {
 /// RetroAchievements, GL, Android UI or save files.
 pub struct LinkStarter {
     events: Receiver<Progress>,
-    consent: Sender<bool>,
+    consent: Sender<PeerPermission>,
     cancel: Cancel,
     // Report unexpected worker exit exactly once, rather than spinner forever.
     done: bool,
@@ -379,7 +400,7 @@ impl LinkStarter {
                     let mut link = TcpLink::join_lab_greeted(
                         SocketAddrV4::new(host, PORT).into(), &fingerprint)?;
                     let peer = stage_mgba_peer(&mut link, &fingerprint, &config,
-                        &worker_cancel, &tx, &approval)?;
+                        false, &worker_cancel, &tx, &approval)?;
                     Ok((link, peer))
                 })
             };
@@ -410,13 +431,13 @@ impl LinkStarter {
         }
     }
 
-    pub fn approve_peer_rom(&self, allowed: bool) {
-        let _ = self.consent.send(allowed);
+    pub fn approve_peer_rom(&self, decision: PeerPermission) {
+        let _ = self.consent.send(decision);
     }
 
     pub fn cancel(&self) {
         self.cancel.cancel();
-        let _ = self.consent.send(false);
+        let _ = self.consent.send(PeerPermission::Reject);
     }
 }
 
@@ -465,7 +486,7 @@ mod tests {
         LinkConfig { game: code.into(), rom: PathBuf::from("unused.gba"),
             core_file: PathBuf::from("unused.so"),
             bios_file: PathBuf::from("unused.bin"), backend: Backend::MgbaSlotCable,
-            mode: LinkKind::Cable }
+            mode: LinkKind::Cable, trusted_dir: PathBuf::from("unused-trust") }
     }
     #[test]
     fn direct_join_rejects_public_and_loopback_addresses() {
