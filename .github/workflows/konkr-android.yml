@@ -451,3 +451,52 @@ jobs:
             --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "slot. for KONKR Pocket Advance $version" \
             --notes-file notes.md "${flags[@]}"
+
+  # One-shot public RC1 publication from the frozen release branch.
+  # The connected GitHub app cannot create tags/releases itself, so an
+  # authenticated GitHub Actions job does it AFTER the exact APK + native CI
+  # gates have passed. Never publish from the continuously moving Lab branch.
+  publish-konkr-rc1-direct:
+    name: Publish first public KONKR RC1
+    if: github.ref == 'refs/heads/release/konkr-android-0.1.0-rc1-a14r2'
+    needs: [debug-apk, a6-a1-mgba-continuity]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: slot-konkr-0.1.0-rc1-signed-apk
+          path: release-assets
+      - name: Validate candidate and create public GitHub pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="konkr-v0.1.0-rc.1"
+          test "$GITHUB_REF" = 'refs/heads/release/konkr-android-0.1.0-rc1-a14r2'
+          test "$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' android/app/build.gradle.kts | head -1)" = '0.1.0-rc.1'
+          test "$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' android/app/build.gradle.kts | head -1)" = '90'
+          apk='release-assets/slot-konkr-0.1.0-rc.1-arm64-x86_64.apk'
+          mv release-assets/app-release.apk "$apk"
+          test -s "$apk"
+          (cd release-assets && sha256sum "$(basename "$apk")" > SHA256SUMS.txt)
+          # A pre-existing tag could be unrelated to this release's binaries:
+          # never overwrite it or upload artifacts from a different commit.
+          if gh api -X GET "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::Tag $tag already exists; refusing to overwrite a published candidate."
+            exit 1
+          fi
+          gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f "ref=refs/tags/$tag" -f "sha=$GITHUB_SHA" > /dev/null
+          {
+            printf '# slot. for KONKR Pocket Advance 0.1.0 RC1\n\n'
+            printf '**Public pre-release** — hardware/visual QA and Lot C audio/frame pacing checks remain outstanding before 0.1.0 stable.\n\n'
+            cat docs/konkr/RELEASE-NOTES-0.1.0.md
+            printf '\n\nExact source commit: %s\n' "$GITHUB_SHA"
+          } > public-release-notes.md
+          gh release create "$tag" "$apk" release-assets/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease --latest=false \
+            --title "slot. for KONKR Pocket Advance 0.1.0 RC1" \
+            --notes-file public-release-notes.md
