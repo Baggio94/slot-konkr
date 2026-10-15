@@ -109,6 +109,7 @@ class MainActivity : Activity() {
     external fun nativeExitGame()
     external fun nativeSuspend()
     external fun nativeIsPlaying(): Boolean
+    external fun nativeCanRefreshLibrary(): Boolean
     external fun nativeAudioSampleRate(): Int
     external fun nativeAudioQueuedShorts(): Int
     external fun nativeSetMgbaLinkRecoveryEnabled(enabled: Boolean)
@@ -148,6 +149,12 @@ class MainActivity : Activity() {
     private var pendingCartStudioUri: String? = null
     private lateinit var cartSounds: CartSounds
     private val scanner = Executors.newSingleThreadExecutor()
+    private data class PendingLibraryIndex(
+        val root: Uri, val json: String, val prepared: String,
+        val serial: Int, val quiet: Boolean
+    )
+    private var pendingLibraryIndex: PendingLibraryIndex? = null
+    private lateinit var libraryRefreshIndicator: SlotLibraryRefreshIndicator
     private val raLoginWorker = Executors.newSingleThreadExecutor()
     private val raSmartWorker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "slot-ra-smart-cache").apply { priority = Thread.MIN_PRIORITY }
@@ -434,6 +441,9 @@ class MainActivity : Activity() {
     }
     private val pulse = object : Runnable {
         override fun run() {
+            // Changed ROM indexes are applied only when the GL engine is
+            // back on its idle carousel, never during a game or its launch.
+            publishPendingLibraryIfIdle()
             pollSystemStatus()
             if (::shelfStatus.isInitialized) {
                 val flags = nativeShelfIndicatorFlags()
@@ -755,6 +765,7 @@ class MainActivity : Activity() {
         val frame = FrameLayout(this)
         frame.addView(view, FrameLayout.LayoutParams(-1, -1))
         shelfStatus = SlotStatusIndicators(this, frame)
+        libraryRefreshIndicator = SlotLibraryRefreshIndicator(this, frame)
         // There is no Android status view: the native Slot renderer owns all
         // shelf messages and controller hints, even during ROM rescanning.
         performanceHud = TextView(this).apply {
@@ -807,7 +818,11 @@ class MainActivity : Activity() {
             if (contentResolver.persistedUriPermissions.any {
                     it.uri == uri && it.isReadPermission
                 }) {
-                if (!restoreCachedLibrary(uri)) scanFolder(uri)
+                if (restoreCachedLibrary(uri)) {
+                    // Use the same fast cached boot as before; verify the SAF
+                    // tree off-thread behind the splash with no UI delay.
+                    scanFolder(uri, quiet = true)
+                } else scanFolder(uri)
             } else {
                 nativeSetShelfStatus(shelfPermissionExpired)
             }
@@ -2038,36 +2053,37 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Load a previously indexed SAF ROM shelf without enumerating ROMs again.
-     * The cache never grants access: the persisted SAF permission is checked by
-     * the caller and opening an individual ROM still uses ContentResolver.
-     */
-    private fun restoreCachedLibrary(root: Uri): Boolean {
+    /** Read only a cache that belongs to this persisted SAF tree. */
+    private fun cachedLibraryGames(root: Uri): String? {
         val file = File(filesDir, ROM_CACHE_NAME)
-        if (!file.isFile || file.length() !in 1L..ROM_CACHE_MAX_BYTES.toLong()) return false
+        if (!file.isFile || file.length() !in 1L..ROM_CACHE_MAX_BYTES.toLong()) return null
         return try {
             val metadata = JSONObject(file.readText(Charsets.UTF_8))
             if (metadata.optInt("schema") != ROM_CACHE_SCHEMA ||
-                metadata.optString("root") != root.toString()) return false
-            val games = metadata.optJSONArray("games") ?: return false
-            val count = setStudioOverrides(games.toString())
+                metadata.optString("root") != root.toString()) null
+            else metadata.optJSONArray("games")?.toString()
+        } catch (error: Exception) {
+            Log.w(TAG, "Invalid ROM cache; scanning without replacing it first", error)
+            null
+        }
+    }
+
+    /** Reuse cached labels immediately without rescanning on the UI thread. */
+    private fun restoreCachedLibrary(root: Uri): Boolean {
+        val games = cachedLibraryGames(root) ?: return false
+        return try {
+            val count = setStudioOverrides(games)
             if (count < 0) return false
-            if (count == 0) {
-                nativeSetShelfStatus(shelfEmpty)
-            } else {
-                nativeSetShelfStatus(shelfNone)
-            }
-            Log.i(TAG, "Restored $count cached ROMs without a SAF rescan")
+            nativeSetShelfStatus(if (count == 0) shelfEmpty else shelfNone)
+            Log.i(TAG, "Restored $count cached ROMs without SAF rescan")
             true
         } catch (error: Exception) {
-            Log.w(TAG, "ROM library cache invalid; performing a fresh scan", error)
+            Log.w(TAG, "Cached library unavailable; scanning", error)
             false
         }
     }
 
-    /** Commit the complete ROM index only after native import succeeds.
-     * AtomicFile keeps the previous shelf intact on a failed/partial refresh.
-     */
+    /** AtomicFile retains the previous library if the write fails. */
     private fun storeCachedLibrary(root: Uri, json: String) {
         val payload = JSONObject()
             .put("schema", ROM_CACHE_SCHEMA)
@@ -2075,7 +2091,7 @@ class MainActivity : Activity() {
             .put("games", JSONArray(json))
             .toString().toByteArray(Charsets.UTF_8)
         if (payload.size > ROM_CACHE_MAX_BYTES) {
-            Log.w(TAG, "ROM library cache too large; future launches will rescan")
+            Log.w(TAG, "ROM library cache exceeds safe limit")
             return
         }
         val atomic = AtomicFile(File(filesDir, ROM_CACHE_NAME))
@@ -2089,40 +2105,108 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun scanFolder(uri: Uri) {
+    /** The scanner never publishes directly. This method runs on the UI
+     * thread only. Rust also rechecks the idle state at the exact GL swap,
+     * guarding against a cartridge inserted between the two callbacks.
+     */
+    private fun publishPendingLibraryIfIdle() {
+        val next = pendingLibraryIndex ?: return
+        if (scanSerial.get() != next.serial) {
+            pendingLibraryIndex = null
+            libraryRefreshIndicator.hide()
+            return
+        }
+        if (!resumed || !nativeCanRefreshLibrary()) return
+        val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)
+        if (saved != next.root.toString()) {
+            pendingLibraryIndex = null
+            libraryRefreshIndicator.hide()
+            return
+        }
+        pendingLibraryIndex = null
+        libraryRefreshIndicator.show()
+        val count = try { nativeSetLibrary(next.prepared) } catch (error: Exception) {
+            Log.e(TAG, "Changed ROM library could not be applied", error)
+            -1
+        }
+        if (count < 0) {
+            libraryRefreshIndicator.hide()
+            nativeSetShelfStatus(shelfImportError)
+            return
+        }
+        nativeSetShelfStatus(if (count == 0) shelfEmpty else shelfNone)
+        // Index persistence and RA diagnostics remain on background workers.
+        scanner.execute {
+            if (scanSerial.get() != next.serial) return@execute
+            try {
+                storeCachedLibrary(next.root, next.json)
+                startRaSmartCache()
+            } catch (error: Exception) {
+                Log.w(TAG, "ROM cache write failed; displayed shelf is intact", error)
+            }
+        }
+        if (!next.quiet) {
+            SlotToast.makeText(this, "Library updated: $count carts",
+                Toast.LENGTH_SHORT).show()
+        }
+        // Brief subtle spinner only for a changed library; never for
+        // unchanged boot scans and never while a game is active.
+        uiHandler.postDelayed({
+            if (::libraryRefreshIndicator.isInitialized && !isDestroyed &&
+                pendingLibraryIndex == null) libraryRefreshIndicator.hide()
+        }, 700L)
+    }
+
+    private fun scanFolder(uri: Uri, quiet: Boolean = false) {
         val serial = scanSerial.incrementAndGet()
-        nativeSetShelfStatus(shelfScanning)
+        pendingLibraryIndex = null
+        if (::libraryRefreshIndicator.isInitialized) libraryRefreshIndicator.hide()
+        if (!quiet) nativeSetShelfStatus(shelfScanning)
         scanner.execute {
             try {
-                val result = RomLibrary.scan(this, uri)
+                val previous = cachedLibraryGames(uri)
+                val result = RomLibrary.scan(this, uri, previous)
                 if (scanSerial.get() != serial) return@execute
-                val count = setStudioOverrides(result.json)
-                if (count >= 0) {
-                    try {
-                        storeCachedLibrary(uri, result.json)
-                        startRaSmartCache()
-                    } catch (error: Exception) {
-                        Log.w(TAG, "Cannot cache ROM library; games remain available", error)
+                // A bounded/incomplete SAF scan is not evidence that a ROM
+                // was removed. Fail closed, retaining the previous shelf.
+                if (result.truncated) {
+                    Log.w(TAG, "Incomplete SAF ROM listing: retaining existing index")
+                    runOnUiThread {
+                        if (!isDestroyed && scanSerial.get() == serial && !quiet) {
+                            nativeSetShelfStatus(shelfNone)
+                            SlotToast.makeText(this,
+                                "ROM scan incomplete. Existing games kept.",
+                                Toast.LENGTH_LONG).show()
+                        }
                     }
+                    return@execute
                 }
+                if (previous != null && RomLibrary.sameIndex(previous, result.json)) {
+                    Log.i(TAG, "ROM library unchanged: " + result.count +
+                        " carts; no renderer rebuild")
+                    runOnUiThread {
+                        if (!isDestroyed && scanSerial.get() == serial && !quiet) {
+                            nativeSetShelfStatus(if (result.count == 0) shelfEmpty else shelfNone)
+                            SlotToast.makeText(this, "Library already up to date.",
+                                Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    return@execute
+                }
+                // Process artwork metadata before handing a changed index
+                // to the UI. No game/ROM bytes or state files are touched.
+                val prepared = CartStudioCatalog.withOverrides(this, result.json)
                 runOnUiThread {
                     if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
-                    if (count < 0) {
-                        nativeSetShelfStatus(shelfImportError)
-                    } else if (count == 0) {
-                        nativeSetShelfStatus(shelfEmpty)
-                    } else {
-                        nativeSetShelfStatus(shelfNone)
-                        val note = if (result.truncated) " (limited to 5000)" else ""
-                        SlotToast.makeText(this, "Library ready: " + count + " carts" + note, Toast.LENGTH_LONG).show()
-                    }
+                    pendingLibraryIndex = PendingLibraryIndex(
+                        uri, result.json, prepared, serial, quiet)
+                    publishPendingLibraryIfIdle()
                 }
             } catch (error: Exception) {
-                Log.e(TAG, "SAF cartridge scan failed", error)
+                Log.e(TAG, "SAF ROM scan failed; previous cache retained", error)
                 runOnUiThread {
-                    if (!isDestroyed && scanSerial.get() == serial) {
+                    if (!isDestroyed && scanSerial.get() == serial && !quiet)
                         nativeSetShelfStatus(shelfReadError)
-                    }
                 }
             }
         }
@@ -2138,6 +2222,8 @@ class MainActivity : Activity() {
         }
         raConnectivity = null
         scanSerial.incrementAndGet()
+        pendingLibraryIndex = null
+        if (::libraryRefreshIndicator.isInitialized) libraryRefreshIndicator.hide()
         scanner.shutdownNow()
         raLoginWorker.shutdownNow()
         raSmartWorker.shutdownNow()
