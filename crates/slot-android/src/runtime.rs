@@ -369,6 +369,7 @@ enum ShelfOverlay {
     Library { row: usize },
     Settings { row: usize },
     ScreenSettings { row: usize },
+    ScreenSystemSettings { platform: Platform, row: usize },
     GameplaySettings { row: usize },
     EmulationSettings { row: usize },
     InterfaceSettings { row: usize },
@@ -387,7 +388,7 @@ enum ShelfOverlay {
     States,
 }
 
-const MENU_TEXT: [&str; 88] = [
+const MENU_TEXT: [&str; 94] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -476,6 +477,12 @@ const MENU_TEXT: [&str; 88] = [
     "Theme",                              // 85
     "Recents",                            // 86
     "Game Titles",                        // 87
+    "GBC Shader",                         // 88
+    "GB Shader",                          // 89
+    "Bezel",                              // 90
+    "Game Boy Advance",                   // 91
+    "Game Boy Color",                     // 92
+    "Game Boy",                           // 93
 ];
 
 #[derive(Clone, Copy)]
@@ -568,6 +575,8 @@ struct Engine {
     slot_faces: Option<(slot_gfx::TexId, slot_gfx::TexId)>,
     slot_dark_faces: (slot_gfx::TexId, slot_gfx::TexId),
     slot_light_faces: (slot_gfx::TexId, slot_gfx::TexId),
+    gb_bezel_tex: slot_gfx::TexId,
+    gbc_bezel_tex: slot_gfx::TexId,
     custom_wallpaper_present: bool,
     setting_values: Vec<(slot_gfx::TexId, u32, u32)>,
     setting_carets: [(slot_gfx::TexId, u32, u32); 2],
@@ -715,6 +724,12 @@ impl Engine {
             else if settings.appearance == crate::settings::Appearance::Light {
                 Some(slot_light_faces)
             } else { Some(slot_dark_faces) };
+        // Official 720x480 GB/GBC screen bezels, sampled once for KONKR.
+        let (gb, w, h)=slot_ui::native_rgba(slot_ui::bitmaps::bezel_gb(),720,480);
+        let gb_bezel_tex=gpu.create_texture(w,h,&gb);
+        let (gbc,w,h)=slot_ui::native_rgba(slot_ui::bitmaps::bezel_gbc(),720,480);
+        let gbc_bezel_tex=gpu.create_texture(w,h,&gbc);
+
         let mut shelves = Vec::new();
 
         // First-run empty shelf: never synthesize fake demo cartridges.
@@ -1015,6 +1030,8 @@ impl Engine {
             slot_faces,
             slot_dark_faces,
             slot_light_faces,
+            gb_bezel_tex,
+            gbc_bezel_tex,
             custom_wallpaper_present,
             setting_values,
             setting_carets,
@@ -2525,12 +2542,27 @@ impl Engine {
                             },
                             ShelfOverlay::ScreenSettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::ScreenSettings {
-                                    row: move_menu_row(row, code, 4),
+                                    row: move_menu_row(row, code, 3),
                                 },
-                                21 | 22 => self.change_setting(row, code == 22),
+                                96 => self.overlay=ShelfOverlay::ScreenSystemSettings {
+                                    platform:Self::screen_submenu_platform(row),row:0,
+                                },
                                 97 => self.overlay = ShelfOverlay::Settings { row: 0 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
+                            },
+                            ShelfOverlay::ScreenSystemSettings { platform,row } => match code {
+                                19 | 20 => self.overlay=ShelfOverlay::ScreenSystemSettings {
+                                    platform,row:move_menu_row(row,code,Self::screen_rows(platform).len()),
+                                },
+                                21 | 22 | 96 => if let Some(key)=Self::screen_keys(platform).get(row).copied(){
+                                    self.change_setting(key,code!=21);
+                                },
+                                97 => self.overlay=ShelfOverlay::ScreenSettings {
+                                    row:match platform{Platform::Gba=>0,Platform::Gbc=>1,Platform::Gb=>2},
+                                },
+                                108 => self.overlay=ShelfOverlay::None,
+                                _=>{}
                             },
                             ShelfOverlay::EmulationSettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::EmulationSettings {
@@ -2621,6 +2653,7 @@ impl Engine {
                                 }
                             },
                             ShelfOverlay::GameMenu { .. } | ShelfOverlay::Multiplayer |
+                            ShelfOverlay::ScreenSystemSettings { .. } |
                             ShelfOverlay::PauseSettings { .. } | ShelfOverlay::PauseScreenSettings { .. } |
                             ShelfOverlay::PauseGameplaySettings { .. } | ShelfOverlay::PauseEmulationSettings { .. } |
                             ShelfOverlay::States | ShelfOverlay::None => {}
@@ -3007,28 +3040,48 @@ impl Engine {
         LiveGameOptions::from_profile(&self.settings, self.game_emulation)
     }
     fn game_shader(&self) -> crate::settings::Shader {
-        if let Some(shader)=self.game_emulation.and_then(|p|p.screen_shader) {
-            return shader;
+        self.game_settings().shader_for(self.current_cart_platform())
+    }
+
+    fn screen_rows(platform: Platform)-> &'static [usize] {
+        match platform {
+            Platform::Gba=>&[34,29,90],
+            Platform::Gbc=>&[88,29,90],
+            Platform::Gb=>&[89,29,36,90],
         }
-        if self.current_cart_platform()==Platform::Gba { self.settings.shader_gba }
-        else { self.settings.shader_gb }
+    }
+    fn screen_keys(platform:Platform)-> &'static [usize] {
+        match platform {
+            Platform::Gba=>&[0,22,25],
+            Platform::Gbc=>&[21,23,26],
+            Platform::Gb=>&[1,24,3,27],
+        }
+    }
+    fn screen_title(platform:Platform)->usize {
+        match platform {
+            Platform::Gba=>91, Platform::Gbc=>92,Platform::Gb=>93,
+        }
+    }
+    fn screen_submenu_platform(row:usize)->Platform {
+        match row {
+            0=>Platform::Gba,1=>Platform::Gbc,_=>Platform::Gb,
+        }
     }
 
     fn pause_screen_rows(&self) -> &'static [usize] {
-        match self.current_cart_platform() {
-            Platform::Gba => &[34,29],
-            Platform::Gb if self.game.as_ref().is_some_and(
-                GameSession::can_change_gb_palette) => &[35,29,36],
-            Platform::Gb | Platform::Gbc => &[35,29],
+        if self.current_cart_platform()==Platform::Gb &&
+            !self.game.as_ref().is_some_and(GameSession::can_change_gb_palette) {
+            &[89,29,90]
+        } else {
+            Self::screen_rows(self.current_cart_platform())
         }
     }
-    fn pause_screen_key(&self, row: usize) -> Option<usize> {
-        match (self.current_cart_platform(),row) {
-            (Platform::Gba,0) => Some(0),
-            (Platform::Gb | Platform::Gbc,0) => Some(1),
-            (_,1) => Some(2),
-            (Platform::Gb,2) => Some(3),
-            _ => None,
+    fn pause_screen_key(&self,row:usize)->Option<usize> {
+        if self.current_cart_platform()==Platform::Gb &&
+            !self.game.as_ref().is_some_and(GameSession::can_change_gb_palette) {
+            [1,24,27].get(row).copied()
+        } else {
+            Self::screen_keys(self.current_cart_platform()).get(row).copied()
         }
     }
     fn pause_settings_rows(&self) -> &'static [usize] {
@@ -3083,7 +3136,7 @@ impl Engine {
         let relaunch=self.game.as_ref().is_some_and(GameSession::requires_relaunch);
         // Shader and color-correction are display-only and safe while linked;
         // never change input, save states, emulation speed or rewind in Link.
-        if relaunch || (linked && !matches!(key,0|1|2)) {
+        if relaunch || (linked && !matches!(key,0|1|2|21|22|23|24|25|26|27)) {
             set_message("Gameplay changes are disabled during Multiplayer".into());
             return;
         }
@@ -3099,13 +3152,12 @@ impl Engine {
         } else { return; }
         self.game_emulation=Some(profile);
         let view=self.game_settings();
-        if matches!(key,0|1) {
-            let shader=if platform==Platform::Gba { view.shader_gba } else { view.shader_gb };
-            self.gpu.set_screen_effect(shader.effect());
+        if matches!(key,0|1|21) {
+            self.gpu.set_screen_effect(view.shader_for(platform).effect());
         }
-        if key==2 {
+        if matches!(key,2|22|23|24) {
             if let Some(session)=self.game.as_mut() {
-                session.set_colour_correction(view.colour_correction);
+                session.set_colour_correction(view.colour_for(platform));
             }
         }
         if key==3 {
@@ -3177,7 +3229,7 @@ impl Engine {
         let globals=self.game_settings();
         self.gpu.set_screen_effect(self.game_shader().effect());
         if let Some(session)=self.game.as_mut() {
-            session.set_colour_correction(globals.colour_correction);
+            session.set_colour_correction(globals.colour_for(self.current_cart_platform()));
             session.set_gb_palette_mode(globals.gb_palettes,globals.palette_name());
         }
         FF_AUDIO_ENABLED.store(globals.ff_sound,Ordering::Release);
@@ -3376,7 +3428,7 @@ impl Engine {
         match key {
             0 => shader(scoped.shader_gba),
             1 => shader(scoped.shader_gb),
-            2 => if scoped.colour_correction { 4 } else { 5 },
+            2 => if scoped.colour_for(self.current_cart_platform()) {4}else{5},
             3 => if scoped.gb_palettes { 4 } else { 5 },
             4 => match scoped.ff_speed { 2 => 0, 3 => 1, 4 => 2, _ => 3 },
             5 => if scoped.ff_sound { 4 } else { 5 },
@@ -3408,6 +3460,13 @@ impl Engine {
                 { 22 } else { 21 },
             19 => if self.settings.show_recents {4}else{5},
             20 => if self.settings.show_titles {4}else{5},
+            21 => shader(scoped.shader_gbc),
+            22 => if scoped.colour_correction_gba {4}else{5},
+            23 => if scoped.colour_correction_gbc {4}else{5},
+            24 => if scoped.colour_correction_gb {4}else{5},
+            25 => if scoped.bezel_gba==crate::settings::Bezel::None {17}else{19},
+            26 => if scoped.bezel_gbc==crate::settings::Bezel::None {17}else{19},
+            27 => if scoped.bezel_gb==crate::settings::Bezel::None {17}else{19},
             _ => 5,
         }
     }
@@ -3437,7 +3496,7 @@ impl Engine {
     fn draw_setting_values(&self, row: usize, keys: &[usize], out: &mut Vec<Draw>) {
         let top = settings_row_top(keys.len());
         for (index, key) in keys.iter().copied().enumerate() {
-            if key > 20 { continue; } // Action-only rows have no value.
+            if key > 27 { continue; } // Action-only rows have no value.
             let (tex, width, height) =
                 if key == 16 && matches!(self.settings.wallpaper,
                     crate::settings::WallpaperPick::File(_)) {
@@ -3627,8 +3686,12 @@ impl Engine {
                 self.draw_setting_values(row, &[10, 11, 12, usize::MAX], out);
             }
             ShelfOverlay::ScreenSettings { row } => {
-                self.draw_original_style_menu(32, &[34, 35, 29, 36], row, out);
-                self.draw_setting_values(row, &[0, 1, 2, 3], out);
+                self.draw_original_style_menu(32, &[91,92,93], row, out);
+            }
+            ShelfOverlay::ScreenSystemSettings {platform,row} => {
+                self.draw_original_style_menu(Self::screen_title(platform),
+                    Self::screen_rows(platform),row,out);
+                self.draw_setting_values(row,Self::screen_keys(platform),out);
             }
             ShelfOverlay::GameplaySettings { row } => {
                 self.draw_original_style_menu(33, &[27, 28, 37, 38, 30, 39], row, out);
@@ -3925,7 +3988,9 @@ impl Engine {
             ShelfOverlay::InterfaceSettings { row } => (10u8, row, 3usize),
             ShelfOverlay::EmulationSettings { row } => (8u8, row, 3usize),
             ShelfOverlay::PauseEmulationSettings { row } => (9u8, row, 3usize),
-            ShelfOverlay::ScreenSettings { row } => (5u8, row, 4usize),
+            ShelfOverlay::ScreenSettings { row } => (5u8, row, 3usize),
+            ShelfOverlay::ScreenSystemSettings { platform,row } =>
+                (16u8,row,Self::screen_rows(platform).len()),
             ShelfOverlay::GameplaySettings { row } => (6u8, row, 6usize),
             _ => (0, 0, 0),
         };
