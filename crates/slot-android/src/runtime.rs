@@ -2909,7 +2909,7 @@ impl Engine {
             match GameSession::open(Path::new(local), &core_file, &storage,
                 core, platform, wants_state,
                 rom_stem, effective_settings.gb_palettes.then(|| effective_settings.palette_name()),
-                effective_settings.colour_correction,
+                effective_settings.colour_for(platform),
                 self.ra_service.as_ref()) {
                 Ok(session) => {
                     self.link_identity = if platform == Platform::Gba {
@@ -3041,6 +3041,18 @@ impl Engine {
     }
     fn game_shader(&self) -> crate::settings::Shader {
         self.game_settings().shader_for(self.current_cart_platform())
+    }
+
+    /// Native 3:2 KONKR: GBA fills the panel and has no forced letterbox bezel.
+    /// GB/GBC preserve the official 720×480 transparent overlays.
+    fn game_bezel(&self) -> Option<slot_gfx::TexId> {
+        if self.game_settings().bezel_for(self.current_cart_platform())
+            == crate::settings::Bezel::None {return None;}
+        match self.current_cart_platform() {
+            Platform::Gba=>None,
+            Platform::Gb=>Some(self.gb_bezel_tex),
+            Platform::Gbc=>Some(self.gbc_bezel_tex),
+        }
     }
 
     fn screen_rows(platform: Platform)-> &'static [usize] {
@@ -3227,9 +3239,10 @@ impl Engine {
         } else { return; }
         self.game_emulation = None;
         let globals=self.game_settings();
+        let platform=self.current_cart_platform();
         self.gpu.set_screen_effect(self.game_shader().effect());
         if let Some(session)=self.game.as_mut() {
-            session.set_colour_correction(globals.colour_for(self.current_cart_platform()));
+            session.set_colour_correction(globals.colour_for(platform));
             session.set_gb_palette_mode(globals.gb_palettes,globals.palette_name());
         }
         FF_AUDIO_ENABLED.store(globals.ff_sound,Ordering::Release);
@@ -3403,9 +3416,10 @@ impl Engine {
             FF_AUDIO_ENABLED.store(self.settings.ff_sound, Ordering::Release);
             AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
         }
-        if key == 2 {
+        if matches!(key,2|22|23|24) {
+            let colour=self.settings.colour_for(self.current_cart_platform());
             if let Some(game) = self.game.as_mut() {
-                game.set_colour_correction(self.settings.colour_correction);
+                game.set_colour_correction(colour);
             }
         }
         self.persist_settings();
@@ -4200,6 +4214,7 @@ impl Engine {
             self.buttons |= ButtonMask::SELECT;
         }
         let profile = self.current_emulation();
+        let bezel=self.game_bezel(); // resolved before mutably borrowing GameSession
         let live=self.live_game_options(); // Copy, zero allocations on 60/120Hz callback
         FF_AUDIO_ENABLED.store(live.ff_sound,Ordering::Release);
         // Android's frame callback changes GLSurfaceView renderMode only when
@@ -4357,6 +4372,12 @@ impl Engine {
             self.gpu.fit(self.size);
             self.gpu.begin_frame();
             let mut commands = vec![Draw::Game];
+            if let Some(tex)=bezel {
+                commands.push(Draw::Tex {
+                    x:0.0,y:0.0,w:OUT_W as f32,h:OUT_H as f32,
+                    tex,alpha:1.0
+                });
+            }
             self.hud.draw(self.born.elapsed().as_millis() as u64, &mut commands);
             self.gpu.draw_list(&commands);
             self.gpu.end_frame(self.size);
