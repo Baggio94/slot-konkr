@@ -3407,7 +3407,13 @@ impl Engine {
         // All menus use the original Slot keycap generator. The paused game
         // screen additionally advertises its active SAVE / LOAD shortcuts.
         if heading == 19 {
-            for (tex, w, x) in centred_hints(&self.game_menu_hints, 15.0) {
+            let linked = self.game.as_ref().is_some_and(|session|
+                session.linked() || session.requires_relaunch());
+            // A paused Link never offers save/load, even in its keycap hints.
+            let hints: &[(slot_gfx::TexId, u32)] = if linked {
+                &self.game_menu_hints[..1] // B Back only
+            } else { &self.game_menu_hints };
+            for (tex, w, x) in centred_hints(hints, 15.0) {
                 out.push(Draw::Tex {
                     x, y: 427.0, w: w as f32, h: HINT_H as f32,
                     tex, alpha: fade,
@@ -4464,7 +4470,7 @@ fn pause_row_text(row: PauseRow, linked: bool, requires_relaunch: bool) -> usize
     match row {
         PauseRow::Resume => 20,
         PauseRow::States => 22,
-        PauseRow::Multiplayer => if linked { 67 } else { 66 },
+        PauseRow::Multiplayer => 66, // Entry always opens status; End Link stays inside adapter
         PauseRow::Settings => 25,
         PauseRow::SaveEject if requires_relaunch => 78,
         PauseRow::SaveEject => 21,
