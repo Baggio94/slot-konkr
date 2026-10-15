@@ -31,6 +31,7 @@ internal class SlotModalDialog(
     message: String,
     private val onDismiss: () -> Unit = {},
 ) {
+    private val isRaLogin = title.equals("RETROACHIEVEMENTS", ignoreCase = true)
     private var busy = false
     private val buttons = ArrayList<TextView>()
     private val secretFields = ArrayList<EditText>()
@@ -96,7 +97,7 @@ internal class SlotModalDialog(
         // Align the RA description, labels and both input boxes exactly with
         // the action labels: those use dp(12) inside the same 32px root inset.
         // Avoid a second native-pixel inset here, which undershoots on AVD.
-        if (title.equals("RETROACHIEVEMENTS", ignoreCase = true)) {
+        if (isRaLogin) {
             val inset = SlotUi.dp(activity, 12)
             setPadding(inset, 0, inset, 0)
         }
@@ -130,12 +131,12 @@ internal class SlotModalDialog(
         root.addView(SlotUi.menuHeading(activity, title),
             LinearLayout.LayoutParams(-1, SlotUi.menuPixel(activity, 32)))
         root.addView(View(activity), LinearLayout.LayoutParams(-1,
-            SlotUi.menuPixel(activity, 19)))
+            SlotUi.menuPixel(activity, if (isRaLogin) 9 else 19)))
         if (message.isNotBlank()) {
             body.addView(SlotUi.label(activity, message, 15f, SlotUi.muted,
                 upper = false).apply {
                 setPadding(0, 0, 0, dp(14))
-                maxLines = if (title.equals("RETROACHIEVEMENTS", ignoreCase = true)) 1 else 5
+                maxLines = if (isRaLogin) 1 else 5
             })
         }
         body.addView(errorText)
@@ -161,12 +162,20 @@ internal class SlotModalDialog(
     }
 
     fun addInput(label: String, hint: String, password: Boolean = false): EditText {
+        // Fixed logical pixels are essential on the 960x640 KONKR:
+        // high OEM density formerly made two 48dp fields overflow the RA
+        // viewport until the first D-pad focus movement scrolled it.
+        val labelHeight = if (isRaLogin) SlotUi.menuPixel(activity, 22) else dp(27)
+        val fieldHeight = if (isRaLogin) SlotUi.menuPixel(activity, 45) else dp(48)
+        val fieldGap = if (isRaLogin) SlotUi.menuPixel(activity, 6) else dp(10)
         body.addView(SlotUi.label(activity, label, 13f, SlotUi.muted),
-            LinearLayout.LayoutParams(-1, dp(27)).apply { topMargin = dp(4) })
+            LinearLayout.LayoutParams(-1, labelHeight).apply {
+                topMargin = if (isRaLogin) SlotUi.menuPixel(activity, 3) else dp(4)
+            })
         val field = SlotUi.field(activity, hint, password)
         field.contentDescription = label
-        body.addView(field, LinearLayout.LayoutParams(-1, dp(48)).apply {
-            bottomMargin = dp(10)
+        body.addView(field, LinearLayout.LayoutParams(-1, fieldHeight).apply {
+            bottomMargin = fieldGap
         })
         fields.add(field)
         if (password) secretFields.add(field)
@@ -219,6 +228,9 @@ internal class SlotModalDialog(
                 View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         }
         // Safe first choice on confirmations; first editable field on forms.
+        // The initial focused EditText must not rely on D-pad scrolling to
+        // finish its layout. Start at the top after all inputs are measured.
+        if (isRaLogin) scroll.post { scroll.scrollTo(0, 0) }
         (fields.firstOrNull() ?: buttons.firstOrNull())?.requestFocus()
     }
 
