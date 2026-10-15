@@ -534,6 +534,8 @@ struct Engine {
     wallpaper_name_face: Option<(slot_gfx::TexId, u32, u32)>,
     /// Live rear/front v1.7.0 slot textures. Always draw in proper depth order.
     slot_faces: Option<(slot_gfx::TexId, slot_gfx::TexId)>,
+    slot_dark_faces: (slot_gfx::TexId, slot_gfx::TexId),
+    slot_light_faces: (slot_gfx::TexId, slot_gfx::TexId),
     custom_wallpaper_present: bool,
     setting_values: Vec<(slot_gfx::TexId, u32, u32)>,
     setting_carets: [(slot_gfx::TexId, u32, u32); 2],
@@ -654,17 +656,28 @@ impl Engine {
         // Preserve existing Config/theme.txt custom colours as an opt-out.
         let custom_colours = visuals_root.as_deref()
             .is_some_and(|root| root.join("Config/theme.txt").exists());
-        let slot_faces = (!custom_colours).then(|| {
+        let mut make_slot = |light: bool| {
+            let (back, front) = if light {
+                (slot_ui::bitmaps::slot_back_light(), slot_ui::bitmaps::slot_front_light())
+            } else {
+                (slot_ui::bitmaps::slot_back(), slot_ui::bitmaps::slot_front())
+            };
             let (back, w, h) = slot_ui::native_rgba(
-                slot_ui::bitmaps::slot_back(),
-                slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H);
+                back, slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H);
             let rear = gpu.create_texture(w, h, &back);
             let (front, w, h) = slot_ui::native_rgba(
-                slot_ui::bitmaps::slot_front(),
-                slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H);
+                front, slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H);
             let front = gpu.create_texture(w, h, &front);
             (rear, front)
-        });
+        };
+        // Both official themes are cached once. Toggling doesn't allocate
+        // textures on the GL thread or shift the original Slot animation.
+        let slot_dark_faces=make_slot(false);
+        let slot_light_faces=make_slot(true);
+        let slot_faces = if custom_colours { None }
+            else if settings.appearance == crate::settings::Appearance::Light {
+                Some(slot_light_faces)
+            } else { Some(slot_dark_faces) };
         let mut shelves = Vec::new();
 
         // First-run empty shelf: never synthesize fake demo cartridges.
@@ -949,6 +962,8 @@ impl Engine {
             wallpaper_personal,
             wallpaper_name_face,
             slot_faces,
+            slot_dark_faces,
+            slot_light_faces,
             custom_wallpaper_present,
             setting_values,
             setting_carets,
@@ -1678,6 +1693,11 @@ impl Engine {
                     .as_ref().map(|(root, _)| root.clone());
                 if let Some(root) = root {
                     slot_ui::set_theme(slot_store::Theme::read(&root));
+                    let custom_colours=root.join("Config/theme.txt").is_file();
+                    self.slot_faces=if custom_colours { None }
+                        else if self.settings.appearance == crate::settings::Appearance::Light {
+                            Some(self.slot_light_faces)
+                        } else { Some(self.slot_dark_faces) };
                     let was_custom_wallpaper = self.custom_wallpaper_present;
                     self.custom_wallpaper_present = root.join("Wallpapers/user.png").is_file();
                     if let ShelfOverlay::InterfaceSettings { row } = self.overlay {
@@ -3007,6 +3027,13 @@ impl Engine {
 
     fn cycle_appearance(&mut self) {
         self.settings.appearance=self.settings.appearance.toggle();
+        let custom_colours = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .as_ref().is_some_and(|(root,_)|
+                root.join("Config/theme.txt").is_file());
+        self.slot_faces=if custom_colours { None }
+            else if self.settings.appearance == crate::settings::Appearance::Light {
+                Some(self.slot_light_faces)
+            } else { Some(self.slot_dark_faces) };
         self.persist_settings();
     }
 
