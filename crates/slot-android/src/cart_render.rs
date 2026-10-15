@@ -1,8 +1,8 @@
 //! Cartridge PNG/embossing raster work, moved off the Android GL thread.
 //! Like upstream Slot's CartFaces, CPU raster happens in bounded workers,
 //! while texture creation and uploads remain on the GLES owner thread.
-use std::collections::HashSet;
-use std::sync::{mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError}, Arc, Mutex};
+use std::collections::{HashSet, VecDeque};
+use std::sync::{mpsc::{self, Receiver, TryRecvError}, Arc, Condvar, Mutex};
 use std::thread;
 
 use slot_store::Cart;
@@ -17,46 +17,50 @@ type Job = (WorkKey, Cart, bool);
 pub(crate) type Layers = [CartFace; 3];
 type ResultFace = (WorkKey, CartFace, Option<Layers>);
 
+#[derive(Default)]
+struct WorkQueue {
+    jobs: VecDeque<Job>,
+    closing: bool,
+}
+
 pub(crate) struct CartRender {
-    submit: SyncSender<Job>,
+    // A short-held priority queue lets rapid D-pad / L1-R1 changes discard
+    // outdated *queued* artwork rather than processing obsolete FIFO jobs.
+    work: Arc<(Mutex<WorkQueue>, Condvar)>,
     finished: Receiver<ResultFace>,
     pending: HashSet<WorkKey>,
-    // A rebuilt Recents shelf may reuse index 0 for a different game.
-    // Worker results from the old generation must NEVER paint that cartridge.
+    wanted: Vec<Key>,
+    // Recents/Favorites can reuse the same index for a different ROM.
     epochs: [u64; 5],
 }
 
 impl CartRender {
     pub(crate) fn start() -> Result<Self, String> {
-        // Never schedule dozens of 9 MiB PNG decodes when the user rapidly
-        // spins through a 115-game GBA shelf. Backpressure keeps RAM bounded.
-        let (submit, jobs) = mpsc::sync_channel::<Job>(8);
         let (ready, finished) = mpsc::channel::<ResultFace>();
-        let shared = Arc::new(Mutex::new(jobs));
+        let work = Arc::new((Mutex::new(WorkQueue::default()), Condvar::new()));
         for index in 0..2 {
-            let source = Arc::clone(&shared);
+            let source = Arc::clone(&work);
             let sink = ready.clone();
             thread::Builder::new()
                 .name(format!("slot-kpa-cart-{index}"))
                 .spawn(move || {
                     loop {
                         let job = {
-                            let receiver = source.lock().unwrap_or_else(|e| e.into_inner());
-                            receiver.recv()
+                            let (lock, notify) = &*source;
+                            let mut queue = lock.lock().unwrap_or_else(|e| e.into_inner());
+                            while queue.jobs.is_empty() && !queue.closing {
+                                queue = notify.wait(queue)
+                                    .unwrap_or_else(|e| e.into_inner());
+                            }
+                            if queue.closing { None } else { queue.jobs.pop_front() }
                         };
-                        let Ok((key, cart, include_material)) = job else { break };
-                        // All heavy PNG decode, cropping, compositing and native artwork
-                        // resampling happens here, never on the GLES render loop.
+                        let Some((key, cart, include_material)) = job else { break };
+                        // No PNG decoding occurs on the GLES thread. At most
+                        // two previously started jobs can become obsolete.
                         let original = cart_face_with_material(&cart, None);
-                        // Keep bounded asynchronous work off the GLES thread.
                         let (rgba, w, h) = slot_ui::native_rgba(
                             &original.rgba, original.w, original.h);
                         let pixels = CartFace { rgba, w, h };
-                        // Side-car previews need just the single composited
-                        // image. Computing three 960p materials for every
-                        // prefetched transparent cart spikes CPU and memory
-                        // during fast D-pad scrolling. Build them only when
-                        // the current selection explicitly needs depth.
                         let layers = if include_material && is_clear(&cart) {
                             let original = [
                                 cart_interior(&cart),
@@ -73,7 +77,9 @@ impl CartRender {
                 })
                 .map_err(|e| format!("Cannot start cartridge renderer: {e}"))?;
         }
-        Ok(Self { submit, finished, pending: HashSet::new(), epochs: [0; 5] })
+        Ok(Self {
+            work, finished, pending: HashSet::new(), wanted: Vec::new(), epochs: [0; 5],
+        })
     }
 
     pub(crate) fn queued(&self, key: Key) -> bool {
@@ -84,18 +90,48 @@ impl CartRender {
         if let Some(epoch) = self.epochs.get_mut(shelf) {
             *epoch = epoch.wrapping_add(1);
             self.pending.retain(|(key, _)| key.0 != shelf);
+            let (lock, _) = &*self.work;
+            let mut q=lock.lock().unwrap_or_else(|e|e.into_inner());
+            q.jobs.retain(|((key,_),_,_)| key.0 != shelf);
         }
+    }
+
+    /// Called every GL frame with the new navigation priorities.
+    /// Only queued (not already decoding) artwork may be cancelled. This
+    /// keeps the CPU/memory cap fixed while ensuring a freshly selected cart
+    /// is ahead of any old background prefetch.
+    pub(crate) fn prioritize(&mut self, desired: &[Key]) {
+        self.wanted.clear();
+        self.wanted.extend_from_slice(desired);
+        let (lock, _) = &*self.work;
+        let mut queue=lock.lock().unwrap_or_else(|e|e.into_inner());
+        let mut dropped=Vec::new();
+        queue.jobs.retain(|(work,_,_)| {
+            let keep=desired.contains(&work.0);
+            if !keep { dropped.push(*work); }
+            keep
+        });
+        for work in dropped { self.pending.remove(&work); }
+        queue.jobs.make_contiguous().sort_by_key(|job| {
+            desired.iter().position(|key|*key==job.0.0).unwrap_or(usize::MAX)
+        });
     }
 
     pub(crate) fn request(&mut self, key: Key, cart: &Cart, include_material: bool) {
         let Some(epoch) = self.epochs.get(key.0).copied() else { return };
         let work = (key, epoch);
         if self.pending.len() >= 8 || self.pending.contains(&work) { return }
-        match self.submit.try_send((work, cart.clone(), include_material)) {
-            Ok(()) => { self.pending.insert(work); }
-            Err(TrySendError::Full(_)) => {} // retry next frame; never block input
-            Err(TrySendError::Disconnected(_)) => {}
-        }
+        let (lock, notify) = &*self.work;
+        let mut queue=lock.lock().unwrap_or_else(|e|e.into_inner());
+        if queue.closing || queue.jobs.len() >= 8 { return }
+        let rank=self.wanted.iter().position(|item|*item==key).unwrap_or(usize::MAX);
+        let at=queue.jobs.iter().position(|item| {
+            self.wanted.iter().position(|k|*k==item.0.0)
+                .unwrap_or(usize::MAX)>rank
+        }).unwrap_or(queue.jobs.len());
+        queue.jobs.insert(at,(work,cart.clone(),include_material));
+        self.pending.insert(work);
+        notify.notify_one();
     }
 
     pub(crate) fn ready(&mut self) -> Option<(Key, CartFace, Option<Layers>)> {
@@ -111,16 +147,27 @@ impl CartRender {
         }
     }
 }
+
+impl Drop for CartRender {
+    fn drop(&mut self) {
+        let (lock, notify)=&*self.work;
+        let mut queue=lock.lock().unwrap_or_else(|e|e.into_inner());
+        queue.closing=true;
+        queue.jobs.clear();
+        notify.notify_all();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn favorites_is_a_real_render_rack_and_discards_stale_results_on_reorder() {
-        let (submit, jobs) = mpsc::sync_channel(3);
+        let work=Arc::new((Mutex::new(WorkQueue::default()),Condvar::new()));
         let (completed, finished) = mpsc::channel();
         let mut renderer = CartRender {
-            submit, finished, pending: HashSet::new(), epochs: [0; 5],
+            work:work.clone(), finished, pending: HashSet::new(), wanted: Vec::new(), epochs: [0; 5],
         };
         // A fresh fifth rack must schedule work, rather than leaving
         // fallback label-colour rectangles visible forever.
@@ -133,14 +180,14 @@ mod tests {
         };
         renderer.request((4, 0), &favorite, false);
         assert!(renderer.queued((4, 0)));
-        let (((key, epoch), _, _)) = jobs.try_recv().expect("FAVORITES job");
+        let (((key, epoch), _, _)) = work.0.lock().unwrap().jobs.pop_front().expect("FAVORITES job");
         assert_eq!(key, (4, 0));
         assert_eq!(epoch, 0);
         renderer.invalidate_shelf(4);
         assert!(!renderer.queued((4, 0)));
         renderer.request((4, 0), &favorite, false);
         assert!(renderer.queued((4, 0)));
-        let (((new_key, new_epoch), _, _)) = jobs.try_recv().expect("new FAVORITES job");
+        let (((new_key, new_epoch), _, _)) = work.0.lock().unwrap().jobs.pop_front().expect("new FAVORITES job");
         assert_eq!((new_key,new_epoch), ((4,0),1));
         let face = || CartFace { rgba: vec![255; 4], w: 1, h: 1 };
         completed.send((((4,0),0),face(),None)).unwrap();
@@ -152,10 +199,10 @@ mod tests {
 
     #[test]
     fn rebuilding_recents_rejects_an_old_worker_face_with_same_index() {
-        let (submit, _jobs) = mpsc::sync_channel(1);
+        let work=Arc::new((Mutex::new(WorkQueue::default()),Condvar::new()));
         let (completed, finished) = mpsc::channel();
         let mut renderer = CartRender {
-            submit, finished, pending: HashSet::new(), epochs: [0; 5],
+            work:work.clone(), finished, pending: HashSet::new(), wanted: Vec::new(), epochs: [0; 5],
         };
         renderer.pending.insert(((3, 0), 0));
         renderer.invalidate_shelf(3);
