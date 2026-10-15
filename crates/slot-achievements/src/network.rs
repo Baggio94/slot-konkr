@@ -331,6 +331,7 @@ pub(crate) fn run(
     prepared: mpsc::Sender<Prepared>,
     notices: mpsc::Sender<Notice>,
     status: Arc<Status>,
+    shutdown: Arc<std::sync::atomic::AtomicBool>,
     mut http: impl Transport,
 ) {
     let dir = store.lock().unwrap().dir.clone();
@@ -357,6 +358,10 @@ pub(crate) fn run(
         })
     } else { PrefetchBudget::default() };
     loop {
+        // Stop accepting fresh HTTP work on account logout. An in-flight
+        // request may take up to the five-second global ureq timeout, but
+        // auth must remain on disk until this worker exits completely.
+        if shutdown.load(std::sync::atomic::Ordering::Acquire) { return; }
         // Android SAF fingerprints arrive independently of opening a game.
         // Keep the HTTP queue small and deduplicated, with no ROM bytes retained.
         for (hash, console) in smart_hashes.try_iter().take(32) {
@@ -415,6 +420,7 @@ pub(crate) fn run(
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
+        if shutdown.load(std::sync::atomic::Ordering::Acquire) { return; }
         // Metadata preparation and badge downloads each occupy half of a cache refresh.
         status.pending.store(
             !library.is_empty()
