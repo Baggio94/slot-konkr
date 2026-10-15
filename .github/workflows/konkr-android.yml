@@ -30,6 +30,9 @@ on:
       - 'scripts/package-konkr-cart-studio.py'
       - 'scripts/slot-kpa-mac-link-bridge.py'
       - '.github/workflows/konkr-android.yml'
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'docs/konkr/**'
 
 concurrency:
   group: konkr-android-${{ github.workflow }}-${{ github.ref }}
