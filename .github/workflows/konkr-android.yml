@@ -226,7 +226,7 @@ jobs:
           if [[ "${GITHUB_REF:-}" == "refs/heads/feat/konkr-multiplayer-lab" ]]; then
             (cd android && gradle --no-daemon :app:assembleMultiplayerLab)
           fi
-          if [[ "${GITHUB_REF:-}" == refs/heads/release/* || "${GITHUB_REF:-}" == refs/heads/integration/konkr-rc4-next || "${GITHUB_REF:-}" == refs/tags/konkr-v* ]]; then
+          if [[ "${GITHUB_REF:-}" == refs/heads/release/* || "${GITHUB_REF:-}" == refs/heads/integration/konkr-rc4-next || "${GITHUB_REF:-}" == refs/tags/konkr-v* || "${GITHUB_REF:-}" == refs/heads/feat/konkr-upstream-1.7-visual-u1 ]]; then
             if [ -z "$SLOT_KEYSTORE_BASE64" ]; then
               echo "::error::Persistent signing key is required for release candidates."
               exit 1
@@ -330,6 +330,29 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/konkr-v')
         with:
           name: slot-konkr-public-signed-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+      - name: Verify signed U1 visual QA APK and compatible update identity
+        if: github.ref == 'refs/heads/feat/konkr-upstream-1.7-visual-u1'
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          test -s "$APK"
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt" dump badging "$APK" | tee "$RUNNER_TEMP/u1-badging.txt"
+          grep -F "package: name='fyi.slot.konkr' versionCode='91'" "$RUNNER_TEMP/u1-badging.txt"
+          grep -F "versionName='0.1.0-rc.2-u1visual'" "$RUNNER_TEMP/u1-badging.txt"
+          CERT="$("$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK")"
+          echo "$CERT" | grep -Fi '4f42b8f0ac98f6a0102804ab51020ea0e7e2de7685c6ce09400a744de0b0fa2f'
+          for abi in arm64-v8a x86_64; do
+            for core in slot_android mgba_libretro gpsp_libretro; do
+              unzip -Z -1 "$APK" | grep -Fx "lib/$abi/lib${core}.so"
+            done
+          done
+          sha256sum "$APK"
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/feat/konkr-upstream-1.7-visual-u1'
+        with:
+          name: slot-konkr-0.1.0-rc2-u1visual-signed-apk
           path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
       - name: Verify RC4 release APK is signed with permanent certificate

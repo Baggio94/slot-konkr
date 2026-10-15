@@ -26,3 +26,7 @@ This branch is based on the frozen, publicly released `konkr-v0.1.0-rc.1` (Andro
 - Real KONKR screenshot/audio/controller validation; CI green is **not** hardware validation.
 
 Never replace an existing installed APK or clear app data to perform these tests. No new public release is being tagged.
+
+## QA artifact and version identity
+
+This branch has an isolated signed test version `0.1.0-rc.2-u1visual` (code 91), built by the KONKR Android CI on the feature branch. It uses the unchanged production app ID `fyi.slot.konkr` and **must pass the pinned persistent-signature SHA256 check** before upload. Both arm64-v8a and x86_64 native libraries must be present. The artifact is `slot-konkr-0.1.0-rc2-u1visual-signed-apk`, **not** a GitHub Release. Do not install any artifact from a failed CI run.
