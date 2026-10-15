@@ -5657,12 +5657,17 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
             SAMPLE_RATE.store(0, Ordering::Release);
             // Preserve each system's selected URI before the Library update
             // destroys the old shelf. Cart Studio changes artwork, not focus.
-            let selected_uris = holder.borrow().as_ref().map(|engine| (
-                engine.active,
-                engine.shelves.iter().map(|shelf|
-                    shelf.carts.get(shelf.index).map(|cart| cart.rom.clone())
-                ).collect::<Vec<_>>(),
-            ));
+            // On cold Android launch, the engine may be created before the
+            // cached SAF library arrives. Do not overwrite the restored
+            // on-disk U2 shelf position with that empty placeholder engine.
+            let selected_uris = holder.borrow().as_ref()
+                .filter(|engine|engine.shelves.iter().any(|s|!s.carts.is_empty()))
+                .map(|engine| (
+                    engine.active,
+                    engine.shelves.iter().map(|shelf|
+                        shelf.carts.get(shelf.index).map(|cart| cart.rom.clone())
+                    ).collect::<Vec<_>>(),
+                ));
             // Destruct old GL resources on the GL thread before recreating them.
             let size = holder.borrow().as_ref().map(|engine| engine.size).unwrap_or((960, 640));
             *holder.borrow_mut() = None;
