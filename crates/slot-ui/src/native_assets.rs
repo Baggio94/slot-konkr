@@ -64,7 +64,9 @@ pub fn native_rgba(src:&[u8],w:u32,h:u32)->(Vec<u8>,u32,u32) {
             let k=(y*tw as usize+x)*4;
             let alpha=accum[3].clamp(0.0,1.0);
             dst[k+3]=(alpha*255.0).round() as u8;
-            if alpha>1.0/255.0 {
+            // Even alpha=1/255 still needs its premultiplied hue.
+            // The old threshold produced a dark fringe on clear GBC shells.
+            if dst[k+3]>0 && accum[3]>0.0 {
                 for ch in 0..3 {
                     dst[k+ch]=((accum[ch]/accum[3]).clamp(0.0,1.0)*255.0).round() as u8;
                 }
