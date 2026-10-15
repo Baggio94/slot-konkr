@@ -5,6 +5,20 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RomLibraryCacheTest {
+    @Test fun silentRefreshComparesActualChangesWithoutDependingOnIterationOrder() {
+        fun rom(name: String) = RomLibrary.IndexEntry(
+            "content://rom/$name", name, "$name.gba", "GBA",
+            "ABCD", false, 12345L, 1700000000L)
+        val a = rom("a")
+        val b = rom("b")
+        org.junit.Assert.assertTrue(RomLibrary.equivalentEntries(listOf(a, b), listOf(b, a)))
+        org.junit.Assert.assertFalse(RomLibrary.equivalentEntries(listOf(a, b), listOf(a)))
+        org.junit.Assert.assertFalse(RomLibrary.equivalentEntries(listOf(a), listOf(a, b)))
+        org.junit.Assert.assertFalse(RomLibrary.equivalentEntries(
+            listOf(a), listOf(a.copy(modified=1700000001L))))
+        org.junit.Assert.assertFalse(RomLibrary.equivalentEntries(listOf(a, a), listOf(a, b)))
+    }
+
     @Test fun unchangedFileReusesHeaderSafely() {
         assertTrue(RomLibrary.canReuseHeader("Advance Wars", 8_388_608, 1_700_000_000_000,
             "Advance Wars", 8_388_608, 1_700_000_000_000))

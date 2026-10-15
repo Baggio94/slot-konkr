@@ -206,6 +206,8 @@ static AUDIO: Mutex<VecDeque<i16>> = Mutex::new(VecDeque::new());
 static PLAYING: AtomicBool = AtomicBool::new(false);
 static SAMPLE_RATE: AtomicI32 = AtomicI32::new(0);
 static DISPLAY_SYNC: AtomicBool = AtomicBool::new(false);
+// Read-only GL-owned library swap gate for Kotlin's background scanner.
+static LIBRARY_UPDATE_SAFE: AtomicBool = AtomicBool::new(false);
 // A12 diagnostic A/B. Default keeps A11 recovery; flag file selects legacy.
 static MGBA_CABLE_RECOVERY: AtomicBool = AtomicBool::new(true);
 // Android AudioTrack time-stretches 2x game audio while preserving pitch.
@@ -4018,6 +4020,11 @@ fn link_unplug_complete(phase: LinkMenu, now: u64) -> bool {
         if now.saturating_sub(since) >= 420)
 }
 
+/// A library refresh may never terminate an inserted or pending game.
+fn may_apply_library_update(game_active: bool, inserted: bool, awaiting: bool) -> bool {
+    !game_active && !inserted && !awaiting
+}
+
 /// A clean install has three shelves but zero cartridges. Never enqueue
 /// nonexistent artwork for the first draw (or after clearing the library).
 fn selected_prefetch_entry(shelves: &[Shelf], active: usize) -> Option<(usize, usize)> {
@@ -4351,6 +4358,14 @@ mod ui_feedback_tests {
     }
 
     #[test]
+    fn background_library_swap_waits_for_idle_carousel() {
+        assert!(may_apply_library_update(false, false, false));
+        assert!(!may_apply_library_update(true, false, false));
+        assert!(!may_apply_library_update(false, true, false));
+        assert!(!may_apply_library_update(false, false, true));
+    }
+
+    #[test]
     fn rebuilding_an_empty_library_keeps_selection_safe() {
         let mut shelves: Vec<Shelf> = (0..3).map(|_| Shelf::new(Vec::new())).collect();
         assert_eq!(restore_shelf_focus(&mut shelves, 0, &[]), 0);
@@ -4524,6 +4539,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
 ) -> u8 {
     ENGINE.with(|holder| {
         let started = Instant::now();
+        LIBRARY_UPDATE_SAFE.store(false, Ordering::Release);
         *holder.borrow_mut() = None;
         *RA_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = None;
         RA_NOTICES.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -4536,6 +4552,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
         match Engine::new(version, snapshot.as_deref()) {
             Ok(engine) => {
                 *holder.borrow_mut() = Some(engine);
+                LIBRARY_UPDATE_SAFE.store(true, Ordering::Release);
                 crate::game::log_launch_timing(&format!(
                     "Cold renderer ready in {}ms", started.elapsed().as_millis()));
                 1
@@ -4597,10 +4614,13 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
     _activity: *mut c_void,
 ) {
     ENGINE.with(|holder| {
+        let safe = holder.borrow().as_ref().is_some_and(|e|
+            may_apply_library_update(e.game.is_some(), e.inserted, e.awaiting_game));
+        LIBRARY_UPDATE_SAFE.store(safe, Ordering::Release);
         let current = holder.borrow().as_ref().map(|engine| engine.library_version);
         let updated = {
             let state = LIBRARY.lock().unwrap_or_else(|err| err.into_inner());
-            if current.is_some_and(|version| version != state.version) {
+            if safe && current.is_some_and(|version| version != state.version) {
                 Some((state.version, state.entries.clone()))
             } else {
                 None
@@ -4635,10 +4655,20 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
                 Err(error) => eprintln!("slot-konkr: could not reload library: {error}"),
             }
         }
-        if let Some(engine) = holder.borrow_mut().as_mut() {
-            engine.draw();
-        }
+        if let Some(engine) = holder.borrow_mut().as_mut() { engine.draw(); }
+        let now_safe = holder.borrow().as_ref().is_some_and(|e|
+            may_apply_library_update(e.game.is_some(), e.inserted, e.awaiting_game));
+        LIBRARY_UPDATE_SAFE.store(now_safe, Ordering::Release);
     });
+}
+
+/// The UI only stages library updates while the renderer is idle; the
+/// renderer itself independently enforces that invariant before rebuilding.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeCanRefreshLibrary(
+    _env: *mut c_void, _activity: *mut c_void,
+) -> jboolean {
+    if LIBRARY_UPDATE_SAFE.load(Ordering::Acquire) { 1 } else { 0 }
 }
 
 #[unsafe(no_mangle)]

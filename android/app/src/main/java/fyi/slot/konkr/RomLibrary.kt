@@ -20,6 +20,30 @@ internal object RomLibrary {
     private const val MAX_DEPTH = 12
 
     internal data class ScanResult(val json: String, val count: Int, val truncated: Boolean)
+    /** Ignore SAF iteration order, but never hide real additions/removals. */
+    internal data class IndexEntry(
+        val uri: String, val title: String, val filename: String, val platform: String,
+        val code: String, val colorOnly: Boolean, val size: Long, val modified: Long
+    )
+    internal fun equivalentEntries(left: List<IndexEntry>, right: List<IndexEntry>): Boolean {
+        if (left.size != right.size) return false
+        val a = left.associateBy { it.uri }
+        val b = right.associateBy { it.uri }
+        return a.size == left.size && b.size == right.size && a == b
+    }
+    internal fun indexEntries(json: String): List<IndexEntry> {
+        val arr = JSONArray(json)
+        require(arr.length() <= MAX_ROMS) { "ROM index exceeds bound" }
+        return (0 until arr.length()).map { i ->
+            val obj = arr.getJSONObject(i)
+            IndexEntry(obj.getString("uri"), obj.optString("title"),
+                obj.optString("filename"), obj.optString("platform"),
+                obj.optString("code"), obj.optBoolean("color_only"),
+                obj.optLong("size", -1), obj.optLong("modified", -1))
+        }
+    }
+    internal fun sameIndex(before: String, after: String): Boolean =
+        equivalentEntries(indexEntries(before), indexEntries(after))
     private data class Directory(val id: String, val depth: Int, val folder: String)
 
     /**
@@ -79,7 +103,10 @@ internal object RomLibrary {
             if (!seen.add(dir.id)) continue
             directories++
             val children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, dir.id)
-            resolver.query(children, columns, null, null, null)?.use { cursor ->
+            // Null means provider unavailable, not an empty ROM folder.
+            val listing = resolver.query(children, columns, null, null, null)
+                ?: throw java.io.IOException("SAF folder listing unavailable")
+            listing.use { cursor ->
                 val idIndex = cursor.getColumnIndexOrThrow(columns[0])
                 val nameIndex = cursor.getColumnIndexOrThrow(columns[1])
                 val mimeIndex = cursor.getColumnIndexOrThrow(columns[2])
