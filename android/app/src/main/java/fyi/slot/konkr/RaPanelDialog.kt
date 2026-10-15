@@ -218,6 +218,9 @@ internal class RaPanelDialog(
         row("GBA prepared", "$cached / $indexed indexed")
         row("GB prepared", "${snapshot.cachedGb ?: "?"} / ${snapshot.indexedGb ?: "?"} indexed")
         row("GBC prepared", "${snapshot.cachedGbc ?: "?"} / ${snapshot.indexedGbc ?: "?"} indexed")
+        row("RA games recognized", snapshot.recognizedGames?.toString() ?: "Checking...")
+        row("No RA match", snapshot.unmatchedGames?.toString() ?: "Checking...")
+        row("Missing icon IDs", snapshot.missingIconMetadata?.toString() ?: "Checking...")
         row("Game icons cached", if (snapshot.gameIconsTotal != null &&
             snapshot.gameIconsCached != null)
             "${snapshot.gameIconsCached} / ${snapshot.gameIconsTotal}"
@@ -242,8 +245,8 @@ internal class RaPanelDialog(
         row("Awards saved", snapshot.recordedAwards?.toString() ?: "Unknown")
         row("GB / GBC", "Online + offline (mGBA)")
         val note = snapshot.warning ?:
-            "Image percentage covers unique badges of GB/GBC/GBA games already prepared. " +
-                "New games can increase the total. Local awards remain after sign out."
+            "Icon totals count distinct known images, not all ROMs. Legacy " +
+                "games with missing icon IDs refresh in the background. Local awards remain."
         content.addView(text(note, 11f, muted).apply {
             setPadding(0, dp(15), 0, dp(2))
         })

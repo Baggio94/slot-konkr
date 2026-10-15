@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -321,6 +321,73 @@ fn already_prepared(dir: &std::path::Path, hash: &str, console: u32) -> bool {
         .is_ok_and(|(game, _)| game.console == console)
 }
 
+/// Older prepared PatchData can lack ImageIcon, although the ROM and award
+/// cache are complete. Repair only the missing game icon metadata; never
+/// refresh unlocks, create a session, or touch the offline award ledger.
+#[derive(Default, Serialize, Deserialize)]
+struct IconRefreshJournal {
+    // ROM hash -> (RA GameID, last successful check). A game without an
+    // official image must not be fetched on every launch.
+    checked: BTreeMap<String, (u32, u64)>,
+}
+impl IconRefreshJournal {
+    const FILE: &'static str = "icon-refresh-checks-v1.json";
+    const RETRY_AFTER: u64 = 7 * 24 * 60 * 60;
+
+    fn load(dir: &std::path::Path) -> Self {
+        storage::read(&dir.join(Self::FILE)).unwrap_or_default()
+    }
+
+    fn needs_refresh(&self, dir: &std::path::Path, hash: &str, console: u32, at: u64) -> bool {
+        let Ok((game, _)) =
+            storage::read::<(Game, BTreeSet<u32>)>(&dir.join(format!("{hash}.json")))
+        else { return false };
+        game.console == console && game.id != 0
+            && crate::badges::game_icon_path(dir, &game.image_icon).is_none()
+            && self.checked.get(hash).is_none_or(|(id, checked_at)| {
+                *id != game.id || at.saturating_sub(*checked_at) >= Self::RETRY_AFTER
+            })
+    }
+
+    fn record(&mut self, dir: &std::path::Path, hash: &str, id: u32, at: u64)
+        -> Result<(), Failure>
+    {
+        let before = self.checked.insert(hash.into(), (id, at));
+        if storage::write(&dir.join(Self::FILE), self).is_err() {
+            if let Some(old) = before { self.checked.insert(hash.into(), old); }
+            else { self.checked.remove(hash); }
+            return Err(Failure::Invalid);
+        }
+        Ok(())
+    }
+}
+
+fn repair_missing_game_icon(
+    http: &mut impl Transport,
+    auth: &Auth,
+    dir: &std::path::Path,
+    hash: &str,
+    console: u32,
+) -> Result<Game, Failure> {
+    let file = dir.join(format!("{hash}.json"));
+    let (mut game, ids): (Game, BTreeSet<u32>) =
+        storage::read(&file).map_err(|_| Failure::Invalid)?;
+    if game.console != console || game.id == 0 { return Err(Failure::Invalid); }
+    let patch = call(http, auth, "patch", &[("g", game.id.to_string())])?;
+    let data = &patch["PatchData"];
+    if data["ID"].as_u64() != Some(u64::from(game.id))
+        || data["ConsoleID"].as_u64() != Some(u64::from(console)) {
+        return Err(Failure::Invalid);
+    }
+    let icon = data["ImageIcon"].as_str().unwrap_or_default();
+    if crate::badges::game_icon_path(dir, icon).is_some() {
+        game.image_icon = icon.into();
+        // Keep the existing achievements and server unlock set exactly as-is.
+        storage::write(&file, &(&game, &ids)).map_err(|_| Failure::Invalid)?;
+    }
+    Ok(game)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
     root: PathBuf,
@@ -349,6 +416,7 @@ pub(crate) fn run(
     let mut badges = crate::badges::Queue::new(&dir);
     let mut smart_queue: VecDeque<(String, u32)> = VecDeque::new();
     let mut queued_hashes: BTreeSet<String> = BTreeSet::new();
+    let mut icon_refresh = IconRefreshJournal::load(&dir);
     let quota_file = dir.join("smart-prefetch-budget.json");
     let mut budget: PrefetchBudget = if quota_file.exists() {
         // Fail closed if the quota journal is corrupted: repeated restarts
@@ -370,7 +438,8 @@ pub(crate) fn run(
                 continue;
             }
             let hash = hash.to_ascii_lowercase();
-            if already_prepared(&dir, &hash, console)
+            if (already_prepared(&dir, &hash, console)
+                    && !icon_refresh.needs_refresh(&dir, &hash, console, now()))
                 || queued_hashes.contains(&hash)
                 || smart_queue.len() >= 5000
             {
@@ -569,11 +638,23 @@ pub(crate) fn run(
             // Preparing a hash uses gameid/patch/unlocks, never starts a session.
             if active.is_none() {
                 if let Some(hash) = smart_queue.front() {
-                    if already_prepared(&dir, &hash.0, hash.1) {
+                    let repair = icon_refresh.needs_refresh(&dir, &hash.0, hash.1, now());
+                    if already_prepared(&dir, &hash.0, hash.1) && !repair {
                         let done = smart_queue.pop_front().unwrap();
                         queued_hashes.remove(&done.0);
                     } else if budget.reserve(&dir, now())? {
-                        match prefetch(&mut http, auth, &dir, &hash.0, hash.1) {
+                        let result = if repair {
+                            // One PatchData call only; preserve previously earned
+                            // unlocks and current offline progress unmodified.
+                            repair_missing_game_icon(&mut http, auth, &dir, &hash.0, hash.1)
+                                .and_then(|game| {
+                                    icon_refresh.record(&dir, &hash.0, game.id, now())?;
+                                    Ok(game)
+                                })
+                        } else {
+                            prefetch(&mut http, auth, &dir, &hash.0, hash.1)
+                        };
+                        match result {
                             Ok(game) => {
                                 badges.enqueue(&game);
                                 let done = smart_queue.pop_front().unwrap();
@@ -581,9 +662,8 @@ pub(crate) fn run(
                             }
                             Err(Failure::Network) => return Err(Failure::Network),
                             Err(error) => {
-                                // Do not burn the entire 100-game quota by
-                                // retrying a single rejected/bad ROM each second.
-                                // The SAF index will offer it again on a later run.
+                                // A rejected/bad ROM must not spin on a live queue.
+                                // The next SAF pass may offer it again, rate limited.
                                 let failed = smart_queue.pop_front().unwrap();
                                 queued_hashes.remove(&failed.0);
                                 deferred_error = Some(error);
@@ -732,6 +812,92 @@ mod tests {
         assert!(already_prepared(root.path(), hash, 5));
         std::fs::write(root.path().join(format!("{hash}.json")), b"broken").unwrap();
         assert!(!already_prepared(root.path(), hash, 5));
+    }
+
+
+    #[test]
+    fn old_prepared_patch_without_icon_is_repaired_once_and_unrecognized_rom_is_skipped() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        let hash = "0123456789abcdef0123456789abcdef";
+        let file = dir.join(format!("{hash}.json"));
+        let game = Game {
+            presence: String::new(), id: 123, console: 5,
+            title: "Old prepared game".into(), image_icon: String::new(),
+            achievements: Vec::new(),
+        };
+        storage::write(&file, &(&game, BTreeSet::<u32>::new())).unwrap();
+        let mut journal = IconRefreshJournal::load(dir);
+        assert!(already_prepared(dir, hash, 5));
+        assert!(journal.needs_refresh(dir, hash, 5, 10_000_000));
+        journal.record(dir, hash, 123, 10_000_000).unwrap();
+        assert!(!IconRefreshJournal::load(dir).needs_refresh(dir, hash, 5, 10_000_001));
+        assert!(IconRefreshJournal::load(dir).needs_refresh(
+            dir, hash, 5, 10_000_000 + IconRefreshJournal::RETRY_AFTER));
+        let unknown = Game { id: 0, ..game };
+        storage::write(&file, &(&unknown, BTreeSet::<u32>::new())).unwrap();
+        assert!(!journal.needs_refresh(dir, hash, 5, 10_000_000));
+    }
+
+    #[test]
+    fn icon_repair_uses_patch_only_and_preserves_achievements_and_unlocks() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        let hash = "fedcba9876543210fedcba9876543210";
+        let file = dir.join(format!("{hash}.json"));
+        let original = Game {
+            presence: "Presence".into(), id: 42, console: 5,
+            title: "Test".into(), image_icon: String::new(),
+            achievements: vec![storage::Achievement {
+                badge: "12345".into(), id: 7, title: "Won".into(),
+                description: "Earned offline".into(), points: 5, flags: 3,
+                definition: "0xH000000=1".into(),
+            }],
+        };
+        let unlocks = BTreeSet::from([7u32, 11u32]);
+        storage::write(&file, &(&original, &unlocks)).unwrap();
+        let mut transport = Fake {
+            reply: json!({"Success": true, "PatchData": {
+                "ID": 42, "ConsoleID": 5, "ImageIcon": "/Images/067895.png"
+            }}),
+            fields: vec![],
+        };
+        let auth = Auth { username: "Player".into(), token: "redacted".into() };
+        let repaired = repair_missing_game_icon(&mut transport, &auth, dir, hash, 5).unwrap();
+        assert_eq!(repaired.image_icon, "/Images/067895.png");
+        assert!(transport.fields.contains(&("r".into(), "patch".into())));
+        assert!(!transport.fields.iter().any(|(_, value)| value == "unlocks" || value == "startsession"));
+        let (saved, saved_unlocks): (Game, BTreeSet<u32>) = storage::read(&file).unwrap();
+        assert_eq!(saved_unlocks, unlocks);
+        assert_eq!(saved.achievements.len(), 1);
+        assert_eq!(saved.achievements[0].id, 7);
+        assert_eq!(saved.presence, "Presence");
+        assert!(!IconRefreshJournal::default().needs_refresh(dir, hash, 5, 10_000_000));
+    }
+
+    #[test]
+    fn icon_repair_rejects_wrong_game_id_without_changing_cache() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        let hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let file = dir.join(format!("{hash}.json"));
+        let original = Game {
+            presence: String::new(), id: 42, console: 6,
+            title: "Test".into(), image_icon: String::new(),
+            achievements: vec![],
+        };
+        storage::write(&file, &(&original, BTreeSet::<u32>::new())).unwrap();
+        let mut transport = Fake {
+            reply: json!({"Success": true, "PatchData": {
+                "ID": 43, "ConsoleID": 6, "ImageIcon": "/Images/234.png"
+            }}),
+            fields: vec![],
+        };
+        let auth = Auth { username: "Player".into(), token: "redacted".into() };
+        assert_eq!(repair_missing_game_icon(&mut transport, &auth, dir, hash, 6)
+            .map(|_| ()), Err(Failure::Invalid));
+        let (saved, _): (Game, BTreeSet<u32>) = storage::read(&file).unwrap();
+        assert!(saved.image_icon.is_empty());
     }
 
     #[test]
