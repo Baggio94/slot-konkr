@@ -56,6 +56,9 @@ pub struct Shelf {
     ride: f32,
     vel: f32,
     held: Option<(i32, Millis, usize)>,
+    /// Up/Down repeat letter jumps like upstream Slot v1.7. Android drops
+    /// framework key repeats; the native shelf clock owns this schedule.
+    held_letter: Option<(i32, Millis, usize)>,
 }
 
 impl Shelf {
@@ -72,6 +75,7 @@ impl Shelf {
             ride: 0.0,
             vel: 0.0,
             held: None,
+            held_letter: None,
         }
     }
 
@@ -240,8 +244,37 @@ impl Shelf {
     }
 
     fn hold(&mut self, by: i32, now: Millis) {
+        self.held_letter = None;
         self.step(by);
         self.held = Some((by, now + REPEAT_DELAY_MS, 0));
+    }
+
+    pub fn hold_up(&mut self, now: Millis) {
+        self.hold_letter(-1, now);
+    }
+
+    pub fn hold_down(&mut self, now: Millis) {
+        self.hold_letter(1, now);
+    }
+
+    fn hold_letter(&mut self, by: i32, now: Millis) {
+        self.held = None;
+        self.jump(by);
+        self.held_letter = Some((by, now + REPEAT_DELAY_MS, 0));
+    }
+
+    pub fn release_up(&mut self) {
+        self.release_letter(-1);
+    }
+
+    pub fn release_down(&mut self) {
+        self.release_letter(1);
+    }
+
+    fn release_letter(&mut self, by: i32) {
+        if matches!(self.held_letter, Some((held, _, _)) if held == by) {
+            self.held_letter = None;
+        }
     }
 
     pub fn release_left(&mut self) {
@@ -260,18 +293,30 @@ impl Shelf {
 
     pub fn release_hold(&mut self) {
         self.held = None;
+        self.held_letter = None;
     }
 
-    pub fn tick(&mut self, now: Millis) {
-        let Some((by, due, fired)) = self.held else {
-            return;
-        };
-        if now < due {
-            return;
+    /// Returns true only if a repeated UP/DOWN changed the selected letter.
+    /// Horizontal repeats continue independently with their existing speed.
+    pub fn tick(&mut self, now: Millis) -> bool {
+        if let Some((by, due, fired)) = self.held_letter {
+            if now >= due {
+                let before = self.index;
+                self.jump(by);
+                let gap = REPEAT_MS[fired.min(REPEAT_MS.len() - 1)];
+                self.held_letter = Some((by, now + gap, fired + 1));
+                return self.index != before;
+            }
+            return false;
         }
-        self.step(by);
-        let rate = REPEAT_MS[fired.min(REPEAT_MS.len() - 1)];
-        self.held = Some((by, now + rate, fired + 1));
+        if let Some((by, due, fired)) = self.held {
+            if now >= due {
+                self.step(by);
+                let gap = REPEAT_MS[fired.min(REPEAT_MS.len() - 1)];
+                self.held = Some((by, now + gap, fired + 1));
+            }
+        }
+        false
     }
 
     fn step(&mut self, by: i32) {

@@ -129,7 +129,7 @@ pub fn platform_name_face(text: &str) -> UndoFace {
     if let Some(font) = text::label_font() {
         let px = LABEL_PX * scale as f32;
         let layout = text::fit(font, text, w as f32, 1, px, px);
-        text::draw_centred(&mut rgba, w, h, &layout, INK);
+        text::draw_centred(&mut rgba, w, h, &layout, [255,255,255]);
     }
     UndoFace { rgba, w, h }
 }

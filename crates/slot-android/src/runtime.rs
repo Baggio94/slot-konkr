@@ -2796,22 +2796,15 @@ impl Engine {
                     (22, true) if !self.inserted => shelf.hold_right(ms),
                     (21, false) => shelf.release_left(),
                     (22, false) => shelf.release_right(),
-                    (19, true) if !self.inserted => shelf.jump_prev_letter(),
-                    (20, true) if !self.inserted => shelf.jump_next_letter(),
+                    (19, true) if !self.inserted => shelf.hold_up(ms),
+                    (20, true) if !self.inserted => shelf.hold_down(ms),
+                    (19, false) => shelf.release_up(),
+                    (20, false) => shelf.release_down(),
                     _ => {}
                 }
-                if !self.inserted && pressed && (code == 19 || code == 20)
-                    && shelf.index != before {
-                    let letter = slot_store::initial(&shelf.carts[shelf.index].stem);
-                    let face = word_face(&letter.to_string());
-                    let tex = match self.letter_texture {
-                        Some(tex) => { self.gpu.update_texture(tex, face.w, face.h, &face.rgba); tex }
-                        None => { let tex = self.gpu.create_texture(face.w, face.h, &face.rgba);
-                            self.letter_texture = Some(tex); tex }
-                    };
-                    self.letter_face = Printed::new(tex, face.w);
-                    self.letter_shown_at = Some(Instant::now());
-                }
+                let jumped= !self.inserted && pressed && (code==19 || code==20)
+                    && shelf.index!=before;
+                if jumped { self.show_selected_letter(); }
             }
         }
     }
@@ -3444,6 +3437,23 @@ impl Engine {
     }
     /// Rasterise only when the selected game changes; no repeated label
     /// processing on 60/120Hz draw callbacks.
+    fn show_selected_letter(&mut self) {
+        let Some(cart)=self.shelves.get(self.active)
+            .and_then(|shelf|shelf.carts.get(shelf.index)) else {return};
+        let letter=slot_store::initial(&cart.stem);
+        let face=slot_ui::word_ink(&letter.to_string(),[255,255,255]);
+        let tex=match self.letter_texture {
+            Some(tex)=>{self.gpu.update_texture(tex,face.w,face.h,&face.rgba);tex},
+            None=>{let tex=self.gpu.create_texture(face.w,face.h,&face.rgba);
+                self.letter_texture=Some(tex);tex},
+        };
+        self.letter_face=Printed::new(tex,face.w);
+        // Upstream clears the previous system-name display when a letter jump
+        // occurs. Otherwise a quick UP just after L1/R1 stays invisible.
+        self.platform_shown_at=None;
+        self.letter_shown_at=Some(Instant::now());
+    }
+
     fn refresh_selected_title(&mut self) {
         if !self.settings.show_titles || self.game.is_some() {return;}
         let name=self.shelves.get(self.active)
@@ -4486,7 +4496,13 @@ impl Engine {
         }
 
         let ms = self.born.elapsed().as_millis() as u64;
-        self.shelves[self.active].tick(ms);
+        let repeated_letter = if !self.inserted && matches!(self.overlay,ShelfOverlay::None) {
+            self.shelves[self.active].tick(ms)
+        } else {
+            self.shelves[self.active].release_hold();
+            false
+        };
+        if repeated_letter { self.show_selected_letter(); }
         self.shelves[self.active].update(dt);
         self.prepare_visible();
         self.refresh_selected_title();
@@ -4538,45 +4554,40 @@ impl Engine {
             } else {
                 shelf.draw_row(None, 0.0, 0.0, 1.0, &mut commands);
                 slot_ui::draw_empty_slot_with(self.slot_faces, &mut commands);
-                // Original Slot draws platform name at the bottom slot mouth.
-                // 200ms ease-in + 1200ms hold + 800ms ease-out, 0.4 peak alpha.
-                if let Some(since) = self.platform_shown_at {
-                    let elapsed_ms = since.elapsed().as_millis() as u64;
-                    // At t=0 the original fade starts at alpha=0. Do NOT
-                    // clear the timer on that first render frame: only expire
-                    // after the full 200ms + 1200ms + 800ms timeline.
-                    if platform_name_running(elapsed_ms) {
-                        let alpha = slot_name_alpha(elapsed_ms);
-                        if alpha > 0.0 {
-                            let face=if self.active==3 {self.recents_platform_face}
-                                else {self.platform_faces[self.active]};
-                            draw_platform_name(face,alpha,&mut commands);
-                        }
+                // Official v1.7.0 shelf: system (L1/R1) or letter
+                // (D-pad Up/Down) uses a 200/1200/800 ms full-opacity name.
+                // Game Titles crossfade back in during the last 800ms, and
+                // stay visible after the name expires. Plain Left/Right
+                // scrolling swaps the title immediately with no name fade.
+                let name = if let Some(since) = self.platform_shown_at {
+                    let elapsed=since.elapsed().as_millis() as u64;
+                    if platform_name_running(elapsed) {
+                        let face=if self.active==3 {self.recents_platform_face}
+                            else {self.platform_faces[self.active]};
+                        Some((face,elapsed,true))
                     } else {
-                        self.platform_shown_at = None;
+                        self.platform_shown_at=None;
+                        None
+                    }
+                } else if let Some(since)=self.letter_shown_at {
+                    let elapsed=since.elapsed().as_millis() as u64;
+                    if platform_name_running(elapsed) {
+                        Some((self.letter_face,elapsed,false))
+                    } else {
+                        self.letter_shown_at=None;
+                        None
+                    }
+                } else {None};
+                if let Some((face,elapsed,is_platform))=name {
+                    let alpha=slot_name_alpha(elapsed);
+                    if alpha>0.0 {
+                        if is_platform {draw_platform_name(face,alpha,&mut commands);}
+                        else {draw_slot_name(face,alpha,&mut commands);}
                     }
                 }
-                if self.platform_shown_at.is_none() {
-                    if self.settings.show_titles {
-                        // Official v1.7: changing an ordinary cartridge changes
-                        // its title IMMEDIATELY. Only system/letter jump names
-                        // temporarily mask the title with 200/1200/800 fades.
-                        let alpha=if let Some(since)=self.letter_shown_at {
-                            let elapsed=since.elapsed().as_millis() as u64;
-                            if platform_name_running(elapsed) {
-                                draw_slot_name(self.letter_face,
-                                    slot_name_alpha(elapsed),&mut commands);
-                                slot_title_alpha(elapsed)
-                            } else {1.0}
-                        } else {1.0};
-                        slot_ui::draw_slot_title(self.selected_title_face,alpha,&mut commands);
-                    } else if let Some(since)=self.letter_shown_at {
-                        let elapsed=since.elapsed().as_millis();
-                        if elapsed<1500 {
-                            let alpha=((1500-elapsed) as f32/250.0).min(1.0);
-                            draw_slot_name(self.letter_face,alpha,&mut commands);
-                        }
-                    }
+                if self.settings.show_titles {
+                    let alpha=name.map_or(1.0,|(_,elapsed,_)|slot_title_alpha(elapsed));
+                    slot_ui::draw_slot_title(self.selected_title_face,alpha,&mut commands);
                 }
             }
         } else {
@@ -4848,11 +4859,11 @@ fn platform_name_running(elapsed_ms: u64) -> bool {
     elapsed_ms < 200 + 1200 + 800
 }
 
-/// Follow Slot 1.5.0's platform name alpha curve and durations exactly.
-/// Slot v1.7 title alpha = inverse name fade, held visible after 2200ms.
+/// Official upstream v1.7 name / title animation is full opacity (1.0).
+/// Hide titles until 1400ms, then crossfade during the 800ms fade-out.
 fn slot_title_alpha(elapsed_ms: u64) -> f32 {
     if elapsed_ms < 1400 { return 0.0; }
-    (1.0 - slot_name_alpha(elapsed_ms) / 0.4).clamp(0.0, 1.0)
+    (1.0 - slot_name_alpha(elapsed_ms)).clamp(0.0, 1.0)
 }
 
 fn slot_name_alpha(elapsed_ms: u64) -> f32 {
@@ -4863,7 +4874,7 @@ fn slot_name_alpha(elapsed_ms: u64) -> f32 {
     } else {
         (1.0 - (elapsed_ms - 1400) as f32 / 800.0).max(0.0)
     };
-    0.4 * slot_ui::ease(level)
+    slot_ui::ease(level)
 }
 
 /// Physical D-pad UP and DOWN must move the selection in opposite
@@ -4918,6 +4929,9 @@ mod ui_feedback_tests {
         assert_eq!(slot_title_alpha(0), 0.0);
         assert_eq!(slot_title_alpha(1399), 0.0);
         assert!((slot_title_alpha(1800) - 0.5).abs() < 0.0001);
+        assert_eq!(slot_name_alpha(200), 1.0);
+        assert_eq!(slot_name_alpha(1400), 1.0);
+        assert!((slot_name_alpha(1800) - 0.5).abs() < 0.0001);
         assert_eq!(slot_title_alpha(2200), 1.0);
         assert_eq!(slot_title_alpha(100_000), 1.0);
     }
