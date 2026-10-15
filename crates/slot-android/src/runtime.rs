@@ -2563,11 +2563,11 @@ impl Engine {
                                     row: move_menu_row(row, code, 5),
                                 },
                                 96 => match row {
-                                    0 => self.overlay = ShelfOverlay::ScreenSettings { row: 0 },
-                                    1 => self.overlay = ShelfOverlay::GameplaySettings { row: 0 },
-                                    2 => self.overlay = ShelfOverlay::EmulationSettings { row: 0 },
-                                    3 => self.overlay = ShelfOverlay::InterfaceSettings { row: 0 },
-                                    4 => self.overlay = ShelfOverlay::GeneralSettings { row: 0 },
+                                    0 => self.overlay = ShelfOverlay::GeneralSettings { row: 0 },
+                                    1 => self.overlay = ShelfOverlay::ScreenSettings { row: 0 },
+                                    2 => self.overlay = ShelfOverlay::GameplaySettings { row: 0 },
+                                    3 => self.overlay = ShelfOverlay::EmulationSettings { row: 0 },
+                                    4 => self.overlay = ShelfOverlay::InterfaceSettings { row: 0 },
                                     _ => return,
                                 },
                                 97 => self.overlay = ShelfOverlay::Menu { row: 4 },
@@ -2581,7 +2581,7 @@ impl Engine {
                                 21 | 22 | 96 => {
                                     self.cycle_general_row(row,code!=21,code==96);
                                 },
-                                97 => self.overlay = ShelfOverlay::Settings { row: 4 },
+                                97 => self.overlay = ShelfOverlay::Settings { row: 0 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -2590,7 +2590,7 @@ impl Engine {
                                     row: move_menu_row(row, code, 3),
                                 },
                                 21 | 22 if row < 3 => self.change_setting(row + 13, code == 22),
-                                97 => self.overlay = ShelfOverlay::Settings { row: 3 },
+                                97 => self.overlay = ShelfOverlay::Settings { row: 4 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -2601,7 +2601,7 @@ impl Engine {
                                 96 => self.overlay=ShelfOverlay::ScreenSystemSettings {
                                     platform:Self::screen_submenu_platform(row),row:0,
                                 },
-                                97 => self.overlay = ShelfOverlay::Settings { row: 0 },
+                                97 => self.overlay = ShelfOverlay::Settings { row: 1 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -2623,7 +2623,7 @@ impl Engine {
                                     row: move_menu_row(row, code, 3),
                                 },
                                 21 | 22 => self.change_setting(row + 10, code == 22),
-                                97 => self.overlay = ShelfOverlay::Settings { row: 2 },
+                                97 => self.overlay = ShelfOverlay::Settings { row: 3 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -2632,7 +2632,7 @@ impl Engine {
                                     row: move_menu_row(row, code, 6),
                                 },
                                 21 | 22 => self.change_setting(row + 4, code == 22),
-                                97 => self.overlay = ShelfOverlay::Settings { row: 1 },
+                                97 => self.overlay = ShelfOverlay::Settings { row: 2 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -3830,7 +3830,7 @@ impl Engine {
                 self.draw_library_share_value(row, out);
             }
             ShelfOverlay::Settings { row } => {
-                self.draw_original_style_menu(26, &[32, 33, 49, 58, 81], row, out);
+                self.draw_original_style_menu(26, &[81, 32, 33, 49, 58], row, out);
             }
             ShelfOverlay::GeneralSettings { row } => {
                 let rows=self.general_rows();
