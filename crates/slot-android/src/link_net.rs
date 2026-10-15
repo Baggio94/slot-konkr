@@ -798,7 +798,7 @@ mod lab_negotiation_tests {
         g.game = *b"BPGE";
         g.rom_sha256.copy_from_slice(digest(&SHA256, &guest_rom).as_ref());
         assert!(h.accepts(&g));
-        assert_eq!(h.bytes()[4], 4, "mGBA must use KMLB/4, not legacy KMLB/3");
+        assert_eq!(h.bytes()[4], 5, "A14 mGBA must require KMLB/5 signed device identity");
 
         let reserve = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let addr: SocketAddr = reserve.local_addr().unwrap();
