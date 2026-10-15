@@ -1,7 +1,27 @@
 use slot_ui::{
     arrows_hint_face, arrows_hint_width, hint_face, hint_width, title_face, UndoFace, ARROW_GAP,
-    CAP, CAP_GAP, HINT_GAP, HINT_H, TITLE_H, TITLE_W,
+    CAP, CAP_GAP, HINT_GAP, HINT_H, TITLE_H, TITLE_W, platform_name_face, PLATFORM_NAME_SCALE,
 };
+
+#[test]
+fn complete_slot_system_names_never_clip_to_game_boy() {
+    let font = slot_ui::text::label_font().expect("official Slot label font");
+    let px = 16.0 * PLATFORM_NAME_SCALE as f32;
+    for name in ["Game Boy Advance", "Game Boy", "Game Boy Color", "Recents", "Favorites"] {
+        let face = platform_name_face(name);
+        let layout = slot_ui::text::fit(font, name, face.w as f32, 1, px, px);
+        assert_eq!(layout.lines, vec![name.to_uppercase()], "{name} was truncated");
+        assert_eq!(layout.px, px, "{name} shrank to a different font size");
+        assert_eq!(face.h, HINT_H * PLATFORM_NAME_SCALE);
+        assert!(face.w < 720 * PLATFORM_NAME_SCALE, "{name} exceeds Slot canvas");
+        assert!(face.rgba.chunks_exact(4).any(|pixel| pixel[3] > 128),
+            "{name} produced no visible text");
+    }
+    assert_ne!(platform_name_face("Game Boy Advance").rgba,
+        platform_name_face("Game Boy").rgba);
+    assert_ne!(platform_name_face("Game Boy Color").rgba,
+        platform_name_face("Game Boy").rgba);
+}
 
 fn opaque(face: &UndoFace, x: u32, y: u32) -> bool {
     face.rgba[((y * face.w + x) * 4 + 3) as usize] > 0

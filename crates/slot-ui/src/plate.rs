@@ -114,20 +114,28 @@ pub fn word_ink(text: &str, ink: [u8; 3]) -> UndoFace {
     UndoFace { rgba, w, h: HINT_H }
 }
 
-/// High-resolution GBA / GB / GBC legend for the KONKR's 960×640 panel.
-/// Render at 3× the exact same 16px Slot label size, then draw at 1/3.
+/// High-resolution shelf label for the KONKR's 960×640 panel.
+/// Render at 3× Slot's original 16px label size, then draw at 1/3.
 ///
-/// Extra transparent left/right padding protects against glyph clipping at
-/// larger text rasterisation while preserving all three labels' font size.
+/// IMPORTANT: word_width() is capped at 140 native pixels for the footer.
+/// Using it here silently wraps and drops the last word of "Game Boy Advance"
+/// and "Game Boy Color" because the platform face permits only one line.
+/// Measure the WHOLE label at the actual 3× font size instead.
 pub const PLATFORM_NAME_SCALE: u32 = 3;
 
 pub fn platform_name_face(text: &str) -> UndoFace {
     let scale = PLATFORM_NAME_SCALE;
-    let w = (word_width(text) + 6) * scale;
+    let px = LABEL_PX * scale as f32;
+    let w = if let Some(font) = text::label_font() {
+        let tracking = (px * 0.10).round(); // text::fit() letter spacing
+        let full_width = text::line_width(font, &text.to_uppercase(), px, tracking);
+        full_width.ceil() as u32 + 6 * scale // protect both glyph edges
+    } else {
+        (word_width(text) + 6) * scale
+    };
     let h = HINT_H * scale;
     let mut rgba = vec![0u8; (w * h * 4) as usize];
     if let Some(font) = text::label_font() {
-        let px = LABEL_PX * scale as f32;
         let layout = text::fit(font, text, w as f32, 1, px, px);
         text::draw_centred(&mut rgba, w, h, &layout, [255,255,255]);
     }
