@@ -205,7 +205,7 @@ impl Settings {
         }
         *self != before
     }
-    pub fn palette_name(self) -> &'static str {
+    pub fn palette_name(&self) -> &'static str {
         GbPalette::all().nth(self.gb_palette as usize)
             .unwrap_or(GbPalette::DEFAULT).core_name()
     }
