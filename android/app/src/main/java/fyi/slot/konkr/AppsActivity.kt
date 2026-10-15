@@ -121,7 +121,11 @@ class AppsActivity : Activity() {
             LinearLayout.LayoutParams(0, SlotUi.menuPixel(this, 32), 1f))
         homeButton = SlotUi.label(this, "Set as Home", 13f).apply {
             gravity = Gravity.CENTER
-            setPadding(dp(15), dp(7), dp(15), dp(7))
+            // Optical centering for Slot's condensed label font: its glyphs
+            // sit slightly below the TextView's geometric centre.
+            // Preserve the same overall padding and button border, but lift
+            // the lettering without translating the clickable surface.
+            setPadding(dp(15), dp(5), dp(15), dp(9))
             isFocusable = true
             isClickable = true
             contentDescription = "Choose the default home launcher"
