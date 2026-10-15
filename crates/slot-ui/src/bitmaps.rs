@@ -42,6 +42,8 @@ const GB_BOARD_PNG: &[u8] = include_bytes!("../../../assets/gb_board.png");
 const BOARD_PNG: &[u8] = include_bytes!("../../../assets/board.png");
 const SOCKET_PNG: &[u8] = include_bytes!("../../../assets/socket.png");
 const CHIP_PNG: &[u8] = include_bytes!("../../../assets/chip.png");
+const BEZEL_GB_PNG: &[u8] = include_bytes!("../../../assets/bezel_gb.png");
+const BEZEL_GBC_PNG: &[u8] = include_bytes!("../../../assets/bezel_gbc.png");
 const SLOT_BACK_DARK_PNG: &[u8] = include_bytes!("../../../assets/slot_back_dark.png");
 const SLOT_BACK_LIGHT_PNG: &[u8] = include_bytes!("../../../assets/slot_back_light.png");
 const SLOT_FRONT_DARK_PNG: &[u8] = include_bytes!("../../../assets/slot_front_dark.png");
@@ -171,6 +173,16 @@ pub fn socket() -> &'static [u8] {
 pub fn chip() -> &'static [u8] {
     static P: OnceLock<Vec<u8>> = OnceLock::new();
     load(CHIP_PNG, CHIP_W, CHIP_H, &P)
+}
+
+/// Official Slot v1.7 full-panel transparent bezels, native source 720x480.
+pub fn bezel_gb() -> &'static [u8] {
+    static P: OnceLock<Vec<u8>>=OnceLock::new();
+    load(BEZEL_GB_PNG,OUT_W,480,&P)
+}
+pub fn bezel_gbc() -> &'static [u8] {
+    static P: OnceLock<Vec<u8>>=OnceLock::new();
+    load(BEZEL_GBC_PNG,OUT_W,480,&P)
 }
 
 pub fn slot_back() -> &'static [u8] {
