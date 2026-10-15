@@ -2921,33 +2921,48 @@ impl Engine {
         }
         let shelf_id = self.active;
         let selected = self.shelves[shelf_id].index;
-        // Prioritise active selected artwork, then the other two SYSTEMS'
-        // selected artwork. Only after that prepare active neighbours.
-        // All three use exactly the same background PNG renderer and GPU
-        // cache; scheduling, not the GB/GBC rasterizer, was the difference.
-        let mut priority: Vec<(usize, usize)> = selected_prefetch_entry(&self.shelves, shelf_id)
+        // Priorities are recomputed every frame, so a rapid D-pad or L1/R1
+        // turn promotes new visible carts ahead of stale background requests.
+        // Order: selected, active +/-1, next/previous system, the rest.
+        let mut priority: Vec<(usize,usize)> = selected_prefetch_entry(&self.shelves,shelf_id)
             .into_iter().collect();
-        for (sid, shelf) in self.shelves.iter().enumerate() {
-            if sid != shelf_id && !shelf.carts.is_empty() {
-                priority.push((sid, shelf.index));
+        for delta in [-1isize,1] {
+            let pos=(selected as isize+delta).rem_euclid(
+                self.shelves[shelf_id].carts.len().max(1) as isize) as usize;
+            if !self.shelves[shelf_id].carts.is_empty()
+                && !priority.contains(&(shelf_id,pos)) {
+                priority.push((shelf_id,pos));
             }
         }
-        let mut visible = self.shelves[shelf_id].on_screen();
-        visible.sort_by_key(|&index| index.abs_diff(selected));
-        for index in visible {
-            if index != selected { priority.push((shelf_id, index)); }
+        for direction in [1,-1] {
+            let sid=next_nonempty_shelf(&self.shelves,shelf_id,direction);
+            if sid!=shelf_id && !priority.contains(&(sid,self.shelves[sid].index)) {
+                priority.push((sid,self.shelves[sid].index));
+            }
         }
-        // A single neighbour on either side of each inactive shelf provides
-        // instant L1/R1 navigation without decoding the entire ROM library.
-        for (sid, shelf) in self.shelves.iter().enumerate() {
-            if sid == shelf_id || shelf.carts.is_empty() { continue; }
-            for delta in [-1isize, 1] {
-                let index = shelf.index as isize + delta;
-                if index >= 0 && (index as usize) < shelf.carts.len() {
-                    priority.push((sid, index as usize));
+        for index in self.shelves[shelf_id].on_screen() {
+            if !priority.contains(&(shelf_id,index)) {
+                priority.push((shelf_id,index));
+            }
+        }
+        for direction in [1,-1] {
+            let sid=next_nonempty_shelf(&self.shelves,shelf_id,direction);
+            if sid==shelf_id { continue; }
+            let shelf=&self.shelves[sid];
+            for delta in [-1isize,1] {
+                let index=(shelf.index as isize+delta)
+                    .rem_euclid(shelf.carts.len().max(1) as isize) as usize;
+                if !priority.contains(&(sid,index)) {
+                    priority.push((sid,index));
                 }
             }
         }
+        for (sid,shelf) in self.shelves.iter().enumerate() {
+            if !shelf.carts.is_empty() && !priority.contains(&(sid,shelf.index)) {
+                priority.push((sid,shelf.index));
+            }
+        }
+        self.cart_render.prioritize(&priority);
         for (sid, index) in priority {
             let wants_material=sid==self.active && index==selected &&
                 self.shelves[sid].carts.get(index).is_some_and(slot_ui::is_clear) &&
