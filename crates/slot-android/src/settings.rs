@@ -112,6 +112,9 @@ pub struct Settings {
     pub wallpaper: WallpaperPick,
     pub wallpaper_tint: WallpaperTint,
     pub appearance: Appearance,
+    /// Slot v1.7 GENERAL: Recents is off by default; persist its list regardless.
+    pub show_recents: bool,
+    pub show_titles: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -125,7 +128,8 @@ impl Default for Settings {
             run_ahead_frames: 0,
             show_wifi: false, show_bluetooth: false, show_integrations: false,
             status_opt_in_v2: true, wallpaper: WallpaperPick::Default,
-            wallpaper_tint: WallpaperTint::Off, appearance: Appearance::Dark }
+            wallpaper_tint: WallpaperTint::Off, appearance: Appearance::Dark,
+            show_recents: false, show_titles: false }
     }
 }
 impl Settings {
@@ -258,6 +262,19 @@ pub fn frame_debt_display_sync(prev: f64, elapsed: f64, speed: f64,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn general_recents_and_titles_are_opt_in_and_persist_without_losing_settings() {
+        let previous=r#"{"ff_speed":4,"wallpaper":"none","run_ahead_frames":1}"#;
+        let mut s:Settings=serde_json::from_str(previous).unwrap();
+        assert!(!s.show_recents && !s.show_titles);
+        s.show_recents=true;s.show_titles=true;
+        let copy:Settings=serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert!(copy.show_recents && copy.show_titles);
+        assert_eq!(copy.ff_speed,4);
+        assert_eq!(copy.run_ahead_frames,1);
+        assert_eq!(copy.wallpaper,WallpaperPick::None);
+    }
 
     #[test]
     fn upstream_v17_wallpaper_picker_follows_original_order() {
