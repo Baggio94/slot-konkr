@@ -13,10 +13,10 @@ android {
         targetSdk = 32
         // Public Android candidate built from the consolidated Multiplayer Lab.
         // Same package ID and signing key: install -r must preserve user data.
-        // Studio v2 QA: install-over U2 code94 and public RC1 code90.
-        // Same package and persistent signing certificate; no data migration.
-        versionCode = 95
-        versionName = "0.1.0-rc.2-studio-v2-qa"
+        // Stability QA: install-over Cart Studio V2 code95 without wiping
+        // installed ROM sources, favorites, save states or account caches.
+        versionCode = 96
+        versionName = "0.1.0-rc.2-stabilization-qa"
         // One byte-identical APK on ARM64 KONKR and x86_64 Mac AVD.
         // Native libraries for BOTH ABIs are built/pinned by the same CI.
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
