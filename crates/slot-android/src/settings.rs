@@ -84,7 +84,7 @@ const NAME: &str = "slot-konkr-settings.json";
 pub enum Shader { Off, Lcd3x, Grid, Dot, Simpletex }
 impl Shader {
     pub const GBA: [Self; 4] = [Self::Off, Self::Lcd3x, Self::Grid, Self::Dot];
-    pub const GB: [Self; 3] = [Self::Off, Self::Grid, Self::Simpletex];
+    pub const GB: [Self; 4] = [Self::Off, Self::Lcd3x, Self::Grid, Self::Simpletex];
     pub fn effect(self) -> ScreenEffect {
         match self { Self::Off => ScreenEffect::None,
             Self::Lcd3x => ScreenEffect::Lcd3x, Self::Grid => ScreenEffect::Grid,
