@@ -180,6 +180,9 @@ static MESSAGE: Mutex<Option<String>> = Mutex::new(None);
 static RA_NOTICES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static RA_STATUS: Mutex<Option<String>> = Mutex::new(None);
 const RA_NOTICE_LIMIT: usize = 8;
+// Up to 96 prepared cartridge faces (~70 MiB worst-case native RGBA artwork).
+// KONKR has 4 GiB shared RAM; the LRU still reuses existing GLES textures.
+const CART_TEXTURE_CACHE_CAPACITY: usize = 96;
 
 fn ra_notice_payload(title: &str, detail: &str, earned: bool, badge: Option<&Path>) -> String {
     let clean = |value: &str, limit: usize| -> String {
@@ -2897,11 +2900,10 @@ impl Engine {
                 }
             }
             if self.shelves[shelf_id].face(index).is_some() {continue}
-            let texture = if self.texture_cache.len() >= 42 {
-                // Pin selected +/- one cart from EACH system so the entire
-                // immediately-visible GB/GBC trio survives GBA scrolling.
-                // At most nine textures are pinned inside our existing 42,
-                // preventing background prefetch/re-eviction thrashing.
+            let texture = if self.texture_cache.len() >= CART_TEXTURE_CACHE_CAPACITY {
+                // Pin selected +/- one cart from each nonempty shelf (up to
+                // 15 across GBA/GB/GBC/Recents/Favorites). Preserve warm art
+                // while the 96-face LRU bounds shared GPU memory.
                 let victim = self.texture_cache.iter().position(|(sid, index, _)| {
                     self.shelves.get(*sid).is_none_or(|shelf|
                         shelf.carts.is_empty() || shelf.index.abs_diff(*index) > 1)

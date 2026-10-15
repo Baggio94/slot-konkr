@@ -32,6 +32,7 @@ internal class SlotModalDialog(
     private val onDismiss: () -> Unit = {},
 ) {
     private val isRaLogin = title.equals("RETROACHIEVEMENTS", ignoreCase = true)
+    private val isRaSignOut = title.equals("SIGN OUT", ignoreCase = true)
     private var busy = false
     private val buttons = ArrayList<TextView>()
     private val secretFields = ArrayList<EditText>()
@@ -93,11 +94,10 @@ internal class SlotModalDialog(
     }
     private val body = LinearLayout(activity).apply {
         orientation = LinearLayout.VERTICAL
-        // The original heading bitmap has its own transparent left gutter.
-        // Align the RA description, labels and both input boxes exactly with
-        // the action labels: those use dp(12) inside the same 32px root inset.
-        // Avoid a second native-pixel inset here, which undershoots on AVD.
-        if (isRaLogin) {
+        // Heading PNGs contain a transparent left gutter. Align RA form text
+        // and SIGN OUT confirmation copy with the 12dp-inset action labels.
+        // Keep other dialogs' established layout unchanged.
+        if (isRaLogin || isRaSignOut) {
             val inset = SlotUi.dp(activity, 12)
             setPadding(inset, 0, inset, 0)
         }
@@ -171,6 +171,9 @@ internal class SlotModalDialog(
         body.addView(SlotUi.label(activity, label, 13f, SlotUi.muted),
             LinearLayout.LayoutParams(-1, labelHeight).apply {
                 topMargin = if (isRaLogin) SlotUi.menuPixel(activity, 3) else dp(4)
+                // Give USERNAME/PASSWORD visible breathing room above the box.
+                // The compact 960x640 RA viewport still fits without scrolling.
+                if (isRaLogin) bottomMargin = SlotUi.menuPixel(activity, 7)
             })
         val field = SlotUi.field(activity, hint, password)
         field.contentDescription = label
