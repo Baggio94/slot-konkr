@@ -87,7 +87,7 @@ impl Shader {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub ff_speed: u8, pub ff_sound: bool, pub colour_correction: bool,
@@ -165,7 +165,7 @@ impl Settings {
                 s
             }).unwrap_or_default()
     }
-    pub fn save(self, dir: &Path) -> io::Result<()> {
+    pub fn save(&self, dir: &Path) -> io::Result<()> {
         fs::create_dir_all(dir)?;
         let target = dir.join(NAME);
         let temporary = dir.join(format!("{NAME}.partial"));
@@ -180,7 +180,7 @@ impl Settings {
     // Screen: keys 0..3; Gameplay: keys 4..9.
     // Faithful to Slot quick_menu.rs except Date & Time (owned by Android).
     pub fn change(&mut self, key: usize, right: bool) -> bool {
-        let before = *self;
+        let before = self.clone();
         match key {
             0 => self.shader_gba = self.shader_gba.step(&Shader::GBA, right),
             1 => self.shader_gb = self.shader_gb.step(&Shader::GB, right),
