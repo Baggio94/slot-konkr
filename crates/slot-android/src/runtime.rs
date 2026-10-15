@@ -508,6 +508,12 @@ impl LiveGameOptions {
     }
 }
 
+#[derive(Clone,Copy)]
+struct ClearMaterial {
+    key:(usize,usize),
+    tex:[slot_gfx::TexId;3], // official back -> PCB -> plastic front
+}
+
 struct Engine {
     gpu: Compositor,
     size: (u32, u32),
@@ -532,6 +538,7 @@ struct Engine {
     emulator_key_latch: EmulatorKeyLatch,
     texture_cache: VecDeque<(usize, usize, slot_gfx::TexId)>,
     cart_render: CartRender,
+    clear_material: Option<ClearMaterial>,
     game: Option<GameSession>,
     pending_game: Option<GameSession>,
     link_identity: Option<crate::link_rom::GbaIdentity>,
@@ -992,6 +999,7 @@ impl Engine {
             emulator_key_latch: EmulatorKeyLatch::default(),
             texture_cache: VecDeque::new(),
             cart_render: CartRender::start()?,
+            clear_material: None,
             game: None,
             pending_game: None,
             link_identity: None,
@@ -2787,14 +2795,40 @@ impl Engine {
         }
     }
 
+    fn upload_clear_material(&mut self, key:(usize,usize), layers:[slot_ui::CartFace;3]) {
+        let textures=if let Some(existing)=self.clear_material {
+            for (tex,face) in existing.tex.iter().copied().zip(layers.into_iter()) {
+                self.gpu.update_texture(tex,face.w,face.h,&face.rgba);
+            }
+            existing.tex
+        } else {
+            layers.map(|face|self.gpu.create_texture(face.w,face.h,&face.rgba))
+        };
+        self.clear_material=Some(ClearMaterial{key,tex:textures});
+    }
+    fn clear_layers(&self) -> ([Option<slot_gfx::TexId>;2],Option<slot_gfx::TexId>) {
+        let selected=self.shelves.get(self.active).map(|s|(self.active,s.index));
+        match (self.clear_material,selected) {
+            (Some(layer),Some(key)) if layer.key==key =>
+                ([Some(layer.tex[0]),Some(layer.tex[1])],Some(layer.tex[2])),
+            _ => ([None,None],None),
+        }
+    }
+
     // Upstream Slot rasterizes its artwork on worker threads. Keep the same
     // separation on Android: no slow PNG decode/embossing on the GLES thread.
     // GPU texture uploads stay on their GL owner and are bounded per frame.
     fn prepare_visible(&mut self) {
         for _ in 0..2 {
-            let Some(((shelf_id, index), face)) = self.cart_render.ready() else { break };
-            let Some(shelf) = self.shelves.get(shelf_id) else { continue };
-            if index >= shelf.carts.len() || shelf.face(index).is_some() { continue }
+            let Some(((shelf_id,index),face,layers))=self.cart_render.ready() else {break};
+            let Some(shelf)=self.shelves.get(shelf_id) else {continue};
+            if index>=shelf.carts.len(){continue}
+            if let Some(layers)=layers {
+                if shelf_id==self.active && index==shelf.index {
+                    self.upload_clear_material((shelf_id,index),layers);
+                }
+            }
+            if self.shelves[shelf_id].face(index).is_some() {continue}
             let texture = if self.texture_cache.len() >= 42 {
                 // Pin selected +/- one cart from EACH system so the entire
                 // immediately-visible GB/GBC trio survives GBA scrolling.
@@ -2845,6 +2879,9 @@ impl Engine {
             }
         }
         for (sid, index) in priority {
+            let wants_material=sid==self.active && index==selected &&
+                self.shelves[sid].carts.get(index).is_some_and(slot_ui::is_clear) &&
+                self.clear_material.map(|m|m.key)!=Some((sid,index));
             if self.shelves[sid].face(index).is_some() {
                 if let Some(pos) = self.texture_cache.iter()
                     .position(|(s, i, _)| *s == sid && *i == index)
@@ -2853,7 +2890,7 @@ impl Engine {
                         self.texture_cache.push_back(entry);
                     }
                 }
-                continue;
+                if !wants_material {continue;}
             }
             // A freshly configured AVD has no ROMs yet. Skip the empty
             // shelf instead of indexing carts[0] and aborting the GL thread.
@@ -3830,11 +3867,13 @@ impl Engine {
             tex: self.chip_shadow,
             alpha: 0.8 * lift,
         });
-        if let Some(tex) = shelf.face(shelf.index) {
-            let face = grown(lid, TURN_PAD as f32 * lid.w / CART_W as f32);
+        let (behind,front)=self.clear_layers();
+        let face=grown(lid,TURN_PAD as f32*lid.w/CART_W as f32);
+        for tex in behind.into_iter().flatten()
+            .chain(front.or_else(||shelf.face(shelf.index))) {
             out.push(Draw::Turned {
-                x: face.x, y: face.y, w: face.w, h: face.h,
-                tex, alpha: 1.0, turn,
+                x:face.x,y:face.y,w:face.w,h:face.h,
+                tex,alpha:1.0,turn,
             });
         }
 
@@ -4043,7 +4082,7 @@ impl Engine {
                         seat: self.progress, alert: None, dim: 0.0,
                         screen: self.screen_power, game: true,
                         slot_faces: self.slot_faces,
-                    }.draw(&mut commands);
+                    }.draw_with_material(&mut commands,self.clear_layers().0,self.clear_layers().1);
                 } else {
                     commands.push(Draw::Game);
                 }
@@ -4505,7 +4544,7 @@ impl Engine {
                 game: false,
                 slot_faces: self.slot_faces,
             }
-            .draw(&mut commands);
+            .draw_with_material(&mut commands,self.clear_layers().0,self.clear_layers().1);
         }
         // The onboarding keycap belongs to Slot's own rendering lifecycle,
         // never the Android overlay. No hint is drawn behind an open menu.
