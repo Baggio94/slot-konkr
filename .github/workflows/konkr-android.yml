@@ -171,7 +171,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: BrandonKowalski/slot
-          ref: 3b907510201c70e579aff7d9205056d18dd0618d
+          ref: 34ac38031fd903eb2a0a0157f1dea4d3a5546195
           path: studio-upstream/slot
 
       - name: Stage original Studio with its pinned upstream Slot sources
@@ -224,7 +224,7 @@ jobs:
           if [[ "${GITHUB_REF:-}" == "refs/heads/feat/konkr-multiplayer-lab" ]]; then
             (cd android && gradle --no-daemon :app:assembleMultiplayerLab)
           fi
-          if [[ "${GITHUB_REF:-}" == refs/heads/release/* || "${GITHUB_REF:-}" == refs/heads/integration/konkr-rc4-next || "${GITHUB_REF:-}" == refs/tags/konkr-v* || "${GITHUB_REF:-}" == refs/heads/feat/konkr-upstream-1.7-visual-u1 || "${GITHUB_REF:-}" == refs/heads/feat/konkr-upstream-1.7-u2 ]]; then
+          if [[ "${GITHUB_REF:-}" == refs/heads/release/* || "${GITHUB_REF:-}" == refs/heads/integration/konkr-rc4-next || "${GITHUB_REF:-}" == refs/tags/konkr-v* || "${GITHUB_REF:-}" == refs/heads/feat/konkr-upstream-1.7-visual-u1 || "${GITHUB_REF:-}" == refs/heads/feat/konkr-upstream-1.7-u2 || "${GITHUB_REF:-}" == refs/heads/feat/konkr-cart-studio-v2 ]]; then
             if [ -z "$SLOT_KEYSTORE_BASE64" ]; then
               echo "::error::Persistent signing key is required for release candidates."
               exit 1
@@ -374,6 +374,38 @@ jobs:
         if: github.ref == 'refs/heads/feat/konkr-upstream-1.7-u2'
         with:
           name: slot-konkr-0.1.0-rc2-u2-qa-signed-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+      - name: Verify signed Studio v2 QA APK, original handmade artwork and Android bridge
+        if: github.ref == 'refs/heads/feat/konkr-cart-studio-v2'
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          test -s "$APK"
+          test "$(tr -d '\r\n' < third_party/slot-cart-studio/slot.ref)" = \
+               "$(git -C studio-upstream/slot rev-parse HEAD)"
+          grep -F 'mod bitmaps;' third_party/slot-cart-studio/src/lib.rs
+          grep -F 'mod board;' third_party/slot-cart-studio/src/lib.rs
+          grep -F 'window.AndroidStudio && selected' android/app/src/main/assets/studio/studio.js
+          grep -F 'session.carts.find((c) => c.slotId === source.selectedKey)' android/app/src/main/assets/studio/studio.js
+          grep -F "window.AndroidStudio ? new URL('art/', location.href).href" android/app/src/main/assets/studio/studio.js
+          grep -F 'async writeLabel(platform, stem, bytes, replace)' android/app/src/main/assets/studio/android-card.js
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt" dump badging "$APK" | tee "$RUNNER_TEMP/studio-v2-badging.txt"
+          grep -F "package: name='fyi.slot.konkr' versionCode='95'" "$RUNNER_TEMP/studio-v2-badging.txt"
+          grep -F "versionName='0.1.0-rc.2-studio-v2-qa'" "$RUNNER_TEMP/studio-v2-badging.txt"
+          CERT="$("$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK")"
+          echo "$CERT" | grep -Fi '4f42b8f0ac98f6a0102804ab51020ea0e7e2de7685c6ce09400a744de0b0fa2f'
+          for abi in arm64-v8a x86_64; do
+            for core in slot_android mgba_libretro gpsp_libretro; do
+              unzip -Z -1 "$APK" | grep -Fx "lib/$abi/lib${core}.so"
+            done
+          done
+          unzip -Z -1 "$APK" | grep -Fx "assets/studio/pkg/slot_cart_studio_bg.wasm"
+          sha256sum "$APK"
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/feat/konkr-cart-studio-v2'
+        with:
+          name: slot-konkr-0.1.0-rc2-studio-v2-qa-signed-apk
           path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
       - name: Verify RC4 release APK is signed with permanent certificate
