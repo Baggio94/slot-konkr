@@ -4448,6 +4448,9 @@ impl Engine {
         self.shelves[self.active].update(dt);
         self.prepare_visible();
         self.refresh_selected_title();
+        // Resolve the optional transparent material before mutably borrowing
+        // the selected rack, otherwise Rust rejects the overlapping borrows.
+        let (selected_clear_back, selected_clear_front) = self.clear_layers();
         let shelf = &mut self.shelves[self.active];
 
         // Original Slot: 450ms seating + 280ms hold. Start the original
@@ -4544,7 +4547,7 @@ impl Engine {
                 game: false,
                 slot_faces: self.slot_faces,
             }
-            .draw_with_material(&mut commands,self.clear_layers().0,self.clear_layers().1);
+            .draw_with_material(&mut commands,selected_clear_back,selected_clear_front);
         }
         // The onboarding keycap belongs to Slot's own rendering lifecycle,
         // never the Android overlay. No hint is drawn behind an open menu.
