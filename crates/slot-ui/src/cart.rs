@@ -2,8 +2,9 @@ use slot_store::gb::Class;
 use slot_store::{Cart, Outline, Platform};
 
 use crate::art;
-use crate::bitmaps::{self, Mould};
-use crate::board::{BOARD_H, BOARD_W};
+use crate::bitmaps::{self, Mould, BOARD_H, BOARD_W};
+// The KONKR core-picker still uses its own BOARD_W/H, which differ from the
+// official v1.7 visual bitmap 360x212. Cart layers use the bitmap dimensions.
 use crate::shell::{shell_for, Finish, Shell};
 use crate::silhouette::{cart_mask, gb_cart_mask, GbShell};
 use crate::text;
