@@ -524,6 +524,8 @@ struct Engine {
     emulation_core_labels: [(slot_gfx::TexId, u32, u32); 2],
     video_mode: VideoMode,
     wallpaper_texture: Option<slot_gfx::TexId>,
+    /// Live rear/front v1.7.0 slot textures. Always draw in proper depth order.
+    slot_faces: Option<(slot_gfx::TexId, slot_gfx::TexId)>,
     custom_wallpaper_present: bool,
     setting_values: Vec<(slot_gfx::TexId, u32, u32)>,
     setting_carets: [(slot_gfx::TexId, u32, u32); 2],
@@ -602,7 +604,20 @@ impl Engine {
         let wallpaper_texture = visuals_root.as_deref()
             .and_then(|root| crate::wallpaper::pick(root, 0))
             .as_deref().and_then(slot_ui::wallpaper_face)
+            .or_else(|| slot_ui::default_background().map(str::to_owned))
             .map(|rgba| gpu.create_texture(OUT_W, OUT_H, &rgba));
+        // Preserve existing Config/theme.txt custom colours as an opt-out.
+        let custom_colours = visuals_root.as_deref()
+            .is_some_and(|root| root.join("Config/theme.txt").exists());
+        let slot_faces = (!custom_colours).then(|| {
+            let rear = gpu.create_texture(
+                slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H,
+                slot_ui::bitmaps::slot_back());
+            let front = gpu.create_texture(
+                slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H,
+                slot_ui::bitmaps::slot_front());
+            (rear, front)
+        });
         let mut shelves = Vec::new();
 
         // First-run empty shelf: never synthesize fake demo cartridges.
@@ -873,6 +888,7 @@ impl Engine {
             emulation_core_labels,
             video_mode: VideoMode::Actual,
             wallpaper_texture,
+            slot_faces,
             custom_wallpaper_present,
             setting_values,
             setting_carets,
@@ -1610,7 +1626,8 @@ impl Engine {
                     }
                     let wallpaper = crate::wallpaper::pick(&root, 0)
                         .as_deref().and_then(slot_ui::wallpaper_face);
-                    self.wallpaper_texture = wallpaper.map(|rgba| {
+                    self.wallpaper_texture = wallpaper.or_else(||
+                    slot_ui::default_background().map(str::to_owned)).map(|rgba| {
                         if let Some(tex) = self.wallpaper_texture {
                             self.gpu.update_texture(tex, OUT_W, OUT_H, &rgba);
                             tex
@@ -3411,6 +3428,7 @@ impl Engine {
                         cart, face: shelf.face(shelf.index), rest, scale,
                         seat: self.progress, alert: None, dim: 0.0,
                         screen: self.screen_power, game: true,
+                        slot_faces: self.slot_faces,
                     }.draw(&mut commands);
                 } else {
                     commands.push(Draw::Game);
@@ -3801,9 +3819,10 @@ impl Engine {
                 let dim = 1.0 + (0.614 - 1.0) * t;
                 let selected = shelf.carts.get(shelf.index).map(|c| c.stem.as_str());
                 shelf.draw_row(selected, 0.0, 0.26 * t, dim, &mut commands);
-                draw_empty_slot(&mut commands);
+                slot_ui::draw_empty_slot_with(self.slot_faces, &mut commands);
             } else {
-                shelf.draw(0.0, &mut commands);
+                shelf.draw_row(None, 0.0, 0.0, 1.0, &mut commands);
+                slot_ui::draw_empty_slot_with(self.slot_faces, &mut commands);
                 // Original Slot draws platform name at the bottom slot mouth.
                 // 200ms ease-in + 1200ms hold + 800ms ease-out, 0.4 peak alpha.
                 if let Some(since) = self.platform_shown_at {
@@ -3844,6 +3863,7 @@ impl Engine {
                 dim: 0.0,
                 screen: 0.0,
                 game: false,
+                slot_faces: self.slot_faces,
             }
             .draw(&mut commands);
         }

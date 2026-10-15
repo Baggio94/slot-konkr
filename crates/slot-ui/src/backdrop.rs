@@ -1,10 +1,26 @@
 use std::path::Path;
+use std::sync::OnceLock;
 
 use slot_gfx::{Draw, TexId, OUT_H, OUT_W};
 
 use crate::art;
 
 const SCRIM: f32 = 0.62;
+
+// Directly use the bundled v1.7.0 wallpaper, not a recreated colour gradient.
+// A user-selected PNG still takes priority via wallpaper_face().
+const DEFAULT_PNG: &[u8] = include_bytes!("../../../assets/background_default.png");
+const BLUR_PNG: &[u8] = include_bytes!("../../../assets/background_default_blur.png");
+
+pub fn default_background() -> Option<&'static [u8]> {
+    static CACHED: OnceLock<Option<Vec<u8>>> = OnceLock::new();
+    CACHED.get_or_init(|| art::cover_bytes(DEFAULT_PNG, OUT_W, OUT_H)).as_deref()
+}
+
+pub fn blur_background() -> Option<&'static [u8]> {
+    static CACHED: OnceLock<Option<Vec<u8>>> = OnceLock::new();
+    CACHED.get_or_init(|| art::cover_bytes(BLUR_PNG, OUT_W, OUT_H)).as_deref()
+}
 
 pub fn wallpaper_face(path: &Path) -> Option<Vec<u8>> {
     art::cover(path, OUT_W, OUT_H)

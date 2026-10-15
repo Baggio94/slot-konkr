@@ -95,6 +95,9 @@ pub struct SlotChrome<'a> {
     pub dim: f32,
     pub screen: f32,
     pub game: bool,
+    /// Real v1.7.0 rear/front housing bitmaps, on the same 720x58 panel.
+    /// None retains the previous theme.txt custom-palette implementation.
+    pub slot_faces: Option<(TexId, TexId)>,
 }
 
 impl SlotChrome<'_> {
@@ -113,7 +116,7 @@ impl SlotChrome<'_> {
 
         let chrome = 1.0 - self.screen.clamp(0.0, 1.0);
 
-        draw_slot_back(chrome, out);
+        draw_slot_back_with(self.slot_faces.map(|faces| faces.0), chrome, out);
 
         let (cw, ch) = cart_box(self.cart.platform);
         let (cw, ch) = (cw as f32, ch as f32);
@@ -186,7 +189,7 @@ impl SlotChrome<'_> {
             out.push(Draw::Game);
         }
 
-        draw_slot_front(chrome, out);
+        draw_slot_front_with(self.slot_faces.map(|faces| faces.1), chrome, out);
     }
 }
 
@@ -198,6 +201,28 @@ fn band(x: f32, y: f32, w: f32, h: f32, c: [f32; 4], alpha: f32) -> Draw {
         h,
         colour: [c[0], c[1], c[2], c[3] * alpha],
     }
+}
+
+fn draw_slot_back_with(texture: Option<TexId>, alpha: f32, out: &mut Vec<Draw>) {
+    if let Some(tex) = texture {
+        out.push(Draw::Tex {
+            x: 0.0, y: BAND_Y, w: OUT_W as f32, h: MOUTH_H,
+            tex, alpha,
+        });
+        return;
+    }
+    draw_slot_back(alpha, out);
+}
+
+fn draw_slot_front_with(texture: Option<TexId>, alpha: f32, out: &mut Vec<Draw>) {
+    if let Some(tex) = texture {
+        out.push(Draw::Tex {
+            x: 0.0, y: BAND_Y, w: OUT_W as f32, h: MOUTH_H,
+            tex, alpha,
+        });
+        return;
+    }
+    draw_slot_front(alpha, out);
 }
 
 fn draw_slot_back(alpha: f32, out: &mut Vec<Draw>) {
@@ -291,8 +316,12 @@ pub fn draw_platform_name(name: Printed, alpha: f32, out: &mut Vec<Draw>) {
 }
 
 pub fn draw_empty_slot(out: &mut Vec<Draw>) {
-    draw_slot_back(1.0, out);
-    draw_slot_front(1.0, out);
+    draw_empty_slot_with(None, out);
+}
+
+pub fn draw_empty_slot_with(faces: Option<(TexId, TexId)>, out: &mut Vec<Draw>) {
+    draw_slot_back_with(faces.map(|pair| pair.0), 1.0, out);
+    draw_slot_front_with(faces.map(|pair| pair.1), 1.0, out);
 }
 
 fn travel(seat: f32, catch: f32) -> f32 {

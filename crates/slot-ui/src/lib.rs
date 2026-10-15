@@ -26,7 +26,7 @@ mod sticker;
 pub mod text;
 mod toast;
 
-pub use backdrop::{bezel_face, draw_backdrop, wallpaper_face};
+pub use backdrop::{bezel_face, blur_background, default_background, draw_backdrop, wallpaper_face};
 pub use barcode::{code39, CODE39_NARROW, CODE39_WIDE};
 pub use battery::{draw_gauge, BOLT_PX, GAUGE_H, GAUGE_W, WALL};
 pub use board::{
@@ -77,7 +77,7 @@ pub use shell::{
 };
 pub use silhouette::{gb_silhouette, silhouette, GbShell};
 pub use slot_chrome::{
-    draw_empty_slot, draw_slot_name, draw_platform_name, ease, edge, housing, opening, recess,
+    draw_empty_slot, draw_empty_slot_with, draw_slot_name, draw_platform_name, ease, edge, housing, opening, recess,
     set_theme, SlotChrome,
     ALERT_PX, LIP_H, MOUTH_H, MOUTH_W,
 };
