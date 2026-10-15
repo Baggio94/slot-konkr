@@ -1,7 +1,7 @@
 //! Per-cartridge opt-in latency profiles. Never touch the ROM or RetroArch saves.
 use std::{fs, io, path::{Path, PathBuf}};
 use serde::{Deserialize, Serialize};
-use crate::{core_selection, settings::{self, Settings, Shader}};
+use crate::{core_selection, settings::{self, Settings, Shader, Bezel}};
 use slot_store::{Core, Platform};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,6 +17,7 @@ pub struct EmulationProfile {
     // U1 pause menus: all are optional and inherit the corresponding
     // global preference until this specific ROM+core is edited.
     pub screen_shader: Option<Shader>,
+    pub screen_bezel: Option<Bezel>,
     pub colour_correction_override: Option<bool>,
     pub gb_palettes_override: Option<bool>,
     pub ff_speed_override: Option<u8>,
@@ -31,7 +32,8 @@ impl Default for EmulationProfile {
         Self { show_fps: false, show_fps_override: None,
             responsive_pacing: false, display_sync_pacing: false,
             run_ahead_frames: 0,
-            screen_shader: None, colour_correction_override: None,
+            screen_shader: None, screen_bezel: None,
+            colour_correction_override: None,
             gb_palettes_override: None, ff_speed_override: None,
             ff_sound_override: None, rewind_override: None,
             turbo_override: None, rumble_override: None,
@@ -45,7 +47,8 @@ impl EmulationProfile {
             responsive_pacing: settings.responsive_pacing,
             display_sync_pacing: settings.display_sync_pacing,
             run_ahead_frames: settings.run_ahead_frames,
-            screen_shader: None, colour_correction_override: None,
+            screen_shader: None, screen_bezel: None,
+            colour_correction_override: None,
             gb_palettes_override: None, ff_speed_override: None,
             ff_sound_override: None, rewind_override: None,
             turbo_override: None, rumble_override: None,
@@ -55,12 +58,12 @@ impl EmulationProfile {
     /// Settings.json or any other game's configured defaults.
     pub fn apply_visual_and_gameplay(&self, settings: &mut Settings, platform: Platform) {
         if let Some(shader)=self.screen_shader {
-            if platform==Platform::Gba { settings.shader_gba=shader; }
-            else { settings.shader_gb=shader; }
+            settings.set_shader_for(platform,shader);
         }
         if let Some(value)=self.colour_correction_override {
-            settings.colour_correction=value;
+            settings.set_colour_for(platform,value);
         }
+        if let Some(value)=self.screen_bezel {settings.set_bezel_for(platform,value);}
         if let Some(value)=self.gb_palettes_override { settings.gb_palettes=value; }
         if let Some(value)=self.ff_speed_override { settings.ff_speed=value; }
         if let Some(value)=self.ff_sound_override { settings.ff_sound=value; }
@@ -78,13 +81,26 @@ impl EmulationProfile {
     {
         let mut view=global.clone();
         self.apply_visual_and_gameplay(&mut view,platform);
-        if !view.change(key,right) { return false; }
+        // Menu key 1 inherited shared GB/GBC shader from RC1. Route
+        // GBC to its new key without altering the GBA or GB settings.
+        let actual_key=match (platform,key) {
+            (Platform::Gbc,1)=>21,
+            (Platform::Gba,2)=>22,
+            (Platform::Gbc,2)=>23,
+            (Platform::Gb,2)=>24,
+            (_,25|26|27)=>match platform {
+                Platform::Gba=>25,Platform::Gbc=>26,Platform::Gb=>27
+            },
+            _=>key,
+        };
+        if !view.change(actual_key,right) { return false; }
         match key {
             0 if platform==Platform::Gba =>
                 self.screen_shader=Some(view.shader_gba),
             1 if platform!=Platform::Gba =>
-                self.screen_shader=Some(view.shader_gb),
-            2 => self.colour_correction_override=Some(view.colour_correction),
+                self.screen_shader=Some(view.shader_for(platform)),
+            2 => self.colour_correction_override=Some(view.colour_for(platform)),
+            25 | 26 | 27 => self.screen_bezel=Some(view.bezel_for(platform)),
             3 if platform==Platform::Gb =>
                 self.gb_palettes_override=Some(view.gb_palettes),
             4 => self.ff_speed_override=Some(view.ff_speed),
@@ -241,6 +257,24 @@ mod tests {
         assert_eq!(effective.shader_gb,global.shader_gb);
         assert!(!effective.turbo);
         assert!(effective.colour_correction);
+    }
+
+    #[test]
+    fn gbc_screen_override_does_not_touch_gb_or_gba_defaults() {
+        let global=Settings::default();
+        let mut profile=EmulationProfile::from_settings(&global);
+        assert!(profile.change_visual_and_gameplay(&global,Platform::Gbc,1,true));
+        assert!(profile.change_visual_and_gameplay(&global,Platform::Gbc,2,true));
+        assert!(profile.change_visual_and_gameplay(&global,Platform::Gbc,26,true));
+        let mut scoped=global.clone();
+        profile.apply_visual_and_gameplay(&mut scoped,Platform::Gbc);
+        assert_ne!(scoped.shader_gbc,global.shader_gbc);
+        assert_eq!(scoped.shader_gb,global.shader_gb);
+        assert_eq!(scoped.shader_gba,global.shader_gba);
+        assert!(scoped.colour_correction_gbc);
+        assert_eq!(scoped.colour_correction_gb,global.colour_correction_gb);
+        assert_eq!(scoped.bezel_gbc,Bezel::None);
+        assert_eq!(global,Settings::default());
     }
 
     #[test]
