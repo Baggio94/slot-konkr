@@ -3906,7 +3906,10 @@ impl Engine {
                     w: w as f32 * scale, h: h as f32 * scale,
                     tex, alpha: 0.68 * fade,
                 });
-                self.draw_setting_values(row, &[10, 11, 12, usize::MAX], out);
+                // The pause menu has three visible rows, not four.
+                // The extra action sentinel displaced ALL value glyphs by
+                // half a row and desynchronised them from their carets.
+                self.draw_setting_values(row, &[10, 11, 12], out);
             }
             ShelfOverlay::ScreenSettings { row } => {
                 self.draw_original_style_menu(32, &[91,92,93], row, out);
