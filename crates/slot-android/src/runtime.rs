@@ -3436,9 +3436,18 @@ impl Engine {
         let carts=crate::favorites::carts(&ids,
             &[&self.shelves[0].carts,&self.shelves[1].carts,&self.shelves[2].carts]);
         let was_favorite=self.active==4;
+        let previous_index=self.shelves[4].index;
+        let previous_uri=self.shelves[4].carts.get(previous_index).map(|c|c.rom.clone());
         self.cart_render.invalidate_shelf(4);
         let moves=self.shelves[4].replace_carts_preserving_visuals(carts);
         self.rekey_rack_visuals(4,&moves);
+        // Unstarring from Favorites selects the next cart, exactly as upstream.
+        if was_favorite && !self.shelves[4].carts.is_empty() &&
+            previous_uri.as_ref().is_some_and(|uri|
+                !self.shelves[4].carts.iter().any(|cart|&cart.rom==uri)) {
+            let last=self.shelves[4].carts.len()-1;
+            self.shelves[4].select(previous_index.min(last));
+        }
         for shelf in &mut self.shelves {
             shelf.mark_starred(|cart|ids.iter()
                 .any(|uri|uri==cart.rom.to_string_lossy().as_ref()));
@@ -3487,6 +3496,15 @@ impl Engine {
     fn record_recent(&mut self) {
         let Some(root)=Self::recents_root() else { return };
         let Some(uri)=self.selected_rom_uri() else { return };
+        // Launches may immediately leave the shelf renderer. Flush the selected
+        // game identity now, rather than relying on a 500ms idle debounce.
+        let focus=crate::selection::Focus {rack:self.active,uri:uri.clone()};
+        if let Err(err)=crate::selection::store(&root,&focus) {
+            eprintln!("slot-konkr: launch shelf-focus save failed: {err}");
+        } else {
+            self.focus_seen=Some((focus.rack,focus.uri));
+            self.focus_dirty_since=None;
+        }
         let next=crate::recents::append_previous(&crate::recents::load(&root),&uri);
         if let Err(err)=crate::recents::store(&root,&next) {
             eprintln!("slot-konkr: unable to update recents rack: {err}");
