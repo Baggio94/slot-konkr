@@ -224,7 +224,7 @@ jobs:
           if [[ "${GITHUB_REF:-}" == "refs/heads/feat/konkr-multiplayer-lab" ]]; then
             (cd android && gradle --no-daemon :app:assembleMultiplayerLab)
           fi
-          if [[ "${GITHUB_REF:-}" == refs/heads/release/* || "${GITHUB_REF:-}" == refs/heads/integration/konkr-rc4-next || "${GITHUB_REF:-}" == refs/tags/konkr-v* || "${GITHUB_REF:-}" == refs/heads/feat/konkr-upstream-1.7-visual-u1 ]]; then
+          if [[ "${GITHUB_REF:-}" == refs/heads/release/* || "${GITHUB_REF:-}" == refs/heads/integration/konkr-rc4-next || "${GITHUB_REF:-}" == refs/tags/konkr-v* || "${GITHUB_REF:-}" == refs/heads/feat/konkr-upstream-1.7-visual-u1 || "${GITHUB_REF:-}" == refs/heads/feat/konkr-upstream-1.7-u2 ]]; then
             if [ -z "$SLOT_KEYSTORE_BASE64" ]; then
               echo "::error::Persistent signing key is required for release candidates."
               exit 1
