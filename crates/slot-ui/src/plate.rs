@@ -23,6 +23,12 @@ const LABEL_MIN_PX: f32 = 10.0;
 const TITLE_PX: f32 = 20.0;
 const TITLE_MIN_PX: f32 = 12.0;
 
+// Exact upstream Slot v1.7 shelf Game Titles face, not Polaroid title_face.
+pub const TITLE_LINE_H: u32 = 32;
+const TITLE_LINE_PX: f32 = 24.0;
+const TITLE_LINE_MIN_PX: f32 = 14.0;
+const TITLE_LINE_MAX_W: f32 = 560.0;
+
 pub struct UndoFace {
     pub rgba: Vec<u8>,
     pub w: u32,
@@ -171,6 +177,23 @@ fn band_width(label: &str) -> u32 {
         .map(|l| text::line_width(font, l, layout.px, layout.tracking))
         .fold(0.0, f32::max);
     (ink.ceil() as u32).clamp(1, LABEL_MAX_W as u32)
+}
+
+/// Pixel geometry and white ink copied from upstream v1.7.0 plate.rs.
+pub fn title_line_face(text: &str) -> UndoFace {
+    let Some(font) = text::label_font() else {
+        return UndoFace { rgba: Vec::new(), w: 0, h: 0 };
+    };
+    let layout = text::fit(
+        font, text, TITLE_LINE_MAX_W, 1, TITLE_LINE_PX, TITLE_LINE_MIN_PX,
+    );
+    let ink = layout.lines.iter()
+        .map(|line| text::line_width(font, line, layout.px, layout.tracking))
+        .fold(0.0, f32::max);
+    let w = (ink.ceil() as u32).clamp(1, TITLE_LINE_MAX_W as u32);
+    let mut rgba = vec![0u8; (w * TITLE_LINE_H * 4) as usize];
+    text::draw_centred(&mut rgba, w, TITLE_LINE_H, &layout, [0xff, 0xff, 0xff]);
+    UndoFace { rgba, w, h: TITLE_LINE_H }
 }
 
 pub fn title_face(text: &str) -> UndoFace {

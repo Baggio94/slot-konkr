@@ -323,6 +323,20 @@ pub fn draw_slot_name(name: Printed, alpha: f32, out: &mut Vec<Draw>) {
     draw_slot_name_at_scale(name, alpha, 1.0, out);
 }
 
+/// Original Slot v1.7 title overlay: 32px high and eight pixels above
+/// the shelf platform text, with the same centred slot-mouth origin.
+pub fn draw_slot_title(title: Printed, alpha: f32, out: &mut Vec<Draw>) {
+    let (Some(tex), true) = (title.face, alpha > 0.0) else { return };
+    let (w, h) = (title.w as f32, crate::plate::TITLE_LINE_H as f32);
+    let hole = SCOOP_Y + SCOOP_D - SLIT_Y;
+    let slot_name_y = SLIT_Y + (hole - HINT_H as f32) / 2.0;
+    out.push(Draw::Tex {
+        x: CX - w / 2.0,
+        y: slot_name_y + HINT_H as f32 - h,
+        w, h, tex, alpha,
+    });
+}
+
 /// Draw a 3× supersampled short platform name at the same native text size.
 pub fn draw_platform_name(name: Printed, alpha: f32, out: &mut Vec<Draw>) {
     draw_slot_name_at_scale(name, alpha, crate::plate::PLATFORM_NAME_SCALE as f32, out);

@@ -59,7 +59,7 @@ pub use link_art::{
 };
 pub use plate::{
     arrows_hint_face, arrows_hint_width, cap_width, centred_hints, hint_face, hint_quad, hint_row,
-    hint_width, title_face, word_face, word_width, platform_name_face, PLATFORM_NAME_SCALE,
+    hint_width, title_face, title_line_face, word_face, word_width, platform_name_face, PLATFORM_NAME_SCALE,
     Hint, UndoFace, ARROW_GAP, CAP, CAP_GAP,
     HINT_EDGE, HINT_GAP, HINT_H, LEGEND_GAP, TITLE_H, TITLE_W,
 };
@@ -79,7 +79,7 @@ pub use shell::{
 };
 pub use silhouette::{gb_silhouette, silhouette, GbShell};
 pub use slot_chrome::{
-    draw_empty_slot, draw_empty_slot_with, draw_slot_name, draw_platform_name, ease, edge, housing, opening, recess,
+    draw_empty_slot, draw_empty_slot_with, draw_slot_name, draw_slot_title, draw_platform_name, ease, edge, housing, opening, recess,
     set_theme, SlotChrome,
     ALERT_PX, LIP_H, MOUTH_H, MOUTH_W,
 };

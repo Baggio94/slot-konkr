@@ -3426,7 +3426,8 @@ impl Engine {
         self.selected_title_name=name.into();
         if name.is_empty(){self.selected_title_since=None;return;}
         let display: String=name.chars().take(39).collect();
-        let image=word_face(&display);
+        let image=slot_ui::title_line_face(&display);
+        if image.w==0 || image.h==0 {self.selected_title_since=None;return;}
         let tex=if let Some(tex)=self.selected_title_texture {
             self.gpu.update_texture(tex,image.w,image.h,&image.rgba);
             tex
@@ -4531,8 +4532,11 @@ impl Engine {
                     if self.settings.show_titles {
                         if let Some(since)=self.selected_title_since {
                             let elapsed=since.elapsed().as_millis() as u64;
-                            if platform_name_running(elapsed) {
-                                draw_slot_name(self.selected_title_face,slot_name_alpha(elapsed),&mut commands);
+                            // Upstream titles remain ON after the platform
+                            // name has faded; they do not expire at 2200 ms.
+                            let alpha=slot_title_alpha(elapsed);
+                            if alpha>0.0 {
+                                slot_ui::draw_slot_title(self.selected_title_face,alpha,&mut commands);
                             }
                         }
                     } else if let Some(since)=self.letter_shown_at {
@@ -4812,6 +4816,12 @@ fn platform_name_running(elapsed_ms: u64) -> bool {
 }
 
 /// Follow Slot 1.5.0's platform name alpha curve and durations exactly.
+/// Slot v1.7 title alpha = inverse name fade, held visible after 2200ms.
+fn slot_title_alpha(elapsed_ms: u64) -> f32 {
+    if elapsed_ms < 1400 { return 0.0; }
+    (1.0 - slot_name_alpha(elapsed_ms) / 0.4).clamp(0.0, 1.0)
+}
+
 fn slot_name_alpha(elapsed_ms: u64) -> f32 {
     let level = if elapsed_ms < 200 {
         elapsed_ms as f32 / 200.0
