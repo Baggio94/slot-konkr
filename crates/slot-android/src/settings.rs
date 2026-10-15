@@ -3,6 +3,69 @@ use std::{fs, io, path::Path};
 use slot_gfx::ScreenEffect;
 use slot_store::GbPalette;
 
+/// Matches Slot v1.7.0's canonical WallpaperPick semantics, while storing
+/// the user's choice in the existing Android JSON settings file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WallpaperPick {
+    None,
+    Random,
+    Default,
+    Blur,
+    File(String),
+}
+impl Default for WallpaperPick {
+    fn default() -> Self { Self::Default }
+}
+impl WallpaperPick {
+    pub fn choices(root: &Path) -> Vec<Self> {
+        let mut choices=vec![Self::None, Self::Random, Self::Default, Self::Blur];
+        choices.extend(crate::wallpaper::list(root).into_iter().map(Self::File));
+        choices
+    }
+    pub fn step(&self, root: &Path, right: bool) -> Self {
+        let choices=Self::choices(root);
+        let at=choices.iter().position(|v| v==self).unwrap_or(2);
+        let n=choices.len();
+        choices[if right {(at+1)%n}else{(at+n-1)%n}].clone()
+    }
+    pub fn is_personal(&self, has_wallpapers: bool) -> bool {
+        matches!(self, Self::File(_)) || (matches!(self, Self::Random) && has_wallpapers)
+    }
+    pub fn label(&self) -> String {
+        match self {
+            Self::None=>"None".into(),
+            Self::Random=>"Random".into(),
+            Self::Default=>"Default".into(),
+            Self::Blur=>"DEFAULT BLUR".into(),
+            Self::File(name)=>name.rsplit_once('.').map(|(a,_)|a).unwrap_or(name).into()
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WallpaperTint { #[default] Off, Low, Medium, High }
+impl WallpaperTint {
+    pub const ALL: [Self; 4]=[Self::Off, Self::Low, Self::Medium, Self::High];
+    pub fn step(self, right: bool) -> Self {
+        let at=Self::ALL.iter().position(|v|*v==self).unwrap_or(0);
+        let n=Self::ALL.len();
+        Self::ALL[if right {(at+1)%n}else{(at+n-1)%n}]
+    }
+    pub fn alpha(self)->f32 {
+        // Exact Slot v1.7.0 app.rs tint_alpha().
+        match self { Self::Off=>0.0, Self::Low=>0.25, Self::Medium=>0.45, Self::High=>0.65 }
+    }
+}
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Appearance { #[default] Dark, Light }
+impl Appearance {
+    pub fn toggle(self)->Self { if self==Self::Dark {Self::Light}else{Self::Dark} }
+}
+
 pub const SPEEDS: [u8; 4] = [2, 3, 4, 6];
 const NAME: &str = "slot-konkr-settings.json";
 
@@ -45,6 +108,10 @@ pub struct Settings {
     pub show_integrations: bool,
     #[serde(default)]
     pub status_opt_in_v2: bool,
+    // Slot v1.7 visual settings; independent of saved emulation profiles.
+    pub wallpaper: WallpaperPick,
+    pub wallpaper_tint: WallpaperTint,
+    pub appearance: Appearance,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -57,13 +124,27 @@ impl Default for Settings {
             display_sync_pacing: false,
             run_ahead_frames: 0,
             show_wifi: false, show_bluetooth: false, show_integrations: false,
-            status_opt_in_v2: true }
+            status_opt_in_v2: true, wallpaper: WallpaperPick::Default,
+            wallpaper_tint: WallpaperTint::Off, appearance: Appearance::Dark }
     }
 }
 impl Settings {
     pub fn load(dir: &Path) -> Self {
         fs::read(dir.join(NAME)).ok()
-            .and_then(|b| serde_json::from_slice::<Self>(&b).ok())
+            .and_then(|b| {
+                let had_wallpaper_choice=serde_json::from_slice::<serde_json::Value>(&b)
+                    .ok().is_some_and(|v|v.get("wallpaper").is_some());
+                serde_json::from_slice::<Self>(&b).ok().map(|mut s| {
+                    // Beta RC1 imported user.png but lacked an option to turn
+                    // it off. Preserve that picture on update to U1 instead
+                    // of silently replacing it with Slot's bundled default.
+                    if !had_wallpaper_choice &&
+                        dir.join("Wallpapers/user.png").is_file() {
+                        s.wallpaper=WallpaperPick::File("user.png".into());
+                    }
+                    s
+                })
+            })
             .map(|mut s| {
                 if !SPEEDS.contains(&s.ff_speed) { s.ff_speed = 2; }
                 if !Shader::GBA.contains(&s.shader_gba) { s.shader_gba = Shader::Off; }
