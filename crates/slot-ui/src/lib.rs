@@ -46,7 +46,7 @@ pub use cart::{
 };
 pub use clock::{clock_label, date_time_text, hhmm, set_clock_hint_face, ClockPicker, Field};
 pub use draw::{Draw, TexId, OUT_H, OUT_W};
-pub use footer::{draw_footer, draw_footer_with_ink, Printed};
+pub use footer::{draw_footer, draw_footer_with_ink, footer_ink, Printed};
 pub use hud::{
     badge_at, ff_badge, FfState, Hud, HudKind, LinkBadge, Millis, HUD_ICON_PX, HUD_INK, HUD_MS,
     LINK_HOST_INK, LINK_JOIN_INK, PLATE_H,
@@ -59,7 +59,7 @@ pub use link_art::{
 };
 pub use plate::{
     arrows_hint_face, arrows_hint_width, cap_width, centred_hints, hint_face, hint_quad, hint_row,
-    hint_width, title_face, title_line_face, word_face, word_width, platform_name_face, PLATFORM_NAME_SCALE,
+    hint_width, title_face, title_line_face, word_face, word_ink, word_width, platform_name_face, PLATFORM_NAME_SCALE,
     Hint, UndoFace, ARROW_GAP, CAP, CAP_GAP,
     HINT_EDGE, HINT_GAP, HINT_H, LEGEND_GAP, TITLE_H, TITLE_W,
 };

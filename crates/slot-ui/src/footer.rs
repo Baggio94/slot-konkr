@@ -33,6 +33,11 @@ pub fn draw_footer(
 ) {
     draw_footer_with_ink(battery,percent,bolt,clock,HUD_INK,out)
 }
+/// Exact official v1.7 dark/light shelf ink, also used for clock/percent/bolt.
+pub fn footer_ink(light: bool) -> [u8;3] {
+    if light { [0,0,0] } else { [255,255,255] }
+}
+
 /// Slot 1.7's shelf footer uses black ink when light appearance is active.
 /// Game HUD colours and menu chrome remain unmodified.
 pub fn draw_footer_with_ink(

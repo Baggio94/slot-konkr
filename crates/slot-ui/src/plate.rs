@@ -99,11 +99,17 @@ pub fn word_width(text: &str) -> u32 {
 }
 
 pub fn word_face(text: &str) -> UndoFace {
+    word_ink(text, INK)
+}
+
+/// Render footer words in Slot's exact Dark/Light ink without touching menu
+/// typography or the game HUD. Called only on clock/battery/theme changes.
+pub fn word_ink(text: &str, ink: [u8; 3]) -> UndoFace {
     let w = word_width(text);
     let mut rgba = vec![0u8; (w * HINT_H * 4) as usize];
     if let Some(font) = text::label_font() {
         let layout = text::fit(font, text, w as f32, 1, LABEL_PX, LABEL_MIN_PX);
-        text::draw_centred(&mut rgba, w, HINT_H, &layout, INK);
+        text::draw_centred(&mut rgba, w, HINT_H, &layout, ink);
     }
     UndoFace { rgba, w, h: HINT_H }
 }

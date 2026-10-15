@@ -634,6 +634,7 @@ struct Engine {
     battery_face: Printed,
     battery: Option<Battery>,
     bolt_texture: slot_gfx::TexId,
+    bolt_light_texture: slot_gfx::TexId,
     letter_texture: Option<slot_gfx::TexId>,
     letter_face: Printed,
     letter_shown_at: Option<Instant>,
@@ -969,8 +970,10 @@ impl Engine {
             gpu.create_texture(face.w, face.h, &face.rgba)
         }).collect();
         hud.set_link_faces(link_faces);
-        let bolt = icon_face(Icon::Charging, BOLT_PX, HUD_INK);
+        let bolt = icon_face(Icon::Charging, BOLT_PX, slot_ui::footer_ink(false));
         let bolt_texture = gpu.create_texture(bolt.w, bolt.h, &bolt.rgba);
+        let bolt = icon_face(Icon::Charging, BOLT_PX, slot_ui::footer_ink(true));
+        let bolt_light_texture = gpu.create_texture(bolt.w, bolt.h, &bolt.rgba);
 
         // On a GBA-only library do not begin on an empty GB or GBC shelf.
         let active = shelves.iter().position(|s| !s.carts.is_empty()).unwrap_or(0);
@@ -1089,6 +1092,7 @@ impl Engine {
             battery_face: Printed::default(),
             battery: None,
             bolt_texture,
+            bolt_light_texture,
             letter_texture: None,
             letter_face: Printed::default(),
             letter_shown_at: None,
@@ -1102,12 +1106,31 @@ impl Engine {
         })
     }
 
+    fn shelf_footer_ink(&self) -> [u8; 3] {
+        slot_ui::footer_ink(
+            self.settings.appearance == crate::settings::Appearance::Light)
+    }
+
+    fn recolour_footer_text(&mut self) {
+        let ink = self.shelf_footer_ink();
+        if let Some(tex) = self.clock_texture {
+            let face = slot_ui::word_ink(&self.clock_text, ink);
+            self.gpu.update_texture(tex, face.w, face.h, &face.rgba);
+            self.clock_face = Printed::new(tex, face.w);
+        }
+        if let (Some(tex), Some(percent)) = (self.battery_texture, self.battery_percent) {
+            let face = slot_ui::word_ink(&format!("{percent}%"), ink);
+            self.gpu.update_texture(tex, face.w, face.h, &face.rgba);
+            self.battery_face = Printed::new(tex, face.w);
+        }
+    }
+
     fn refresh_system_status(&mut self) {
         let status = SYSTEM_STATUS.lock().unwrap_or_else(|p| p.into_inner()).clone();
         if status.clock != self.clock_text {
             self.clock_text = status.clock;
             if !self.clock_text.is_empty() {
-                let face = word_face(&self.clock_text);
+                let face = slot_ui::word_ink(&self.clock_text, self.shelf_footer_ink());
                 let tex = match self.clock_texture {
                     Some(tex) => { self.gpu.update_texture(tex, face.w, face.h, &face.rgba); tex }
                     None => { let tex = self.gpu.create_texture(face.w, face.h, &face.rgba);
@@ -1129,7 +1152,7 @@ impl Engine {
                 self.gpu.update_texture(tex, sticker.w, sticker.h, &sticker.rgba);
             }
             if let Some(percent) = percent {
-                let face = word_face(&format!("{percent}%"));
+                let face = slot_ui::word_ink(&format!("{percent}%"), self.shelf_footer_ink());
                 let tex = match self.battery_texture {
                     Some(tex) => { self.gpu.update_texture(tex, face.w, face.h, &face.rgba); tex }
                     None => { let tex = self.gpu.create_texture(face.w, face.h, &face.rgba);
@@ -3458,6 +3481,7 @@ impl Engine {
             else if self.settings.appearance == crate::settings::Appearance::Light {
                 Some(self.slot_light_faces)
             } else { Some(self.slot_dark_faces) };
+        self.recolour_footer_text();
         self.persist_settings();
     }
 
@@ -4610,8 +4634,10 @@ impl Engine {
             if self.settings.show_wifi { indicator_flags |= 2; }
             if self.settings.show_bluetooth { indicator_flags |= 4; }
             if self.settings.show_integrations { indicator_flags |= 8; }
-            draw_footer(self.battery, self.battery_face,
-                Some(self.bolt_texture), self.clock_face, &mut commands);
+            let light=self.settings.appearance==crate::settings::Appearance::Light;
+            slot_ui::draw_footer_with_ink(self.battery,self.battery_face,
+                Some(if light {self.bolt_light_texture} else {self.bolt_texture}),
+                self.clock_face,self.shelf_footer_ink(),&mut commands);
         }
         SHELF_INDICATOR_FLAGS.store(indicator_flags, Ordering::Release);
         self.gpu.fit(self.size);
