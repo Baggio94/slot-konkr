@@ -47,3 +47,34 @@ fn upstream_1_7_transparent_shell_precomposes_real_board_without_changing_label(
     assert_eq!(android.rgba, cart_face_with_material(&cart, None).rgba,
         "no material flicker from frame-to-frame randomness");
 }
+
+#[test]
+fn u1_clear_material_is_drawn_in_exact_original_slot_depth_order() {
+    use slot_gfx::TexId;
+    use slot_ui::{SlotChrome,Draw};
+    let cart=cartridge("U3IE","Boktai - The Sun Is in Your Hand");
+    let labels=[
+        TexId::from_raw(7), // precomposited shelf cache, not drawn in insert
+        TexId::from_raw(8), // back coloured plastic
+        TexId::from_raw(9), // PCB
+        TexId::from_raw(10), // translucent front and label
+    ];
+    let chrome=SlotChrome {
+        cart:&cart,face:Some(labels[0]),rest:170.0,scale:1.0,
+        seat:0.55,alert:None,dim:0.0,screen:0.0,game:false,
+        slot_faces:None,
+    };
+    let mut out=Vec::new();
+    chrome.draw_with_material(&mut out,
+        [Some(labels[1]),Some(labels[2])],Some(labels[3]));
+    let visible:Vec<_>=out.iter().filter_map(|draw|match draw {
+        Draw::Tex{tex,..}=>Some(*tex),_=>None,
+    }).collect();
+    assert_eq!(visible,&labels[1..],
+        "official back -> PCB -> front, never double-draw cached solid face");
+    let mut fallback=Vec::new();
+    chrome.draw(&mut fallback);
+    assert_eq!(fallback.iter().filter_map(|draw|match draw {
+        Draw::Tex{tex,..}=>Some(*tex),_=>None,
+    }).collect::<Vec<_>>(),vec![labels[0]]);
+}
