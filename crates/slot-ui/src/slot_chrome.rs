@@ -102,6 +102,16 @@ pub struct SlotChrome<'a> {
 
 impl SlotChrome<'_> {
     pub fn draw(&self, out: &mut Vec<Draw>) {
+        self.draw_with_material(out,[None,None],None)
+    }
+
+    /// Exactly like Slot v1.7.0's behind:[interior,pcb] then transparent
+    /// front. Android uses a single precomposited face in shelf previews,
+    /// but passes the three independent source bitmaps during insertion.
+    pub fn draw_with_material(
+        &self, out: &mut Vec<Draw>,
+        behind: [Option<TexId>; 2], transparent_front: Option<TexId>,
+    ) {
         let seat = self.seat.clamp(0.0, 1.0);
         let dim = self.dim.clamp(0.0, 1.0);
         if dim > 0.0 {
@@ -134,7 +144,10 @@ impl SlotChrome<'_> {
         let x = centre + (CX - centre) * k - cw / 2.0;
         let y = foot0 + (seated_foot - foot0) * travel - ch;
         let cart_alpha = if seat >= 1.0 { chrome } else { 1.0 };
-        out.push(match self.face {
+        for tex in behind.into_iter().flatten() {
+            out.push(Draw::Tex { x, y, w: cw, h: ch, tex, alpha: cart_alpha });
+        }
+        out.push(match transparent_front.or(self.face) {
             Some(tex) => Draw::Tex {
                 x,
                 y,
