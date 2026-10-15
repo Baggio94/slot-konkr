@@ -1,33 +1,25 @@
-# Slot KONKR U1 — Pause emulation phase
+# Slot KONKR U1 — Pause/settings emulation migration (implemented; QA pending)
 
-This first pause-menu phase is intentionally narrow and is not a public release.
+This document supersedes the early code92 partial-pause notes. It describes the **current code**, not a future TODO. The current U1 final-QA candidate is code 93, and it must have a fully green CI on its own commit before user installation.
 
-- **Carousel:** Y no longer opens the legacy per-ROM emulation popup; the key
-  is reserved for favourites in U2. X remains Cart Studio; SELECT remains the
-  native animated core selector. No changes to X/Y Buttons turbo.
-- **Global:** START → Settings → Emulation still writes global defaults only.
-- **Pause:** Resume / States / Multiplayer / Settings / Save & Eject for solo.
-  Active Link/RFU hides States; irreversible post-Link requires an explicit
-  safe eject to solo. Every item uses an action enum rather than hardcoded
-  indices, including restoring the right Multiplayer selection after B.
-- **Pause → Settings → Emulation:** Show Stats / Frame Pacing /
-  Run-Ahead / Reset to Global, saved exclusively to the selected ROM and core.
-  Pacing modes apply when gameplay resumes; invalidate stale time debt and
-  speculative audio but **never reboot a core**. The app's global defaults
-  remain intact.
-- **Safety:** Neither Frame Pacing nor Run-Ahead can change during a live
-  Link session or a stopped Link core requiring a solo relaunch. Rewind and
-  states remain unavailable during Link. Flash-save / unsupported speculative
-  audio protection remains enforced and saved profile intent is preserved.
-- **Scope boundary:** per-ROM Screen and Gameplay overrides are NOT wired yet;
-  do not expose them in Pause Settings until each has a proper persisted
-  per-ROM/per-core override and the live renderer/core is tested. The next
-  phase adds these independently without mutating global settings.
+## Navigation and scope
 
-Tests include action-based pause row model, conditional Multiplayer States
-hiding and exact menu back navigation. Device testing on Mac AVD and KONKR is
-still required. The public RC1 remains untouched.
+- Carousel START → `Library / Cart Studio / RetroAchievements / Apps / Settings / About`.
+- **Global** Settings → `General / Screen / Gameplay / Emulation / Interface`; only global Settings updates `slot-konkr-settings.json`.
+- **Solo Pause** → `Resume / States / Multiplayer / Settings / Save & Eject`; **Linked Pause** → `Resume / Multiplayer / Settings / Save & Eject` (no States).
+- Pause Settings → `Screen / Gameplay / Emulation / Reset to Global`, all changes implicit to the **current ROM + current core** without any “This Game” badge. Linked sessions show only safe Screen settings, disable state/save/speed/Run-Ahead/rewind/turbo changes, and keep Link/RFU connected when opening/closing its menu.
+- Screen profile: GBA/GBC/GB Shader/Colour Correction/Bezel independently, GB palette only if supported; no artificial forced bezel for 3:2 GBA.
+- Gameplay: Fast Forward speed/sound, Rewind, `X/Y Buttons`, Rumble, Auto Save on Eject.
+- Emulation: Show Stats, Frame Pacing Standard/Responsive/Display Sync, Run-Ahead 0/1/2 subject to core/game safety.
 
-## Dedicated safe-to-update QA build
+## Persistence and safe live changes
 
-The menus version is code **92**, versionName **0.1.0-rc.2-u1pause**. The CI artifact is `slot-konkr-0.1.0-rc2-u1pause-signed-apk` and is gated on the same pinned persistent signature and arm64-v8a/x86_64 native libraries as the public RC1. On physical KONKR or Mac AVD, update with `adb install -r`; NEVER uninstall or clear saves. The prior visual-only code91 remains downloadable from its earlier green workflow.
+- Per-game and per-core preferences use optional fields in existing `GameEmulation/<rom>.<core>.json`; legacy files deserialize normally. Global settings do not change when editing Pause.
+- Screen shader and colour correction apply to the live session; pacing/Run-Ahead are read by the live engine without reopening the core. Time debt, speculative audio and Fast Forward state are cleared when appropriate. Pokémon mGBA Flash protection and gpSP speculative-audio safeguards stay enabled.
+- `Reset to Global` removes only the selected ROM/core overrides and reapplies inherited values immediately. No other ROM/core's settings are overwritten.
+- Unsafe post-Link states use explicit eject/recovery rather than falsely promising Resume. Link state and multiplayer protocol are unchanged.
+- Carousel `Y` stays reserved for **U2 favourites**, `X` opens Cart Studio, `SELECT` opens the core-picker animation. Do not rename/alter the game setting `X/Y Buttons` (Turbo).
+
+## Gate
+
+CI: `debug-apk` and `a6-a1-mgba-continuity`, Rust UI/settings/migration and Android tests, permanent APK signing fingerprint and ARM64/x86_64 package checks. Manual acceptance: Mac emulator then KONKR device, including existing SRAM/RTC/RetroArch states, Multiplayer reconnect/recovery and all live per-ROM/core options. **Do not publish a GitHub Release or merge this Draft PR before acceptance.**

@@ -4904,6 +4904,18 @@ mod ui_feedback_tests {
     use super::*;
 
     #[test]
+    fn official_game_title_fades_after_name_and_then_remains_visible() {
+        // The earlier U1 renderer incorrectly expired Game Titles after
+        // 2200ms; upstream instead keeps a fully visible title at rest.
+        assert_eq!(slot_title_alpha(0), 0.0);
+        assert_eq!(slot_title_alpha(1399), 0.0);
+        assert!((slot_title_alpha(1800) - 0.5).abs() < 0.0001);
+        assert_eq!(slot_title_alpha(2200), 1.0);
+        assert_eq!(slot_title_alpha(100_000), 1.0);
+    }
+
+
+    #[test]
     fn legacy_multiplayer_heading_helper_mode_and_footer_text_cannot_come_back() {
         // Our previous integration/konkr-rc4-next rendered indices 68..77
         // as extra MULTIPLAYER/CABLE/CHOOSE... overlays, together with an

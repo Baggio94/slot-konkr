@@ -78,3 +78,13 @@ pub(crate) fn draw_printed(x: f32, y: f32, p: Printed, out: &mut Vec<Draw>) {
 fn printed(x: f32, p: Printed, out: &mut Vec<Draw>) {
     draw_printed(x, FOOTER_Y, p, out);
 }
+
+#[cfg(test)]
+mod theme_tests {
+    use super::*;
+    #[test]
+    fn upstream_footer_ink_switches_whole_palette() {
+        assert_eq!(footer_ink(false), [255, 255, 255]);
+        assert_eq!(footer_ink(true), [0, 0, 0]);
+    }
+}
