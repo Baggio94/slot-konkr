@@ -41,7 +41,7 @@ const UNREADABLE =
 const OLD_SHELL_FILE =
   'This browser can’t open cart_shell.ini. Start the latest slot once, then choose the card again.';
 const OLD_LAYOUT =
-  'This card still keeps its roms loose in Games. Start slot once on the device to sweep them into GBA, GB and GBC folders, then choose the card again.';
+  'This card keeps its roms loose in Games, where slot doesn’t look. Move them into the GBA, GB and GBC folders inside Games, then choose the card again.';
 
 export async function fromDirectory(root) {
   let games;
@@ -66,8 +66,6 @@ export async function fromDirectory(root) {
       }
     }
   }
-  // A card swept by slot has the folders. One that has roms but no folders predates the sweep,
-  // and slot does that sweep itself on the device rather than the studio doing it over the wire.
   if (!sawPlatform && loose) throw new Error(OLD_LAYOUT);
 
   const labels = new Map();
@@ -104,6 +102,9 @@ export async function fromDirectory(root) {
     };
     const txt = await read('cart_shell.txt');
     if (txt !== null) return txt;
+    let listed = false;
+    for await (const [name] of dir.entries()) listed ||= name.toLowerCase() === 'cart_shell.ini';
+    if (!listed) return null;
     try {
       return await read('cart_shell.ini');
     } catch (e) {
