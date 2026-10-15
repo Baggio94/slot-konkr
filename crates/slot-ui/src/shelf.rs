@@ -2,13 +2,14 @@ use slot_gfx::{Draw, TexId, OUT_H, OUT_W};
 use slot_store::Cart;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use crate::cart::{cart_box, gb_shell_of, label_colour, label_text, CART_H, CART_W};
+use crate::cart::{cart_box, gb_shell_of, label_colour, label_text, label_panel, gb_label_panel, GBC_LABEL_X, GBC_LABEL_Y, GBC_LABEL_W, CART_H, CART_W};
 use crate::hud::Millis;
 use crate::silhouette::GbShell;
 use crate::slot_chrome::{draw_empty_slot, MOUTH_H};
 
 const SIDE_SCALE: f32 = 0.78;
 const SIDE_ALPHA: f32 = 0.55;
+const STAR_INSET: f32 = 5.0;
 
 static SLACK: AtomicU32 = AtomicU32::new(0);
 
@@ -53,6 +54,8 @@ pub struct Shelf {
     gb_shadow: Option<TexId>,
     gbc_shadow: Option<TexId>,
     shells: Vec<Option<GbShell>>,
+    starred: Vec<bool>,
+    star: Option<(TexId, f32, f32)>,
     ride: f32,
     vel: f32,
     held: Option<(i32, Millis, usize)>,
@@ -64,6 +67,8 @@ pub struct Shelf {
 impl Shelf {
     pub fn new(carts: Vec<Cart>) -> Self {
         Shelf {
+            starred: vec![false; carts.len()],
+            star: None,
             shells: carts.iter().map(gb_shell_of).collect(),
             faces: vec![None; carts.len()],
             carts,
@@ -88,6 +93,7 @@ impl Shelf {
         let previously_selected = before.get(self.index).map(|c| c.rom.clone());
         self.faces = vec![None; self.carts.len()];
         self.shells = self.carts.iter().map(gb_shell_of).collect();
+        self.starred = vec![false; self.carts.len()];
         let mut moves = Vec::new();
         for (old, cart) in before.iter().enumerate() {
             if let Some(new) = self.carts.iter().position(|item| item.rom == cart.rom) {
@@ -108,6 +114,13 @@ impl Shelf {
         self.scroll = i as f32;
         self.ride = i as f32;
         self.vel = 0.0;
+    }
+
+    pub fn set_star(&mut self, tex: TexId, w: u32, h: u32) {
+        self.star = Some((tex, w as f32, h as f32));
+    }
+    pub fn mark_starred(&mut self, mut is_favorite: impl FnMut(&Cart) -> bool) {
+        self.starred = self.carts.iter().map(&mut is_favorite).collect();
     }
 
     pub fn set_shadow(&mut self, face: TexId) {
@@ -444,6 +457,26 @@ impl Shelf {
                     }
                 }
             });
+            // Faithful original v1.7 pixel-star with label-relative geometry.
+            if let (Some(true), Some((tex, sw, sh))) = (self.starred.get(i), self.star) {
+                let (lx, ly, lw) = match cart.platform {
+                    slot_store::Platform::Gba => {
+                        let (x,y,right,_) = label_panel(cw,ch);
+                        (x as f32,y as f32,(right-x) as f32)
+                    },
+                    slot_store::Platform::Gb => {
+                        let (x,y,right,_) = gb_label_panel(cw,ch);
+                        (x as f32,y as f32,(right-x) as f32)
+                    },
+                    slot_store::Platform::Gbc =>
+                        (GBC_LABEL_X as f32,GBC_LABEL_Y as f32,GBC_LABEL_W as f32),
+                };
+                out.push(Draw::Tex {
+                    x: (x + (lx + lw) * scale - sw - STAR_INSET).round(),
+                    y: (y + ly * scale + STAR_INSET).round(),
+                    w: sw, h: sh, tex, alpha: alpha * dim,
+                });
+            }
         }
     }
 }
