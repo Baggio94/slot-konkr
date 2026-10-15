@@ -370,7 +370,9 @@ enum ShelfOverlay {
     EmulationSettings { row: usize },
     InterfaceSettings { row: usize },
     GeneralSettings { row: usize },
-    GameEmulationSettings { row: usize },
+    // Pause submenus never mutate the global Settings object.
+    PauseSettings { row: usize },
+    PauseEmulationSettings { row: usize },
     About,
     Scraping,
     Achievements,
@@ -2141,52 +2143,68 @@ impl Engine {
                 }
         if self.game.is_some() && matches!(self.overlay, ShelfOverlay::GameMenu { .. }) {
                     if pressed {
-                        match self.overlay {
-                            ShelfOverlay::GameMenu { row } => match code {
-                                19 | 20 => {
-                                    self.overlay = ShelfOverlay::GameMenu {
-                                        row: move_menu_row(row, code, 4),
-                                    };
-                                }
-                                // Both "Save & Eject" (row 2) and the
-                                // post-link "Eject to play solo" (row 0)
-                                // must use the SAME save/eject lifecycle.
-                                // Never render an action which only prints
-                                // an error and leaves the user trapped.
-                                96 if game_menu_ejects(row, self.game.as_ref()
-                                    .is_some_and(GameSession::requires_relaunch)) => {
-                                    self.handle(Input::Exit);
-                                }
-                                96 => {
-                                    match row {
-                                        1 => {
-                                            self.link_entry = LinkEntry::GameMenu;
-                                            if self.game.as_ref().is_some_and(GameSession::linked) {
-                                                // Reopen the connected adapter instead of
-                                            // ENDing the Link when the Pause menu row
-                                            // 'Multiplayer' is selected.
+                        let linked = self.game.as_ref().is_some_and(GameSession::linked);
+                        let relaunch = self.game.as_ref().is_some_and(GameSession::requires_relaunch);
+                        if let ShelfOverlay::GameMenu { row } = self.overlay {
+                            match code {
+                                19 | 20 => self.overlay = ShelfOverlay::GameMenu {
+                                    row: move_menu_row(row, code, pause_rows(linked, relaunch).len()),
+                                },
+                                96 => match pause_rows(linked, relaunch).get(row).copied() {
+                                    Some(PauseRow::SaveEject) => self.handle(Input::Exit),
+                                    Some(PauseRow::Resume) => self.overlay = ShelfOverlay::None,
+                                    Some(PauseRow::States) if !linked && !relaunch =>
+                                        self.open_polaroids(),
+                                    Some(PauseRow::Multiplayer) => {
+                                        self.link_entry = LinkEntry::GameMenu;
+                                        if linked {
+                                            // Show existing connected adapter, never unplug
+                                            // when merely opening the Multiplayer menu.
                                             self.link_phase = LinkMenu::Linked {
                                                 role: self.link_role,
                                                 worked: self.link_worked_at,
-                                                since: self.link_millis(),
-                                                opened: true,
+                                                since: self.link_millis(), opened: true,
                                             };
                                             self.overlay = ShelfOverlay::Multiplayer;
-                                            } else { self.enter_multiplayer_menu(); }
-                                        }
-                                        3 => {
-                                            if self.game.as_ref().is_some_and(|g| g.linked() || g.requires_relaunch()) {
-                                                set_message("Relaunch the cartridge before using Save States".into());
-                                            } else { self.open_polaroids(); }
-                                        }
-                                        _ => self.overlay = ShelfOverlay::None,
-                                    }
-                                }
-                                97 => {
-                                    if !self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
-                                        self.overlay = ShelfOverlay::None;
-                                    } else { set_message("Eject to return to solo.".into()); }
+                                        } else { self.enter_multiplayer_menu(); }
+                                    },
+                                    Some(PauseRow::Settings) if !relaunch =>
+                                        self.overlay = ShelfOverlay::PauseSettings { row: 0 },
+                                    _ => {}
                                 },
+                                97 => if !relaunch {
+                                    self.overlay = ShelfOverlay::None
+                                } else { set_message("Eject to return to solo.".into()); },
+                                _ => {}
+                            }
+                        }
+                    }
+                    return;
+                }
+                if self.game.is_some() && matches!(self.overlay, ShelfOverlay::PauseSettings { .. }
+                    | ShelfOverlay::PauseEmulationSettings { .. }) {
+                    if pressed {
+                        match self.overlay {
+                            ShelfOverlay::PauseSettings { row } => match code {
+                                // Only per-ROM Emulation has been migrated so far.
+                                19 | 20 => self.overlay = ShelfOverlay::PauseSettings {
+                                    row: move_menu_row(row, code, 1),
+                                },
+                                96 => self.overlay = ShelfOverlay::PauseEmulationSettings { row: 0 },
+                                97 => self.overlay = ShelfOverlay::GameMenu {
+                                    row: pause_rows(self.game.as_ref().is_some_and(GameSession::linked),
+                                        self.game.as_ref().is_some_and(GameSession::requires_relaunch))
+                                        .iter().position(|item| *item==PauseRow::Settings).unwrap_or(0),
+                                },
+                                _ => {}
+                            },
+                            ShelfOverlay::PauseEmulationSettings { row } => match code {
+                                19 | 20 => self.overlay = ShelfOverlay::PauseEmulationSettings {
+                                    row: move_menu_row(row, code, 4),
+                                },
+                                21 | 22 if row < 3 => self.change_game_emulation(row + 10, code == 22),
+                                96 if row == 3 => self.reset_game_emulation(),
+                                97 => self.overlay = ShelfOverlay::PauseSettings { row: 0 },
                                 _ => {}
                             },
                             _ => {}
@@ -2442,15 +2460,6 @@ impl Engine {
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
-                            ShelfOverlay::GameEmulationSettings { row } => match code {
-                                19 | 20 => self.overlay = ShelfOverlay::GameEmulationSettings {
-                                    row: move_menu_row(row, code, 4),
-                                },
-                                21 | 22 if row < 3 => self.change_game_emulation(row + 10, code == 22),
-                                96 if row == 3 => self.reset_game_emulation(),
-                                97 | 108 => self.overlay = ShelfOverlay::None,
-                                _ => {}
-                            },
                             ShelfOverlay::GameplaySettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::GameplaySettings {
                                     row: move_menu_row(row, code, 6),
@@ -2531,6 +2540,7 @@ impl Engine {
                                 }
                             },
                             ShelfOverlay::GameMenu { .. } | ShelfOverlay::Multiplayer |
+                            ShelfOverlay::PauseSettings { .. } | ShelfOverlay::PauseEmulationSettings { .. } |
                             ShelfOverlay::States | ShelfOverlay::None => {}
                         }
                     }
@@ -2547,12 +2557,9 @@ impl Engine {
                             UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(13);
                             return;
                         }
-                        // Y edits the selected cartridge. X remains Cart Studio.
-                        100 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
-                            self.load_selected_emulation();
-                            self.overlay = ShelfOverlay::GameEmulationSettings { row: 0 };
-                            return;
-                        }
+                        // Y is intentionally reserved for the favourites toggle
+                        // in U2. No legacy per-game settings popup on the carousel.
+                        100 if !self.inserted => { return; }
                         108 if !self.inserted => {
                             self.shelves[self.active].release_hold();
                             self.overlay = ShelfOverlay::Menu { row: 0 };
@@ -2940,6 +2947,17 @@ impl Engine {
         });
     }
     fn change_game_emulation(&mut self, key: usize, right: bool) {
+        if self.game.as_ref().is_some_and(|game|game.linked() || game.requires_relaunch()) {
+            // In a linked session, do not alter the effective frame cadence
+            // or speculative time travel. Keep the current session in sync.
+            set_message("Emulation settings are locked while Multiplayer is active".into());
+            return;
+        }
+        if key == 12 && self.game.as_ref().is_some_and(|game|
+            !game.runahead_supported()) {
+            set_message("Run-Ahead unavailable for this core/game (Link, Flash or speculative audio protection)".into());
+            return;
+        }
         if key == 12 && self.game.as_ref().is_some_and(|game|
             game.mgba_flash_runahead_blocked()) {
             set_message("Run-Ahead is disabled for Pokemon Gen III with mGBA to protect Flash saves. gpSP is unchanged.".into());
@@ -2956,8 +2974,17 @@ impl Engine {
             }
         } else { return; }
         self.game_emulation = Some(profile);
+        // Avoid reinterpreting a frame debt accumulated under the previous
+        // timing policy, and discard any prior predictive video/audio frame.
+        // The core stays alive; edits take effect on the first resumed frame.
+        self.game_accum = 0.0;
+        AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
     fn reset_game_emulation(&mut self) {
+        if self.game.as_ref().is_some_and(|game|game.linked() || game.requires_relaunch()) {
+            set_message("Cannot reset emulation during Multiplayer".into());
+            return;
+        }
         let Some(uri) = self.selected_rom_uri() else { return; };
         let core = self.selected_emulation_core();
         if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
@@ -2967,6 +2994,8 @@ impl Engine {
             }
         } else { return; }
         self.game_emulation = None;
+        self.game_accum = 0.0;
+        AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
     fn persist_settings(&self) {
         if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
@@ -3053,7 +3082,7 @@ impl Engine {
 
     fn setting_value(&self, key: usize) -> usize {
         use crate::settings::Shader;
-        let profile = if matches!(self.overlay, ShelfOverlay::GameEmulationSettings { .. }) {
+        let profile = if matches!(self.overlay, ShelfOverlay::PauseEmulationSettings { .. }) {
             self.current_emulation()
         } else { EmulationProfile::from_settings(&self.settings) };
         let shader = |shader| match shader {
@@ -3292,8 +3321,8 @@ impl Engine {
                 self.draw_original_style_menu(50, &[51, 52, 55], row, out);
                 self.draw_setting_values(row, &[10, 11, 12], out);
             }
-            ShelfOverlay::GameEmulationSettings { row } => {
-                self.draw_original_style_menu(56, &[51, 52, 55, 57], row, out);
+            ShelfOverlay::PauseEmulationSettings { row } => {
+                self.draw_original_style_menu(50, &[51, 52, 55, 57], row, out);
                 // Identify the selected core without changing Slot's menu
                 // layout or existing keycap typography.
                 let index = if self.selected_emulation_core() == Core::Gpsp { 1 } else { 0 };
@@ -3345,13 +3374,14 @@ impl Engine {
                 self.draw_menu_hints(141.0, 311.0, out);
             }
             ShelfOverlay::GameMenu { row } => {
-                let first = if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
-                    78
-                } else { 20 };
-                let second = if self.game.as_ref().is_some_and(GameSession::linked) {
-                    67
-                } else { 66 };
-                self.draw_original_style_menu(19, &[first, second, 21, 22], row, out);
+                let linked = self.game.as_ref().is_some_and(GameSession::linked);
+                let relaunch = self.game.as_ref().is_some_and(GameSession::requires_relaunch);
+                let indices: Vec<usize> = pause_rows(linked, relaunch).iter()
+                    .map(|item| pause_row_text(*item, linked, relaunch)).collect();
+                self.draw_original_style_menu(19, &indices, row, out);
+            }
+            ShelfOverlay::PauseSettings { row } => {
+                self.draw_original_style_menu(26, &[49], row, out);
             }
             ShelfOverlay::Multiplayer => self.draw_multiplayer(out),
             ShelfOverlay::Core => {
@@ -3584,14 +3614,17 @@ impl Engine {
         let (kind, selected, count) = match self.overlay {
             ShelfOverlay::Menu { row } => (1u8, row, 6usize),
             ShelfOverlay::Library { row } => (2u8, row, 6usize),
-            ShelfOverlay::GameMenu { row } => (3u8, row, 4usize),
+            ShelfOverlay::GameMenu { row } => (3u8, row, pause_rows(
+                self.game.as_ref().is_some_and(GameSession::linked),
+                self.game.as_ref().is_some_and(GameSession::requires_relaunch)).len()),
+            ShelfOverlay::PauseSettings { row } => (13u8, row, 1usize),
             ShelfOverlay::Multiplayer => (11u8, 0, 0usize),
             ShelfOverlay::Settings { row } => (4u8, row, 5usize),
             ShelfOverlay::GeneralSettings { row } =>
                 (12u8, row, if self.show_general_tint() { 3 } else { 2 }),
             ShelfOverlay::InterfaceSettings { row } => (10u8, row, if self.custom_wallpaper_present { 5 } else { 4 }),
             ShelfOverlay::EmulationSettings { row } => (8u8, row, 3usize),
-            ShelfOverlay::GameEmulationSettings { row } => (9u8, row, 4usize),
+            ShelfOverlay::PauseEmulationSettings { row } => (9u8, row, 4usize),
             ShelfOverlay::ScreenSettings { row } => (5u8, row, 4usize),
             ShelfOverlay::GameplaySettings { row } => (6u8, row, 6usize),
             _ => (0, 0, 0),
@@ -3731,7 +3764,8 @@ impl Engine {
             return;
         }
         if self.game.is_some() && matches!(self.overlay,
-            ShelfOverlay::GameMenu { .. } | ShelfOverlay::Multiplayer) {
+            ShelfOverlay::GameMenu { .. } | ShelfOverlay::Multiplayer |
+            ShelfOverlay::PauseSettings { .. } | ShelfOverlay::PauseEmulationSettings { .. }) {
             // Coordinate the pause with the remote game. Without this
             // the other Cable peer times out and gpSP RFU can drift.
             if let Some(game) = self.game.as_mut() { game.set_link_paused(true); }
@@ -4207,10 +4241,42 @@ fn link_mode_can_switch(core: Core, chosen: LinkKind, code: &str,
     selected_serial != opposite_serial
 }
 
-/// Route the post-link primary label to the same Input::Exit path as
-/// Save & Eject. In active solo play the primary menu item stays Resume.
-fn game_menu_ejects(row: usize, requires_relaunch: bool) -> bool {
-    row == 2 || (row == 0 && requires_relaunch)
+/// These rows are modelled by *action*, not by a hardcoded screen index.
+/// It prevents a linked session from routing "Save & Eject" to "Resume".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PauseRow { Resume, States, Multiplayer, Settings, SaveEject }
+const SOLO_PAUSE_ROWS: &[PauseRow] = &[
+    PauseRow::Resume, PauseRow::States, PauseRow::Multiplayer,
+    PauseRow::Settings, PauseRow::SaveEject,
+];
+const LINK_PAUSE_ROWS: &[PauseRow] = &[
+    PauseRow::Resume, PauseRow::Multiplayer, PauseRow::Settings,
+    PauseRow::SaveEject,
+];
+// If a Link core must be relaunched before solo, it must not expose
+// unsafe actions or a misleading Resume control.
+const RELAUNCH_PAUSE_ROWS: &[PauseRow] = &[
+    PauseRow::SaveEject, PauseRow::Multiplayer,
+];
+fn pause_rows(linked: bool, requires_relaunch: bool) -> &'static [PauseRow] {
+    if requires_relaunch { RELAUNCH_PAUSE_ROWS }
+    else if linked { LINK_PAUSE_ROWS }
+    else { SOLO_PAUSE_ROWS }
+}
+fn pause_row_text(row: PauseRow, linked: bool, requires_relaunch: bool) -> usize {
+    match row {
+        PauseRow::Resume => 20,
+        PauseRow::States => 22,
+        PauseRow::Multiplayer => if linked { 67 } else { 66 },
+        PauseRow::Settings => 25,
+        PauseRow::SaveEject if requires_relaunch => 78,
+        PauseRow::SaveEject => 21,
+    }
+}
+
+/// Ejection and resume are never inferred from their displayed row numbers.
+fn game_menu_ejects(row: usize, linked: bool, requires_relaunch: bool) -> bool {
+    matches!(pause_rows(linked, requires_relaunch).get(row), Some(PauseRow::SaveEject))
 }
 
 /// The original Slot HUD distinguishes a remote end and a BIOS mismatch.
