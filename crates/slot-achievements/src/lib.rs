@@ -99,6 +99,7 @@ enum Control {
     Load(network::Load),
     Unload(u64),
     Flush(Arc<AtomicBool>),
+    Shutdown,
     // Android's SAF scanner sends only full-ROM MD5s; no ROM bytes go over HTTP.
     PrefetchHash(String, u32),
 }
@@ -124,6 +125,10 @@ pub struct Service {
     flushing: AtomicBool,
     flushed: Arc<AtomicBool>,
     status: Arc<Status>,
+    stopping: AtomicBool,
+    evaluator_stopped: Arc<AtomicBool>,
+    http_shutdown: Arc<AtomicBool>,
+    http_stopped: Arc<AtomicBool>,
 }
 
 impl Service {
@@ -140,6 +145,12 @@ impl Service {
         let flushed = Arc::new(AtomicBool::new(false));
         let worker_flushed = flushed.clone();
         let worker_enabled = enabled.clone();
+        let evaluator_stopped = Arc::new(AtomicBool::new(false));
+        let http_shutdown = Arc::new(AtomicBool::new(false));
+        let http_stopped = Arc::new(AtomicBool::new(false));
+        let eval_done = evaluator_stopped.clone();
+        let network_stop = http_shutdown.clone();
+        let network_done = http_stopped.clone();
         let status = Arc::new(Status::default());
         let worker_status = status.clone();
         let spawned = std::thread::Builder::new()
@@ -152,14 +163,19 @@ impl Service {
                     frame_rx,
                     notice_tx,
                     worker_status,
+                    network_stop,
+                    network_done,
                     transport,
                 );
                 worker_enabled.store(false, Ordering::Release);
                 worker_flushed.store(true, Ordering::Release);
+                eval_done.store(true, Ordering::Release);
             });
         if spawned.is_err() {
             status.set(SyncStatus::Attention);
             flushed.store(true, Ordering::Release);
+            evaluator_stopped.store(true, Ordering::Release);
+            http_stopped.store(true, Ordering::Release);
             eprintln!("slot: achievements worker could not start");
         }
         Self {
@@ -171,6 +187,10 @@ impl Service {
             flushing: AtomicBool::new(false),
             flushed,
             status,
+            stopping: AtomicBool::new(false),
+            evaluator_stopped,
+            http_shutdown,
+            http_stopped,
         }
     }
 
@@ -225,6 +245,21 @@ impl Service {
         self.flushed.load(Ordering::Acquire)
     }
 
+    /// Nonblocking two-worker shutdown for Android in-place account logout.
+    /// Caller must first pass flush_ready and the no-unsaved-awards barrier.
+    /// Never remove auth/config while either old-account worker may still run.
+    pub fn shutdown_ready(&self) -> bool {
+        if !self.flushed.load(Ordering::Acquire) || self.has_unsaved_awards() {
+            return false;
+        }
+        if !self.stopping.swap(true, Ordering::AcqRel) {
+            self.http_shutdown.store(true, Ordering::Release);
+            let _ = self.controls.send(Control::Shutdown);
+        }
+        self.evaluator_stopped.load(Ordering::Acquire)
+            && self.http_stopped.load(Ordering::Acquire)
+    }
+
     pub fn wrap(&self, core: Box<dyn RetroCore>) -> Box<dyn RetroCore> {
         self.wrap_for_console(core, 5)
     }
@@ -266,6 +301,8 @@ fn run(
     frames: mpsc::Receiver<Frame>,
     notices: mpsc::Sender<Notice>,
     status: Arc<Status>,
+    http_shutdown: Arc<AtomicBool>,
+    http_stopped: Arc<AtomicBool>,
     transport: impl network::Transport + Send + 'static,
 ) {
     let config_path = root.join("Config/retroachievements.toml");
@@ -303,6 +340,8 @@ fn run(
     let network_notices = notices.clone();
     let cached_prepared = prepared_tx.clone();
     let network_status = status.clone();
+    let network_stop = http_shutdown.clone();
+    let network_done = http_stopped.clone();
     status.set(SyncStatus::Syncing);
     if std::thread::Builder::new()
         .name("slot-ra-http".into())
@@ -316,11 +355,14 @@ fn run(
                 prepared_tx,
                 network_notices,
                 network_status,
+                network_stop,
                 transport,
             );
+            network_done.store(true, Ordering::Release);
         })
         .is_err()
     {
+        http_stopped.store(true, Ordering::Release);
         status.set(SyncStatus::Attention);
         let _ = notices.send(Notice::status(0, "Achievements network worker failed"));
         return;
@@ -351,6 +393,15 @@ fn run(
                 Ok(Control::Flush(done)) => {
                     retry_unsaved(&mut unsaved, &store, &notices);
                     done.store(true, Ordering::Release);
+                }
+                Ok(Control::Shutdown) => {
+                    retry_unsaved(&mut unsaved, &store, &notices);
+                    status.unsaved.store(!unsaved.is_empty(), Ordering::Release);
+                    if unsaved.is_empty() {
+                        // The HTTP worker has its own cancellation flag and
+                        // must separately acknowledge exit before auth deletion.
+                        return;
+                    }
                 }
                 Ok(Control::Load(load)) => {
                     generation = load.generation;
