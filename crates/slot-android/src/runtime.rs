@@ -375,6 +375,8 @@ enum ShelfOverlay {
     GeneralSettings { row: usize },
     // Pause submenus never mutate the global Settings object.
     PauseSettings { row: usize },
+    PauseScreenSettings { row: usize },
+    PauseGameplaySettings { row: usize },
     PauseEmulationSettings { row: usize },
     About,
     Scraping,
@@ -2013,6 +2015,8 @@ impl Engine {
                                 self.overlay=match self.overlay {
                                     ShelfOverlay::GameMenu { .. }
                                     | ShelfOverlay::PauseSettings { .. }
+                                    | ShelfOverlay::PauseScreenSettings { .. }
+                                    | ShelfOverlay::PauseGameplaySettings { .. }
                                     | ShelfOverlay::PauseEmulationSettings { .. }
                                     | ShelfOverlay::States => ShelfOverlay::None,
                                     _=>ShelfOverlay::GameMenu {row:0},
@@ -2197,15 +2201,26 @@ impl Engine {
                     return;
                 }
                 if self.game.is_some() && matches!(self.overlay, ShelfOverlay::PauseSettings { .. }
+                    | ShelfOverlay::PauseScreenSettings { .. }
+                    | ShelfOverlay::PauseGameplaySettings { .. }
                     | ShelfOverlay::PauseEmulationSettings { .. }) {
                     if pressed {
                         match self.overlay {
                             ShelfOverlay::PauseSettings { row } => match code {
-                                // Only per-ROM Emulation has been migrated so far.
                                 19 | 20 => self.overlay = ShelfOverlay::PauseSettings {
-                                    row: move_menu_row(row, code, 1),
+                                    row: move_menu_row(row, code, self.pause_settings_rows().len()),
                                 },
-                                96 => self.overlay = ShelfOverlay::PauseEmulationSettings { row: 0 },
+                                96 => {
+                                    let linked=self.game.as_ref().is_some_and(GameSession::linked);
+                                    self.overlay=match row {
+                                        0 => ShelfOverlay::PauseScreenSettings { row: 0 },
+                                        1 if !linked => ShelfOverlay::PauseGameplaySettings { row: 0 },
+                                        2 if !linked => ShelfOverlay::PauseEmulationSettings { row: 0 },
+                                        3 if !linked => {self.reset_game_emulation();
+                                            ShelfOverlay::PauseSettings { row }},
+                                        _ => ShelfOverlay::PauseSettings { row },
+                                    };
+                                },
                                 97 => self.overlay = ShelfOverlay::GameMenu {
                                     row: pause_rows(self.game.as_ref().is_some_and(GameSession::linked),
                                         self.game.as_ref().is_some_and(GameSession::requires_relaunch))
@@ -2213,13 +2228,30 @@ impl Engine {
                                 },
                                 _ => {}
                             },
+                            ShelfOverlay::PauseScreenSettings { row } => match code {
+                                19 | 20 => self.overlay = ShelfOverlay::PauseScreenSettings {
+                                    row: move_menu_row(row,code,self.pause_screen_rows().len()),
+                                },
+                                21 | 22 => if let Some(key)=self.pause_screen_key(row) {
+                                    self.change_game_screen_or_gameplay(key,code==22);
+                                },
+                                97 => self.overlay = ShelfOverlay::PauseSettings { row: 0 },
+                                _ => {}
+                            },
+                            ShelfOverlay::PauseGameplaySettings { row } => match code {
+                                19 | 20 => self.overlay = ShelfOverlay::PauseGameplaySettings {
+                                    row: move_menu_row(row,code,6),
+                                },
+                                21 | 22 => self.change_game_screen_or_gameplay(row+4,code==22),
+                                97 => self.overlay = ShelfOverlay::PauseSettings { row: 1 },
+                                _ => {}
+                            },
                             ShelfOverlay::PauseEmulationSettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::PauseEmulationSettings {
-                                    row: move_menu_row(row, code, 4),
+                                    row: move_menu_row(row, code, 3),
                                 },
-                                21 | 22 if row < 3 => self.change_game_emulation(row + 10, code == 22),
-                                96 if row == 3 => self.reset_game_emulation(),
-                                97 => self.overlay = ShelfOverlay::PauseSettings { row: 0 },
+                                21 | 22 => self.change_game_emulation(row + 10, code == 22),
+                                97 => self.overlay = ShelfOverlay::PauseSettings { row: 2 },
                                 _ => {}
                             },
                             _ => {}
@@ -2555,7 +2587,8 @@ impl Engine {
                                 }
                             },
                             ShelfOverlay::GameMenu { .. } | ShelfOverlay::Multiplayer |
-                            ShelfOverlay::PauseSettings { .. } | ShelfOverlay::PauseEmulationSettings { .. } |
+                            ShelfOverlay::PauseSettings { .. } | ShelfOverlay::PauseScreenSettings { .. } |
+                            ShelfOverlay::PauseGameplaySettings { .. } | ShelfOverlay::PauseEmulationSettings { .. } |
                             ShelfOverlay::States | ShelfOverlay::None => {}
                         }
                     }
@@ -2926,6 +2959,41 @@ impl Engine {
         }
     }
 
+    /// Merge this ROM+core's optional visual/gameplay overrides on top of
+    /// globally persisted Settings without mutating them or another ROM.
+    fn game_settings(&self) -> crate::settings::Settings {
+        let mut effective = self.settings.clone();
+        if let Some(profile) = self.game_emulation {
+            profile.apply_visual_and_gameplay(&mut effective, self.current_cart_platform());
+        }
+        effective
+    }
+
+    fn pause_screen_rows(&self) -> &'static [usize] {
+        match self.current_cart_platform() {
+            Platform::Gba => &[34,29],
+            Platform::Gb => &[35,29,36],
+            Platform::Gbc => &[35,29],
+        }
+    }
+    fn pause_screen_key(&self, row: usize) -> Option<usize> {
+        match (self.current_cart_platform(),row) {
+            (Platform::Gba,0) => Some(0),
+            (Platform::Gb | Platform::Gbc,0) => Some(1),
+            (_,1) => Some(2),
+            (Platform::Gb,2) => Some(3),
+            _ => None,
+        }
+    }
+    fn pause_settings_rows(&self) -> &'static [usize] {
+        if self.game.as_ref().is_some_and(GameSession::linked) {
+            // Display-only settings cannot alter GBA Link/RFU state.
+            &[32]
+        } else {
+            &[32,33,49,57]
+        }
+    }
+
     fn current_emulation(&self) -> EmulationProfile {
         let mut profile = self.game_emulation
             .unwrap_or_else(|| EmulationProfile::from_settings(&self.settings));
@@ -2961,6 +3029,52 @@ impl Engine {
                 .and_then(|(root, _)| EmulationProfile::load(root, uri, core))
         });
     }
+    fn change_game_screen_or_gameplay(&mut self, key: usize, right: bool) {
+        let Some(uri)=self.selected_rom_uri() else { return };
+        let core=self.selected_emulation_core();
+        let platform=self.current_cart_platform();
+        let linked=self.game.as_ref().is_some_and(GameSession::linked);
+        let relaunch=self.game.as_ref().is_some_and(GameSession::requires_relaunch);
+        // Shader and color-correction are display-only and safe while linked;
+        // never change input, save states, emulation speed or rewind in Link.
+        if relaunch || (linked && !matches!(key,0|1|2)) {
+            set_message("Gameplay changes are disabled during Multiplayer".into());
+            return;
+        }
+        // This method is only called from the paused game, not the carousel.
+        let mut profile=self.game_emulation
+            .unwrap_or_else(|| EmulationProfile::from_settings(&self.settings));
+        if !profile.change_visual_and_gameplay(&self.settings,platform,key,right) { return; }
+        if let Some((root,_))=PATHS.lock().unwrap_or_else(|e|e.into_inner()).as_ref() {
+            if let Err(error)=profile.save(root,&uri,core) {
+                set_message(format!("Cannot save game settings: {error}"));
+                return;
+            }
+        } else { return; }
+        self.game_emulation=Some(profile);
+        let view=self.game_settings();
+        if matches!(key,0|1) {
+            let shader=if platform==Platform::Gba { view.shader_gba } else { view.shader_gb };
+            self.gpu.set_screen_effect(shader.effect());
+        }
+        if key==2 {
+            if let Some(session)=self.game.as_mut() {
+                session.set_colour_correction(view.colour_correction);
+            }
+        }
+        if key==3 {
+            if let Some(session)=self.game.as_mut() {
+                session.set_gb_palette_mode(view.gb_palettes,view.palette_name());
+            }
+        }
+        if key==5 {
+            FF_AUDIO_ENABLED.store(view.ff_sound,Ordering::Release);
+            AUDIO.lock().unwrap_or_else(|e|e.into_inner()).clear();
+        }
+        // No stale FF, rewind or frame debt after an option changes.
+        if (4..=9).contains(&key) { self.reset_time_controls(); }
+    }
+
     fn change_game_emulation(&mut self, key: usize, right: bool) {
         if self.game.as_ref().is_some_and(|game|game.linked() || game.requires_relaunch()) {
             // In a linked session, do not alter the effective frame cadence
@@ -3105,21 +3219,26 @@ impl Engine {
         let profile = if matches!(self.overlay, ShelfOverlay::PauseEmulationSettings { .. }) {
             self.current_emulation()
         } else { EmulationProfile::from_settings(&self.settings) };
+        let scoped = if matches!(self.overlay,
+            ShelfOverlay::PauseScreenSettings { .. } |
+            ShelfOverlay::PauseGameplaySettings { .. }) {
+            self.game_settings()
+        } else { self.settings.clone() };
         let shader = |shader| match shader {
             Shader::Off => 5, Shader::Lcd3x => 6, Shader::Grid => 7,
             Shader::Dot => 8, Shader::Simpletex => 9,
         };
         match key {
-            0 => shader(self.settings.shader_gba),
-            1 => shader(self.settings.shader_gb),
-            2 => if self.settings.colour_correction { 4 } else { 5 },
-            3 => if self.settings.gb_palettes { 4 } else { 5 },
-            4 => match self.settings.ff_speed { 2 => 0, 3 => 1, 4 => 2, _ => 3 },
-            5 => if self.settings.ff_sound { 4 } else { 5 },
-            6 => if self.settings.rewind { 4 } else { 5 },
-            7 => if self.settings.turbo { 15 } else { 16 },
-            8 => if self.settings.rumble { 4 } else { 5 },
-            9 => if self.settings.eject_save { 4 } else { 5 },
+            0 => shader(scoped.shader_gba),
+            1 => shader(scoped.shader_gb),
+            2 => if scoped.colour_correction { 4 } else { 5 },
+            3 => if scoped.gb_palettes { 4 } else { 5 },
+            4 => match scoped.ff_speed { 2 => 0, 3 => 1, 4 => 2, _ => 3 },
+            5 => if scoped.ff_sound { 4 } else { 5 },
+            6 => if scoped.rewind { 4 } else { 5 },
+            7 => if scoped.turbo { 15 } else { 16 },
+            8 => if scoped.rumble { 4 } else { 5 },
+            9 => if scoped.eject_save { 4 } else { 5 },
             10 => if profile.show_fps { 4 } else { 5 },
             11 => if profile.display_sync_pacing { 14 }
                 else if profile.responsive_pacing { 11 } else { 10 },
@@ -3342,7 +3461,7 @@ impl Engine {
                 self.draw_setting_values(row, &[10, 11, 12], out);
             }
             ShelfOverlay::PauseEmulationSettings { row } => {
-                self.draw_original_style_menu(50, &[51, 52, 55, 57], row, out);
+                self.draw_original_style_menu(50, &[51, 52, 55], row, out);
                 // Identify the selected core without changing Slot's menu
                 // layout or existing keycap typography.
                 let index = if self.selected_emulation_core() == Core::Gpsp { 1 } else { 0 };
@@ -3401,7 +3520,18 @@ impl Engine {
                 self.draw_original_style_menu(19, &indices, row, out);
             }
             ShelfOverlay::PauseSettings { row } => {
-                self.draw_original_style_menu(26, &[49], row, out);
+                self.draw_original_style_menu(26, self.pause_settings_rows(), row, out);
+            }
+            ShelfOverlay::PauseScreenSettings { row } => {
+                let items=self.pause_screen_rows();
+                self.draw_original_style_menu(32, items, row, out);
+                let keys: Vec<usize>=(0..items.len())
+                    .filter_map(|index|self.pause_screen_key(index)).collect();
+                self.draw_setting_values(row,&keys,out);
+            }
+            ShelfOverlay::PauseGameplaySettings { row } => {
+                self.draw_original_style_menu(33, &[27,28,37,38,30,39], row, out);
+                self.draw_setting_values(row,&[4,5,6,7,8,9],out);
             }
             ShelfOverlay::Multiplayer => self.draw_multiplayer(out),
             ShelfOverlay::Core => {
@@ -3637,14 +3767,17 @@ impl Engine {
             ShelfOverlay::GameMenu { row } => (3u8, row, pause_rows(
                 self.game.as_ref().is_some_and(GameSession::linked),
                 self.game.as_ref().is_some_and(GameSession::requires_relaunch)).len()),
-            ShelfOverlay::PauseSettings { row } => (13u8, row, 1usize),
+            ShelfOverlay::PauseSettings { row } => (13u8, row, self.pause_settings_rows().len()),
+            ShelfOverlay::PauseScreenSettings { row } =>
+                (14u8, row, self.pause_screen_rows().len()),
+            ShelfOverlay::PauseGameplaySettings { row } => (15u8, row, 6usize),
             ShelfOverlay::Multiplayer => (11u8, 0, 0usize),
             ShelfOverlay::Settings { row } => (4u8, row, 5usize),
             ShelfOverlay::GeneralSettings { row } =>
                 (12u8, row, if self.show_general_tint() { 3 } else { 2 }),
             ShelfOverlay::InterfaceSettings { row } => (10u8, row, if self.custom_wallpaper_present { 5 } else { 4 }),
             ShelfOverlay::EmulationSettings { row } => (8u8, row, 3usize),
-            ShelfOverlay::PauseEmulationSettings { row } => (9u8, row, 4usize),
+            ShelfOverlay::PauseEmulationSettings { row } => (9u8, row, 3usize),
             ShelfOverlay::ScreenSettings { row } => (5u8, row, 4usize),
             ShelfOverlay::GameplaySettings { row } => (6u8, row, 6usize),
             _ => (0, 0, 0),
@@ -3785,7 +3918,8 @@ impl Engine {
         }
         if self.game.is_some() && matches!(self.overlay,
             ShelfOverlay::GameMenu { .. } | ShelfOverlay::Multiplayer |
-            ShelfOverlay::PauseSettings { .. } | ShelfOverlay::PauseEmulationSettings { .. }) {
+            ShelfOverlay::PauseSettings { .. } | ShelfOverlay::PauseScreenSettings { .. } |
+            ShelfOverlay::PauseGameplaySettings { .. } | ShelfOverlay::PauseEmulationSettings { .. }) {
             // Coordinate the pause with the remote game. Without this
             // the other Cable peer times out and gpSP RFU can drift.
             if let Some(game) = self.game.as_mut() { game.set_link_paused(true); }
