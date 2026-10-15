@@ -415,47 +415,32 @@ impl Shelf {
             }
             let x = x + shake;
             let y = foot_y(ch as f32) - h;
-            if alpha < 1.0 {
-                let backing = match self.shells.get(i).copied().flatten() {
-                    None => self.shadow,
-                    Some(GbShell::Notched) => self.gb_shadow,
-                    Some(GbShell::Rounded) => self.gbc_shadow,
-                };
+            let backing = match self.shells.get(i).copied().flatten() {
+                None => self.shadow,
+                Some(GbShell::Notched) => self.gb_shadow,
+                Some(GbShell::Rounded) => self.gbc_shadow,
+            };
+            if alpha < 1.0 && self.face(i).is_some() {
                 if let Some(tex) = backing {
                     out.push(Draw::Tex {
-                        x,
-                        y,
-                        w,
-                        h,
-                        tex,
-                        alpha: recede_alpha(alpha),
+                        x, y, w, h, tex, alpha: recede_alpha(alpha),
                     });
                 }
             }
+            // Never show the old bright solid-colour placeholder. A cartridge
+            // awaiting its PNG uses the original GBA/GB/GBC silhouette instead.
             out.push(match self.face(i) {
                 Some(tex) => Draw::Tex {
-                    x,
-                    y,
-                    w,
-                    h,
-                    tex,
-                    alpha: alpha * dim,
+                    x, y, w, h, tex, alpha: alpha * dim,
                 },
-                None => {
-                    let c = label_colour(&label_text(cart));
-                    Draw::Rect {
-                        x,
-                        y,
-                        w,
-                        h,
-                        colour: [
-                            c[0] as f32 / 255.0,
-                            c[1] as f32 / 255.0,
-                            c[2] as f32 / 255.0,
-                            alpha * dim,
-                        ],
-                    }
-                }
+                None => match backing {
+                    Some(tex) => Draw::Tex {
+                        x, y, w, h, tex, alpha: alpha * dim,
+                    },
+                    None => Draw::Rect {
+                        x, y, w, h, colour: [0.14, 0.14, 0.16, alpha * dim],
+                    },
+                },
             });
             // Faithful original v1.7 pixel-star with label-relative geometry.
             if let (Some(true), Some((tex, sw, sh))) = (self.starred.get(i), self.star) {
