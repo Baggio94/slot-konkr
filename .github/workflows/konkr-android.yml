@@ -89,10 +89,8 @@ jobs:
         run: cargo test -p slot-achievements -p slot-retro
       - name: Test KONKR 3:2 scaling
         run: cargo test -p slot-gfx --no-default-features --test konkr
-      - name: Test original Slot v1.7 PNG graphics and wallpaper
-        run: |
-          cargo test -p slot-ui --test cart_material --test upstream_v17_assets
-          cargo test -p slot --test wallpaper
+      - name: Test original Slot v1.7 PNG and cartridge graphics
+        run: cargo test -p slot-ui --test cart_material --test upstream_v17_assets
       - name: Export authentic Slot keycap graphics for Android Apps
         run: |
           cargo run --locked -p slot-ui --example export_apps_legend -- android/app/src/main/assets/apps_controls
@@ -399,7 +397,7 @@ jobs:
   # Linux host, not pass a test that silently skips when vendor/ is empty.
   # The Android arm64 core is separately built in debug-apk above.
   a6-a1-mgba-continuity:
-    if: github.ref == 'refs/heads/feat/konkr-multiplayer-lab' || startsWith(github.ref, 'refs/tags/konkr-v') || startsWith(github.ref, 'refs/heads/release/konkr-android-')
+    if: github.ref == 'refs/heads/feat/konkr-multiplayer-lab' || startsWith(github.ref, 'refs/tags/konkr-v') || startsWith(github.ref, 'refs/heads/release/konkr-android-') || github.ref == 'refs/heads/feat/konkr-upstream-1.7-visual-u1'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -413,6 +411,9 @@ jobs:
             build-essential cmake pkg-config \
             libasound2-dev libudev-dev \
             libx11-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+      - name: Verify original v1.7 wallpaper no-repeat deck
+        if: github.ref == 'refs/heads/feat/konkr-upstream-1.7-visual-u1'
+        run: cargo test -p slot --test wallpaper
       - name: Build exact pinned patched mGBA for native execution
         run: |
           mkdir -p vendor
