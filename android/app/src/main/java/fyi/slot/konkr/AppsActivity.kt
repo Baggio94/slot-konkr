@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -66,8 +67,15 @@ class AppsActivity : Activity() {
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density + .5f).toInt()
 
+    // TextView SP depends on Android's font scale and screen density. Slot's
+    // artwork is based on a 720px-wide logical viewport instead: use that
+    // identical pixel scale on KONKR and the Mac AVD.
+    private fun slotSize(label: TextView, logicalPx: Int): TextView = label.apply {
+        setTextSize(TypedValue.COMPLEX_UNIT_PX, SlotUi.menuPixel(this@AppsActivity, logicalPx).toFloat())
+    }
     private fun text(label: String, size: Float, bright: Boolean = true) =
-        SlotUi.label(this, label, size, if (bright) SlotUi.ink else SlotUi.muted, upper = false)
+        slotSize(SlotUi.label(this, label, size,
+            if (bright) SlotUi.ink else SlotUi.muted, upper = false), size.toInt())
 
     private fun plate(color: Int, selected: Boolean = false) = GradientDrawable().apply {
         setColor(color)
@@ -119,13 +127,15 @@ class AppsActivity : Activity() {
         }
         header.addView(SlotUi.menuHeading(this, "APPS"),
             LinearLayout.LayoutParams(0, SlotUi.menuPixel(this, 32), 1f))
-        homeButton = SlotUi.label(this, "Set as Home", 13f).apply {
+        homeButton = slotSize(SlotUi.label(this, "Set as Home", 13f), 13).apply {
             gravity = Gravity.CENTER
-            // Optical centering for Slot's condensed label font: its glyphs
-            // sit slightly below the TextView's geometric centre.
-            // Preserve the same overall padding and button border, but lift
-            // the lettering without translating the clickable surface.
-            setPadding(dp(15), dp(5), dp(15), dp(9))
+            isSingleLine = true
+            // Pixel units from the same 720x480 Slot canvas as the button's
+            // fixed-height slot frame. Insets remain symmetric at any density.
+            setPadding(SlotUi.menuPixel(this@AppsActivity, 12),
+                SlotUi.menuPixel(this@AppsActivity, 4),
+                SlotUi.menuPixel(this@AppsActivity, 12),
+                SlotUi.menuPixel(this@AppsActivity, 6))
             isFocusable = true
             isClickable = true
             contentDescription = "Choose the default home launcher"
