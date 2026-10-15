@@ -6,11 +6,15 @@ use std::sync::{mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError}, 
 use std::thread;
 
 use slot_store::Cart;
-use slot_ui::{cart_face_with_material, CartFace};
+use slot_ui::{cart_face_with_material, cart_face, cart_interior, cart_backing,
+    gb_shell_of, is_clear, CartFace};
 
 type Key = (usize, usize);
 type Job = (Key, Cart);
-type ResultFace = (Key, CartFace);
+/// Three source-faithful clear-cart textures for a *selected* cartridge:
+/// original back, PCB, translucent front/label. Side carts keep one face.
+pub(crate) type Layers = [CartFace; 3];
+type ResultFace = (Key, CartFace, Option<Layers>);
 
 pub(crate) struct CartRender {
     submit: SyncSender<Job>,
@@ -44,7 +48,18 @@ impl CartRender {
                         let (rgba, w, h) = slot_ui::native_rgba(
                             &original.rgba, original.w, original.h);
                         let pixels = CartFace { rgba, w, h };
-                        if sink.send((key, pixels)).is_err() { break }
+                        let layers = if is_clear(&cart) {
+                            let original = [
+                                cart_interior(&cart),
+                                cart_backing(gb_shell_of(&cart)),
+                                cart_face(&cart),
+                            ];
+                            Some(original.map(|face| {
+                                let (rgba,w,h)=slot_ui::native_rgba(&face.rgba,face.w,face.h);
+                                CartFace{rgba,w,h}
+                            }))
+                        } else {None};
+                        if sink.send((key,pixels,layers)).is_err() { break }
                     }
                 })
                 .map_err(|e| format!("Cannot start cartridge renderer: {e}"))?;
@@ -68,7 +83,8 @@ impl CartRender {
     pub(crate) fn ready(&mut self) -> Option<ResultFace> {
         loop {
             match self.finished.try_recv() {
-                Ok((key, face)) if self.pending.remove(&key) => return Some((key, face)),
+                Ok((key, face, layers)) if self.pending.remove(&key) =>
+                    return Some((key,face,layers)),
                 Ok(_) => continue,
                 Err(TryRecvError::Empty | TryRecvError::Disconnected) => return None,
             }
