@@ -92,6 +92,12 @@ internal class SlotModalDialog(
     }
     private val body = LinearLayout(activity).apply {
         orientation = LinearLayout.VERTICAL
+        // Match Slot's 37px list inset below its 32px raster title.
+        // Applied to the RetroAchievements login only.
+        if (title.equals("RETROACHIEVEMENTS", ignoreCase = true)) {
+            val inset = SlotUi.menuPixel(activity, 5)
+            setPadding(inset, 0, inset, 0)
+        }
     }
     private val scroll = ScrollView(activity).apply {
         isVerticalScrollBarEnabled = false
@@ -127,7 +133,7 @@ internal class SlotModalDialog(
             body.addView(SlotUi.label(activity, message, 15f, SlotUi.muted,
                 upper = false).apply {
                 setPadding(0, 0, 0, dp(14))
-                maxLines = 5
+                maxLines = if (title.equals("RETROACHIEVEMENTS", ignoreCase = true)) 1 else 5
             })
         }
         body.addView(errorText)
