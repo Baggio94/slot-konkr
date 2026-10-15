@@ -1,7 +1,8 @@
 use slot_gfx::{Draw, TexId, OUT_H, OUT_W};
 use slot_power::Battery;
 
-use crate::battery::{draw_gauge, GAUGE_H};
+use crate::battery::{draw_gauge_with_ink, GAUGE_H};
+use crate::hud::HUD_INK;
 use crate::plate::HINT_H;
 use crate::slot_chrome::MOUTH_H;
 
@@ -30,9 +31,19 @@ pub fn draw_footer(
     clock: Printed,
     out: &mut Vec<Draw>,
 ) {
+    draw_footer_with_ink(battery,percent,bolt,clock,HUD_INK,out)
+}
+/// Slot 1.7's shelf footer uses black ink when light appearance is active.
+/// Game HUD colours and menu chrome remain unmodified.
+pub fn draw_footer_with_ink(
+    battery: Option<Battery>,percent: Printed,bolt: Option<TexId>,
+    clock: Printed,ink: [u8;3],out:&mut Vec<Draw>,
+) {
     let y = FOOTER_Y + (HINT_H as f32 - GAUGE_H) / 2.0;
-    draw_gauge(FOOTER_MARGIN, y, battery, percent, bolt, out);
-    printed(OUT_W as f32 - FOOTER_MARGIN - clock.w as f32, clock, out);
+    let c=[ink[0] as f32/255.0,ink[1] as f32/255.0,
+        ink[2] as f32/255.0,1.0];
+    draw_gauge_with_ink(FOOTER_MARGIN,y,battery,percent,bolt,c,out);
+    printed(OUT_W as f32 - FOOTER_MARGIN - clock.w as f32,clock,out);
 }
 
 pub(crate) fn draw_printed(x: f32, y: f32, p: Printed, out: &mut Vec<Draw>) {
