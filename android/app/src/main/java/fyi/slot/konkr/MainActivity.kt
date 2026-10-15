@@ -1605,8 +1605,7 @@ class MainActivity : Activity() {
         val login = SlotModalDialog(
             this,
             "RETROACHIEVEMENTS",
-            "Sign in securely over HTTPS. Your password is not stored. " +
-                "GBA achievements use Casual mode.",
+            "Sign in securely. Achievements use Casual mode.",
             onDismiss = { nativeExternalReturn() }
         )
         val username = login.addInput("USERNAME", "RetroAchievements username")
