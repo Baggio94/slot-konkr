@@ -23,7 +23,7 @@ pub(crate) struct CartRender {
     pending: HashSet<WorkKey>,
     // A rebuilt Recents shelf may reuse index 0 for a different game.
     // Worker results from the old generation must NEVER paint that cartridge.
-    epochs: [u64; 4],
+    epochs: [u64; 5],
 }
 
 impl CartRender {
@@ -73,7 +73,7 @@ impl CartRender {
                 })
                 .map_err(|e| format!("Cannot start cartridge renderer: {e}"))?;
         }
-        Ok(Self { submit, finished, pending: HashSet::new(), epochs: [0; 4] })
+        Ok(Self { submit, finished, pending: HashSet::new(), epochs: [0; 5] })
     }
 
     pub(crate) fn queued(&self, key: Key) -> bool {
@@ -116,11 +116,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn favorites_is_a_real_render_rack_and_discards_stale_results_on_reorder() {
+        let (submit, jobs) = mpsc::sync_channel(3);
+        let (completed, finished) = mpsc::channel();
+        let mut renderer = CartRender {
+            submit, finished, pending: HashSet::new(), epochs: [0; 5],
+        };
+        // A fresh fifth rack must schedule work, rather than leaving
+        // fallback label-colour rectangles visible forever.
+        let favorite = slot_store::Cart {
+            platform: slot_store::Platform::Gba,
+            stem: "Tetris".into(),
+            title: String::new(), code: String::new(),
+            rom: std::path::PathBuf::from("content://roms/tetris.gba"),
+            label: None, shell: None,
+        };
+        renderer.request((4, 0), &favorite, false);
+        assert!(renderer.queued((4, 0)));
+        let (((key, epoch), _, _)) = jobs.try_recv().expect("FAVORITES job");
+        assert_eq!(key, (4, 0));
+        assert_eq!(epoch, 0);
+        renderer.invalidate_shelf(4);
+        assert!(!renderer.queued((4, 0)));
+        renderer.request((4, 0), &favorite, false);
+        assert!(renderer.queued((4, 0)));
+        let (((new_key, new_epoch), _, _)) = jobs.try_recv().expect("new FAVORITES job");
+        assert_eq!((new_key,new_epoch), ((4,0),1));
+        let face = || CartFace { rgba: vec![255; 4], w: 1, h: 1 };
+        completed.send((((4,0),0),face(),None)).unwrap();
+        completed.send((((4,0),1),face(),None)).unwrap();
+        assert_eq!(renderer.ready().map(|result|result.0),Some((4,0)));
+        assert!(renderer.ready().is_none());
+        assert!(!renderer.queued((4,0)));
+    }
+
+    #[test]
     fn rebuilding_recents_rejects_an_old_worker_face_with_same_index() {
         let (submit, _jobs) = mpsc::sync_channel(1);
         let (completed, finished) = mpsc::channel();
         let mut renderer = CartRender {
-            submit, finished, pending: HashSet::new(), epochs: [0; 4],
+            submit, finished, pending: HashSet::new(), epochs: [0; 5],
         };
         renderer.pending.insert(((3, 0), 0));
         renderer.invalidate_shelf(3);
