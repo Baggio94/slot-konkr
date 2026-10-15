@@ -22,6 +22,8 @@ import java.util.Locale
  */
 internal object SlotUi {
     val background: Int = Color.rgb(23, 22, 25)
+    // The same dark opening palette used for native Library / Settings.
+    val menuBackground: Int = Color.rgb(8, 8, 11)
     val surface: Int = Color.rgb(37, 36, 43)
     val selected: Int = Color.rgb(68, 66, 77)
     val ink: Int = Color.rgb(246, 244, 239)
@@ -63,6 +65,13 @@ internal object SlotUi {
         setTextColor(color)
         gravity = Gravity.CENTER_VERTICAL
     }
+
+    /** Muted upper-left native Settings heading shared by Android screens. */
+    fun menuHeading(context: Context, title: String): TextView =
+        label(context, title, 17f, muted).apply {
+            letterSpacing = .11f
+            gravity = Gravity.CENTER_VERTICAL
+        }
 
     fun button(context: Context, value: String, onClick: () -> Unit): TextView =
         label(context, value, 13f).apply {

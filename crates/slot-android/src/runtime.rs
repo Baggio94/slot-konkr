@@ -457,8 +457,8 @@ const MENU_TEXT: [&str; 81] = [
     "",                                 // 76 retired: no middle-page helper text
     "",                                 // 77 retired: upstream shows A OK
     "Eject to play solo",               // 78
-    "Share Saves: OFF",                  // 79
-    "Share Saves: ON",                   // 80
+    "Share mGBA/gpSP Saves",            // 79
+    "",                                  // 80 retired: value rendered at right
 ];
 
 struct Engine {
@@ -2235,6 +2235,12 @@ impl Engine {
                                     let next = if code == 19 { (row + 5) % 6 } else { (row + 1) % 6 };
                                     self.overlay = ShelfOverlay::Library { row: next };
                                 }
+                                // Identical left/right + A toggle to Settings.
+                                // Keep the selected row and refresh value in place.
+                                21 | 22 | 96 if row == 4 => {
+                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
+                                        .push_back(17);
+                                }
                                 96 => match row {
                                     0..=5 => {
                                         // ROM, BIOS, SRAM root, State root,
@@ -2887,6 +2893,28 @@ impl Engine {
         }
     }
 
+    /// Exact Settings ON/OFF texture and carets on Library row 4.
+    fn draw_library_share_value(&self, row: usize, out: &mut Vec<Draw>) {
+        let which = if SHARE_SAVES_ENABLED.load(Ordering::Acquire) { 4 } else { 5 };
+        let (tex, width, height) = self.setting_values[which];
+        let y = settings_row_top(6) + 4.0 * QUICK_PITCH + 8.0;
+        let scale = 0.79f32;
+        let w = width as f32 * scale;
+        let right = OUT_W as f32 - 34.0;
+        let selected = row == 4;
+        let x = right - w - if selected { 22.0 } else { 0.0 };
+        out.push(Draw::Tex { x, y, w, h: height as f32 * scale, tex,
+            alpha: if selected { 1.0 } else { 0.62 } });
+        if selected {
+            let (left, lw, lh) = self.setting_carets[0];
+            let (right_tex, rw, rh) = self.setting_carets[1];
+            out.push(Draw::Tex { x: x - lw as f32 - 8.0, y,
+                w: lw as f32, h: lh as f32, tex: left, alpha: 1.0 });
+            out.push(Draw::Tex { x: right - rw as f32, y,
+                w: rw as f32, h: rh as f32, tex: right_tex, alpha: 1.0 });
+        }
+    }
+
     fn draw_setting_values(&self, row: usize, keys: &[usize], out: &mut Vec<Draw>) {
         let top = settings_row_top(keys.len());
         for (index, key) in keys.iter().copied().enumerate() {
@@ -3026,8 +3054,8 @@ impl Engine {
                 self.draw_original_style_menu(0, &[1, 2, 3, 48, 25, 31], row, out);
             }
             ShelfOverlay::Library { row } => {
-                let sharing = if SHARE_SAVES_ENABLED.load(Ordering::Acquire) { 80 } else { 79 };
-                self.draw_original_style_menu(5, &[6, 24, 7, 8, sharing, 9], row, out);
+                self.draw_original_style_menu(5, &[6, 24, 7, 8, 79, 9], row, out);
+                self.draw_library_share_value(row, out);
             }
             ShelfOverlay::Settings { row } => {
                 self.draw_original_style_menu(26, &[32, 33, 49, 58], row, out);

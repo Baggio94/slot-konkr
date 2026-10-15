@@ -123,11 +123,12 @@ internal class RaPanelDialog(
     fun show() {
         val root = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(37), dp(18), dp(37), dp(15))
-            setBackgroundColor(SlotUi.background)
+            setPadding(dp(32), dp(21), dp(32), dp(12))
+            setBackgroundColor(SlotUi.menuBackground)
         }
-        root.addView(text("RETROACHIEVEMENTS", 23f), LinearLayout.LayoutParams(-1, dp(43)))
-        root.addView(separator(), LinearLayout.LayoutParams(-1, dp(1)))
+        root.addView(SlotUi.menuHeading(activity, "RETROACHIEVEMENTS"),
+            LinearLayout.LayoutParams(-1, dp(54)))
+        root.addView(View(activity), LinearLayout.LayoutParams(-1, dp(10)))
         scroll = ScrollView(activity).apply {
             isFillViewport = false
             isFocusable = false
@@ -174,7 +175,7 @@ internal class RaPanelDialog(
         dialog.show()
         dialog.window?.apply {
             setWindowAnimations(R.style.SlotWindowAnimation)
-            setBackgroundDrawable(ColorDrawable(Color.rgb(23, 22, 25)))
+            setBackgroundDrawable(ColorDrawable(SlotUi.menuBackground))
             addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
             setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             decorView.systemUiVisibility = (

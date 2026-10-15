@@ -105,8 +105,8 @@ class AppsActivity : Activity() {
         // main thread before the first Apps frame can be presented.
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(SlotUi.background)
-            setPadding(dp(22), dp(10), dp(22), dp(4))
+            setBackgroundColor(SlotUi.menuBackground)
+            setPadding(dp(22), dp(21), dp(22), dp(4))
             isFocusableInTouchMode = true
         }
         setContentView(root)
@@ -115,7 +115,8 @@ class AppsActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        header.addView(text("APPS", 19f), LinearLayout.LayoutParams(0, dp(48), 1f))
+        header.addView(SlotUi.menuHeading(this, "APPS"),
+            LinearLayout.LayoutParams(0, dp(54), 1f))
         homeButton = SlotUi.label(this, "Set as Home", 13f).apply {
             gravity = Gravity.CENTER
             setPadding(dp(15), dp(7), dp(15), dp(7))
@@ -126,9 +127,8 @@ class AppsActivity : Activity() {
         }
         header.addView(homeButton, LinearLayout.LayoutParams(-2, dp(38)))
         root.addView(header)
-        root.addView(View(this).apply {
-            setBackgroundColor(SlotUi.rule)
-        }, LinearLayout.LayoutParams(-1, dp(1)))
+        // Match Slot's breathing room below the subdued Settings heading.
+        root.addView(View(this), LinearLayout.LayoutParams(-1, dp(10)))
 
         grid = GridView(this).apply {
             numColumns = COLUMNS
