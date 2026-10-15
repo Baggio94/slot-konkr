@@ -584,6 +584,15 @@ struct Engine {
     platform_shown_at: Option<Instant>,
 }
 
+/// The upstream wallpaper.deck expects Config/ to exist on an SD card.
+/// Android's fresh app-private filesDir does not necessarily contain it yet.
+fn pick_wallpaper_android(root: &Path) -> Option<PathBuf> {
+    if let Err(error) = std::fs::create_dir_all(root.join("Config")) {
+        eprintln!("slot-konkr: cannot initialize wallpaper deck: {error}");
+    }
+    crate::wallpaper::pick(root, 0)
+}
+
 impl Engine {
     fn new(library_version: u64, library: Option<&[RomEntry]>) -> Result<Self, String> {
         let size = (960, 640);
@@ -602,7 +611,7 @@ impl Engine {
         let custom_wallpaper_present = visuals_root.as_deref()
             .is_some_and(|root| root.join("Wallpapers/user.png").is_file());
         let wallpaper_texture = visuals_root.as_deref()
-            .and_then(|root| crate::wallpaper::pick(root, 0))
+            .and_then(|root| pick_wallpaper_android(root))
             .as_deref().and_then(slot_ui::wallpaper_face)
             .or_else(|| slot_ui::default_background().map(|rgba| rgba.to_vec()))
             .map(|rgba| gpu.create_texture(OUT_W, OUT_H, &rgba));
@@ -1624,7 +1633,7 @@ impl Engine {
                             self.overlay = ShelfOverlay::InterfaceSettings { row: 3 };
                         }
                     }
-                    let wallpaper = crate::wallpaper::pick(&root, 0)
+                    let wallpaper = pick_wallpaper_android(&root)
                         .as_deref().and_then(slot_ui::wallpaper_face);
                     self.wallpaper_texture = wallpaper.or_else(||
                     slot_ui::default_background().map(|rgba| rgba.to_vec())).map(|rgba| {
