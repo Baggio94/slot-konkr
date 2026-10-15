@@ -389,7 +389,7 @@ jobs:
           grep -F 'window.AndroidStudio && selected' android/app/src/main/assets/studio/studio.js
           grep -F 'session.carts.find((c) => c.slotId === source.selectedKey)' android/app/src/main/assets/studio/studio.js
           grep -F "window.AndroidStudio ? new URL('art/', location.href).href" android/app/src/main/assets/studio/studio.js
-          grep -F 'async writeLabel(platform, stem, bytes, replace)' android/app/src/main/assets/studio/android-card.js
+          grep -F 'async write(platform, stem, bytes, replace = false)' android/app/src/main/assets/studio/android-card.js
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt" dump badging "$APK" | tee "$RUNNER_TEMP/studio-v2-badging.txt"
           grep -F "package: name='fyi.slot.konkr' versionCode='95'" "$RUNNER_TEMP/studio-v2-badging.txt"
           grep -F "versionName='0.1.0-rc.2-studio-v2-qa'" "$RUNNER_TEMP/studio-v2-badging.txt"
