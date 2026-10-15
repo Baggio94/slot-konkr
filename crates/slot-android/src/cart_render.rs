@@ -198,6 +198,42 @@ mod tests {
     }
 
     #[test]
+    fn fast_system_switch_cancels_old_prefetch_and_promotes_active_cart() {
+        let work=Arc::new((Mutex::new(WorkQueue::default()),Condvar::new()));
+        let (_complete,finished)=mpsc::channel::<ResultFace>();
+        let mut renderer=CartRender {
+            work:work.clone(), finished, pending:HashSet::new(),
+            wanted:Vec::new(),epochs:[0;5],
+        };
+        let cart=slot_store::Cart {
+            platform:slot_store::Platform::Gba, stem:"Tetris".into(),
+            title:String::new(),code:String::new(),
+            rom:std::path::PathBuf::from("content://roms/tetris.gba"),
+            label:None,shell:None,
+        };
+        renderer.prioritize(&[(0,0),(0,1),(1,0)]);
+        renderer.request((0,0),&cart,false);
+        renderer.request((0,1),&cart,false);
+        renderer.request((1,0),&cart,false);
+        assert_eq!(work.0.lock().unwrap().jobs.len(),3);
+        // L1/R1 changes selected system while previous PNGs are still queued.
+        renderer.prioritize(&[(2,5),(1,0),(2,6)]);
+        assert!(!renderer.queued((0,0)));
+        assert!(!renderer.queued((0,1)));
+        assert!(renderer.queued((1,0)));
+        renderer.request((2,6),&cart,false);
+        renderer.request((2,5),&cart,false);
+        let queue=work.0.lock().unwrap();
+        let ids:Vec<_>=queue.jobs.iter().map(|job|job.0.0).collect();
+        assert_eq!(ids,vec![(2,5),(1,0),(2,6)]);
+        drop(queue);
+        // Reversing direction still keeps the current cart first.
+        renderer.prioritize(&[(2,6),(2,5)]);
+        let queue=work.0.lock().unwrap();
+        assert_eq!(queue.jobs.front().unwrap().0.0,(2,6));
+    }
+
+    #[test]
     fn rebuilding_recents_rejects_an_old_worker_face_with_same_index() {
         let work=Arc::new((Mutex::new(WorkQueue::default()),Condvar::new()));
         let (completed, finished) = mpsc::channel();
