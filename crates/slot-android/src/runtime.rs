@@ -524,6 +524,7 @@ struct Engine {
     emulation_core_labels: [(slot_gfx::TexId, u32, u32); 2],
     video_mode: VideoMode,
     wallpaper_texture: Option<slot_gfx::TexId>,
+    wallpaper_personal: bool,
     /// Live rear/front v1.7.0 slot textures. Always draw in proper depth order.
     slot_faces: Option<(slot_gfx::TexId, slot_gfx::TexId)>,
     custom_wallpaper_present: bool,
@@ -593,6 +594,35 @@ fn pick_wallpaper_android(root: &Path) -> Option<PathBuf> {
     crate::wallpaper::pick(root, 0)
 }
 
+/// Reuse Slot v1.7.0's exact wallpaper selector. Only Android app-private
+/// Wallpapers/ files are eligible: never access ROMs or external SAF paths.
+fn wallpaper_pixels(root: Option<&Path>, selection: &crate::settings::WallpaperPick)
+    -> (Option<Vec<u8>>, bool)
+{
+    use crate::settings::WallpaperPick;
+    let default = || slot_ui::default_background_native().map(|v|v.to_vec());
+    let personal = match (selection, root) {
+        (WallpaperPick::None, _) => return (None, false),
+        (WallpaperPick::Default, _) => return (default(), false),
+        (WallpaperPick::Blur, _) =>
+            return (slot_ui::blur_background_native().map(|v|v.to_vec()), false),
+        (WallpaperPick::File(name), Some(root)) => {
+            if crate::wallpaper::list(root).contains(name) {
+                Some(root.join("Wallpapers").join(name))
+            } else { None }
+        }
+        (WallpaperPick::Random, Some(root)) => pick_wallpaper_android(root),
+        _ => None,
+    };
+    if let Some(image) = personal.and_then(|p|slot_ui::wallpaper_face_native(&p)) {
+        (Some(image), true)
+    } else {
+        // Official Slot falls back to the bundled default for an empty random
+        // deck or a deleted file. Never silently mutate the saved selection.
+        (default(), false)
+    }
+}
+
 impl Engine {
     fn new(library_version: u64, library: Option<&[RomEntry]>) -> Result<Self, String> {
         let size = (960, 640);
@@ -610,11 +640,10 @@ impl Engine {
         }
         let custom_wallpaper_present = visuals_root.as_deref()
             .is_some_and(|root| root.join("Wallpapers/user.png").is_file());
-        let wallpaper_texture = visuals_root.as_deref()
-            .and_then(|root| pick_wallpaper_android(root))
-            .as_deref().and_then(slot_ui::wallpaper_face_native)
-            .or_else(|| slot_ui::default_background_native().map(|rgba| rgba.to_vec()))
-            .map(|rgba| gpu.create_texture(slot_ui::NATIVE_W, slot_ui::NATIVE_H, &rgba));
+        let (wallpaper_pixels, wallpaper_personal) =
+            wallpaper_pixels(visuals_root.as_deref(), &settings.wallpaper);
+        let wallpaper_texture = wallpaper_pixels.map(|rgba|
+            gpu.create_texture(slot_ui::NATIVE_W, slot_ui::NATIVE_H, &rgba));
         // Preserve existing Config/theme.txt custom colours as an opt-out.
         let custom_colours = visuals_root.as_deref()
             .is_some_and(|root| root.join("Config/theme.txt").exists());
@@ -899,6 +928,7 @@ impl Engine {
             emulation_core_labels,
             video_mode: VideoMode::Actual,
             wallpaper_texture,
+            wallpaper_personal,
             slot_faces,
             custom_wallpaper_present,
             setting_values,
@@ -1629,23 +1659,31 @@ impl Engine {
                     .as_ref().map(|(root, _)| root.clone());
                 if let Some(root) = root {
                     slot_ui::set_theme(slot_store::Theme::read(&root));
+                    let was_custom_wallpaper = self.custom_wallpaper_present;
                     self.custom_wallpaper_present = root.join("Wallpapers/user.png").is_file();
                     if let ShelfOverlay::InterfaceSettings { row } = self.overlay {
                         if !self.custom_wallpaper_present && row > 3 {
                             self.overlay = ShelfOverlay::InterfaceSettings { row: 3 };
                         }
                     }
-                    let wallpaper = pick_wallpaper_android(&root)
-                        .as_deref().and_then(slot_ui::wallpaper_face_native);
-                    self.wallpaper_texture = wallpaper.or_else(||
-                    slot_ui::default_background_native().map(|rgba| rgba.to_vec())).map(|rgba| {
-                        if let Some(tex) = self.wallpaper_texture {
-                            self.gpu.update_texture(tex, slot_ui::NATIVE_W, slot_ui::NATIVE_H, &rgba);
-                            tex
-                        } else {
-                            self.gpu.create_texture(slot_ui::NATIVE_W, slot_ui::NATIVE_H, &rgba)
+                    // A freshly imported user.png should appear immediately.
+                    // Explicit None selection is never overridden by import.
+                    if self.custom_wallpaper_present &&
+                        !was_custom_wallpaper &&
+                        self.settings.wallpaper != crate::settings::WallpaperPick::None {
+                        self.settings.wallpaper =
+                            crate::settings::WallpaperPick::File("user.png".into());
+                        self.persist_settings();
+                    }
+                    // A deleted custom image falls back to Default only if
+                    // it was the current selection.
+                    if let crate::settings::WallpaperPick::File(name) = &self.settings.wallpaper {
+                        if !crate::wallpaper::list(&root).contains(name) {
+                            self.settings.wallpaper = crate::settings::WallpaperPick::Default;
+                            self.persist_settings();
                         }
-                    });
+                    }
+                    self.reload_wallpaper(Some(&root));
                 }
             }
             Input::ReloadCartLabel { uri } => {
@@ -2878,6 +2916,40 @@ impl Engine {
         }
     }
 
+    fn reload_wallpaper(&mut self, root: Option<&Path>) {
+        let (image, personal) = wallpaper_pixels(root, &self.settings.wallpaper);
+        self.wallpaper_personal = personal;
+        if let Some(rgba) = image {
+            self.wallpaper_texture = Some(if let Some(tex) = self.wallpaper_texture {
+                self.gpu.update_texture(tex, slot_ui::NATIVE_W, slot_ui::NATIVE_H, &rgba);
+                tex
+            } else {
+                self.gpu.create_texture(slot_ui::NATIVE_W, slot_ui::NATIVE_H, &rgba)
+            });
+        }
+        // None deliberately leaves the texture allocated for quick reactivation
+        // but never draws it, avoiding repeated GL allocations on toggling.
+    }
+
+    fn cycle_wallpaper(&mut self, right: bool) {
+        let root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .as_ref().map(|(root,_)|root.clone());
+        let Some(root) = root.as_deref() else { return };
+        self.settings.wallpaper = self.settings.wallpaper.step(root, right);
+        self.reload_wallpaper(Some(root));
+        self.persist_settings();
+    }
+
+    fn cycle_wallpaper_tint(&mut self, right: bool) {
+        self.settings.wallpaper_tint=self.settings.wallpaper_tint.step(right);
+        self.persist_settings();
+    }
+
+    fn cycle_appearance(&mut self) {
+        self.settings.appearance=self.settings.appearance.toggle();
+        self.persist_settings();
+    }
+
     fn change_setting(&mut self, key: usize, right: bool) {
         if !self.settings.change(key, right) { return; }
         if key == 5 {
@@ -3822,8 +3894,15 @@ impl Engine {
             h: OUT_H as f32,
             colour: [0.085, 0.085, 0.093, 1.0],
         }];
-        // Exact upstream Slot wallpaper compositor, behind its cartridge shelf.
-        slot_ui::draw_backdrop(self.wallpaper_texture, &mut commands);
+        // Slot v1.7 carousel ground: None has no wallpaper; personal images
+        // receive only the selected Wallpaper Tint (never a fixed scrim).
+        let active_wallpaper = if self.settings.wallpaper ==
+            crate::settings::WallpaperPick::None { None }
+            else { self.wallpaper_texture };
+        let tint = if self.wallpaper_personal {
+            self.settings.wallpaper_tint.alpha()
+        } else { 0.0 };
+        slot_ui::draw_ground_tinted(active_wallpaper, tint, &mut commands);
         if self.progress == 0.0 {
             if let Some(picker) = self.picker {
                 let t = slot_ui::ease(picker.openness(self.born.elapsed().as_millis() as u64));
