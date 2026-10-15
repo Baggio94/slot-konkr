@@ -3,6 +3,7 @@
 //! Stage M1: display-only preview carts, not executable games.
 mod library;
 mod settings;
+mod recents;
 mod emulation;
 mod pokemon_flash;
 // Directly compile the original Cart Studio No-Intro DAT matching code and tests.

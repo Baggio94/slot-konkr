@@ -2,12 +2,12 @@ use std::path::PathBuf;
 use slot_store::{Cart, Platform};
 use slot_ui::{cart_face_with, cart_face_with_material, LABEL_X, LABEL_Y, LABEL_W, LABEL_H};
 
-fn cart() -> Cart {
+fn cartridge(code: &str, name: &str) -> Cart {
     Cart {
         platform: Platform::Gba,
-        stem: "Advance Wars 2 - Black Hole Rising (USA)".into(),
-        title: "Advance Wars 2".into(),
-        code: "AW2E".into(),
+        stem: name.into(),
+        title: name.into(),
+        code: code.into(),
         rom: PathBuf::new(),
         label: None,
         shell: None,
@@ -15,32 +15,66 @@ fn cart() -> Cart {
 }
 
 #[test]
-fn satin_finish_is_stable_and_preserves_original_slot_shape_and_label() {
-    let cart = cart();
-    let plain = cart_face_with(&cart, None);
-    let material = cart_face_with_material(&cart, None);
-    let material2 = cart_face_with_material(&cart, None);
-    assert_eq!((plain.w, plain.h), (material.w, material.h));
-    assert_eq!(material.rgba, material2.rgba, "material must never flicker");
-    let mut changes = 0usize;
-    let mut clearly_visible = 0usize;
-    for (old, sat) in plain.rgba.chunks_exact(4).zip(material.rgba.chunks_exact(4)) {
-        assert_eq!(old[3], sat[3], "upstream silhouette must remain identical");
-        for c in 0..3 {
-            let delta = (old[c] as i16 - sat[c] as i16).abs();
-            assert!(delta <= 27, "material shade must not distort original colours");
-            if delta >= 6 { clearly_visible += 1; }
-            if delta != 0 { changes += 1; }
+fn upstream_1_7_solid_shell_is_pixel_identical_in_android_carousel() {
+    let cart = cartridge("AW2E", "Advance Wars 2 - Black Hole Rising (USA)");
+    let official = cart_face_with(&cart, None);
+    let android = cart_face_with_material(&cart, None);
+    assert_eq!((official.w, official.h), (360, 212));
+    assert_eq!(android.rgba, official.rgba,
+        "no Android-only satin grain, gradients or recolouring on solid cartridges");
+}
+
+#[test]
+fn upstream_1_7_transparent_shell_precomposes_real_board_without_changing_label() {
+    // Boktai is an upstream Shell::Translucent GBA code in the real shell table.
+    let cart = cartridge("U3IE", "Boktai - The Sun Is in Your Hand");
+    let official_shell = cart_face_with(&cart, None);
+    let android = cart_face_with_material(&cart, None);
+    assert_eq!((official_shell.w, official_shell.h), (android.w, android.h));
+    let changed = official_shell.rgba.chunks_exact(4).zip(android.rgba.chunks_exact(4))
+        .filter(|(old, new)| old != new).count();
+    assert!(changed > 100,
+        "the board behind authentic translucent plastic must be visibly present");
+    // The original opaque cartridge label must remain untouched.
+    for y in LABEL_Y..LABEL_Y + LABEL_H {
+        for x in LABEL_X..LABEL_X + LABEL_W {
+            let at = ((y * official_shell.w + x) * 4) as usize;
+            if official_shell.rgba[at + 3] == 255 {
+                assert_eq!(&official_shell.rgba[at..at+4], &android.rgba[at..at+4]);
+            }
         }
     }
-    assert!(changes > 100, "material finish should change the plastic");
-    assert!(clearly_visible > 4000, "softbox reflections should be visible on screen");
-    // The paper label must remain pixel-perfect and legible.
-    for y in LABEL_Y..(LABEL_Y + LABEL_H) {
-        for x in LABEL_X..(LABEL_X + LABEL_W) {
-            let at = ((y * plain.w + x) * 4) as usize;
-            assert_eq!(&plain.rgba[at..at + 4], &material.rgba[at..at + 4],
-                "the label must never inherit plastic grain");
-        }
-    }
+    assert_eq!(android.rgba, cart_face_with_material(&cart, None).rgba,
+        "no material flicker from frame-to-frame randomness");
+}
+
+#[test]
+fn u1_clear_material_is_drawn_in_exact_original_slot_depth_order() {
+    use slot_gfx::TexId;
+    use slot_ui::{SlotChrome,Draw};
+    let cart=cartridge("U3IE","Boktai - The Sun Is in Your Hand");
+    let labels=[
+        TexId::from_raw(7), // precomposited shelf cache, not drawn in insert
+        TexId::from_raw(8), // back coloured plastic
+        TexId::from_raw(9), // PCB
+        TexId::from_raw(10), // translucent front and label
+    ];
+    let chrome=SlotChrome {
+        cart:&cart,face:Some(labels[0]),rest:170.0,scale:1.0,
+        seat:0.55,alert:None,dim:0.0,screen:0.0,game:false,
+        slot_faces:None,
+    };
+    let mut out=Vec::new();
+    chrome.draw_with_material(&mut out,
+        [Some(labels[1]),Some(labels[2])],Some(labels[3]));
+    let visible:Vec<_>=out.iter().filter_map(|draw|match draw {
+        Draw::Tex{tex,..}=>Some(*tex),_=>None,
+    }).collect();
+    assert_eq!(visible,&labels[1..],
+        "official back -> PCB -> front, never double-draw cached solid face");
+    let mut fallback=Vec::new();
+    chrome.draw(&mut fallback);
+    assert_eq!(fallback.iter().filter_map(|draw|match draw {
+        Draw::Tex{tex,..}=>Some(*tex),_=>None,
+    }).collect::<Vec<_>>(),vec![labels[0]]);
 }

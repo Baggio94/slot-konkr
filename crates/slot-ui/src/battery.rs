@@ -28,12 +28,14 @@ const INK: [f32; 4] = [
 ];
 
 pub fn draw_gauge(
-    x: f32,
-    y: f32,
-    battery: Option<Battery>,
-    percent: Printed,
-    bolt: Option<TexId>,
-    out: &mut Vec<Draw>,
+    x:f32,y:f32,battery:Option<Battery>,percent:Printed,
+    bolt:Option<TexId>,out:&mut Vec<Draw>
+) {
+    draw_gauge_with_ink(x,y,battery,percent,bolt,INK,out)
+}
+pub fn draw_gauge_with_ink(
+    x:f32,y:f32,battery:Option<Battery>,percent:Printed,
+    bolt:Option<TexId>,ink:[f32;4],out:&mut Vec<Draw>
 ) {
     let Some(b) = battery else {
         return;
@@ -45,7 +47,7 @@ pub fn draw_gauge(
             y,
             w,
             h,
-            colour: INK,
+            colour: ink,
         });
     };
 

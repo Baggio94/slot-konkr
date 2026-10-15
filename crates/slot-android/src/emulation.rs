@@ -1,8 +1,8 @@
 //! Per-cartridge opt-in latency profiles. Never touch the ROM or RetroArch saves.
 use std::{fs, io, path::{Path, PathBuf}};
 use serde::{Deserialize, Serialize};
-use crate::{core_selection, settings::{self, Settings}};
-use slot_store::Core;
+use crate::{core_selection, settings::{self, Settings, Shader, Bezel}};
+use slot_store::{Core, Platform};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -14,12 +14,30 @@ pub struct EmulationProfile {
     pub responsive_pacing: bool,
     pub display_sync_pacing: bool,
     pub run_ahead_frames: u8,
+    // U1 pause menus: all are optional and inherit the corresponding
+    // global preference until this specific ROM+core is edited.
+    pub screen_shader: Option<Shader>,
+    pub screen_bezel: Option<Bezel>,
+    pub colour_correction_override: Option<bool>,
+    pub gb_palettes_override: Option<bool>,
+    pub ff_speed_override: Option<u8>,
+    pub ff_sound_override: Option<bool>,
+    pub rewind_override: Option<bool>,
+    pub turbo_override: Option<bool>, // original KONKR "X/Y Buttons"
+    pub rumble_override: Option<bool>,
+    pub eject_save_override: Option<bool>,
 }
 impl Default for EmulationProfile {
     fn default() -> Self {
         Self { show_fps: false, show_fps_override: None,
             responsive_pacing: false, display_sync_pacing: false,
-            run_ahead_frames: 0 }
+            run_ahead_frames: 0,
+            screen_shader: None, screen_bezel: None,
+            colour_correction_override: None,
+            gb_palettes_override: None, ff_speed_override: None,
+            ff_sound_override: None, rewind_override: None,
+            turbo_override: None, rumble_override: None,
+            eject_save_override: None }
     }
 }
 impl EmulationProfile {
@@ -28,11 +46,80 @@ impl EmulationProfile {
             show_fps_override: None,
             responsive_pacing: settings.responsive_pacing,
             display_sync_pacing: settings.display_sync_pacing,
-            run_ahead_frames: settings.run_ahead_frames }
+            run_ahead_frames: settings.run_ahead_frames,
+            screen_shader: None, screen_bezel: None,
+            colour_correction_override: None,
+            gb_palettes_override: None, ff_speed_override: None,
+            ff_sound_override: None, rewind_override: None,
+            turbo_override: None, rumble_override: None,
+            eject_save_override: None }
     }
+    /// Materialise the *current* game's per-ROM settings without mutating
+    /// Settings.json or any other game's configured defaults.
+    pub fn apply_visual_and_gameplay(&self, settings: &mut Settings, platform: Platform) {
+        if let Some(shader)=self.screen_shader {
+            settings.set_shader_for(platform,shader);
+        }
+        if let Some(value)=self.colour_correction_override {
+            settings.set_colour_for(platform,value);
+        }
+        if let Some(value)=self.screen_bezel {settings.set_bezel_for(platform,value);}
+        if let Some(value)=self.gb_palettes_override { settings.gb_palettes=value; }
+        if let Some(value)=self.ff_speed_override { settings.ff_speed=value; }
+        if let Some(value)=self.ff_sound_override { settings.ff_sound=value; }
+        if let Some(value)=self.rewind_override { settings.rewind=value; }
+        if let Some(value)=self.turbo_override { settings.turbo=value; }
+        if let Some(value)=self.rumble_override { settings.rumble=value; }
+        if let Some(value)=self.eject_save_override { settings.eject_save=value; }
+    }
+
+    /// Screen/Gameplay pause edits are scoped to the current cart and core.
+    /// Using the existing global Settings::change() preserves Slot's exact
+    /// cycling rules, including its KONKR X/Y Buttons naming/values.
+    pub fn change_visual_and_gameplay(&mut self, global: &Settings,
+        platform: Platform, key: usize, right: bool) -> bool
+    {
+        let mut view=global.clone();
+        self.apply_visual_and_gameplay(&mut view,platform);
+        // Menu key 1 inherited shared GB/GBC shader from RC1. Route
+        // GBC to its new key without altering the GBA or GB settings.
+        let actual_key=match (platform,key) {
+            (Platform::Gbc,1)=>21,
+            (Platform::Gba,2)=>22,
+            (Platform::Gbc,2)=>23,
+            (Platform::Gb,2)=>24,
+            (_,25|26|27)=>match platform {
+                Platform::Gba=>25,Platform::Gbc=>26,Platform::Gb=>27
+            },
+            _=>key,
+        };
+        if !view.change(actual_key,right) { return false; }
+        match key {
+            0 if platform==Platform::Gba =>
+                self.screen_shader=Some(view.shader_gba),
+            1 if platform!=Platform::Gba =>
+                self.screen_shader=Some(view.shader_for(platform)),
+            2 => self.colour_correction_override=Some(view.colour_for(platform)),
+            25 | 26 | 27 => self.screen_bezel=Some(view.bezel_for(platform)),
+            3 if platform==Platform::Gb =>
+                self.gb_palettes_override=Some(view.gb_palettes),
+            4 => self.ff_speed_override=Some(view.ff_speed),
+            5 => self.ff_sound_override=Some(view.ff_sound),
+            6 => self.rewind_override=Some(view.rewind),
+            7 => self.turbo_override=Some(view.turbo),
+            8 => self.rumble_override=Some(view.rumble),
+            9 => self.eject_save_override=Some(view.eject_save),
+            _ => return false,
+        }
+        true
+    }
+
     pub fn sanitize(mut self) -> Self {
         if !self.responsive_pacing { self.display_sync_pacing = false; }
         if self.run_ahead_frames > 2 { self.run_ahead_frames = 0; }
+        if !settings::SPEEDS.contains(&self.ff_speed_override.unwrap_or(2)) {
+            self.ff_speed_override=None;
+        }
         self
     }
     pub fn change(&mut self, key: usize, right: bool) -> bool {
@@ -150,6 +237,56 @@ mod tests {
         assert_eq!(profile.show_fps_override, Some(true));
         assert!(profile.change(10, true));
         assert_eq!(profile.show_fps_override, Some(false));
+    }
+
+    #[test]
+    fn pause_screen_and_gameplay_edits_never_change_global_defaults() {
+        let baseline=Settings::default();
+        let global=baseline.clone();
+        let mut p=EmulationProfile::from_settings(&global);
+        assert!(p.change_visual_and_gameplay(&global,Platform::Gba,0,true));
+        assert!(p.change_visual_and_gameplay(&global,Platform::Gba,2,true));
+        assert!(p.change_visual_and_gameplay(&global,Platform::Gba,7,true));
+        assert_eq!(baseline,global,"Pause edits never mutate Settings.json");
+        assert_eq!(p.screen_shader,Some(Shader::Lcd3x));
+        assert_eq!(p.colour_correction_override,Some(true));
+        assert_eq!(p.turbo_override,Some(!global.turbo));
+        let mut effective=global.clone();
+        p.apply_visual_and_gameplay(&mut effective,Platform::Gba);
+        assert_eq!(effective.shader_gba,Shader::Lcd3x);
+        assert_eq!(effective.shader_gb,global.shader_gb);
+        assert!(!effective.turbo);
+        assert!(effective.colour_correction);
+    }
+
+    #[test]
+    fn gbc_screen_override_does_not_touch_gb_or_gba_defaults() {
+        let global=Settings::default();
+        let mut profile=EmulationProfile::from_settings(&global);
+        assert!(profile.change_visual_and_gameplay(&global,Platform::Gbc,1,true));
+        assert!(profile.change_visual_and_gameplay(&global,Platform::Gbc,2,true));
+        assert!(profile.change_visual_and_gameplay(&global,Platform::Gbc,26,true));
+        let mut scoped=global.clone();
+        profile.apply_visual_and_gameplay(&mut scoped,Platform::Gbc);
+        assert_ne!(scoped.shader_gbc,global.shader_gbc);
+        assert_eq!(scoped.shader_gb,global.shader_gb);
+        assert_eq!(scoped.shader_gba,global.shader_gba);
+        assert!(scoped.colour_correction_gbc);
+        assert_eq!(scoped.colour_correction_gb,global.colour_correction_gb);
+        assert_eq!(scoped.bezel_gbc,Bezel::None);
+        assert_eq!(global,Settings::default());
+    }
+
+    #[test]
+    fn new_per_game_visual_overrides_are_absent_in_all_legacy_json() {
+        let p:EmulationProfile=serde_json::from_str(
+            r#"{"responsive_pacing":true,"run_ahead_frames":1}"#).unwrap();
+        assert_eq!(p.screen_shader,None);
+        assert_eq!(p.ff_speed_override,None);
+        assert_eq!(p.turbo_override,None);
+        let mut s=Settings::default();
+        p.apply_visual_and_gameplay(&mut s,Platform::Gba);
+        assert_eq!(s,Settings::default());
     }
 
     #[test]

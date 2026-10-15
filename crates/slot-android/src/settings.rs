@@ -3,6 +3,79 @@ use std::{fs, io, path::Path};
 use slot_gfx::ScreenEffect;
 use slot_store::GbPalette;
 
+/// Matches Slot v1.7.0's canonical WallpaperPick semantics, while storing
+/// the user's choice in the existing Android JSON settings file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WallpaperPick {
+    None,
+    Random,
+    Default,
+    Blur,
+    File(String),
+}
+impl Default for WallpaperPick {
+    fn default() -> Self { Self::Default }
+}
+impl WallpaperPick {
+    pub fn choices(root: &Path) -> Vec<Self> {
+        let mut choices=vec![Self::None, Self::Random, Self::Default, Self::Blur];
+        choices.extend(crate::wallpaper::list(root).into_iter().map(Self::File));
+        choices
+    }
+    pub fn step(&self, root: &Path, right: bool) -> Self {
+        let choices=Self::choices(root);
+        let at=choices.iter().position(|v| v==self).unwrap_or(2);
+        let n=choices.len();
+        choices[if right {(at+1)%n}else{(at+n-1)%n}].clone()
+    }
+    pub fn is_personal(&self, has_wallpapers: bool) -> bool {
+        matches!(self, Self::File(_)) || (matches!(self, Self::Random) && has_wallpapers)
+    }
+    pub fn label(&self) -> String {
+        match self {
+            Self::None=>"None".into(),
+            Self::Random=>"Random".into(),
+            Self::Default=>"Default".into(),
+            Self::Blur=>"DEFAULT BLUR".into(),
+            Self::File(name)=>name.rsplit_once('.').map(|(a,_)|a).unwrap_or(name).into()
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WallpaperTint { #[default] Off, Low, Medium, High }
+impl WallpaperTint {
+    pub const ALL: [Self; 4]=[Self::Off, Self::Low, Self::Medium, Self::High];
+    pub fn step(self, right: bool) -> Self {
+        let at=Self::ALL.iter().position(|v|*v==self).unwrap_or(0);
+        let n=Self::ALL.len();
+        Self::ALL[if right {(at+1)%n}else{(at+n-1)%n}]
+    }
+    pub fn alpha(self)->f32 {
+        // Exact Slot v1.7.0 app.rs tint_alpha().
+        match self { Self::Off=>0.0, Self::Low=>0.25, Self::Medium=>0.45, Self::High=>0.65 }
+    }
+}
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Appearance { #[default] Dark, Light }
+impl Appearance {
+    pub fn toggle(self)->Self { if self==Self::Dark {Self::Light}else{Self::Dark} }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all="snake_case")]
+pub enum Bezel { None, Default }
+impl Default for Bezel {fn default()->Self {Self::Default}}
+impl Bezel {
+    pub fn step(self)->Self {
+        match self {Self::None=>Self::Default,Self::Default=>Self::None}
+    }
+}
+
 pub const SPEEDS: [u8; 4] = [2, 3, 4, 6];
 const NAME: &str = "slot-konkr-settings.json";
 
@@ -24,11 +97,18 @@ impl Shader {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub ff_speed: u8, pub ff_sound: bool, pub colour_correction: bool,
     pub rumble: bool, pub shader_gba: Shader, pub shader_gb: Shader,
+    pub shader_gbc: Shader,
+    // Retain legacy field for old RC1 Settings.json and old desktop Link code;
+    // the three platform fields below are authoritative after migration.
+    pub colour_correction_gba: bool,
+    pub colour_correction_gb: bool,
+    pub colour_correction_gbc: bool,
+    pub bezel_gba: Bezel, pub bezel_gbc: Bezel, pub bezel_gb: Bezel,
     pub gb_palettes: bool, pub gb_palette: u8, pub rewind: bool,
     // X/Y Buttons: true = Slot's original Turbo, false = Y=A and X=B.
     // Existing persisted turbo=false now selects the alternative A/B mapping.
@@ -45,29 +125,72 @@ pub struct Settings {
     pub show_integrations: bool,
     #[serde(default)]
     pub status_opt_in_v2: bool,
+    // Slot v1.7 visual settings; independent of saved emulation profiles.
+    pub wallpaper: WallpaperPick,
+    pub wallpaper_tint: WallpaperTint,
+    pub appearance: Appearance,
+    /// Slot v1.7 GENERAL: Recents is off by default; persist its list regardless.
+    pub show_recents: bool,
+    pub show_titles: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
         // Dev13 settings survive upgrades. Do not change established defaults.
         Self { ff_speed: 2, ff_sound: true, colour_correction: false,
             rumble: true, shader_gba: Shader::Off, shader_gb: Shader::Off,
+            shader_gbc: Shader::Off,
+            colour_correction_gba: false, colour_correction_gb: false,
+            colour_correction_gbc: false,
+            bezel_gba: Bezel::None, bezel_gbc: Bezel::Default, bezel_gb: Bezel::Default,
             gb_palettes: false, gb_palette: 1, rewind: true,
             turbo: true, eject_save: true,
             show_fps: false, responsive_pacing: false,
             display_sync_pacing: false,
             run_ahead_frames: 0,
             show_wifi: false, show_bluetooth: false, show_integrations: false,
-            status_opt_in_v2: true }
+            status_opt_in_v2: true, wallpaper: WallpaperPick::Default,
+            wallpaper_tint: WallpaperTint::Off, appearance: Appearance::Dark,
+            show_recents: false, show_titles: false }
     }
 }
 impl Settings {
     pub fn load(dir: &Path) -> Self {
         fs::read(dir.join(NAME)).ok()
-            .and_then(|b| serde_json::from_slice::<Self>(&b).ok())
+            .and_then(|b| {
+                let old_json=serde_json::from_slice::<serde_json::Value>(&b).ok();
+                let had_wallpaper_choice=old_json.as_ref()
+                    .is_some_and(|v|v.get("wallpaper").is_some());
+                serde_json::from_slice::<Self>(&b).ok().map(|mut s| {
+                    // Critical: prior U1/RC1 stored a shared GB/GBC shader and
+                    // shared color correction. Copy those values *once* into
+                    // independent fields, never reset the user's preferences.
+                    if let Some(json)=old_json.as_ref() {
+                        if json.get("shader_gbc").is_none() {s.shader_gbc=s.shader_gb;}
+                        for (name,platform) in [
+                            ("colour_correction_gba", slot_store::Platform::Gba),
+                            ("colour_correction_gb", slot_store::Platform::Gb),
+                            ("colour_correction_gbc", slot_store::Platform::Gbc),
+                        ] {
+                            if json.get(name).is_none() {
+                                s.set_colour_for(platform,s.colour_correction);
+                            }
+                        }
+                    }
+                    // Beta RC1 imported user.png but lacked an option to turn
+                    // it off. Preserve that picture on update to U1 instead
+                    // of silently replacing it with Slot's bundled default.
+                    if !had_wallpaper_choice &&
+                        dir.join("Wallpapers/user.png").is_file() {
+                        s.wallpaper=WallpaperPick::File("user.png".into());
+                    }
+                    s
+                })
+            })
             .map(|mut s| {
                 if !SPEEDS.contains(&s.ff_speed) { s.ff_speed = 2; }
                 if !Shader::GBA.contains(&s.shader_gba) { s.shader_gba = Shader::Off; }
                 if !Shader::GB.contains(&s.shader_gb) { s.shader_gb = Shader::Off; }
+                if !Shader::GB.contains(&s.shader_gbc) { s.shader_gbc = Shader::Off; }
                 if s.gb_palette >= 48 { s.gb_palette = 1; }
                 if !s.responsive_pacing { s.display_sync_pacing = false; }
                 if s.run_ahead_frames > 2 { s.run_ahead_frames = 0; }
@@ -84,7 +207,7 @@ impl Settings {
                 s
             }).unwrap_or_default()
     }
-    pub fn save(self, dir: &Path) -> io::Result<()> {
+    pub fn save(&self, dir: &Path) -> io::Result<()> {
         fs::create_dir_all(dir)?;
         let target = dir.join(NAME);
         let temporary = dir.join(format!("{NAME}.partial"));
@@ -96,14 +219,70 @@ impl Settings {
         if write.is_err() { let _ = fs::remove_file(temporary); }
         write
     }
-    // Screen: keys 0..3; Gameplay: keys 4..9.
+    pub fn shader_for(&self, platform: slot_store::Platform)->Shader {
+        match platform {
+            slot_store::Platform::Gba=>self.shader_gba,
+            slot_store::Platform::Gbc=>self.shader_gbc,
+            slot_store::Platform::Gb=>self.shader_gb,
+        }
+    }
+    pub fn set_shader_for(&mut self,platform:slot_store::Platform,shader:Shader) {
+        match platform {
+            slot_store::Platform::Gba=>self.shader_gba=shader,
+            slot_store::Platform::Gbc=>self.shader_gbc=shader,
+            slot_store::Platform::Gb=>self.shader_gb=shader,
+        }
+    }
+    pub fn colour_for(&self,platform:slot_store::Platform)->bool {
+        match platform {
+            slot_store::Platform::Gba=>self.colour_correction_gba,
+            slot_store::Platform::Gbc=>self.colour_correction_gbc,
+            slot_store::Platform::Gb=>self.colour_correction_gb,
+        }
+    }
+    pub fn set_colour_for(&mut self,platform:slot_store::Platform,value:bool) {
+        match platform {
+            slot_store::Platform::Gba=>{
+                self.colour_correction_gba=value;
+                self.colour_correction=value; // compatibility with old JSON
+            },
+            slot_store::Platform::Gbc=>self.colour_correction_gbc=value,
+            slot_store::Platform::Gb=>self.colour_correction_gb=value,
+        }
+    }
+    pub fn bezel_for(&self,platform:slot_store::Platform)->Bezel {
+        match platform {
+            slot_store::Platform::Gba=>self.bezel_gba,
+            slot_store::Platform::Gbc=>self.bezel_gbc,
+            slot_store::Platform::Gb=>self.bezel_gb,
+        }
+    }
+    pub fn set_bezel_for(&mut self,platform:slot_store::Platform,value:Bezel) {
+        match platform {
+            slot_store::Platform::Gba=>self.bezel_gba=value,
+            slot_store::Platform::Gbc=>self.bezel_gbc=value,
+            slot_store::Platform::Gb=>self.bezel_gb=value,
+        }
+    }
+    // Screen: 0 GBA shader, 1 GB shader, 2 legacy GBA correction, 3 palettes.
+    // 21 GBC shader, 22/23/24 independent corrections, 25/26/27 bezels.
+    // Gameplay: keys 4..9.
     // Faithful to Slot quick_menu.rs except Date & Time (owned by Android).
     pub fn change(&mut self, key: usize, right: bool) -> bool {
-        let before = *self;
+        let before = self.clone();
         match key {
             0 => self.shader_gba = self.shader_gba.step(&Shader::GBA, right),
             1 => self.shader_gb = self.shader_gb.step(&Shader::GB, right),
-            2 => self.colour_correction = !self.colour_correction,
+            2 | 22 => self.set_colour_for(slot_store::Platform::Gba,
+                !self.colour_correction_gba),
+            23 => self.set_colour_for(slot_store::Platform::Gbc,
+                !self.colour_correction_gbc),
+            24 => self.set_colour_for(slot_store::Platform::Gb,
+                !self.colour_correction_gb),
+            21 => self.shader_gbc=self.shader_gbc.step(&Shader::GB,right),
+            25 => self.bezel_gba=self.bezel_gba.step(),
+            26 => self.bezel_gbc=self.bezel_gbc.step(),
+            27 => self.bezel_gb=self.bezel_gb.step(),
             3 => self.gb_palettes = !self.gb_palettes,
             4 => {
                 let at = SPEEDS.iter().position(|x| *x == self.ff_speed).unwrap_or(0);
@@ -124,7 +303,7 @@ impl Settings {
         }
         *self != before
     }
-    pub fn palette_name(self) -> &'static str {
+    pub fn palette_name(&self) -> &'static str {
         GbPalette::all().nth(self.gb_palette as usize)
             .unwrap_or(GbPalette::DEFAULT).core_name()
     }
@@ -177,6 +356,108 @@ pub fn frame_debt_display_sync(prev: f64, elapsed: f64, speed: f64,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_shared_gb_gbc_shader_and_colour_migrate_identically_then_split() {
+        let root=std::env::temp_dir().join(format!("konkr-u1-screen-migrate-{}",std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(NAME),
+            r#"{"shader_gb":"grid","colour_correction":true,"ff_speed":3}"#).unwrap();
+        let mut settings=Settings::load(&root);
+        assert_eq!(settings.shader_for(slot_store::Platform::Gb),Shader::Grid);
+        assert_eq!(settings.shader_for(slot_store::Platform::Gbc),Shader::Grid);
+        for p in [slot_store::Platform::Gba,slot_store::Platform::Gbc,slot_store::Platform::Gb] {
+            assert!(settings.colour_for(p));
+        }
+        settings.change(21,true); // GBC shader only
+        settings.change(23,true); // GBC correction only
+        assert_eq!(settings.shader_gb,Shader::Grid);
+        assert_ne!(settings.shader_gbc,Shader::Grid);
+        assert!(!settings.colour_correction_gbc);
+        assert!(settings.colour_correction_gb);
+        assert_eq!(settings.ff_speed,3);
+        settings.save(&root).unwrap();
+        assert_eq!(Settings::load(&root),settings);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn general_recents_and_titles_are_opt_in_and_persist_without_losing_settings() {
+        let previous=r#"{"ff_speed":4,"wallpaper":"none","run_ahead_frames":1}"#;
+        let mut s:Settings=serde_json::from_str(previous).unwrap();
+        assert!(!s.show_recents && !s.show_titles);
+        s.show_recents=true;s.show_titles=true;
+        let copy:Settings=serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert!(copy.show_recents && copy.show_titles);
+        assert_eq!(copy.ff_speed,4);
+        assert_eq!(copy.run_ahead_frames,1);
+        assert_eq!(copy.wallpaper,WallpaperPick::None);
+    }
+
+    #[test]
+    fn upstream_v17_wallpaper_picker_follows_original_order() {
+        use WallpaperPick::*;
+        let root=std::env::temp_dir().join(format!(
+            "slot-wallpaper-choice-test-{}", std::process::id()));
+        let dir=root.join("Wallpapers");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("user.png"), b"placeholder").unwrap();
+        std::fs::write(dir.join("another.png"), b"placeholder").unwrap();
+        let choices=WallpaperPick::choices(&root);
+        assert_eq!(choices, vec![None,Random,Default,Blur,
+            File("another.png".into()),File("user.png".into())]);
+        assert_eq!(None.step(&root,true), Random);
+        assert_eq!(None.step(&root,false), File("user.png".into()));
+        assert_eq!(Default.step(&root,true), Blur);
+        assert_eq!(Blur.step(&root,true), File("another.png".into()));
+        assert_eq!(File("missing.png".into()).step(&root,true), Blur);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn wallpaper_none_persists_with_other_dev13_preferences_unchanged() {
+        let mut settings: Settings=serde_json::from_str(
+            r#"{"run_ahead_frames":2,"show_wifi":true,"status_opt_in_v2":true}"#).unwrap();
+        assert_eq!(settings.wallpaper, WallpaperPick::Default);
+        assert_eq!(settings.appearance, Appearance::Dark);
+        assert_eq!(settings.wallpaper_tint, WallpaperTint::Off);
+        settings.wallpaper=WallpaperPick::None;
+        settings.wallpaper_tint=WallpaperTint::High;
+        settings.appearance=Appearance::Light;
+        let saved=serde_json::to_string(&settings).unwrap();
+        let restored:Settings=serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.wallpaper,WallpaperPick::None);
+        assert_eq!(restored.wallpaper_tint.alpha(),0.65);
+        assert_eq!(restored.appearance,Appearance::Light);
+        assert_eq!(restored.run_ahead_frames,2);
+        assert!(restored.show_wifi && restored.status_opt_in_v2);
+    }
+
+    #[test]
+    fn old_user_png_migrates_to_file_without_overwriting_existing_settings() {
+        let root=std::env::temp_dir().join(format!(
+            "slot-wallpaper-migration-test-{}",std::process::id()));
+        std::fs::create_dir_all(root.join("Wallpapers")).unwrap();
+        std::fs::write(root.join("Wallpapers/user.png"),b"png").unwrap();
+        std::fs::write(root.join("slot-konkr-settings.json"),
+            br#"{"eject_save":false,"status_opt_in_v2":true}"#).unwrap();
+        let s=Settings::load(&root);
+        assert_eq!(s.wallpaper,WallpaperPick::File("user.png".into()));
+        assert!(!s.eject_save);
+        let mut settings=s.clone();
+        settings.wallpaper=WallpaperPick::None;
+        settings.save(&root).unwrap();
+        assert_eq!(Settings::load(&root).wallpaper,WallpaperPick::None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn official_wallpaper_tint_alpha_and_theme_toggle_are_exact() {
+        assert_eq!(WallpaperTint::ALL.map(WallpaperTint::alpha),
+            [0.0,0.25,0.45,0.65]);
+        assert_eq!(Appearance::Dark.toggle(),Appearance::Light);
+        assert_eq!(Appearance::Light.toggle(),Appearance::Dark);
+    }
 
     #[test]
     fn mgba_cable_preserves_bounded_debt_while_peer_frame_is_missing() {

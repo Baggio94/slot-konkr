@@ -351,10 +351,13 @@ thread_local! {
 enum LinkEntry { Shortcut, GameMenu }
 
 impl LinkEntry {
-    fn back(self) -> ShelfOverlay {
+    fn back(self, linked: bool, requires_relaunch: bool) -> ShelfOverlay {
         match self {
             Self::Shortcut => ShelfOverlay::None,
-            Self::GameMenu => ShelfOverlay::GameMenu { row: 1 },
+            Self::GameMenu => ShelfOverlay::GameMenu {
+                row: pause_rows(linked, requires_relaunch).iter()
+                    .position(|item| *item == PauseRow::Multiplayer).unwrap_or(0),
+            },
         }
     }
 }
@@ -366,10 +369,16 @@ enum ShelfOverlay {
     Library { row: usize },
     Settings { row: usize },
     ScreenSettings { row: usize },
+    ScreenSystemSettings { platform: Platform, row: usize },
     GameplaySettings { row: usize },
     EmulationSettings { row: usize },
     InterfaceSettings { row: usize },
-    GameEmulationSettings { row: usize },
+    GeneralSettings { row: usize },
+    // Pause submenus never mutate the global Settings object.
+    PauseSettings { row: usize },
+    PauseScreenSettings { row: usize },
+    PauseGameplaySettings { row: usize },
+    PauseEmulationSettings { row: usize },
     About,
     Scraping,
     Achievements,
@@ -379,7 +388,7 @@ enum ShelfOverlay {
     States,
 }
 
-const MENU_TEXT: [&str; 81] = [
+const MENU_TEXT: [&str; 94] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -461,7 +470,49 @@ const MENU_TEXT: [&str; 81] = [
     "Eject to play solo",               // 78
     "Share mGBA/gpSP Saves",            // 79
     "",                                  // 80 retired: value rendered at right
+    "General",                            // 81, official Slot v1.7 menu
+    "GENERAL",                            // 82
+    "Wallpaper",                          // 83
+    "Wallpaper Tint",                     // 84
+    "Theme",                              // 85
+    "Recents",                            // 86
+    "Game Titles",                        // 87
+    "GBC Shader",                         // 88
+    "GB Shader",                          // 89
+    "Bezel",                              // 90
+    "Game Boy Advance",                   // 91
+    "Game Boy Color",                     // 92
+    "Game Boy",                           // 93
 ];
+
+#[derive(Clone, Copy)]
+struct LiveGameOptions {
+    ff_speed: u8,
+    ff_sound: bool,
+    rewind: bool,
+    turbo: bool, // KONKR X/Y Buttons
+    rumble: bool,
+    eject_save: bool,
+}
+impl LiveGameOptions {
+    fn from_profile(global: &crate::settings::Settings, p: Option<EmulationProfile>) -> Self {
+        let ff_speed=p.and_then(|v|v.ff_speed_override).unwrap_or(global.ff_speed);
+        Self {
+            ff_speed,
+            ff_sound:p.and_then(|v|v.ff_sound_override).unwrap_or(global.ff_sound),
+            rewind:p.and_then(|v|v.rewind_override).unwrap_or(global.rewind),
+            turbo:p.and_then(|v|v.turbo_override).unwrap_or(global.turbo),
+            rumble:p.and_then(|v|v.rumble_override).unwrap_or(global.rumble),
+            eject_save:p.and_then(|v|v.eject_save_override).unwrap_or(global.eject_save),
+        }
+    }
+}
+
+#[derive(Clone,Copy)]
+struct ClearMaterial {
+    key:(usize,usize),
+    tex:[slot_gfx::TexId;3], // official back -> PCB -> plastic front
+}
 
 struct Engine {
     gpu: Compositor,
@@ -487,6 +538,7 @@ struct Engine {
     emulator_key_latch: EmulatorKeyLatch,
     texture_cache: VecDeque<(usize, usize, slot_gfx::TexId)>,
     cart_render: CartRender,
+    clear_material: Option<ClearMaterial>,
     game: Option<GameSession>,
     pending_game: Option<GameSession>,
     link_identity: Option<crate::link_rom::GbaIdentity>,
@@ -524,6 +576,14 @@ struct Engine {
     emulation_core_labels: [(slot_gfx::TexId, u32, u32); 2],
     video_mode: VideoMode,
     wallpaper_texture: Option<slot_gfx::TexId>,
+    wallpaper_personal: bool,
+    wallpaper_name_face: Option<(slot_gfx::TexId, u32, u32)>,
+    /// Live rear/front v1.7.0 slot textures. Always draw in proper depth order.
+    slot_faces: Option<(slot_gfx::TexId, slot_gfx::TexId)>,
+    slot_dark_faces: (slot_gfx::TexId, slot_gfx::TexId),
+    slot_light_faces: (slot_gfx::TexId, slot_gfx::TexId),
+    gb_bezel_tex: slot_gfx::TexId,
+    gbc_bezel_tex: slot_gfx::TexId,
     custom_wallpaper_present: bool,
     setting_values: Vec<(slot_gfx::TexId, u32, u32)>,
     setting_carets: [(slot_gfx::TexId, u32, u32); 2],
@@ -574,12 +634,55 @@ struct Engine {
     battery_face: Printed,
     battery: Option<Battery>,
     bolt_texture: slot_gfx::TexId,
+    bolt_light_texture: slot_gfx::TexId,
     letter_texture: Option<slot_gfx::TexId>,
     letter_face: Printed,
     letter_shown_at: Option<Instant>,
     // Unmodified upstream system names: 200ms in, 1200ms hold, 800ms out.
     platform_faces: [Printed; 3],
+    recents_platform_face: Printed,
     platform_shown_at: Option<Instant>,
+    selected_title_name: String,
+    selected_title_face: Printed,
+    selected_title_texture: Option<slot_gfx::TexId>,
+}
+
+/// The upstream wallpaper.deck expects Config/ to exist on an SD card.
+/// Android's fresh app-private filesDir does not necessarily contain it yet.
+fn pick_wallpaper_android(root: &Path) -> Option<PathBuf> {
+    if let Err(error) = std::fs::create_dir_all(root.join("Config")) {
+        eprintln!("slot-konkr: cannot initialize wallpaper deck: {error}");
+    }
+    crate::wallpaper::pick(root, 0)
+}
+
+/// Reuse Slot v1.7.0's exact wallpaper selector. Only Android app-private
+/// Wallpapers/ files are eligible: never access ROMs or external SAF paths.
+fn wallpaper_pixels(root: Option<&Path>, selection: &crate::settings::WallpaperPick)
+    -> (Option<Vec<u8>>, bool)
+{
+    use crate::settings::WallpaperPick;
+    let default = || slot_ui::default_background_native().map(|v|v.to_vec());
+    let personal = match (selection, root) {
+        (WallpaperPick::None, _) => return (None, false),
+        (WallpaperPick::Default, _) => return (default(), false),
+        (WallpaperPick::Blur, _) =>
+            return (slot_ui::blur_background_native().map(|v|v.to_vec()), false),
+        (WallpaperPick::File(name), Some(root)) => {
+            if crate::wallpaper::list(root).contains(name) {
+                Some(root.join("Wallpapers").join(name))
+            } else { None }
+        }
+        (WallpaperPick::Random, Some(root)) => pick_wallpaper_android(root),
+        _ => None,
+    };
+    if let Some(image) = personal.and_then(|p|slot_ui::wallpaper_face_native(&p)) {
+        (Some(image), true)
+    } else {
+        // Official Slot falls back to the bundled default for an empty random
+        // deck or a deleted file. Never silently mutate the saved selection.
+        (default(), false)
+    }
 }
 
 impl Engine {
@@ -599,10 +702,41 @@ impl Engine {
         }
         let custom_wallpaper_present = visuals_root.as_deref()
             .is_some_and(|root| root.join("Wallpapers/user.png").is_file());
-        let wallpaper_texture = visuals_root.as_deref()
-            .and_then(|root| crate::wallpaper::pick(root, 0))
-            .as_deref().and_then(slot_ui::wallpaper_face)
-            .map(|rgba| gpu.create_texture(OUT_W, OUT_H, &rgba));
+        let (wallpaper_pixels, wallpaper_personal) =
+            wallpaper_pixels(visuals_root.as_deref(), &settings.wallpaper);
+        let wallpaper_texture = wallpaper_pixels.map(|rgba|
+            gpu.create_texture(slot_ui::NATIVE_W, slot_ui::NATIVE_H, &rgba));
+        // Preserve existing Config/theme.txt custom colours as an opt-out.
+        let custom_colours = visuals_root.as_deref()
+            .is_some_and(|root| root.join("Config/theme.txt").exists());
+        let mut make_slot = |light: bool| {
+            let (back, front) = if light {
+                (slot_ui::bitmaps::slot_back_light(), slot_ui::bitmaps::slot_front_light())
+            } else {
+                (slot_ui::bitmaps::slot_back(), slot_ui::bitmaps::slot_front())
+            };
+            let (back, w, h) = slot_ui::native_rgba(
+                back, slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H);
+            let rear = gpu.create_texture(w, h, &back);
+            let (front, w, h) = slot_ui::native_rgba(
+                front, slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H);
+            let front = gpu.create_texture(w, h, &front);
+            (rear, front)
+        };
+        // Both official themes are cached once. Toggling doesn't allocate
+        // textures on the GL thread or shift the original Slot animation.
+        let slot_dark_faces=make_slot(false);
+        let slot_light_faces=make_slot(true);
+        let slot_faces = if custom_colours { None }
+            else if settings.appearance == crate::settings::Appearance::Light {
+                Some(slot_light_faces)
+            } else { Some(slot_dark_faces) };
+        // Official 720x480 GB/GBC screen bezels, sampled once for KONKR.
+        let (gb, w, h)=slot_ui::native_rgba(slot_ui::bitmaps::bezel_gb(),720,480);
+        let gb_bezel_tex=gpu.create_texture(w,h,&gb);
+        let (gbc,w,h)=slot_ui::native_rgba(slot_ui::bitmaps::bezel_gbc(),720,480);
+        let gbc_bezel_tex=gpu.create_texture(w,h,&gbc);
+
         let mut shelves = Vec::new();
 
         // First-run empty shelf: never synthesize fake demo cartridges.
@@ -619,6 +753,15 @@ impl Engine {
             }
             shelves.push(Shelf::new(carts));
         }
+        // Fourth rack mirrors Slot's ten most recently launched ROMs.
+        // Do not modify the three platform shelves or their ROM roots.
+        let recent_ids=visuals_root.as_deref().map(crate::recents::load)
+            .unwrap_or_default();
+        let recent_carts=crate::recents::carts(&recent_ids,
+            &[&shelves[0].carts, &shelves[1].carts, &shelves[2].carts]);
+        shelves.push(Shelf::new(if settings.show_recents {
+            recent_carts
+        } else { Vec::new() }));
 
         // Same compact size for all three platforms, rasterised at 3x
         // resolution before downsampling to Slot's 720x480 design canvas.
@@ -628,6 +771,11 @@ impl Engine {
             let tex = gpu.create_texture(face.w, face.h, &face.rgba);
             Printed::new(tex, face.w)
         });
+
+        let recent_label = platform_name_face("RECENTS");
+        let recents_platform_face=Printed::new(
+            gpu.create_texture(recent_label.w,recent_label.h,&recent_label.rgba),
+            recent_label.w);
 
         let shadow = cart_shadow();
         let gba = gpu.create_texture(shadow.w, shadow.h, &shadow.rgba);
@@ -736,12 +884,23 @@ impl Engine {
         let setting_values = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
-                              "DISPLAY SYNC", "TURBO", "A/B"]
+                              "DISPLAY SYNC", "TURBO", "A/B",
+                              "None", "Random", "Default", "DEFAULT BLUR",
+                              "Dark", "Light", "Low", "Medium", "High", "Custom"]
             .into_iter().map(|value| {
                 let face = quick_value_face(value, true);
                 let tex = gpu.create_texture(face.w, face.h, &face.rgba);
                 (tex, face.w, face.h)
             }).collect();
+        let wallpaper_name_face = match &settings.wallpaper {
+            crate::settings::WallpaperPick::File(_) => {
+                let name = settings.wallpaper.label();
+                let short: String = name.chars().take(18).collect();
+                let face = quick_value_face(&short, true);
+                Some((gpu.create_texture(face.w, face.h, &face.rgba), face.w, face.h))
+            }
+            _ => None,
+        };
         let emulation_core_labels = Core::ALL.map(|core| {
             let face = quick_value_face(core.text(), true);
             (gpu.create_texture(face.w, face.h, &face.rgba), face.w, face.h)
@@ -810,8 +969,10 @@ impl Engine {
             gpu.create_texture(face.w, face.h, &face.rgba)
         }).collect();
         hud.set_link_faces(link_faces);
-        let bolt = icon_face(Icon::Charging, BOLT_PX, HUD_INK);
+        let bolt = icon_face(Icon::Charging, BOLT_PX, slot_ui::footer_ink(false));
         let bolt_texture = gpu.create_texture(bolt.w, bolt.h, &bolt.rgba);
+        let bolt = icon_face(Icon::Charging, BOLT_PX, slot_ui::footer_ink(true));
+        let bolt_light_texture = gpu.create_texture(bolt.w, bolt.h, &bolt.rgba);
 
         // On a GBA-only library do not begin on an empty GB or GBC shelf.
         let active = shelves.iter().position(|s| !s.carts.is_empty()).unwrap_or(0);
@@ -840,6 +1001,7 @@ impl Engine {
             emulator_key_latch: EmulatorKeyLatch::default(),
             texture_cache: VecDeque::new(),
             cart_render: CartRender::start()?,
+            clear_material: None,
             game: None,
             pending_game: None,
             link_identity: None,
@@ -873,6 +1035,13 @@ impl Engine {
             emulation_core_labels,
             video_mode: VideoMode::Actual,
             wallpaper_texture,
+            wallpaper_personal,
+            wallpaper_name_face,
+            slot_faces,
+            slot_dark_faces,
+            slot_light_faces,
+            gb_bezel_tex,
+            gbc_bezel_tex,
             custom_wallpaper_present,
             setting_values,
             setting_carets,
@@ -922,12 +1091,36 @@ impl Engine {
             battery_face: Printed::default(),
             battery: None,
             bolt_texture,
+            bolt_light_texture,
             letter_texture: None,
             letter_face: Printed::default(),
             letter_shown_at: None,
             platform_faces,
+            recents_platform_face,
             platform_shown_at: has_multiple_systems.then_some(now),
+            selected_title_name: String::new(),
+            selected_title_face: Printed::default(),
+            selected_title_texture: None,
         })
+    }
+
+    fn shelf_footer_ink(&self) -> [u8; 3] {
+        slot_ui::footer_ink(
+            self.settings.appearance == crate::settings::Appearance::Light)
+    }
+
+    fn recolour_footer_text(&mut self) {
+        let ink = self.shelf_footer_ink();
+        if let Some(tex) = self.clock_texture {
+            let face = slot_ui::word_ink(&self.clock_text, ink);
+            self.gpu.update_texture(tex, face.w, face.h, &face.rgba);
+            self.clock_face = Printed::new(tex, face.w);
+        }
+        if let (Some(tex), Some(percent)) = (self.battery_texture, self.battery_percent) {
+            let face = slot_ui::word_ink(&format!("{percent}%"), ink);
+            self.gpu.update_texture(tex, face.w, face.h, &face.rgba);
+            self.battery_face = Printed::new(tex, face.w);
+        }
     }
 
     fn refresh_system_status(&mut self) {
@@ -935,7 +1128,7 @@ impl Engine {
         if status.clock != self.clock_text {
             self.clock_text = status.clock;
             if !self.clock_text.is_empty() {
-                let face = word_face(&self.clock_text);
+                let face = slot_ui::word_ink(&self.clock_text, self.shelf_footer_ink());
                 let tex = match self.clock_texture {
                     Some(tex) => { self.gpu.update_texture(tex, face.w, face.h, &face.rgba); tex }
                     None => { let tex = self.gpu.create_texture(face.w, face.h, &face.rgba);
@@ -957,7 +1150,7 @@ impl Engine {
                 self.gpu.update_texture(tex, sticker.w, sticker.h, &sticker.rgba);
             }
             if let Some(percent) = percent {
-                let face = word_face(&format!("{percent}%"));
+                let face = slot_ui::word_ink(&format!("{percent}%"), self.shelf_footer_ink());
                 let tex = match self.battery_texture {
                     Some(tex) => { self.gpu.update_texture(tex, face.w, face.h, &face.rgba); tex }
                     None => { let tex = self.gpu.create_texture(face.w, face.h, &face.rgba);
@@ -1005,11 +1198,11 @@ impl Engine {
         let time = self.born.elapsed().as_millis() as u64;
         match code {
             96 | 97 => {
-                let key = if self.active == 0 { 0 } else { 1 };
-                self.change_setting(key, code == 96);
-                let shader = if self.active == 0 {
-                    self.settings.shader_gba
-                } else { self.settings.shader_gb };
+                let key = if self.current_cart_platform() == Platform::Gba { 0 } else { 1 };
+                if self.game.is_some() {
+                    self.change_game_screen_or_gameplay(key,code == 96);
+                } else { self.change_setting(key,code == 96); }
+                let shader = self.game_shader();
                 self.gpu.set_screen_effect(shader.effect());
                 self.hud.toast(match shader {
                     crate::settings::Shader::Off => Toast::ShaderOff,
@@ -1020,8 +1213,10 @@ impl Engine {
                 }, time);
             }
             100 => {
-                self.change_setting(2, true);
-                self.hud.toast(if self.settings.colour_correction {
+                if self.game.is_some() {
+                    self.change_game_screen_or_gameplay(2,true);
+                } else { self.change_setting(2,true); }
+                self.hud.toast(if self.game_settings().colour_correction {
                     Toast::ColourOn
                 } else { Toast::ColourOff }, time);
             }
@@ -1056,7 +1251,7 @@ impl Engine {
             }
             104 | 105 => {
                 // Also valid for GB-compatible .gbc ROMs (CGB flag bit 7 unset).
-                if self.settings.gb_palettes
+                if self.game_settings().gb_palettes
                     && self.game.as_ref().is_some_and(|g| g.can_change_gb_palette())
                 {
                     let index = if code == 105 {
@@ -1602,22 +1797,37 @@ impl Engine {
                     .as_ref().map(|(root, _)| root.clone());
                 if let Some(root) = root {
                     slot_ui::set_theme(slot_store::Theme::read(&root));
+                    let custom_colours=root.join("Config/theme.txt").is_file();
+                    self.slot_faces=if custom_colours { None }
+                        else if self.settings.appearance == crate::settings::Appearance::Light {
+                            Some(self.slot_light_faces)
+                        } else { Some(self.slot_dark_faces) };
+                    let was_custom_wallpaper = self.custom_wallpaper_present;
                     self.custom_wallpaper_present = root.join("Wallpapers/user.png").is_file();
                     if let ShelfOverlay::InterfaceSettings { row } = self.overlay {
                         if !self.custom_wallpaper_present && row > 3 {
                             self.overlay = ShelfOverlay::InterfaceSettings { row: 3 };
                         }
                     }
-                    let wallpaper = crate::wallpaper::pick(&root, 0)
-                        .as_deref().and_then(slot_ui::wallpaper_face);
-                    self.wallpaper_texture = wallpaper.map(|rgba| {
-                        if let Some(tex) = self.wallpaper_texture {
-                            self.gpu.update_texture(tex, OUT_W, OUT_H, &rgba);
-                            tex
-                        } else {
-                            self.gpu.create_texture(OUT_W, OUT_H, &rgba)
+                    // A freshly imported user.png should appear immediately.
+                    // Explicit None selection is never overridden by import.
+                    if self.custom_wallpaper_present &&
+                        !was_custom_wallpaper &&
+                        self.settings.wallpaper != crate::settings::WallpaperPick::None {
+                        self.settings.wallpaper =
+                            crate::settings::WallpaperPick::File("user.png".into());
+                        self.persist_settings();
+                    }
+                    // A deleted custom image falls back to Default only if
+                    // it was the current selection.
+                    if let crate::settings::WallpaperPick::File(name) = &self.settings.wallpaper {
+                        if !crate::wallpaper::list(&root).contains(name) {
+                            self.settings.wallpaper = crate::settings::WallpaperPick::Default;
+                            self.persist_settings();
                         }
-                    });
+                    }
+                    self.reload_wallpaper(Some(&root));
+                    self.refresh_wallpaper_name();
                 }
             }
             Input::ReloadCartLabel { uri } => {
@@ -1709,7 +1919,7 @@ impl Engine {
                 // The reversed cart animation will emit the original eject sound.
                 if self.progress > 0.0 || self.inserted { self.eject_sound_armed = true; }
                 if let Some(mut session) = self.game.take() {
-                    let saved = session.save(self.settings.eject_save);
+                    let saved = session.save(self.live_game_options().eject_save);
                     if saved && !session.is_link_sandbox() {
                         if let Some(uri) = self.requested_uri.as_deref() {
                             let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -1842,7 +2052,9 @@ impl Engine {
                             self.overlay = ShelfOverlay::None;
                         } else if !matches!(self.link_phase, LinkMenu::Unplug { .. }) {
                             self.cancel_link_discovery();
-                            self.overlay = self.link_entry.back();
+                            self.overlay = self.link_entry.back(
+                                        self.game.as_ref().is_some_and(GameSession::linked),
+                                        self.game.as_ref().is_some_and(GameSession::requires_relaunch));
                         }
                     }
                     return;
@@ -1898,8 +2110,12 @@ impl Engine {
                             } else {
                                 self.mode_last_tap=Some(Instant::now());
                                 self.overlay=match self.overlay {
-                                    ShelfOverlay::GameMenu { .. }=>ShelfOverlay::None,
-                                    ShelfOverlay::States=>ShelfOverlay::None,
+                                    ShelfOverlay::GameMenu { .. }
+                                    | ShelfOverlay::PauseSettings { .. }
+                                    | ShelfOverlay::PauseScreenSettings { .. }
+                                    | ShelfOverlay::PauseGameplaySettings { .. }
+                                    | ShelfOverlay::PauseEmulationSettings { .. }
+                                    | ShelfOverlay::States => ShelfOverlay::None,
                                     _=>ShelfOverlay::GameMenu {row:0},
                                 };
                             }
@@ -1927,19 +2143,25 @@ impl Engine {
                                 96 => self.request_multiplayer_network(),
                                 97 | 108 => {
                                     self.cancel_link_discovery();
-                                    self.overlay = self.link_entry.back();
+                                    self.overlay = self.link_entry.back(
+                                        self.game.as_ref().is_some_and(GameSession::linked),
+                                        self.game.as_ref().is_some_and(GameSession::requires_relaunch));
                                 }
                                 _ => {}
                             },
                             LinkMenu::Working { .. } => {
                                 if code == 97 || code == 108 {
                                     self.cancel_link_discovery();
-                                    self.overlay = self.link_entry.back();
+                                    self.overlay = self.link_entry.back(
+                                        self.game.as_ref().is_some_and(GameSession::linked),
+                                        self.game.as_ref().is_some_and(GameSession::requires_relaunch));
                                 }
                             }
                             LinkMenu::Failed { .. } => {
                                 if code == 96 || code == 97 || code == 108 {
-                                    self.overlay = self.link_entry.back();
+                                    self.overlay = self.link_entry.back(
+                                        self.game.as_ref().is_some_and(GameSession::linked),
+                                        self.game.as_ref().is_some_and(GameSession::requires_relaunch));
                                 }
                             }
                             LinkMenu::Linked { opened: true, role, .. } => match code {
@@ -1976,7 +2198,9 @@ impl Engine {
                                         }
                                     }
                                 }
-                                97 | 108 => self.overlay = self.link_entry.back(),
+                                97 | 108 => self.overlay = self.link_entry.back(
+                                        self.game.as_ref().is_some_and(GameSession::linked),
+                                        self.game.as_ref().is_some_and(GameSession::requires_relaunch)),
                                 _ => {}
                             },
                             LinkMenu::Linked { opened: false, .. } | LinkMenu::Unplug { .. } => {}
@@ -2035,52 +2259,96 @@ impl Engine {
                 }
         if self.game.is_some() && matches!(self.overlay, ShelfOverlay::GameMenu { .. }) {
                     if pressed {
-                        match self.overlay {
-                            ShelfOverlay::GameMenu { row } => match code {
-                                19 | 20 => {
-                                    self.overlay = ShelfOverlay::GameMenu {
-                                        row: move_menu_row(row, code, 4),
-                                    };
-                                }
-                                // Both "Save & Eject" (row 2) and the
-                                // post-link "Eject to play solo" (row 0)
-                                // must use the SAME save/eject lifecycle.
-                                // Never render an action which only prints
-                                // an error and leaves the user trapped.
-                                96 if game_menu_ejects(row, self.game.as_ref()
-                                    .is_some_and(GameSession::requires_relaunch)) => {
-                                    self.handle(Input::Exit);
-                                }
-                                96 => {
-                                    match row {
-                                        1 => {
-                                            self.link_entry = LinkEntry::GameMenu;
-                                            if self.game.as_ref().is_some_and(GameSession::linked) {
-                                                // Reopen the connected adapter instead of
-                                            // ENDing the Link when the Pause menu row
-                                            // 'Multiplayer' is selected.
+                        let linked = self.game.as_ref().is_some_and(GameSession::linked);
+                        let relaunch = self.game.as_ref().is_some_and(GameSession::requires_relaunch);
+                        if let ShelfOverlay::GameMenu { row } = self.overlay {
+                            match code {
+                                19 | 20 => self.overlay = ShelfOverlay::GameMenu {
+                                    row: move_menu_row(row, code, pause_rows(linked, relaunch).len()),
+                                },
+                                96 => match pause_rows(linked, relaunch).get(row).copied() {
+                                    Some(PauseRow::SaveEject) => self.handle(Input::Exit),
+                                    Some(PauseRow::Resume) => self.overlay = ShelfOverlay::None,
+                                    Some(PauseRow::States) if !linked && !relaunch =>
+                                        self.open_polaroids(),
+                                    Some(PauseRow::Multiplayer) => {
+                                        self.link_entry = LinkEntry::GameMenu;
+                                        if linked {
+                                            // Show existing connected adapter, never unplug
+                                            // when merely opening the Multiplayer menu.
                                             self.link_phase = LinkMenu::Linked {
                                                 role: self.link_role,
                                                 worked: self.link_worked_at,
-                                                since: self.link_millis(),
-                                                opened: true,
+                                                since: self.link_millis(), opened: true,
                                             };
                                             self.overlay = ShelfOverlay::Multiplayer;
-                                            } else { self.enter_multiplayer_menu(); }
-                                        }
-                                        3 => {
-                                            if self.game.as_ref().is_some_and(|g| g.linked() || g.requires_relaunch()) {
-                                                set_message("Relaunch the cartridge before using Save States".into());
-                                            } else { self.open_polaroids(); }
-                                        }
-                                        _ => self.overlay = ShelfOverlay::None,
-                                    }
-                                }
-                                97 => {
-                                    if !self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
-                                        self.overlay = ShelfOverlay::None;
-                                    } else { set_message("Eject to return to solo.".into()); }
+                                        } else { self.enter_multiplayer_menu(); }
+                                    },
+                                    Some(PauseRow::Settings) if !relaunch =>
+                                        self.overlay = ShelfOverlay::PauseSettings { row: 0 },
+                                    _ => {}
                                 },
+                                97 => if !relaunch {
+                                    self.overlay = ShelfOverlay::None
+                                } else { set_message("Eject to return to solo.".into()); },
+                                _ => {}
+                            }
+                        }
+                    }
+                    return;
+                }
+                if self.game.is_some() && matches!(self.overlay, ShelfOverlay::PauseSettings { .. }
+                    | ShelfOverlay::PauseScreenSettings { .. }
+                    | ShelfOverlay::PauseGameplaySettings { .. }
+                    | ShelfOverlay::PauseEmulationSettings { .. }) {
+                    if pressed {
+                        match self.overlay {
+                            ShelfOverlay::PauseSettings { row } => match code {
+                                19 | 20 => self.overlay = ShelfOverlay::PauseSettings {
+                                    row: move_menu_row(row, code, self.pause_settings_rows().len()),
+                                },
+                                96 => {
+                                    let linked=self.game.as_ref().is_some_and(GameSession::linked);
+                                    self.overlay=match row {
+                                        0 => ShelfOverlay::PauseScreenSettings { row: 0 },
+                                        1 if !linked => ShelfOverlay::PauseGameplaySettings { row: 0 },
+                                        2 if !linked => ShelfOverlay::PauseEmulationSettings { row: 0 },
+                                        3 if !linked => {self.reset_game_emulation();
+                                            ShelfOverlay::PauseSettings { row }},
+                                        _ => ShelfOverlay::PauseSettings { row },
+                                    };
+                                },
+                                97 => self.overlay = ShelfOverlay::GameMenu {
+                                    row: pause_rows(self.game.as_ref().is_some_and(GameSession::linked),
+                                        self.game.as_ref().is_some_and(GameSession::requires_relaunch))
+                                        .iter().position(|item| *item==PauseRow::Settings).unwrap_or(0),
+                                },
+                                _ => {}
+                            },
+                            ShelfOverlay::PauseScreenSettings { row } => match code {
+                                19 | 20 => self.overlay = ShelfOverlay::PauseScreenSettings {
+                                    row: move_menu_row(row,code,self.pause_screen_rows().len()),
+                                },
+                                21 | 22 => if let Some(key)=self.pause_screen_key(row) {
+                                    self.change_game_screen_or_gameplay(key,code==22);
+                                },
+                                97 => self.overlay = ShelfOverlay::PauseSettings { row: 0 },
+                                _ => {}
+                            },
+                            ShelfOverlay::PauseGameplaySettings { row } => match code {
+                                19 | 20 => self.overlay = ShelfOverlay::PauseGameplaySettings {
+                                    row: move_menu_row(row,code,6),
+                                },
+                                21 | 22 => self.change_game_screen_or_gameplay(row+4,code==22),
+                                97 => self.overlay = ShelfOverlay::PauseSettings { row: 1 },
+                                _ => {}
+                            },
+                            ShelfOverlay::PauseEmulationSettings { row } => match code {
+                                19 | 20 => self.overlay = ShelfOverlay::PauseEmulationSettings {
+                                    row: move_menu_row(row, code, 3),
+                                },
+                                21 | 22 => self.change_game_emulation(row + 10, code == 22),
+                                97 => self.overlay = ShelfOverlay::PauseSettings { row: 2 },
                                 _ => {}
                             },
                             _ => {}
@@ -2122,7 +2390,7 @@ impl Engine {
                     if self.game.as_ref().is_some_and(GameSession::linked)
                         && (code == 104 || code == 105) { return; }
                     if code == 104 {
-                        if !self.settings.rewind { return; }
+                        if !self.live_game_options().rewind { return; }
                         if pressed {
                             self.rewind_held = true;
                             self.rewind_accum = 0.0;
@@ -2163,7 +2431,7 @@ impl Engine {
                         AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
                         AUDIO_SPEED_PERMILLE.store(
                             if self.ff_latched || self.ff_held {
-                                i32::from(self.settings.ff_speed) * 1000
+                                i32::from(self.live_game_options().ff_speed) * 1000
                             } else { 1000 },
                             Ordering::Release);
                         self.hud.set_ff(match (self.ff_latched, self.ff_held) {
@@ -2176,7 +2444,7 @@ impl Engine {
                     // Slot original: GB/GBC L1 = Stretch, R1 = Actual.
                     // On GBA the shoulder buttons remain owned by the core.
                     // SELECT+shoulder save/load is handled below and takes priority.
-                    if self.active != 0 && self.buttons & ButtonMask::SELECT == 0
+                    if self.current_cart_platform() != Platform::Gba && self.buttons & ButtonMask::SELECT == 0
                         && (code == 102 || code == 103) {
                         if pressed {
                             self.set_video_mode(if code == 102 {
@@ -2267,45 +2535,63 @@ impl Engine {
                             },
                             ShelfOverlay::Settings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::Settings {
-                                    row: move_menu_row(row, code, 4),
+                                    row: move_menu_row(row, code, 5),
                                 },
                                 96 => match row {
                                     0 => self.overlay = ShelfOverlay::ScreenSettings { row: 0 },
                                     1 => self.overlay = ShelfOverlay::GameplaySettings { row: 0 },
                                     2 => self.overlay = ShelfOverlay::EmulationSettings { row: 0 },
                                     3 => self.overlay = ShelfOverlay::InterfaceSettings { row: 0 },
+                                    4 => self.overlay = ShelfOverlay::GeneralSettings { row: 0 },
                                     _ => return,
                                 },
                                 97 => self.overlay = ShelfOverlay::Menu { row: 4 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
+                            ShelfOverlay::GeneralSettings { row } => match code {
+                                19 | 20 => self.overlay = ShelfOverlay::GeneralSettings {
+                                    row: move_menu_row(row, code, self.general_rows().len()),
+                                },
+                                21 | 22 | 96 => {
+                                    self.cycle_general_row(row,code!=21,code==96);
+                                },
+                                97 => self.overlay = ShelfOverlay::Settings { row: 4 },
+                                108 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
                             ShelfOverlay::InterfaceSettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::InterfaceSettings {
-                                    row: move_menu_row(row, code,
-                                        if self.custom_wallpaper_present { 5 } else { 4 }),
+                                    row: move_menu_row(row, code, 3),
                                 },
                                 21 | 22 if row < 3 => self.change_setting(row + 13, code == 22),
-                                96 if row == 3 => {
-                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(8);
-                                }
-                                96 if row == 4 && self.custom_wallpaper_present => {
-                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(10);
-                                    self.custom_wallpaper_present = false;
-                                    self.overlay = ShelfOverlay::InterfaceSettings { row: 3 };
-                                }
                                 97 => self.overlay = ShelfOverlay::Settings { row: 3 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
                             ShelfOverlay::ScreenSettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::ScreenSettings {
-                                    row: move_menu_row(row, code, 4),
+                                    row: move_menu_row(row, code, 3),
                                 },
-                                21 | 22 => self.change_setting(row, code == 22),
+                                96 => self.overlay=ShelfOverlay::ScreenSystemSettings {
+                                    platform:Self::screen_submenu_platform(row),row:0,
+                                },
                                 97 => self.overlay = ShelfOverlay::Settings { row: 0 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
+                            },
+                            ShelfOverlay::ScreenSystemSettings { platform,row } => match code {
+                                19 | 20 => self.overlay=ShelfOverlay::ScreenSystemSettings {
+                                    platform,row:move_menu_row(row,code,Self::screen_rows(platform).len()),
+                                },
+                                21 | 22 | 96 => if let Some(key)=Self::screen_keys(platform).get(row).copied(){
+                                    self.change_setting(key,code!=21);
+                                },
+                                97 => self.overlay=ShelfOverlay::ScreenSettings {
+                                    row:match platform{Platform::Gba=>0,Platform::Gbc=>1,Platform::Gb=>2},
+                                },
+                                108 => self.overlay=ShelfOverlay::None,
+                                _=>{}
                             },
                             ShelfOverlay::EmulationSettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::EmulationSettings {
@@ -2314,15 +2600,6 @@ impl Engine {
                                 21 | 22 => self.change_setting(row + 10, code == 22),
                                 97 => self.overlay = ShelfOverlay::Settings { row: 2 },
                                 108 => self.overlay = ShelfOverlay::None,
-                                _ => {}
-                            },
-                            ShelfOverlay::GameEmulationSettings { row } => match code {
-                                19 | 20 => self.overlay = ShelfOverlay::GameEmulationSettings {
-                                    row: move_menu_row(row, code, 4),
-                                },
-                                21 | 22 if row < 3 => self.change_game_emulation(row + 10, code == 22),
-                                96 if row == 3 => self.reset_game_emulation(),
-                                97 | 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
                             ShelfOverlay::GameplaySettings { row } => match code {
@@ -2405,6 +2682,9 @@ impl Engine {
                                 }
                             },
                             ShelfOverlay::GameMenu { .. } | ShelfOverlay::Multiplayer |
+                            ShelfOverlay::ScreenSystemSettings { .. } |
+                            ShelfOverlay::PauseSettings { .. } | ShelfOverlay::PauseScreenSettings { .. } |
+                            ShelfOverlay::PauseGameplaySettings { .. } | ShelfOverlay::PauseEmulationSettings { .. } |
                             ShelfOverlay::States | ShelfOverlay::None => {}
                         }
                     }
@@ -2421,12 +2701,9 @@ impl Engine {
                             UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(13);
                             return;
                         }
-                        // Y edits the selected cartridge. X remains Cart Studio.
-                        100 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
-                            self.load_selected_emulation();
-                            self.overlay = ShelfOverlay::GameEmulationSettings { row: 0 };
-                            return;
-                        }
+                        // Y is intentionally reserved for the favourites toggle
+                        // in U2. No legacy per-game settings popup on the carousel.
+                        100 if !self.inserted => { return; }
                         108 if !self.inserted => {
                             self.shelves[self.active].release_hold();
                             self.overlay = ShelfOverlay::Menu { row: 0 };
@@ -2519,23 +2796,36 @@ impl Engine {
                     (22, true) if !self.inserted => shelf.hold_right(ms),
                     (21, false) => shelf.release_left(),
                     (22, false) => shelf.release_right(),
-                    (19, true) if !self.inserted => shelf.jump_prev_letter(),
-                    (20, true) if !self.inserted => shelf.jump_next_letter(),
+                    (19, true) if !self.inserted => shelf.hold_up(ms),
+                    (20, true) if !self.inserted => shelf.hold_down(ms),
+                    (19, false) => shelf.release_up(),
+                    (20, false) => shelf.release_down(),
                     _ => {}
                 }
-                if !self.inserted && pressed && (code == 19 || code == 20)
-                    && shelf.index != before {
-                    let letter = slot_store::initial(&shelf.carts[shelf.index].stem);
-                    let face = word_face(&letter.to_string());
-                    let tex = match self.letter_texture {
-                        Some(tex) => { self.gpu.update_texture(tex, face.w, face.h, &face.rgba); tex }
-                        None => { let tex = self.gpu.create_texture(face.w, face.h, &face.rgba);
-                            self.letter_texture = Some(tex); tex }
-                    };
-                    self.letter_face = Printed::new(tex, face.w);
-                    self.letter_shown_at = Some(Instant::now());
-                }
+                let jumped= !self.inserted && pressed && (code==19 || code==20)
+                    && shelf.index!=before;
+                if jumped { self.show_selected_letter(); }
             }
+        }
+    }
+
+    fn upload_clear_material(&mut self, key:(usize,usize), layers:[slot_ui::CartFace;3]) {
+        let textures=if let Some(existing)=self.clear_material {
+            for (tex,face) in existing.tex.iter().copied().zip(layers.into_iter()) {
+                self.gpu.update_texture(tex,face.w,face.h,&face.rgba);
+            }
+            existing.tex
+        } else {
+            layers.map(|face|self.gpu.create_texture(face.w,face.h,&face.rgba))
+        };
+        self.clear_material=Some(ClearMaterial{key,tex:textures});
+    }
+    fn clear_layers(&self) -> ([Option<slot_gfx::TexId>;2],Option<slot_gfx::TexId>) {
+        let selected=self.shelves.get(self.active).map(|s|(self.active,s.index));
+        match (self.clear_material,selected) {
+            (Some(layer),Some(key)) if layer.key==key =>
+                ([Some(layer.tex[0]),Some(layer.tex[1])],Some(layer.tex[2])),
+            _ => ([None,None],None),
         }
     }
 
@@ -2544,21 +2834,29 @@ impl Engine {
     // GPU texture uploads stay on their GL owner and are bounded per frame.
     fn prepare_visible(&mut self) {
         for _ in 0..2 {
-            let Some(((shelf_id, index), face)) = self.cart_render.ready() else { break };
-            let Some(shelf) = self.shelves.get(shelf_id) else { continue };
-            if index >= shelf.carts.len() || shelf.face(index).is_some() { continue }
+            let Some(((shelf_id,index),face,layers))=self.cart_render.ready() else {break};
+            let Some(shelf)=self.shelves.get(shelf_id) else {continue};
+            if index>=shelf.carts.len(){continue}
+            if let Some(layers)=layers {
+                if shelf_id==self.active && index==shelf.index {
+                    self.upload_clear_material((shelf_id,index),layers);
+                }
+            }
+            if self.shelves[shelf_id].face(index).is_some() {continue}
             let texture = if self.texture_cache.len() >= 42 {
                 // Pin selected +/- one cart from EACH system so the entire
                 // immediately-visible GB/GBC trio survives GBA scrolling.
                 // At most nine textures are pinned inside our existing 42,
                 // preventing background prefetch/re-eviction thrashing.
                 let victim = self.texture_cache.iter().position(|(sid, index, _)| {
-                    self.shelves[*sid].carts.is_empty() ||
-                    self.shelves[*sid].index.abs_diff(*index) > 1
+                    self.shelves.get(*sid).is_none_or(|shelf|
+                        shelf.carts.is_empty() || shelf.index.abs_diff(*index) > 1)
                 }).unwrap_or(0);
                 let (old_shelf, old_index, tex) = self.texture_cache
                     .remove(victim).expect("nonempty texture pool");
-                self.shelves[old_shelf].take_face(old_index);
+                if let Some(shelf) = self.shelves.get_mut(old_shelf) {
+                    shelf.take_face(old_index);
+                }
                 self.gpu.update_texture(tex, face.w, face.h, &face.rgba);
                 tex
             } else {
@@ -2597,6 +2895,9 @@ impl Engine {
             }
         }
         for (sid, index) in priority {
+            let wants_material=sid==self.active && index==selected &&
+                self.shelves[sid].carts.get(index).is_some_and(slot_ui::is_clear) &&
+                self.clear_material.map(|m|m.key)!=Some((sid,index));
             if self.shelves[sid].face(index).is_some() {
                 if let Some(pos) = self.texture_cache.iter()
                     .position(|(s, i, _)| *s == sid && *i == index)
@@ -2605,13 +2906,13 @@ impl Engine {
                         self.texture_cache.push_back(entry);
                     }
                 }
-                continue;
+                if !wants_material {continue;}
             }
             // A freshly configured AVD has no ROMs yet. Skip the empty
             // shelf instead of indexing carts[0] and aborting the GL thread.
             let Some(cart) = self.shelves.get(sid).and_then(|shelf| shelf.carts.get(index))
             else { continue; };
-            self.cart_render.request((sid, index), cart);
+            self.cart_render.request((sid, index), cart, wants_material);
         }
     }
 
@@ -2651,16 +2952,17 @@ impl Engine {
             let rom_stem = self.shelves[self.active].carts
                 .get(self.shelves[self.active].index)
                 .map_or("", |cart| cart.stem.as_str());
+            let effective_settings = self.game_settings();
             let started = Instant::now();
             let resume_preference = NEXT_RESUME_MODE.swap(-1, Ordering::AcqRel);
             let wants_state = match resume_preference {
                 0 => false, 1 => true,
-                _ => self.settings.eject_save && !self.fresh_launch,
+                _ => effective_settings.eject_save && !self.fresh_launch,
             };
             match GameSession::open(Path::new(local), &core_file, &storage,
                 core, platform, wants_state,
-                rom_stem, self.settings.gb_palettes.then(|| self.settings.palette_name()),
-                self.settings.colour_correction,
+                rom_stem, effective_settings.gb_palettes.then(|| effective_settings.palette_name()),
+                effective_settings.colour_for(platform),
                 self.ra_service.as_ref()) {
                 Ok(session) => {
                     self.link_identity = if platform == Platform::Gba {
@@ -2778,6 +3080,86 @@ impl Engine {
         }
     }
 
+    /// Merge this ROM+core's optional visual/gameplay overrides on top of
+    /// globally persisted Settings without mutating them or another ROM.
+    fn game_settings(&self) -> crate::settings::Settings {
+        let mut effective = self.settings.clone();
+        if let Some(profile) = self.game_emulation {
+            profile.apply_visual_and_gameplay(&mut effective, self.current_cart_platform());
+        }
+        effective
+    }
+    fn live_game_options(&self) -> LiveGameOptions {
+        LiveGameOptions::from_profile(&self.settings, self.game_emulation)
+    }
+    fn game_shader(&self) -> crate::settings::Shader {
+        self.game_settings().shader_for(self.current_cart_platform())
+    }
+
+    /// Native 3:2 KONKR: GBA fills the panel and has no forced letterbox bezel.
+    /// GB/GBC preserve the official 720×480 transparent overlays.
+    fn game_bezel(&self) -> Option<slot_gfx::TexId> {
+        if self.game_settings().bezel_for(self.current_cart_platform())
+            == crate::settings::Bezel::None {return None;}
+        match self.current_cart_platform() {
+            Platform::Gba=>None,
+            Platform::Gb=>Some(self.gb_bezel_tex),
+            Platform::Gbc=>Some(self.gbc_bezel_tex),
+        }
+    }
+
+    fn screen_rows(platform: Platform)-> &'static [usize] {
+        match platform {
+            // Upstream v1.7 hides GBA bezel on an unframed 3:2 panel:
+            // GBA already fills KONKR's native 960x640 display.
+            Platform::Gba=>&[34,29],
+            Platform::Gbc=>&[88,29,90],
+            Platform::Gb=>&[89,29,36,90],
+        }
+    }
+    fn screen_keys(platform:Platform)-> &'static [usize] {
+        match platform {
+            Platform::Gba=>&[0,22],
+            Platform::Gbc=>&[21,23,26],
+            Platform::Gb=>&[1,24,3,27],
+        }
+    }
+    fn screen_title(platform:Platform)->usize {
+        match platform {
+            Platform::Gba=>91, Platform::Gbc=>92,Platform::Gb=>93,
+        }
+    }
+    fn screen_submenu_platform(row:usize)->Platform {
+        match row {
+            0=>Platform::Gba,1=>Platform::Gbc,_=>Platform::Gb,
+        }
+    }
+
+    fn pause_screen_rows(&self) -> &'static [usize] {
+        if self.current_cart_platform()==Platform::Gb &&
+            !self.game.as_ref().is_some_and(GameSession::can_change_gb_palette) {
+            &[89,29,90]
+        } else {
+            Self::screen_rows(self.current_cart_platform())
+        }
+    }
+    fn pause_screen_key(&self,row:usize)->Option<usize> {
+        if self.current_cart_platform()==Platform::Gb &&
+            !self.game.as_ref().is_some_and(GameSession::can_change_gb_palette) {
+            [1,24,27].get(row).copied()
+        } else {
+            Self::screen_keys(self.current_cart_platform()).get(row).copied()
+        }
+    }
+    fn pause_settings_rows(&self) -> &'static [usize] {
+        if self.game.as_ref().is_some_and(GameSession::linked) {
+            // Display-only settings cannot alter GBA Link/RFU state.
+            &[32]
+        } else {
+            &[32,33,49,57]
+        }
+    }
+
     fn current_emulation(&self) -> EmulationProfile {
         let mut profile = self.game_emulation
             .unwrap_or_else(|| EmulationProfile::from_settings(&self.settings));
@@ -2813,7 +3195,63 @@ impl Engine {
                 .and_then(|(root, _)| EmulationProfile::load(root, uri, core))
         });
     }
+    fn change_game_screen_or_gameplay(&mut self, key: usize, right: bool) {
+        let Some(uri)=self.selected_rom_uri() else { return };
+        let core=self.selected_emulation_core();
+        let platform=self.current_cart_platform();
+        let linked=self.game.as_ref().is_some_and(GameSession::linked);
+        let relaunch=self.game.as_ref().is_some_and(GameSession::requires_relaunch);
+        // Shader and color-correction are display-only and safe while linked;
+        // never change input, save states, emulation speed or rewind in Link.
+        if relaunch || (linked && !matches!(key,0|1|2|21|22|23|24|25|26|27)) {
+            set_message("Gameplay changes are disabled during Multiplayer".into());
+            return;
+        }
+        // This method is only called from the paused game, not the carousel.
+        let mut profile=self.game_emulation
+            .unwrap_or_else(|| EmulationProfile::from_settings(&self.settings));
+        if !profile.change_visual_and_gameplay(&self.settings,platform,key,right) { return; }
+        if let Some((root,_))=PATHS.lock().unwrap_or_else(|e|e.into_inner()).as_ref() {
+            if let Err(error)=profile.save(root,&uri,core) {
+                set_message(format!("Cannot save game settings: {error}"));
+                return;
+            }
+        } else { return; }
+        self.game_emulation=Some(profile);
+        let view=self.game_settings();
+        if matches!(key,0|1|21) {
+            self.gpu.set_screen_effect(view.shader_for(platform).effect());
+        }
+        if matches!(key,2|22|23|24) {
+            if let Some(session)=self.game.as_mut() {
+                session.set_colour_correction(view.colour_for(platform));
+            }
+        }
+        if key==3 {
+            if let Some(session)=self.game.as_mut() {
+                session.set_gb_palette_mode(view.gb_palettes,view.palette_name());
+            }
+        }
+        if key==5 {
+            FF_AUDIO_ENABLED.store(view.ff_sound,Ordering::Release);
+            AUDIO.lock().unwrap_or_else(|e|e.into_inner()).clear();
+        }
+        // No stale FF, rewind or frame debt after an option changes.
+        if (4..=9).contains(&key) { self.reset_time_controls(); }
+    }
+
     fn change_game_emulation(&mut self, key: usize, right: bool) {
+        if self.game.as_ref().is_some_and(|game|game.linked() || game.requires_relaunch()) {
+            // In a linked session, do not alter the effective frame cadence
+            // or speculative time travel. Keep the current session in sync.
+            set_message("Emulation settings are locked while Multiplayer is active".into());
+            return;
+        }
+        if key == 12 && self.game.as_ref().is_some_and(|game|
+            !game.runahead_supported()) {
+            set_message("Run-Ahead unavailable for this core/game (Link, Flash or speculative audio protection)".into());
+            return;
+        }
         if key == 12 && self.game.as_ref().is_some_and(|game|
             game.mgba_flash_runahead_blocked()) {
             set_message("Run-Ahead is disabled for Pokemon Gen III with mGBA to protect Flash saves. gpSP is unchanged.".into());
@@ -2821,7 +3259,12 @@ impl Engine {
         }
         let Some(uri) = self.selected_rom_uri() else { return; };
         let core = self.selected_emulation_core();
-        let mut profile = self.current_emulation();
+        // Edit the persisted intent, not the safety-clamped effective profile.
+        // A core that temporarily disables speculative frames must not erase
+        // saved Run-Ahead preference when we change Show Stats / pacing.
+        let mut profile = self.game_emulation
+            .unwrap_or_else(|| EmulationProfile::from_settings(&self.settings));
+        profile.show_fps = profile.show_fps_override.unwrap_or(self.settings.show_fps);
         if !profile.change(key, right) { return; }
         if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             if let Err(error) = profile.save(root, &uri, core) {
@@ -2830,8 +3273,17 @@ impl Engine {
             }
         } else { return; }
         self.game_emulation = Some(profile);
+        // Avoid reinterpreting a frame debt accumulated under the previous
+        // timing policy, and discard any prior predictive video/audio frame.
+        // The core stays alive; edits take effect on the first resumed frame.
+        self.game_accum = 0.0;
+        AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
     fn reset_game_emulation(&mut self) {
+        if self.game.as_ref().is_some_and(|game|game.linked() || game.requires_relaunch()) {
+            set_message("Cannot reset emulation during Multiplayer".into());
+            return;
+        }
         let Some(uri) = self.selected_rom_uri() else { return; };
         let core = self.selected_emulation_core();
         if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
@@ -2841,6 +3293,16 @@ impl Engine {
             }
         } else { return; }
         self.game_emulation = None;
+        let globals=self.game_settings();
+        let platform=self.current_cart_platform();
+        self.gpu.set_screen_effect(self.game_shader().effect());
+        if let Some(session)=self.game.as_mut() {
+            session.set_colour_correction(globals.colour_for(platform));
+            session.set_gb_palette_mode(globals.gb_palettes,globals.palette_name());
+        }
+        FF_AUDIO_ENABLED.store(globals.ff_sound,Ordering::Release);
+        self.reset_time_controls();
+        AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
     fn persist_settings(&self) {
         if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
@@ -2850,15 +3312,209 @@ impl Engine {
         }
     }
 
+    fn reload_wallpaper(&mut self, root: Option<&Path>) {
+        let (image, personal) = wallpaper_pixels(root, &self.settings.wallpaper);
+        self.wallpaper_personal = personal;
+        if let Some(rgba) = image {
+            self.wallpaper_texture = Some(if let Some(tex) = self.wallpaper_texture {
+                self.gpu.update_texture(tex, slot_ui::NATIVE_W, slot_ui::NATIVE_H, &rgba);
+                tex
+            } else {
+                self.gpu.create_texture(slot_ui::NATIVE_W, slot_ui::NATIVE_H, &rgba)
+            });
+        }
+        // None deliberately leaves the texture allocated for quick reactivation
+        // but never draws it, avoiding repeated GL allocations on toggling.
+    }
+
+    fn refresh_wallpaper_name(&mut self) {
+        let crate::settings::WallpaperPick::File(_) = &self.settings.wallpaper
+            else { return };
+        let name = self.settings.wallpaper.label();
+        let short: String = name.chars().take(18).collect();
+        let face = quick_value_face(&short, true);
+        self.wallpaper_name_face = Some(
+            if let Some((tex, _, _)) = self.wallpaper_name_face {
+                self.gpu.update_texture(tex, face.w, face.h, &face.rgba);
+                (tex, face.w, face.h)
+            } else {
+                (self.gpu.create_texture(face.w, face.h, &face.rgba), face.w, face.h)
+            });
+    }
+
+    fn cycle_wallpaper(&mut self, right: bool) {
+        let root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .as_ref().map(|(root,_)|root.clone());
+        let Some(root) = root.as_deref() else { return };
+        self.settings.wallpaper = self.settings.wallpaper.step(root, right);
+        self.reload_wallpaper(Some(root));
+        self.refresh_wallpaper_name();
+        self.persist_settings();
+    }
+
+    fn recents_root() -> Option<PathBuf> {
+        PATHS.lock().unwrap_or_else(|e|e.into_inner())
+            .as_ref().map(|(root,_)|root.clone())
+    }
+    fn rebuild_recents(&mut self) {
+        let Some(root)=Self::recents_root() else { return };
+        let ids=crate::recents::load(&root);
+        let carts=crate::recents::carts(&ids,
+            &[&self.shelves[0].carts,&self.shelves[1].carts,&self.shelves[2].carts]);
+        let was_recent=self.active==3;
+        // Reject completed worker art from the previous URI->index mapping.
+        self.cart_render.invalidate_shelf(3);
+        let moves=self.shelves[3].replace_carts_preserving_visuals(
+            if self.settings.show_recents { carts } else { Vec::new() });
+        // Preserve GPU handles for unchanged ROMs while retaining orphaned
+        // handles in the 42-slot recycler (sentinel entries are first victims).
+        for (shelf,index,_) in &mut self.texture_cache {
+            if *shelf != 3 { continue; }
+            if let Some((_,new))=moves.iter().find(|(old,_)|*old==*index) {
+                *index=*new;
+            } else {
+                *shelf=usize::MAX;
+                *index=usize::MAX;
+            }
+        }
+        // Material layers are tied to a ROM, not to its former rack index.
+        // Retain the three GPU handles when the same clear cart moves in
+        // Recents (including while inserting), but invalidate removed ROMs.
+        if let Some(material)=self.clear_material.as_mut() {
+            if material.key.0==3 {
+                if let Some((_,new))=moves.iter().find(|(old,_)|*old==material.key.1) {
+                    material.key.1=*new;
+                } else {
+                    material.key=(usize::MAX,usize::MAX);
+                }
+            }
+        }
+        if was_recent && self.shelves[3].carts.is_empty() {
+            self.active=next_nonempty_shelf(&self.shelves,0,1);
+        }
+    }
+    fn record_recent(&mut self) {
+        let Some(root)=Self::recents_root() else { return };
+        let Some(uri)=self.selected_rom_uri() else { return };
+        let next=crate::recents::append_previous(&crate::recents::load(&root),&uri);
+        if let Err(err)=crate::recents::store(&root,&next) {
+            eprintln!("slot-konkr: unable to update recents rack: {err}");
+        } else {
+            self.rebuild_recents();
+        }
+    }
+    fn general_rows(&self) -> Vec<usize> {
+        let mut rows=vec![83]; // Wallpaper
+        if self.show_general_tint(){rows.push(84);}
+        rows.extend_from_slice(&[85,86,87,43]);
+        if self.custom_wallpaper_present {rows.push(45);}
+        rows
+    }
+    fn cycle_general_row(&mut self, row: usize, right: bool, confirm: bool) {
+        let Some(which)=self.general_rows().get(row).copied() else {return};
+        match which {
+            83 => self.cycle_wallpaper(right),
+            84 => self.cycle_wallpaper_tint(right),
+            85 => self.cycle_appearance(),
+            86 => {
+                self.settings.show_recents=!self.settings.show_recents;
+                self.rebuild_recents();
+                self.persist_settings();
+            }
+            87 => {
+                self.settings.show_titles=!self.settings.show_titles;
+                self.selected_title_name.clear();
+                self.persist_settings();
+            }
+            43 if confirm => UI_ACTION.lock().unwrap_or_else(|e|e.into_inner()).push_back(8),
+            45 if confirm => {
+                UI_ACTION.lock().unwrap_or_else(|e|e.into_inner()).push_back(10);
+                self.custom_wallpaper_present=false;
+                self.overlay=ShelfOverlay::GeneralSettings {
+                    row: row.saturating_sub(1),
+                };
+            }
+            _ => {}
+        }
+    }
+    /// Rasterise only when the selected game changes; no repeated label
+    /// processing on 60/120Hz draw callbacks.
+    fn show_selected_letter(&mut self) {
+        let Some(cart)=self.shelves.get(self.active)
+            .and_then(|shelf|shelf.carts.get(shelf.index)) else {return};
+        let letter=slot_store::initial(&cart.stem);
+        let face=slot_ui::word_ink(&letter.to_string(),[255,255,255]);
+        let tex=match self.letter_texture {
+            Some(tex)=>{self.gpu.update_texture(tex,face.w,face.h,&face.rgba);tex},
+            None=>{let tex=self.gpu.create_texture(face.w,face.h,&face.rgba);
+                self.letter_texture=Some(tex);tex},
+        };
+        self.letter_face=Printed::new(tex,face.w);
+        // Upstream clears the previous system-name display when a letter jump
+        // occurs. Otherwise a quick UP just after L1/R1 stays invisible.
+        self.platform_shown_at=None;
+        self.letter_shown_at=Some(Instant::now());
+    }
+
+    fn refresh_selected_title(&mut self) {
+        if !self.settings.show_titles || self.game.is_some() {return;}
+        // Original v1.7 shelf Game Titles use label_text() (cleaned
+        // filename), NOT the GBA internal ROM header. Reuse the same value
+        // and Slot's native fit/ellipsis, without arbitrary 39-char clipping.
+        let name=self.shelves.get(self.active)
+            .and_then(|s|s.carts.get(s.index))
+            .map(slot_ui::label_text).unwrap_or_default();
+        if name==self.selected_title_name {return;}
+        self.selected_title_name=name.clone();
+        if name.is_empty(){self.selected_title_face=Printed::default();return;}
+        let image=slot_ui::title_line_face(&name);
+        if image.w==0 || image.h==0 {
+            self.selected_title_face=Printed::default();
+            return;
+        }
+        let tex=if let Some(tex)=self.selected_title_texture {
+            self.gpu.update_texture(tex,image.w,image.h,&image.rgba);
+            tex
+        }else{
+            let tex=self.gpu.create_texture(image.w,image.h,&image.rgba);
+            self.selected_title_texture=Some(tex);
+            tex
+        };
+        self.selected_title_face=Printed::new(tex,image.w);
+    }
+
+    fn show_general_tint(&self) -> bool {
+        self.wallpaper_personal
+    }
+
+    fn cycle_wallpaper_tint(&mut self, right: bool) {
+        self.settings.wallpaper_tint=self.settings.wallpaper_tint.step(right);
+        self.persist_settings();
+    }
+
+    fn cycle_appearance(&mut self) {
+        self.settings.appearance=self.settings.appearance.toggle();
+        let custom_colours = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .as_ref().is_some_and(|(root,_)|
+                root.join("Config/theme.txt").is_file());
+        self.slot_faces=if custom_colours { None }
+            else if self.settings.appearance == crate::settings::Appearance::Light {
+                Some(self.slot_light_faces)
+            } else { Some(self.slot_dark_faces) };
+        self.recolour_footer_text();
+        self.persist_settings();
+    }
+
     fn change_setting(&mut self, key: usize, right: bool) {
         if !self.settings.change(key, right) { return; }
         if key == 5 {
             FF_AUDIO_ENABLED.store(self.settings.ff_sound, Ordering::Release);
             AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
         }
-        if key == 2 {
+        if matches!(key,2|22|23|24) {
+            let colour=self.settings.colour_for(self.current_cart_platform());
             if let Some(game) = self.game.as_mut() {
-                game.set_colour_correction(self.settings.colour_correction);
+                game.set_colour_correction(colour);
             }
         }
         self.persist_settings();
@@ -2866,24 +3522,29 @@ impl Engine {
 
     fn setting_value(&self, key: usize) -> usize {
         use crate::settings::Shader;
-        let profile = if matches!(self.overlay, ShelfOverlay::GameEmulationSettings { .. }) {
+        let profile = if matches!(self.overlay, ShelfOverlay::PauseEmulationSettings { .. }) {
             self.current_emulation()
         } else { EmulationProfile::from_settings(&self.settings) };
+        let scoped = if matches!(self.overlay,
+            ShelfOverlay::PauseScreenSettings { .. } |
+            ShelfOverlay::PauseGameplaySettings { .. }) {
+            self.game_settings()
+        } else { self.settings.clone() };
         let shader = |shader| match shader {
             Shader::Off => 5, Shader::Lcd3x => 6, Shader::Grid => 7,
             Shader::Dot => 8, Shader::Simpletex => 9,
         };
         match key {
-            0 => shader(self.settings.shader_gba),
-            1 => shader(self.settings.shader_gb),
-            2 => if self.settings.colour_correction { 4 } else { 5 },
-            3 => if self.settings.gb_palettes { 4 } else { 5 },
-            4 => match self.settings.ff_speed { 2 => 0, 3 => 1, 4 => 2, _ => 3 },
-            5 => if self.settings.ff_sound { 4 } else { 5 },
-            6 => if self.settings.rewind { 4 } else { 5 },
-            7 => if self.settings.turbo { 15 } else { 16 },
-            8 => if self.settings.rumble { 4 } else { 5 },
-            9 => if self.settings.eject_save { 4 } else { 5 },
+            0 => shader(scoped.shader_gba),
+            1 => shader(scoped.shader_gb),
+            2 => if scoped.colour_for(self.current_cart_platform()) {4}else{5},
+            3 => if scoped.gb_palettes { 4 } else { 5 },
+            4 => match scoped.ff_speed { 2 => 0, 3 => 1, 4 => 2, _ => 3 },
+            5 => if scoped.ff_sound { 4 } else { 5 },
+            6 => if scoped.rewind { 4 } else { 5 },
+            7 => if scoped.turbo { 15 } else { 16 },
+            8 => if scoped.rumble { 4 } else { 5 },
+            9 => if scoped.eject_save { 4 } else { 5 },
             10 => if profile.show_fps { 4 } else { 5 },
             11 => if profile.display_sync_pacing { 14 }
                 else if profile.responsive_pacing { 11 } else { 10 },
@@ -2891,6 +3552,30 @@ impl Engine {
             13 => if self.settings.show_wifi { 4 } else { 5 },
             14 => if self.settings.show_bluetooth { 4 } else { 5 },
             15 => if self.settings.show_integrations { 4 } else { 5 },
+            16 => match &self.settings.wallpaper {
+                crate::settings::WallpaperPick::None => 17,
+                crate::settings::WallpaperPick::Random => 18,
+                crate::settings::WallpaperPick::Default => 19,
+                crate::settings::WallpaperPick::Blur => 20,
+                crate::settings::WallpaperPick::File(_) => 26,
+            },
+            17 => match self.settings.wallpaper_tint {
+                crate::settings::WallpaperTint::Off => 5,
+                crate::settings::WallpaperTint::Low => 23,
+                crate::settings::WallpaperTint::Medium => 24,
+                crate::settings::WallpaperTint::High => 25,
+            },
+            18 => if self.settings.appearance == crate::settings::Appearance::Light
+                { 22 } else { 21 },
+            19 => if self.settings.show_recents {4}else{5},
+            20 => if self.settings.show_titles {4}else{5},
+            21 => shader(scoped.shader_gbc),
+            22 => if scoped.colour_correction_gba {4}else{5},
+            23 => if scoped.colour_correction_gbc {4}else{5},
+            24 => if scoped.colour_correction_gb {4}else{5},
+            25 => if scoped.bezel_gba==crate::settings::Bezel::None {17}else{19},
+            26 => if scoped.bezel_gbc==crate::settings::Bezel::None {17}else{19},
+            27 => if scoped.bezel_gb==crate::settings::Bezel::None {17}else{19},
             _ => 5,
         }
     }
@@ -2920,8 +3605,14 @@ impl Engine {
     fn draw_setting_values(&self, row: usize, keys: &[usize], out: &mut Vec<Draw>) {
         let top = settings_row_top(keys.len());
         for (index, key) in keys.iter().copied().enumerate() {
-            if key > 15 { continue; } // Reset-to-global has no value.
-            let (tex, width, height) = self.setting_values[self.setting_value(key)];
+            if key > 27 { continue; } // Action-only rows have no value.
+            let (tex, width, height) =
+                if key == 16 && matches!(self.settings.wallpaper,
+                    crate::settings::WallpaperPick::File(_)) {
+                    self.wallpaper_name_face.unwrap_or(self.setting_values[26])
+                } else {
+                    self.setting_values[self.setting_value(key)]
+                };
             let y = top + index as f32 * QUICK_PITCH + 8.0;
             let scale = 0.79;
             let w = width as f32 * scale;
@@ -2987,7 +3678,13 @@ impl Engine {
         // All menus use the original Slot keycap generator. The paused game
         // screen additionally advertises its active SAVE / LOAD shortcuts.
         if heading == 19 {
-            for (tex, w, x) in centred_hints(&self.game_menu_hints, 15.0) {
+            let linked = self.game.as_ref().is_some_and(|session|
+                session.linked() || session.requires_relaunch());
+            // A paused Link never offers save/load, even in its keycap hints.
+            let hints: &[(slot_gfx::TexId, u32)] = if linked {
+                &self.game_menu_hints[..1] // B Back only
+            } else { &self.game_menu_hints };
+            for (tex, w, x) in centred_hints(hints, 15.0) {
                 out.push(Draw::Tex {
                     x, y: 427.0, w: w as f32, h: HINT_H as f32,
                     tex, alpha: fade,
@@ -3060,23 +3757,26 @@ impl Engine {
                 self.draw_library_share_value(row, out);
             }
             ShelfOverlay::Settings { row } => {
-                self.draw_original_style_menu(26, &[32, 33, 49, 58], row, out);
+                self.draw_original_style_menu(26, &[32, 33, 49, 58, 81], row, out);
+            }
+            ShelfOverlay::GeneralSettings { row } => {
+                let rows=self.general_rows();
+                self.draw_original_style_menu(82,&rows,row,out);
+                let keys:Vec<usize>=rows.iter().map(|id|match id {
+                    83=>16,84=>17,85=>18,86=>19,87=>20,_=>usize::MAX
+                }).collect();
+                self.draw_setting_values(row,&keys,out);
             }
             ShelfOverlay::InterfaceSettings { row } => {
-                if self.custom_wallpaper_present {
-                    self.draw_original_style_menu(59, &[63, 64, 65, 43, 45], row, out);
-                    self.draw_setting_values(row, &[13, 14, 15, usize::MAX, usize::MAX], out);
-                } else {
-                    self.draw_original_style_menu(59, &[63, 64, 65, 43], row, out);
-                    self.draw_setting_values(row, &[13, 14, 15, usize::MAX], out);
-                }
+                self.draw_original_style_menu(59, &[63, 64, 65], row, out);
+                self.draw_setting_values(row, &[13, 14, 15], out);
             }
             ShelfOverlay::EmulationSettings { row } => {
                 self.draw_original_style_menu(50, &[51, 52, 55], row, out);
                 self.draw_setting_values(row, &[10, 11, 12], out);
             }
-            ShelfOverlay::GameEmulationSettings { row } => {
-                self.draw_original_style_menu(56, &[51, 52, 55, 57], row, out);
+            ShelfOverlay::PauseEmulationSettings { row } => {
+                self.draw_original_style_menu(50, &[51, 52, 55], row, out);
                 // Identify the selected core without changing Slot's menu
                 // layout or existing keycap typography.
                 let index = if self.selected_emulation_core() == Core::Gpsp { 1 } else { 0 };
@@ -3095,8 +3795,12 @@ impl Engine {
                 self.draw_setting_values(row, &[10, 11, 12, usize::MAX], out);
             }
             ShelfOverlay::ScreenSettings { row } => {
-                self.draw_original_style_menu(32, &[34, 35, 29, 36], row, out);
-                self.draw_setting_values(row, &[0, 1, 2, 3], out);
+                self.draw_original_style_menu(32, &[91,92,93], row, out);
+            }
+            ShelfOverlay::ScreenSystemSettings {platform,row} => {
+                self.draw_original_style_menu(Self::screen_title(platform),
+                    Self::screen_rows(platform),row,out);
+                self.draw_setting_values(row,Self::screen_keys(platform),out);
             }
             ShelfOverlay::GameplaySettings { row } => {
                 self.draw_original_style_menu(33, &[27, 28, 37, 38, 30, 39], row, out);
@@ -3128,13 +3832,25 @@ impl Engine {
                 self.draw_menu_hints(141.0, 311.0, out);
             }
             ShelfOverlay::GameMenu { row } => {
-                let first = if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
-                    78
-                } else { 20 };
-                let second = if self.game.as_ref().is_some_and(GameSession::linked) {
-                    67
-                } else { 66 };
-                self.draw_original_style_menu(19, &[first, second, 21, 22], row, out);
+                let linked = self.game.as_ref().is_some_and(GameSession::linked);
+                let relaunch = self.game.as_ref().is_some_and(GameSession::requires_relaunch);
+                let indices: Vec<usize> = pause_rows(linked, relaunch).iter()
+                    .map(|item| pause_row_text(*item, linked, relaunch)).collect();
+                self.draw_original_style_menu(19, &indices, row, out);
+            }
+            ShelfOverlay::PauseSettings { row } => {
+                self.draw_original_style_menu(26, self.pause_settings_rows(), row, out);
+            }
+            ShelfOverlay::PauseScreenSettings { row } => {
+                let items=self.pause_screen_rows();
+                self.draw_original_style_menu(32, items, row, out);
+                let keys: Vec<usize>=(0..items.len())
+                    .filter_map(|index|self.pause_screen_key(index)).collect();
+                self.draw_setting_values(row,&keys,out);
+            }
+            ShelfOverlay::PauseGameplaySettings { row } => {
+                self.draw_original_style_menu(33, &[27,28,37,38,30,39], row, out);
+                self.draw_setting_values(row,&[4,5,6,7,8,9],out);
             }
             ShelfOverlay::Multiplayer => self.draw_multiplayer(out),
             ShelfOverlay::Core => {
@@ -3209,11 +3925,13 @@ impl Engine {
             tex: self.chip_shadow,
             alpha: 0.8 * lift,
         });
-        if let Some(tex) = shelf.face(shelf.index) {
-            let face = grown(lid, TURN_PAD as f32 * lid.w / CART_W as f32);
+        let (behind,front)=self.clear_layers();
+        let face=grown(lid,TURN_PAD as f32*lid.w/CART_W as f32);
+        for tex in behind.into_iter().flatten()
+            .chain(front.or_else(||shelf.face(shelf.index))) {
             out.push(Draw::Turned {
-                x: face.x, y: face.y, w: face.w, h: face.h,
-                tex, alpha: 1.0, turn,
+                x:face.x,y:face.y,w:face.w,h:face.h,
+                tex,alpha:1.0,turn,
             });
         }
 
@@ -3367,13 +4085,23 @@ impl Engine {
         let (kind, selected, count) = match self.overlay {
             ShelfOverlay::Menu { row } => (1u8, row, 6usize),
             ShelfOverlay::Library { row } => (2u8, row, 6usize),
-            ShelfOverlay::GameMenu { row } => (3u8, row, 4usize),
+            ShelfOverlay::GameMenu { row } => (3u8, row, pause_rows(
+                self.game.as_ref().is_some_and(GameSession::linked),
+                self.game.as_ref().is_some_and(GameSession::requires_relaunch)).len()),
+            ShelfOverlay::PauseSettings { row } => (13u8, row, self.pause_settings_rows().len()),
+            ShelfOverlay::PauseScreenSettings { row } =>
+                (14u8, row, self.pause_screen_rows().len()),
+            ShelfOverlay::PauseGameplaySettings { row } => (15u8, row, 6usize),
             ShelfOverlay::Multiplayer => (11u8, 0, 0usize),
-            ShelfOverlay::Settings { row } => (4u8, row, 4usize),
-            ShelfOverlay::InterfaceSettings { row } => (10u8, row, if self.custom_wallpaper_present { 5 } else { 4 }),
+            ShelfOverlay::Settings { row } => (4u8, row, 5usize),
+            ShelfOverlay::GeneralSettings { row } =>
+                (12u8, row, self.general_rows().len()),
+            ShelfOverlay::InterfaceSettings { row } => (10u8, row, 3usize),
             ShelfOverlay::EmulationSettings { row } => (8u8, row, 3usize),
-            ShelfOverlay::GameEmulationSettings { row } => (9u8, row, 4usize),
-            ShelfOverlay::ScreenSettings { row } => (5u8, row, 4usize),
+            ShelfOverlay::PauseEmulationSettings { row } => (9u8, row, 3usize),
+            ShelfOverlay::ScreenSettings { row } => (5u8, row, 3usize),
+            ShelfOverlay::ScreenSystemSettings { platform,row } =>
+                (16u8,row,Self::screen_rows(platform).len()),
             ShelfOverlay::GameplaySettings { row } => (6u8, row, 6usize),
             _ => (0, 0, 0),
         };
@@ -3411,7 +4139,8 @@ impl Engine {
                         cart, face: shelf.face(shelf.index), rest, scale,
                         seat: self.progress, alert: None, dim: 0.0,
                         screen: self.screen_power, game: true,
-                    }.draw(&mut commands);
+                        slot_faces: self.slot_faces,
+                    }.draw_with_material(&mut commands,self.clear_layers().0,self.clear_layers().1);
                 } else {
                     commands.push(Draw::Game);
                 }
@@ -3470,11 +4199,9 @@ impl Engine {
                     self.buttons = 0;
                     SAMPLE_RATE.store(session.sample_rate, Ordering::Release);
                     self.game = Some(session);
+                    self.record_recent();
                     self.game_accum = 0.0;
-                    let shader = if self.active == 0 {
-                        self.settings.shader_gba
-                    } else { self.settings.shader_gb };
-                    self.gpu.set_screen_effect(shader.effect());
+                    self.gpu.set_screen_effect(self.game_shader().effect());
                     // The exact Slot upstream geometry: GB/GBC 160x144
                     // is centred within the 240x160 libretro canvas.
                     let name = self.shelves[self.active].carts
@@ -3511,7 +4238,9 @@ impl Engine {
             return;
         }
         if self.game.is_some() && matches!(self.overlay,
-            ShelfOverlay::GameMenu { .. } | ShelfOverlay::Multiplayer) {
+            ShelfOverlay::GameMenu { .. } | ShelfOverlay::Multiplayer |
+            ShelfOverlay::PauseSettings { .. } | ShelfOverlay::PauseScreenSettings { .. } |
+            ShelfOverlay::PauseGameplaySettings { .. } | ShelfOverlay::PauseEmulationSettings { .. }) {
             // Coordinate the pause with the remote game. Without this
             // the other Cable peer times out and gpSP RFU can drift.
             if let Some(game) = self.game.as_mut() { game.set_link_paused(true); }
@@ -3582,6 +4311,9 @@ impl Engine {
             self.buttons |= ButtonMask::SELECT;
         }
         let profile = self.current_emulation();
+        let bezel=self.game_bezel(); // resolved before mutably borrowing GameSession
+        let live=self.live_game_options(); // Copy, zero allocations on 60/120Hz callback
+        FF_AUDIO_ENABLED.store(live.ff_sound,Ordering::Release);
         // Android's frame callback changes GLSurfaceView renderMode only when
         // an active game explicitly selected DISPLAY SYNC. No engine work or
         // GL resource ownership ever moves away from the GL render thread.
@@ -3617,7 +4349,7 @@ impl Engine {
             } else {
                 // Original Slot offers 2/3/4/6x, independent of display Hz.
                 let fast = self.ff_held || self.ff_latched;
-                let multiplier = if fast { f64::from(self.settings.ff_speed) } else { 1.0 };
+                let multiplier = if fast { f64::from(live.ff_speed) } else { 1.0 };
                 let period = 1.0 / session.fps;
                 // RC4 Beta 5 restores Beta 3's less aggressive RESPONSIVE mode:
                 // never insert catch-up frames on a single display callback.
@@ -3646,7 +4378,7 @@ impl Engine {
                         self.game_accum, f64::from(dt), multiplier, period, fast, responsive);
                 }
                 let frame_limit = if mgba_cable_pacing { 2 }
-                    else if fast { usize::from(self.settings.ff_speed) * 4 }
+                    else if fast { usize::from(live.ff_speed) * 4 }
                     else if responsive { 1 } else { 4 };
                 // A13.1: revert the experimental second-frame budget.
                 // Real-world A13 KONKR/AVD tests suffered repeated Link
@@ -3656,8 +4388,8 @@ impl Engine {
                     // Cable lockstep must not consume emulation time while
                     // the remote frame has not arrived. NEVER invent a solo
                     // frame or perform speculative Run-Ahead on a held link.
-                    if !session.advance(self.buttons, self.settings.turbo,
-                        self.settings.rewind && !session.linked()) {
+                    if !session.advance(self.buttons, live.turbo,
+                        live.rewind && !session.linked()) {
                         // A waiting mGBA Cable frame is NOT an emulated frame.
                         // Retain at most two frames of debt; only real remote
                         // inputs can advance them later. Never preserve debt
@@ -3694,7 +4426,7 @@ impl Engine {
                     self.game_accum -= period;
                     stepped += 1;
                     let samples = session.take_audio();
-                    if (!fast || (self.settings.ff_sound &&
+                    if (!fast || (live.ff_sound &&
                         FF_AUDIO_SUPPORTED.load(Ordering::Acquire)))
                         && !samples.is_empty() {
                         let mut audio = AUDIO.lock().unwrap_or_else(|e| e.into_inner());
@@ -3708,7 +4440,7 @@ impl Engine {
                 && profile.run_ahead_frames > 0 {
                 // The normal frames and their audio are already consumed.
                 // Predicted video never advances the real saved/RA timeline.
-                session.prepare_runahead(self.buttons, self.settings.turbo,
+                session.prepare_runahead(self.buttons, live.turbo,
                     profile.run_ahead_frames);
             }
             if stepped > 0 && !self.rewind_held {
@@ -3728,7 +4460,7 @@ impl Engine {
                 }
                 self.gpu.upload_game(session.frame());
                 RUMBLE_STRENGTH.store(
-                    if self.settings.rumble && !self.rewind_held {
+                    if live.rumble && !self.rewind_held {
                         i32::from(session.rumble_strength())
                     } else { 0 },
                     Ordering::Release,
@@ -3737,6 +4469,12 @@ impl Engine {
             self.gpu.fit(self.size);
             self.gpu.begin_frame();
             let mut commands = vec![Draw::Game];
+            if let Some(tex)=bezel {
+                commands.push(Draw::Tex {
+                    x:0.0,y:0.0,w:OUT_W as f32,h:OUT_H as f32,
+                    tex,alpha:1.0
+                });
+            }
             self.hud.draw(self.born.elapsed().as_millis() as u64, &mut commands);
             self.gpu.draw_list(&commands);
             self.gpu.end_frame(self.size);
@@ -3764,9 +4502,19 @@ impl Engine {
         }
 
         let ms = self.born.elapsed().as_millis() as u64;
-        self.shelves[self.active].tick(ms);
+        let repeated_letter = if !self.inserted && matches!(self.overlay,ShelfOverlay::None) {
+            self.shelves[self.active].tick(ms)
+        } else {
+            self.shelves[self.active].release_hold();
+            false
+        };
+        if repeated_letter { self.show_selected_letter(); }
         self.shelves[self.active].update(dt);
         self.prepare_visible();
+        self.refresh_selected_title();
+        // Resolve the optional transparent material before mutably borrowing
+        // the selected rack, otherwise Rust rejects the overlapping borrows.
+        let (selected_clear_back, selected_clear_front) = self.clear_layers();
         let shelf = &mut self.shelves[self.active];
 
         // Original Slot: 450ms seating + 280ms hold. Start the original
@@ -3793,41 +4541,59 @@ impl Engine {
             h: OUT_H as f32,
             colour: [0.085, 0.085, 0.093, 1.0],
         }];
-        // Exact upstream Slot wallpaper compositor, behind its cartridge shelf.
-        slot_ui::draw_backdrop(self.wallpaper_texture, &mut commands);
+        // Slot v1.7 carousel ground: None has no wallpaper; personal images
+        // receive only the selected Wallpaper Tint (never a fixed scrim).
+        let active_wallpaper = if self.settings.wallpaper ==
+            crate::settings::WallpaperPick::None { None }
+            else { self.wallpaper_texture };
+        let tint = if self.wallpaper_personal {
+            self.settings.wallpaper_tint.alpha()
+        } else { 0.0 };
+        slot_ui::draw_ground_tinted(active_wallpaper, tint, &mut commands);
         if self.progress == 0.0 {
             if let Some(picker) = self.picker {
                 let t = slot_ui::ease(picker.openness(self.born.elapsed().as_millis() as u64));
                 let dim = 1.0 + (0.614 - 1.0) * t;
                 let selected = shelf.carts.get(shelf.index).map(|c| c.stem.as_str());
                 shelf.draw_row(selected, 0.0, 0.26 * t, dim, &mut commands);
-                draw_empty_slot(&mut commands);
+                slot_ui::draw_empty_slot_with(self.slot_faces, &mut commands);
             } else {
-                shelf.draw(0.0, &mut commands);
-                // Original Slot draws platform name at the bottom slot mouth.
-                // 200ms ease-in + 1200ms hold + 800ms ease-out, 0.4 peak alpha.
-                if let Some(since) = self.platform_shown_at {
-                    let elapsed_ms = since.elapsed().as_millis() as u64;
-                    // At t=0 the original fade starts at alpha=0. Do NOT
-                    // clear the timer on that first render frame: only expire
-                    // after the full 200ms + 1200ms + 800ms timeline.
-                    if platform_name_running(elapsed_ms) {
-                        let alpha = slot_name_alpha(elapsed_ms);
-                        if alpha > 0.0 {
-                            draw_platform_name(self.platform_faces[self.active], alpha, &mut commands);
-                        }
+                shelf.draw_row(None, 0.0, 0.0, 1.0, &mut commands);
+                slot_ui::draw_empty_slot_with(self.slot_faces, &mut commands);
+                // Official v1.7.0 shelf: system (L1/R1) or letter
+                // (D-pad Up/Down) uses a 200/1200/800 ms full-opacity name.
+                // Game Titles crossfade back in during the last 800ms, and
+                // stay visible after the name expires. Plain Left/Right
+                // scrolling swaps the title immediately with no name fade.
+                let name = if let Some(since) = self.platform_shown_at {
+                    let elapsed=since.elapsed().as_millis() as u64;
+                    if platform_name_running(elapsed) {
+                        let face=if self.active==3 {self.recents_platform_face}
+                            else {self.platform_faces[self.active]};
+                        Some((face,elapsed,true))
                     } else {
-                        self.platform_shown_at = None;
+                        self.platform_shown_at=None;
+                        None
+                    }
+                } else if let Some(since)=self.letter_shown_at {
+                    let elapsed=since.elapsed().as_millis() as u64;
+                    if platform_name_running(elapsed) {
+                        Some((self.letter_face,elapsed,false))
+                    } else {
+                        self.letter_shown_at=None;
+                        None
+                    }
+                } else {None};
+                if let Some((face,elapsed,is_platform))=name {
+                    let alpha=slot_name_alpha(elapsed);
+                    if alpha>0.0 {
+                        if is_platform {draw_platform_name(face,alpha,&mut commands);}
+                        else {draw_slot_name(face,alpha,&mut commands);}
                     }
                 }
-                if self.platform_shown_at.is_none() {
-                    if let Some(since) = self.letter_shown_at {
-                        let ms = since.elapsed().as_millis();
-                        if ms < 1500 {
-                            let alpha = ((1500 - ms) as f32 / 250.0).min(1.0);
-                            draw_slot_name(self.letter_face, alpha, &mut commands);
-                        }
-                    }
+                if self.settings.show_titles {
+                    let alpha=name.map_or(1.0,|(_,elapsed,_)|slot_title_alpha(elapsed));
+                    slot_ui::draw_slot_title(self.selected_title_face,alpha,&mut commands);
                 }
             }
         } else {
@@ -3844,8 +4610,9 @@ impl Engine {
                 dim: 0.0,
                 screen: 0.0,
                 game: false,
+                slot_faces: self.slot_faces,
             }
-            .draw(&mut commands);
+            .draw_with_material(&mut commands,selected_clear_back,selected_clear_front);
         }
         // The onboarding keycap belongs to Slot's own rendering lifecycle,
         // never the Android overlay. No hint is drawn behind an open menu.
@@ -3891,8 +4658,10 @@ impl Engine {
             if self.settings.show_wifi { indicator_flags |= 2; }
             if self.settings.show_bluetooth { indicator_flags |= 4; }
             if self.settings.show_integrations { indicator_flags |= 8; }
-            draw_footer(self.battery, self.battery_face,
-                Some(self.bolt_texture), self.clock_face, &mut commands);
+            let light=self.settings.appearance==crate::settings::Appearance::Light;
+            slot_ui::draw_footer_with_ink(self.battery,self.battery_face,
+                Some(if light {self.bolt_light_texture} else {self.bolt_texture}),
+                self.clock_face,self.shelf_footer_ink(),&mut commands);
         }
         SHELF_INDICATOR_FLAGS.store(indicator_flags, Ordering::Release);
         self.gpu.fit(self.size);
@@ -3978,10 +4747,42 @@ fn link_mode_can_switch(core: Core, chosen: LinkKind, code: &str,
     selected_serial != opposite_serial
 }
 
-/// Route the post-link primary label to the same Input::Exit path as
-/// Save & Eject. In active solo play the primary menu item stays Resume.
-fn game_menu_ejects(row: usize, requires_relaunch: bool) -> bool {
-    row == 2 || (row == 0 && requires_relaunch)
+/// These rows are modelled by *action*, not by a hardcoded screen index.
+/// It prevents a linked session from routing "Save & Eject" to "Resume".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PauseRow { Resume, States, Multiplayer, Settings, SaveEject }
+const SOLO_PAUSE_ROWS: &[PauseRow] = &[
+    PauseRow::Resume, PauseRow::States, PauseRow::Multiplayer,
+    PauseRow::Settings, PauseRow::SaveEject,
+];
+const LINK_PAUSE_ROWS: &[PauseRow] = &[
+    PauseRow::Resume, PauseRow::Multiplayer, PauseRow::Settings,
+    PauseRow::SaveEject,
+];
+// If a Link core must be relaunched before solo, it must not expose
+// unsafe actions or a misleading Resume control.
+const RELAUNCH_PAUSE_ROWS: &[PauseRow] = &[
+    PauseRow::SaveEject, PauseRow::Multiplayer,
+];
+fn pause_rows(linked: bool, requires_relaunch: bool) -> &'static [PauseRow] {
+    if requires_relaunch { RELAUNCH_PAUSE_ROWS }
+    else if linked { LINK_PAUSE_ROWS }
+    else { SOLO_PAUSE_ROWS }
+}
+fn pause_row_text(row: PauseRow, linked: bool, requires_relaunch: bool) -> usize {
+    match row {
+        PauseRow::Resume => 20,
+        PauseRow::States => 22,
+        PauseRow::Multiplayer => 66, // Entry always opens status; End Link stays inside adapter
+        PauseRow::Settings => 25,
+        PauseRow::SaveEject if requires_relaunch => 78,
+        PauseRow::SaveEject => 21,
+    }
+}
+
+/// Ejection and resume are never inferred from their displayed row numbers.
+fn game_menu_ejects(row: usize, linked: bool, requires_relaunch: bool) -> bool {
+    matches!(pause_rows(linked, requires_relaunch).get(row), Some(PauseRow::SaveEject))
 }
 
 /// The original Slot HUD distinguishes a remote end and a BIOS mismatch.
@@ -4064,7 +4865,13 @@ fn platform_name_running(elapsed_ms: u64) -> bool {
     elapsed_ms < 200 + 1200 + 800
 }
 
-/// Follow Slot 1.5.0's platform name alpha curve and durations exactly.
+/// Official upstream v1.7 name / title animation is full opacity (1.0).
+/// Hide titles until 1400ms, then crossfade during the 800ms fade-out.
+fn slot_title_alpha(elapsed_ms: u64) -> f32 {
+    if elapsed_ms < 1400 { return 0.0; }
+    (1.0 - slot_name_alpha(elapsed_ms)).clamp(0.0, 1.0)
+}
+
 fn slot_name_alpha(elapsed_ms: u64) -> f32 {
     let level = if elapsed_ms < 200 {
         elapsed_ms as f32 / 200.0
@@ -4073,7 +4880,7 @@ fn slot_name_alpha(elapsed_ms: u64) -> f32 {
     } else {
         (1.0 - (elapsed_ms - 1400) as f32 / 800.0).max(0.0)
     };
-    0.4 * slot_ui::ease(level)
+    slot_ui::ease(level)
 }
 
 /// Physical D-pad UP and DOWN must move the selection in opposite
@@ -4112,6 +4919,36 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 #[cfg(test)]
 mod ui_feedback_tests {
     use super::*;
+
+    #[test]
+    fn gba_three_two_screen_hides_no_op_bezel_but_keeps_gb_gbc() {
+        assert_eq!(Engine::screen_rows(Platform::Gba), &[34,29]);
+        assert_eq!(Engine::screen_keys(Platform::Gba), &[0,22]);
+        assert_eq!(Engine::screen_rows(Platform::Gbc), &[88,29,90]);
+        assert_eq!(Engine::screen_rows(Platform::Gb), &[89,29,36,90]);
+    }
+    #[test]
+    fn ordinary_cart_scrolling_does_not_restart_name_fade() {
+        // A no-name-transition title is drawn at alpha 1 immediately;
+        // only a letter jump invokes slot_title_alpha().
+        assert_eq!(slot_title_alpha(0), 0.0);
+        assert_eq!(slot_title_alpha(2200), 1.0);
+        assert!(!platform_name_running(2200));
+    }
+    #[test]
+    fn official_game_title_fades_after_name_and_then_remains_visible() {
+        // The earlier U1 renderer incorrectly expired Game Titles after
+        // 2200ms; upstream instead keeps a fully visible title at rest.
+        assert_eq!(slot_title_alpha(0), 0.0);
+        assert_eq!(slot_title_alpha(1399), 0.0);
+        assert!((slot_title_alpha(1800) - 0.5).abs() < 0.0001);
+        assert_eq!(slot_name_alpha(200), 1.0);
+        assert_eq!(slot_name_alpha(1400), 1.0);
+        assert!((slot_name_alpha(1800) - 0.5).abs() < 0.0001);
+        assert_eq!(slot_title_alpha(2200), 1.0);
+        assert_eq!(slot_title_alpha(100_000), 1.0);
+    }
+
 
     #[test]
     fn legacy_multiplayer_heading_helper_mode_and_footer_text_cannot_come_back() {
@@ -4194,17 +5031,47 @@ mod ui_feedback_tests {
     }
 
     #[test]
+    fn paused_game_controls_inherit_globals_until_overridden() {
+        let mut settings=crate::settings::Settings::default();
+        settings.ff_speed=6;
+        settings.turbo=true; // KONKR original X/Y Buttons
+        let defaults=LiveGameOptions::from_profile(&settings,None);
+        assert_eq!(defaults.ff_speed,6);
+        assert!(defaults.turbo);
+        let mut profile=EmulationProfile::from_settings(&settings);
+        assert!(profile.change_visual_and_gameplay(&settings,Platform::Gba,7,true));
+        assert!(profile.change_visual_and_gameplay(&settings,Platform::Gba,4,true));
+        let scoped=LiveGameOptions::from_profile(&settings,Some(profile));
+        assert_ne!(scoped.ff_speed,defaults.ff_speed);
+        assert_eq!(scoped.turbo,!defaults.turbo);
+        assert_eq!(settings.ff_speed,6);
+        assert!(settings.turbo,"global X/Y Buttons must not be modified");
+        // A reset immediately restores the current Settings globals.
+        assert_eq!(LiveGameOptions::from_profile(&settings,None).ff_speed,6);
+    }
+
+    #[test]
     fn eject_to_play_solo_is_an_action_not_a_noop() {
-        assert!(game_menu_ejects(0, true),
-            "post-multiplayer row 0 must perform the same ejection as row 2");
-        assert!(game_menu_ejects(2, true));
-        assert!(game_menu_ejects(2, false));
-        assert!(!game_menu_ejects(0, false),
-            "active solo row 0 must resume without ejecting");
-        assert!(!game_menu_ejects(1, true),
-            "end link action must not accidentally eject");
-        assert!(!game_menu_ejects(3, true),
-            "states action must not accidentally eject");
+        assert_eq!(pause_rows(false,false),
+            &[PauseRow::Resume,PauseRow::States,PauseRow::Multiplayer,
+                PauseRow::Settings,PauseRow::SaveEject]);
+        assert_eq!(pause_rows(true,false),
+            &[PauseRow::Resume,PauseRow::Multiplayer,PauseRow::Settings,
+                PauseRow::SaveEject]);
+        assert_eq!(pause_rows(false,true),
+            &[PauseRow::SaveEject,PauseRow::Multiplayer]);
+        for (linked,needs_eject) in [(false,false),(true,false),(false,true),(true,true)] {
+            for (index,item) in pause_rows(linked,needs_eject).iter().enumerate() {
+                assert_eq!(game_menu_ejects(index,linked,needs_eject),
+                    *item==PauseRow::SaveEject,
+                    "never save/eject from States, Settings or Multiplayer");
+            }
+        }
+        assert!(game_menu_ejects(0,true,true));
+        assert!(!game_menu_ejects(0,true,false));
+        assert_eq!(pause_row_text(PauseRow::SaveEject,true,true),78);
+        assert_eq!(pause_row_text(PauseRow::Settings,true,false),25);
+        assert!(!pause_rows(true,false).contains(&PauseRow::States));
     }
 
     #[test]
@@ -4283,8 +5150,13 @@ mod ui_feedback_tests {
 
     #[test]
     fn multiplayer_b_restores_exactly_the_opening_context() {
-        assert_eq!(LinkEntry::Shortcut.back(), ShelfOverlay::None);
-        assert_eq!(LinkEntry::GameMenu.back(), ShelfOverlay::GameMenu { row: 1 });
+        assert_eq!(LinkEntry::Shortcut.back(false,false), ShelfOverlay::None);
+        assert_eq!(LinkEntry::GameMenu.back(false,false),
+            ShelfOverlay::GameMenu { row: 2 });
+        assert_eq!(LinkEntry::GameMenu.back(true,false),
+            ShelfOverlay::GameMenu { row: 1 });
+        assert_eq!(LinkEntry::GameMenu.back(true,true),
+            ShelfOverlay::GameMenu { row: 1 });
     }
 
     #[test]
@@ -4495,8 +5367,9 @@ mod ui_feedback_tests {
         assert!(!platform_name_running(3500));
         assert_eq!(slot_name_alpha(0), 0.0);
         assert!(slot_name_alpha(100) > 0.0);
-        assert!((slot_name_alpha(200) - 0.4).abs() < 0.001);
-        assert!((slot_name_alpha(1400) - 0.4).abs() < 0.001);
+        // v1.7.0 SLOT_NAME_ALPHA is 1.0, not the old Android 0.4.
+        assert!((slot_name_alpha(200) - 1.0).abs() < 0.001);
+        assert!((slot_name_alpha(1400) - 1.0).abs() < 0.001);
         assert!(slot_name_alpha(2000) > 0.0);
         assert_eq!(slot_name_alpha(2200), 0.0);
         assert_eq!(slot_name_alpha(3500), 0.0);

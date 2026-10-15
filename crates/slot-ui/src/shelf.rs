@@ -56,6 +56,9 @@ pub struct Shelf {
     ride: f32,
     vel: f32,
     held: Option<(i32, Millis, usize)>,
+    /// Up/Down repeat letter jumps like upstream Slot v1.7. Android drops
+    /// framework key repeats; the native shelf clock owns this schedule.
+    held_letter: Option<(i32, Millis, usize)>,
 }
 
 impl Shelf {
@@ -72,7 +75,32 @@ impl Shelf {
             ride: 0.0,
             vel: 0.0,
             held: None,
+            held_letter: None,
         }
+    }
+
+    /// Reorder the Recents rack without discarding reusable GPU faces or
+    /// shadow handles. The returned old/new indices re-key Engine's bounded
+    /// texture pool; removed ROM faces remain recyclable there.
+    pub fn replace_carts_preserving_visuals(&mut self, carts: Vec<Cart>) -> Vec<(usize, usize)> {
+        let before = std::mem::replace(&mut self.carts, carts);
+        let faces = std::mem::take(&mut self.faces);
+        let previously_selected = before.get(self.index).map(|c| c.rom.clone());
+        self.faces = vec![None; self.carts.len()];
+        self.shells = self.carts.iter().map(gb_shell_of).collect();
+        let mut moves = Vec::new();
+        for (old, cart) in before.iter().enumerate() {
+            if let Some(new) = self.carts.iter().position(|item| item.rom == cart.rom) {
+                self.faces[new] = faces[old];
+                moves.push((old, new));
+            }
+        }
+        let next = previously_selected
+            .and_then(|rom| self.carts.iter().position(|cart| cart.rom == rom))
+            .unwrap_or(0);
+        self.select(next);
+        self.release_hold();
+        moves
     }
 
     pub fn select(&mut self, i: usize) {
@@ -216,8 +244,37 @@ impl Shelf {
     }
 
     fn hold(&mut self, by: i32, now: Millis) {
+        self.held_letter = None;
         self.step(by);
         self.held = Some((by, now + REPEAT_DELAY_MS, 0));
+    }
+
+    pub fn hold_up(&mut self, now: Millis) {
+        self.hold_letter(-1, now);
+    }
+
+    pub fn hold_down(&mut self, now: Millis) {
+        self.hold_letter(1, now);
+    }
+
+    fn hold_letter(&mut self, by: i32, now: Millis) {
+        self.held = None;
+        self.jump(by);
+        self.held_letter = Some((by, now + REPEAT_DELAY_MS, 0));
+    }
+
+    pub fn release_up(&mut self) {
+        self.release_letter(-1);
+    }
+
+    pub fn release_down(&mut self) {
+        self.release_letter(1);
+    }
+
+    fn release_letter(&mut self, by: i32) {
+        if matches!(self.held_letter, Some((held, _, _)) if held == by) {
+            self.held_letter = None;
+        }
     }
 
     pub fn release_left(&mut self) {
@@ -236,18 +293,30 @@ impl Shelf {
 
     pub fn release_hold(&mut self) {
         self.held = None;
+        self.held_letter = None;
     }
 
-    pub fn tick(&mut self, now: Millis) {
-        let Some((by, due, fired)) = self.held else {
-            return;
-        };
-        if now < due {
-            return;
+    /// Returns true only if a repeated UP/DOWN changed the selected letter.
+    /// Horizontal repeats continue independently with their existing speed.
+    pub fn tick(&mut self, now: Millis) -> bool {
+        if let Some((by, due, fired)) = self.held_letter {
+            if now >= due {
+                let before = self.index;
+                self.jump(by);
+                let gap = REPEAT_MS[fired.min(REPEAT_MS.len() - 1)];
+                self.held_letter = Some((by, now + gap, fired + 1));
+                return self.index != before;
+            }
+            return false;
         }
-        self.step(by);
-        let rate = REPEAT_MS[fired.min(REPEAT_MS.len() - 1)];
-        self.held = Some((by, now + rate, fired + 1));
+        if let Some((by, due, fired)) = self.held {
+            if now >= due {
+                self.step(by);
+                let gap = REPEAT_MS[fired.min(REPEAT_MS.len() - 1)];
+                self.held = Some((by, now + gap, fired + 1));
+            }
+        }
+        false
     }
 
     fn step(&mut self, by: i32) {
@@ -385,4 +454,55 @@ fn shrink(offset: f32) -> f32 {
 
 fn recede_alpha(face_alpha: f32) -> f32 {
     (face_alpha / SIDE_ALPHA).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod konkr_navigation_tests {
+    use super::*;
+
+    fn cart(name: &str) -> Cart {
+        Cart {
+            platform: slot_store::Platform::Gba,
+            stem: name.to_string(),
+            title: String::new(), code: String::new(),
+            rom: std::path::PathBuf::from(format!("{name}.gba")),
+            label: None, shell: None,
+        }
+    }
+
+    #[test]
+    fn vertical_letter_jump_repeats_on_native_clock_and_stops_on_release() {
+        let mut shelf = Shelf::new(vec![
+            cart("Apple"), cart("Apricot"), cart("Banana"), cart("Cherry"),
+        ]);
+        shelf.hold_down(0);
+        assert_eq!(shelf.carts[shelf.index].stem, "Banana");
+        assert!(!shelf.tick(399));
+        assert_eq!(shelf.carts[shelf.index].stem, "Banana");
+        assert!(shelf.tick(400));
+        assert_eq!(shelf.carts[shelf.index].stem, "Cherry");
+        shelf.release_down();
+        assert!(!shelf.tick(10_000));
+        assert_eq!(shelf.carts[shelf.index].stem, "Cherry");
+
+        shelf.hold_up(10_000);
+        assert_eq!(shelf.carts[shelf.index].stem, "Banana");
+        shelf.release_hold();
+        assert!(!shelf.tick(20_000));
+        assert_eq!(shelf.carts[shelf.index].stem, "Banana");
+    }
+
+    #[test]
+    fn held_letter_switch_cancels_old_horizontal_hold() {
+        let mut shelf = Shelf::new(vec![
+            cart("Apple"), cart("Banana"), cart("Cherry"),
+        ]);
+        shelf.hold_right(0);
+        assert_eq!(shelf.carts[shelf.index].stem, "Banana");
+        shelf.hold_down(50);
+        assert_eq!(shelf.carts[shelf.index].stem, "Cherry");
+        assert!(!shelf.tick(449));
+        assert!(shelf.tick(450));
+        assert_eq!(shelf.carts[shelf.index].stem, "Apple");
+    }
 }
