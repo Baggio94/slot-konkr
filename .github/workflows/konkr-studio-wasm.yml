@@ -3,7 +3,7 @@ name: KONKR Cart Studio upstream WASM
 on:
   workflow_dispatch:
   push:
-    branches: [feat/konkr-dev26-cart-studio-foundation]
+    branches: [feat/konkr-dev26-cart-studio-foundation, feat/konkr-cart-studio-v2]
     paths:
       - 'third_party/slot-cart-studio/**'
       - '.github/workflows/konkr-studio-wasm.yml'
@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: BrandonKowalski/slot
-          ref: 3b907510201c70e579aff7d9205056d18dd0618d
+          ref: 34ac38031fd903eb2a0a0157f1dea4d3a5546195
           path: slot
 
       - name: Set up official Studio beside its matching Slot sources
