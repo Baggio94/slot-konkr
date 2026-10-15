@@ -123,6 +123,7 @@ class MainActivity : Activity() {
     external fun nativeRaAccountConfigured()
     external fun nativeRaPrefetchHash(hash: String, console: Int)
     external fun nativeRaFlushReady(): Boolean
+    external fun nativeRaStopReady(): Boolean
     external fun nativeSystemStatus(clock: String, batteryPercent: Int, charging: Boolean)
     external fun nativePollUiAction(): Int
     external fun nativeReloadVisualAssets()
@@ -1486,8 +1487,8 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Outstanding awards remain on disk when signing out. Closing the process
-     * is mandatory to stop the old account's detached native HTTP worker.
+     * Confirm flush of earned awards, then await BOTH account-scoped native
+     * workers before revoking credentials. Keep Slot running throughout.
      */
     private fun confirmRaSignOut(panel: RaPanelDialog, username: String) {
         if (nativeIsPlaying()) {
@@ -1513,10 +1514,10 @@ class MainActivity : Activity() {
                 val confirm = SlotModalDialog(
                     this,
                     "SIGN OUT",
-                    "$message\n\nSlot closes after sign-out to stop the old account safely."
+                    "$message\n\nSlot will keep running after sign-out."
                 )
                 confirm.addButton("STAY SIGNED IN") { confirm.dismiss() }
-                confirm.addButton("SIGN OUT & CLOSE") {
+                confirm.addButton("SIGN OUT") {
                     val unsaved = runCatching {
                         JSONObject(nativeRaStatus() ?: "{}").optBoolean("unsaved", false)
                     }.getOrDefault(false)
@@ -1547,21 +1548,53 @@ class MainActivity : Activity() {
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
                 if (ready) {
-                    if (!RaAccount.beginSignOut(filesDir, username)) {
-                        SlotToast.makeText(this,
-                            "Can't sign out safely. No awards were changed.",
-                            Toast.LENGTH_LONG).show()
-                    } else {
-                        panel.dismiss()
-                        uiHandler.postDelayed({
-                            finishAffinity()
-                            android.os.Process.killProcess(android.os.Process.myPid())
-                        }, 200L)
-                    }
+                    stopRaBeforeSignOut(panel, username, 0)
                 } else {
                     uiHandler.postDelayed({
                         flushRaBeforeSignOut(panel, username, attempt + 1)
                     }, 100L)
+                }
+            }
+        }
+    }
+
+    /**
+     * Native stop is asynchronous: wait for the evaluator AND for any HTTPS
+     * request already in progress, before deleting the old session token.
+     * On failure/timeout, leave the account configured and its awards intact.
+     */
+    private fun stopRaBeforeSignOut(panel: RaPanelDialog, username: String, attempt: Int) {
+        if (isDestroyed || nativeIsPlaying()) return
+        if (attempt >= 150) {
+            SlotToast.makeText(this,
+                "Sign out couldn't safely stop RetroAchievements. Restart Slot before retrying.",
+                Toast.LENGTH_LONG).show()
+            return
+        }
+        view.queueEvent {
+            val ready = nativeRaStopReady()
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                if (!ready) {
+                    uiHandler.postDelayed({
+                        stopRaBeforeSignOut(panel, username, attempt + 1)
+                    }, 100L)
+                    return@runOnUiThread
+                }
+                // The old-account workers have acknowledged termination.
+                // Retain cached awards and game data for later sync.
+                val success = RaAccount.beginSignOut(filesDir, username)
+                    && RaAccount.finishPendingSignOut(filesDir)
+                if (success) {
+                    panel.dismiss()
+                    SlotToast.makeText(this,
+                        "RetroAchievements signed out. Local awards were kept.",
+                        Toast.LENGTH_LONG).show()
+                    openRetroAchievementsAccount()
+                } else {
+                    SlotToast.makeText(this,
+                        "Sign out needs attention. Your local awards were kept. Restart Slot to retry.",
+                        Toast.LENGTH_LONG).show()
                 }
             }
         }
