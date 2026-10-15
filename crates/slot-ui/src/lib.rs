@@ -1,4 +1,5 @@
 mod art;
+pub mod bitmaps;
 pub use art::cover;
 mod backdrop;
 mod barcode;
