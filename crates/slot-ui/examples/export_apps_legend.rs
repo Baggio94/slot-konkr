@@ -30,6 +30,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Pixel-identical to Rust's Library/Settings heading textures.
         ("heading-apps.png", quick_value_face("APPS", true)),
         ("heading-ra.png", quick_value_face("RETROACHIEVEMENTS", true)),
+        ("heading-save-conflict.png", quick_value_face("SAVE CONFLICT", true)),
+        ("heading-save-state.png", quick_value_face("SAVE STATE", true)),
+        ("heading-sign-out.png", quick_value_face("SIGN OUT", true)),
+        ("heading-link-consent.png", quick_value_face("LINK — SHARE CARTRIDGE", true)),
+        ("heading-direct-join.png", quick_value_face("MULTIPLAYER — DIRECT JOIN", true)),
     ] {
         let expected_height = if filename.starts_with("heading-") { 40 } else { 24 };
         assert!(face.w > 20 && face.h == expected_height,

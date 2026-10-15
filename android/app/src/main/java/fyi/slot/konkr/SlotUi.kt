@@ -77,6 +77,11 @@ internal object SlotUi {
         val asset = when (title.uppercase(Locale.ROOT)) {
             "APPS" -> "heading-apps.png"
             "RETROACHIEVEMENTS" -> "heading-ra.png"
+            "SAVE CONFLICT" -> "heading-save-conflict.png"
+            "SAVE STATE" -> "heading-save-state.png"
+            "SIGN OUT" -> "heading-sign-out.png"
+            "LINK — SHARE CARTRIDGE" -> "heading-link-consent.png"
+            "MULTIPLAYER — DIRECT JOIN" -> "heading-direct-join.png"
             else -> null
         }
         val image = asset?.let { file ->
