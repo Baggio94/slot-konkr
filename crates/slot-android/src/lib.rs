@@ -4,6 +4,8 @@
 mod library;
 mod settings;
 mod recents;
+mod favorites;
+mod selection;
 mod emulation;
 mod pokemon_flash;
 // Directly compile the original Cart Studio No-Intro DAT matching code and tests.
