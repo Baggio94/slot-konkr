@@ -645,7 +645,6 @@ struct Engine {
     selected_title_name: String,
     selected_title_face: Printed,
     selected_title_texture: Option<slot_gfx::TexId>,
-    selected_title_since: Option<Instant>,
 }
 
 /// The upstream wallpaper.deck expects Config/ to exist on an SD card.
@@ -1102,7 +1101,6 @@ impl Engine {
             selected_title_name: String::new(),
             selected_title_face: Printed::default(),
             selected_title_texture: None,
-            selected_title_since: None,
         })
     }
 
@@ -3454,10 +3452,10 @@ impl Engine {
             .unwrap_or("");
         if name==self.selected_title_name {return;}
         self.selected_title_name=name.into();
-        if name.is_empty(){self.selected_title_since=None;return;}
+        if name.is_empty(){return;}
         let display: String=name.chars().take(39).collect();
         let image=slot_ui::title_line_face(&display);
-        if image.w==0 || image.h==0 {self.selected_title_since=None;return;}
+        if image.w==0 || image.h==0 {return;}
         let tex=if let Some(tex)=self.selected_title_texture {
             self.gpu.update_texture(tex,image.w,image.h,&image.rgba);
             tex
@@ -3467,7 +3465,6 @@ impl Engine {
             tex
         };
         self.selected_title_face=Printed::new(tex,image.w);
-        self.selected_title_since=Some(Instant::now());
     }
 
     fn show_general_tint(&self) -> bool {
@@ -4561,15 +4558,18 @@ impl Engine {
                 }
                 if self.platform_shown_at.is_none() {
                     if self.settings.show_titles {
-                        if let Some(since)=self.selected_title_since {
+                        // Official v1.7: changing an ordinary cartridge changes
+                        // its title IMMEDIATELY. Only system/letter jump names
+                        // temporarily mask the title with 200/1200/800 fades.
+                        let alpha=if let Some(since)=self.letter_shown_at {
                             let elapsed=since.elapsed().as_millis() as u64;
-                            // Upstream titles remain ON after the platform
-                            // name has faded; they do not expire at 2200 ms.
-                            let alpha=slot_title_alpha(elapsed);
-                            if alpha>0.0 {
-                                slot_ui::draw_slot_title(self.selected_title_face,alpha,&mut commands);
-                            }
-                        }
+                            if platform_name_running(elapsed) {
+                                draw_slot_name(self.letter_face,
+                                    slot_name_alpha(elapsed),&mut commands);
+                                slot_title_alpha(elapsed)
+                            } else {1.0}
+                        } else {1.0};
+                        slot_ui::draw_slot_title(self.selected_title_face,alpha,&mut commands);
                     } else if let Some(since)=self.letter_shown_at {
                         let elapsed=since.elapsed().as_millis();
                         if elapsed<1500 {
@@ -4903,6 +4903,14 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 mod ui_feedback_tests {
     use super::*;
 
+    #[test]
+    fn ordinary_cart_scrolling_does_not_restart_name_fade() {
+        // A no-name-transition title is drawn at alpha 1 immediately;
+        // only a letter jump invokes slot_title_alpha().
+        assert_eq!(slot_title_alpha(0), 0.0);
+        assert_eq!(slot_title_alpha(2200), 1.0);
+        assert!(!platform_name_running(2200));
+    }
     #[test]
     fn official_game_title_fades_after_name_and_then_remains_visible() {
         // The earlier U1 renderer incorrectly expired Game Titles after
