@@ -644,6 +644,9 @@ struct Engine {
     favorites_platform_face: Printed,
     focus_seen: Option<(usize, String)>,
     focus_dirty_since: Option<Instant>,
+    // Upstream v1.7 menu key-repeat belongs to the UI clock, never libretro.
+    menu_held: Option<(i32,u64,usize)>,
+    menu_repeat_dispatch: bool,
     platform_shown_at: Option<Instant>,
     selected_title_name: String,
     selected_title_face: Printed,
@@ -1122,6 +1125,8 @@ impl Engine {
             favorites_platform_face,
             focus_seen: None,
             focus_dirty_since: None,
+            menu_held: None,
+            menu_repeat_dispatch: false,
             platform_shown_at: has_multiple_systems.then_some(now),
             selected_title_name: String::new(),
             selected_title_face: Printed::default(),
@@ -2029,6 +2034,19 @@ impl Engine {
                 }
             }
             Input::Key(code, pressed) => {
+                if matches!(code, 19 | 20) {
+                    if !pressed {
+                        if self.menu_held.is_some_and(|(held,_,_)|held==code) {
+                            self.menu_held=None;
+                        }
+                    } else if !self.menu_repeat_dispatch
+                        && !matches!(self.overlay,ShelfOverlay::None)
+                    {
+                        self.menu_held=Some((code,self.born.elapsed().as_millis() as u64+400,0));
+                    }
+                } else if pressed && matches!(code,96|97|108) {
+                    self.menu_held=None;
+                }
                 if code == 110 {
                     match select_home_action(
                         pressed,
@@ -4078,7 +4096,24 @@ impl Engine {
         self.overlay=ShelfOverlay::States;
     }
 
+    // 400ms hold then the original accelerated 110/85/65/50ms repeat
+    // in Slot-owned menus. Android key repeats are filtered at MainActivity.
+    fn tick_menu_repeat(&mut self) {
+        let Some((key,due,count))=self.menu_held else {return};
+        if matches!(self.overlay,ShelfOverlay::None) {
+            self.menu_held=None;
+            return;
+        }
+        let now=self.born.elapsed().as_millis() as u64;
+        if now<due {return;}
+        const GAPS:[u64;4]=[110,85,65,50];
+        self.menu_held=Some((key,now+GAPS[count.min(3)],count+1));
+        self.menu_repeat_dispatch=true;
+        self.handle(Input::Key(key,true));
+        self.menu_repeat_dispatch=false;
+    }
     fn draw(&mut self) {
+        self.tick_menu_repeat();
         self.refresh_system_status();
         // Poll the already-running achievement evaluator without blocking GL.
         // Only Android's foreground UI displays notices; the worker never
