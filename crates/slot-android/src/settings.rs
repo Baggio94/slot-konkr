@@ -260,6 +260,71 @@ mod tests {
     use super::*;
 
     #[test]
+    fn upstream_v17_wallpaper_picker_follows_original_order() {
+        use WallpaperPick::*;
+        let root=std::env::temp_dir().join(format!(
+            "slot-wallpaper-choice-test-{}", std::process::id()));
+        let dir=root.join("Wallpapers");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("user.png"), b"placeholder").unwrap();
+        std::fs::write(dir.join("another.png"), b"placeholder").unwrap();
+        let choices=WallpaperPick::choices(&root);
+        assert_eq!(choices, vec![None,Random,Default,Blur,
+            File("another.png".into()),File("user.png".into())]);
+        assert_eq!(None.step(&root,true), Random);
+        assert_eq!(None.step(&root,false), File("user.png".into()));
+        assert_eq!(Default.step(&root,true), Blur);
+        assert_eq!(Blur.step(&root,true), File("another.png".into()));
+        assert_eq!(File("missing.png".into()).step(&root,true), Blur);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn wallpaper_none_persists_with_other_dev13_preferences_unchanged() {
+        let mut settings: Settings=serde_json::from_str(
+            r#"{"run_ahead_frames":2,"show_wifi":true,"status_opt_in_v2":true}"#).unwrap();
+        assert_eq!(settings.wallpaper, WallpaperPick::Default);
+        assert_eq!(settings.appearance, Appearance::Dark);
+        assert_eq!(settings.wallpaper_tint, WallpaperTint::Off);
+        settings.wallpaper=WallpaperPick::None;
+        settings.wallpaper_tint=WallpaperTint::High;
+        settings.appearance=Appearance::Light;
+        let saved=serde_json::to_string(&settings).unwrap();
+        let restored:Settings=serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.wallpaper,WallpaperPick::None);
+        assert_eq!(restored.wallpaper_tint.alpha(),0.65);
+        assert_eq!(restored.appearance,Appearance::Light);
+        assert_eq!(restored.run_ahead_frames,2);
+        assert!(restored.show_wifi && restored.status_opt_in_v2);
+    }
+
+    #[test]
+    fn old_user_png_migrates_to_file_without_overwriting_existing_settings() {
+        let root=std::env::temp_dir().join(format!(
+            "slot-wallpaper-migration-test-{}",std::process::id()));
+        std::fs::create_dir_all(root.join("Wallpapers")).unwrap();
+        std::fs::write(root.join("Wallpapers/user.png"),b"png").unwrap();
+        std::fs::write(root.join("slot-konkr-settings.json"),
+            br#"{"eject_save":false,"status_opt_in_v2":true}"#).unwrap();
+        let s=Settings::load(&root);
+        assert_eq!(s.wallpaper,WallpaperPick::File("user.png".into()));
+        assert!(!s.eject_save);
+        let mut settings=s.clone();
+        settings.wallpaper=WallpaperPick::None;
+        settings.save(&root).unwrap();
+        assert_eq!(Settings::load(&root).wallpaper,WallpaperPick::None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn official_wallpaper_tint_alpha_and_theme_toggle_are_exact() {
+        assert_eq!(WallpaperTint::ALL.map(WallpaperTint::alpha),
+            [0.0,0.25,0.45,0.65]);
+        assert_eq!(Appearance::Dark.toggle(),Appearance::Light);
+        assert_eq!(Appearance::Light.toggle(),Appearance::Dark);
+    }
+
+    #[test]
     fn mgba_cable_preserves_bounded_debt_while_peer_frame_is_missing() {
         let frame = 1.0 / 59.7275;
         let mut debt = frame_debt_mgba_cable(0.0, frame, frame);
