@@ -82,7 +82,9 @@ internal class RaAchievementOverlay(
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(12), dp(9), dp(14), dp(9))
         background = GradientDrawable().apply {
-            setColor(SlotUi.background)
+            // 92% opaque: subtly reveal gameplay under the popup, without
+            // fading the achievement badge, text or crisp foreground border.
+            setColor(Color.argb(235, 23, 22, 25))
             cornerRadius = dp(4).toFloat()
         }
         elevation = dp(3).toFloat()

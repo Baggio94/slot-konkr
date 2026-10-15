@@ -13,10 +13,10 @@ android {
         targetSdk = 32
         // Public Android candidate built from the consolidated Multiplayer Lab.
         // Same package ID and signing key: install -r must preserve user data.
-        // Stability QA code98: update-in-place from code97, preserving
+        // Stability QA code99: update-in-place from code98, preserving
         // installed ROM sources, per-account RA data and all saves/states.
-        versionCode = 98
-        versionName = "0.1.0-rc.2-stabilization-qa98"
+        versionCode = 99
+        versionName = "0.1.0-rc.2-stabilization-qa99"
         // One byte-identical APK on ARM64 KONKR and x86_64 Mac AVD.
         // Native libraries for BOTH ABIs are built/pinned by the same CI.
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }

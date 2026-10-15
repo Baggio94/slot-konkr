@@ -780,11 +780,12 @@ impl Engine {
             &[&shelves[0].carts,&shelves[1].carts,&shelves[2].carts]);
         shelves.push(Shelf::new(favorite_carts));
 
-        // Same compact size for all three platforms, rasterised at 3x
-        // resolution before downsampling to Slot's 720x480 design canvas.
+        // Original Slot names, not abbreviations: Game Boy Advance,
+        // Game Boy, Game Boy Color. Keep the existing 3x antialiased 16px
+        // font, centered placement and official 200/1200/800ms fade.
         // Cache textures once rather than rebuilding on every L1/R1.
         let platform_faces = Platform::ALL.map(|platform| {
-            let face = platform_name_face(platform_abbrev(platform));
+            let face = platform_name_face(platform.name());
             let tex = gpu.create_texture(face.w, face.h, &face.rgba);
             Printed::new(tex, face.w)
         });
@@ -5035,14 +5036,6 @@ fn restore_shelf_focus(shelves: &mut [Shelf], active: usize, uris: &[Option<Path
 /// Slot. keeps the label timer alive even when fade-in alpha is initially zero.
 /// Time-based expiry (not alpha-based) is essential for reliable GBA startup
 /// and every L1/R1 GB/GBC/GBA switch on a high-refresh-rate Android panel.
-fn platform_abbrev(platform: Platform) -> &'static str {
-    match platform {
-        Platform::Gba => "GBA",
-        Platform::Gb => "GB",
-        Platform::Gbc => "GBC",
-    }
-}
-
 fn platform_name_running(elapsed_ms: u64) -> bool {
     elapsed_ms < 200 + 1200 + 800
 }
@@ -5555,13 +5548,14 @@ mod ui_feedback_tests {
         assert!(slot_name_alpha(2000) > 0.0);
         assert_eq!(slot_name_alpha(2200), 0.0);
         assert_eq!(slot_name_alpha(3500), 0.0);
-        assert_eq!(platform_abbrev(Platform::Gba), "GBA");
-        assert_eq!(platform_abbrev(Platform::Gb), "GB");
-        assert_eq!(platform_abbrev(Platform::Gbc), "GBC");
+        assert_eq!(Platform::Gba.name(), "Game Boy Advance");
+        assert_eq!(Platform::Gb.name(), "Game Boy");
+        assert_eq!(Platform::Gbc.name(), "Game Boy Color");
         for platform in Platform::ALL {
-            let face = platform_name_face(platform_abbrev(platform));
+            let face = platform_name_face(platform.name());
             assert_eq!(face.h, HINT_H * slot_ui::PLATFORM_NAME_SCALE);
-            assert!(face.w > 0);
+            // Original names must fit the Slot canvas at native scale.
+            assert!(face.w > 0 && face.w < 720 * slot_ui::PLATFORM_NAME_SCALE);
             assert_eq!(face.rgba.len(), (face.w * face.h * 4) as usize);
         }
     }

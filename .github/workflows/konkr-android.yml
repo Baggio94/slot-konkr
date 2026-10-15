@@ -408,15 +408,15 @@ jobs:
           name: slot-konkr-0.1.0-rc2-studio-v2-qa-signed-apk
           path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
-      - name: Verify signed KONKR V2 stabilization QA code98, cert, ABIs and Studio
+      - name: Verify signed KONKR V2 stabilization QA code99, cert, ABIs and Studio
         if: github.ref == 'refs/heads/fix/konkr-v2-performance-ui-ra'
         run: |
           set -euo pipefail
           APK=android/app/build/outputs/apk/release/app-release.apk
           test -s "$APK"
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt" dump badging "$APK" | tee "$RUNNER_TEMP/stability-qa-badging.txt"
-          grep -F "package: name='fyi.slot.konkr' versionCode='98'" "$RUNNER_TEMP/stability-qa-badging.txt"
-          grep -F "versionName='0.1.0-rc.2-stabilization-qa98'" "$RUNNER_TEMP/stability-qa-badging.txt"
+          grep -F "package: name='fyi.slot.konkr' versionCode='99'" "$RUNNER_TEMP/stability-qa-badging.txt"
+          grep -F "versionName='0.1.0-rc.2-stabilization-qa99'" "$RUNNER_TEMP/stability-qa-badging.txt"
           CERT="$("$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK")"
           echo "$CERT" | grep -Fi '4f42b8f0ac98f6a0102804ab51020ea0e7e2de7685c6ce09400a744de0b0fa2f'
           for abi in arm64-v8a x86_64; do
@@ -429,7 +429,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: github.ref == 'refs/heads/fix/konkr-v2-performance-ui-ra'
         with:
-          name: slot-konkr-0.1.0-rc2-stabilization-code98-signed-apk
+          name: slot-konkr-0.1.0-rc2-stabilization-code99-signed-apk
           path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
       - name: Verify RC4 release APK is signed with permanent certificate
