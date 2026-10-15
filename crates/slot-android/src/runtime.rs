@@ -5367,8 +5367,9 @@ mod ui_feedback_tests {
         assert!(!platform_name_running(3500));
         assert_eq!(slot_name_alpha(0), 0.0);
         assert!(slot_name_alpha(100) > 0.0);
-        assert!((slot_name_alpha(200) - 0.4).abs() < 0.001);
-        assert!((slot_name_alpha(1400) - 0.4).abs() < 0.001);
+        // v1.7.0 SLOT_NAME_ALPHA is 1.0, not the old Android 0.4.
+        assert!((slot_name_alpha(200) - 1.0).abs() < 0.001);
+        assert!((slot_name_alpha(1400) - 1.0).abs() < 0.001);
         assert!(slot_name_alpha(2000) > 0.0);
         assert_eq!(slot_name_alpha(2200), 0.0);
         assert_eq!(slot_name_alpha(3500), 0.0);
