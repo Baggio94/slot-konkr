@@ -14,6 +14,10 @@ pub const ALERT_PX: f32 = 44.0;
 
 pub const MOUTH_H: f32 = 58.0;
 const BAND_Y: f32 = OUT_H as f32 - MOUTH_H;
+// Exact upstream slot_chrome.rs: platform/letter names appear just ABOVE
+// the physical mouth, not inside its recess.
+const SLOT_NAME_GAP: f32 = 6.0;
+const SLOT_NAME_Y: f32 = OUT_H as f32 - MOUTH_H - HINT_H as f32 - SLOT_NAME_GAP;
 
 pub const MOUTH_W: f32 = SEATED_W as f32 + 14.0;
 const SLIT_H: f32 = 9.0;
@@ -308,10 +312,9 @@ fn draw_slot_name_at_scale(name: Printed, alpha: f32, scale: f32, out: &mut Vec<
         return;
     };
     let (w, h) = (name.w as f32 / scale, HINT_H as f32);
-    let hole = SCOOP_Y + SCOOP_D - SLIT_Y;
     out.push(Draw::Tex {
         x: CX - w / 2.0,
-        y: SLIT_Y + (hole - h) / 2.0,
+        y: SLOT_NAME_Y,
         w,
         h,
         tex,
@@ -328,11 +331,9 @@ pub fn draw_slot_name(name: Printed, alpha: f32, out: &mut Vec<Draw>) {
 pub fn draw_slot_title(title: Printed, alpha: f32, out: &mut Vec<Draw>) {
     let (Some(tex), true) = (title.face, alpha > 0.0) else { return };
     let (w, h) = (title.w as f32, crate::plate::TITLE_LINE_H as f32);
-    let hole = SCOOP_Y + SCOOP_D - SLIT_Y;
-    let slot_name_y = SLIT_Y + (hole - HINT_H as f32) / 2.0;
     out.push(Draw::Tex {
         x: CX - w / 2.0,
-        y: slot_name_y + HINT_H as f32 - h,
+        y: SLOT_NAME_Y + HINT_H as f32 - h,
         w, h, tex, alpha,
     });
 }
@@ -364,4 +365,14 @@ fn travel(seat: f32, catch: f32) -> f32 {
 
 pub fn ease(u: f32) -> f32 {
     u * u * u * (u * (u * 6.0 - 15.0) + 10.0)
+}
+
+#[cfg(test)]
+mod upstream_slot_name_geometry_tests {
+    use super::*;
+    #[test]
+    fn title_and_platform_share_official_v17_name_baseline() {
+        assert_eq!(SLOT_NAME_Y, 392.0);
+        assert_eq!(SLOT_NAME_Y + HINT_H as f32 - crate::plate::TITLE_LINE_H as f32, 384.0);
+    }
 }
