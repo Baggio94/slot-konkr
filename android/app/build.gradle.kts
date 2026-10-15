@@ -13,9 +13,9 @@ android {
         targetSdk = 32
         // Public Android candidate built from the consolidated Multiplayer Lab.
         // Same package ID and signing key: install -r must preserve user data.
-        // U1 QA: monotonically higher than public RC1, normal package and signer.
-        versionCode = 93
-        versionName = "0.1.0-rc.2-u1final-qa"
+        // U2 QA: install-over U1 code93 and public RC1 code90; same package/signature.
+        versionCode = 94
+        versionName = "0.1.0-rc.2-u2-qa"
         // One byte-identical APK on ARM64 KONKR and x86_64 Mac AVD.
         // Native libraries for BOTH ABIs are built/pinned by the same CI.
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
