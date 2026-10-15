@@ -612,19 +612,21 @@ impl Engine {
             .is_some_and(|root| root.join("Wallpapers/user.png").is_file());
         let wallpaper_texture = visuals_root.as_deref()
             .and_then(|root| pick_wallpaper_android(root))
-            .as_deref().and_then(slot_ui::wallpaper_face)
-            .or_else(|| slot_ui::default_background().map(|rgba| rgba.to_vec()))
-            .map(|rgba| gpu.create_texture(OUT_W, OUT_H, &rgba));
+            .as_deref().and_then(slot_ui::wallpaper_face_native)
+            .or_else(|| slot_ui::default_background_native().map(|rgba| rgba.to_vec()))
+            .map(|rgba| gpu.create_texture(slot_ui::NATIVE_W, slot_ui::NATIVE_H, &rgba));
         // Preserve existing Config/theme.txt custom colours as an opt-out.
         let custom_colours = visuals_root.as_deref()
             .is_some_and(|root| root.join("Config/theme.txt").exists());
         let slot_faces = (!custom_colours).then(|| {
-            let rear = gpu.create_texture(
-                slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H,
-                slot_ui::bitmaps::slot_back());
-            let front = gpu.create_texture(
-                slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H,
-                slot_ui::bitmaps::slot_front());
+            let (back, w, h) = slot_ui::native_rgba(
+                slot_ui::bitmaps::slot_back(),
+                slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H);
+            let rear = gpu.create_texture(w, h, &back);
+            let (front, w, h) = slot_ui::native_rgba(
+                slot_ui::bitmaps::slot_front(),
+                slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H);
+            let front = gpu.create_texture(w, h, &front);
             (rear, front)
         });
         let mut shelves = Vec::new();
@@ -1634,14 +1636,14 @@ impl Engine {
                         }
                     }
                     let wallpaper = pick_wallpaper_android(&root)
-                        .as_deref().and_then(slot_ui::wallpaper_face);
+                        .as_deref().and_then(slot_ui::wallpaper_face_native);
                     self.wallpaper_texture = wallpaper.or_else(||
-                    slot_ui::default_background().map(|rgba| rgba.to_vec())).map(|rgba| {
+                    slot_ui::default_background_native().map(|rgba| rgba.to_vec())).map(|rgba| {
                         if let Some(tex) = self.wallpaper_texture {
-                            self.gpu.update_texture(tex, OUT_W, OUT_H, &rgba);
+                            self.gpu.update_texture(tex, slot_ui::NATIVE_W, slot_ui::NATIVE_H, &rgba);
                             tex
                         } else {
-                            self.gpu.create_texture(OUT_W, OUT_H, &rgba)
+                            self.gpu.create_texture(slot_ui::NATIVE_W, slot_ui::NATIVE_H, &rgba)
                         }
                     });
                 }

@@ -37,9 +37,13 @@ impl CartRender {
                             receiver.recv()
                         };
                         let Ok((key, cart)) = job else { break };
-                        // All heavy PNG decode, cropping, compositing and satin
-                        // shading happens here, never on the GLES render loop.
-                        let pixels = cart_face_with_material(&cart, None);
+                        // All heavy PNG decode, cropping, compositing and native artwork
+                        // resampling happens here, never on the GLES render loop.
+                        let original = cart_face_with_material(&cart, None);
+                        // Keep bounded asynchronous work off the GLES thread.
+                        let (rgba, w, h) = slot_ui::native_rgba(
+                            &original.rgba, original.w, original.h);
+                        let pixels = CartFace { rgba, w, h };
                         if sink.send((key, pixels)).is_err() { break }
                     }
                 })
