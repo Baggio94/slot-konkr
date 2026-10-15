@@ -2835,12 +2835,14 @@ impl Engine {
                 // At most nine textures are pinned inside our existing 42,
                 // preventing background prefetch/re-eviction thrashing.
                 let victim = self.texture_cache.iter().position(|(sid, index, _)| {
-                    self.shelves[*sid].carts.is_empty() ||
-                    self.shelves[*sid].index.abs_diff(*index) > 1
+                    self.shelves.get(*sid).is_none_or(|shelf|
+                        shelf.carts.is_empty() || shelf.index.abs_diff(*index) > 1)
                 }).unwrap_or(0);
                 let (old_shelf, old_index, tex) = self.texture_cache
                     .remove(victim).expect("nonempty texture pool");
-                self.shelves[old_shelf].take_face(old_index);
+                if let Some(shelf) = self.shelves.get_mut(old_shelf) {
+                    shelf.take_face(old_index);
+                }
                 self.gpu.update_texture(tex, face.w, face.h, &face.rgba);
                 tex
             } else {
@@ -3344,14 +3346,25 @@ impl Engine {
         let carts=crate::recents::carts(&ids,
             &[&self.shelves[0].carts,&self.shelves[1].carts,&self.shelves[2].carts]);
         let was_recent=self.active==3;
-        let selected=self.shelves.get(3)
-            .and_then(|s|s.carts.get(s.index))
-            .map(|c|c.rom.clone());
-        self.shelves[3]=Shelf::new(if self.settings.show_recents {carts} else {Vec::new()});
-        if let Some(uri)=selected {
-            if let Some(i)=self.shelves[3].carts.iter().position(|c|c.rom==uri) {
-                self.shelves[3].select(i);
+        // Reject completed worker art from the previous URI->index mapping.
+        self.cart_render.invalidate_shelf(3);
+        let moves=self.shelves[3].replace_carts_preserving_visuals(
+            if self.settings.show_recents { carts } else { Vec::new() });
+        // Preserve GPU handles for unchanged ROMs while retaining orphaned
+        // handles in the 42-slot recycler (sentinel entries are first victims).
+        for (shelf,index,_) in &mut self.texture_cache {
+            if *shelf != 3 { continue; }
+            if let Some((_,new))=moves.iter().find(|(old,_)|old==index) {
+                *index=*new;
+            } else {
+                *shelf=usize::MAX;
+                *index=usize::MAX;
             }
+        }
+        // Reuse the three material allocations but never apply them to a
+        // different ROM after an index shuffle.
+        if let Some(material)=self.clear_material.as_mut() {
+            if material.key.0==3 {material.key=(usize::MAX,usize::MAX);}
         }
         if was_recent && self.shelves[3].carts.is_empty() {
             self.active=next_nonempty_shelf(&self.shelves,0,1);

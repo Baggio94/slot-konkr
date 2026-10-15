@@ -10,16 +10,20 @@ use slot_ui::{cart_face_with_material, cart_face, cart_interior, cart_backing,
     gb_shell_of, is_clear, CartFace};
 
 type Key = (usize, usize);
-type Job = (Key, Cart);
+type WorkKey = (Key, u64);
+type Job = (WorkKey, Cart);
 /// Three source-faithful clear-cart textures for a *selected* cartridge:
 /// original back, PCB, translucent front/label. Side carts keep one face.
 pub(crate) type Layers = [CartFace; 3];
-type ResultFace = (Key, CartFace, Option<Layers>);
+type ResultFace = (WorkKey, CartFace, Option<Layers>);
 
 pub(crate) struct CartRender {
     submit: SyncSender<Job>,
     finished: Receiver<ResultFace>,
-    pending: HashSet<Key>,
+    pending: HashSet<WorkKey>,
+    // A rebuilt Recents shelf may reuse index 0 for a different game.
+    // Worker results from the old generation must NEVER paint that cartridge.
+    epochs: [u64; 4],
 }
 
 impl CartRender {
@@ -64,30 +68,65 @@ impl CartRender {
                 })
                 .map_err(|e| format!("Cannot start cartridge renderer: {e}"))?;
         }
-        Ok(Self { submit, finished, pending: HashSet::new() })
+        Ok(Self { submit, finished, pending: HashSet::new(), epochs: [0; 4] })
     }
 
     pub(crate) fn queued(&self, key: Key) -> bool {
-        self.pending.contains(&key)
+        self.epochs.get(key.0).is_some_and(|epoch| self.pending.contains(&(key, *epoch)))
+    }
+
+    pub(crate) fn invalidate_shelf(&mut self, shelf: usize) {
+        if let Some(epoch) = self.epochs.get_mut(shelf) {
+            *epoch = epoch.wrapping_add(1);
+            self.pending.retain(|(key, _)| key.0 != shelf);
+        }
     }
 
     pub(crate) fn request(&mut self, key: Key, cart: &Cart) {
-        if self.pending.len() >= 8 || self.pending.contains(&key) { return }
-        match self.submit.try_send((key, cart.clone())) {
-            Ok(()) => { self.pending.insert(key); }
+        let Some(epoch) = self.epochs.get(key.0).copied() else { return };
+        let work = (key, epoch);
+        if self.pending.len() >= 8 || self.pending.contains(&work) { return }
+        match self.submit.try_send((work, cart.clone())) {
+            Ok(()) => { self.pending.insert(work); }
             Err(TrySendError::Full(_)) => {} // retry next frame; never block input
             Err(TrySendError::Disconnected(_)) => {}
         }
     }
 
-    pub(crate) fn ready(&mut self) -> Option<ResultFace> {
+    pub(crate) fn ready(&mut self) -> Option<(Key, CartFace, Option<Layers>)> {
         loop {
             match self.finished.try_recv() {
-                Ok((key, face, layers)) if self.pending.remove(&key) =>
-                    return Some((key,face,layers)),
+                Ok(((key, epoch), face, layers))
+                    if self.pending.remove(&(key, epoch)) &&
+                        self.epochs.get(key.0).copied() == Some(epoch) =>
+                    return Some((key, face, layers)),
                 Ok(_) => continue,
                 Err(TryRecvError::Empty | TryRecvError::Disconnected) => return None,
             }
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rebuilding_recents_rejects_an_old_worker_face_with_same_index() {
+        let (submit, _jobs) = mpsc::sync_channel(1);
+        let (completed, finished) = mpsc::channel();
+        let mut renderer = CartRender {
+            submit, finished, pending: HashSet::new(), epochs: [0; 4],
+        };
+        renderer.pending.insert(((3, 0), 0));
+        renderer.invalidate_shelf(3);
+        assert!(!renderer.queued((3, 0)));
+        renderer.pending.insert(((3, 0), 1));
+        let face = || CartFace { rgba: vec![255; 4], w: 1, h: 1 };
+        completed.send((((3, 0), 0), face(), None)).unwrap();
+        completed.send((((3, 0), 1), face(), None)).unwrap();
+        let accepted = renderer.ready().expect("fresh Recents face");
+        assert_eq!(accepted.0, (3, 0));
+        assert!(renderer.ready().is_none());
+        assert!(!renderer.queued((3, 0)));
     }
 }

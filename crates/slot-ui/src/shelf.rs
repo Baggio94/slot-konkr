@@ -75,6 +75,30 @@ impl Shelf {
         }
     }
 
+    /// Reorder the Recents rack without discarding reusable GPU faces or
+    /// shadow handles. The returned old/new indices re-key Engine's bounded
+    /// texture pool; removed ROM faces remain recyclable there.
+    pub fn replace_carts_preserving_visuals(&mut self, carts: Vec<Cart>) -> Vec<(usize, usize)> {
+        let before = std::mem::replace(&mut self.carts, carts);
+        let faces = std::mem::take(&mut self.faces);
+        let previously_selected = before.get(self.index).map(|c| c.rom.clone());
+        self.faces = vec![None; self.carts.len()];
+        self.shells = self.carts.iter().map(gb_shell_of).collect();
+        let mut moves = Vec::new();
+        for (old, cart) in before.iter().enumerate() {
+            if let Some(new) = self.carts.iter().position(|item| item.rom == cart.rom) {
+                self.faces[new] = faces[old];
+                moves.push((old, new));
+            }
+        }
+        let next = previously_selected
+            .and_then(|rom| self.carts.iter().position(|cart| cart.rom == rom))
+            .unwrap_or(0);
+        self.select(next);
+        self.release_hold();
+        moves
+    }
+
     pub fn select(&mut self, i: usize) {
         self.index = i;
         self.scroll = i as f32;
