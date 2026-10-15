@@ -92,10 +92,12 @@ internal class SlotModalDialog(
     }
     private val body = LinearLayout(activity).apply {
         orientation = LinearLayout.VERTICAL
-        // Match Slot's 37px list inset below its 32px raster title.
-        // Applied to the RetroAchievements login only.
+        // The original heading bitmap has its own transparent left gutter.
+        // Align the RA description, labels and both input boxes exactly with
+        // the action labels: those use dp(12) inside the same 32px root inset.
+        // Avoid a second native-pixel inset here, which undershoots on AVD.
         if (title.equals("RETROACHIEVEMENTS", ignoreCase = true)) {
-            val inset = SlotUi.menuPixel(activity, 5)
+            val inset = SlotUi.dp(activity, 12)
             setPadding(inset, 0, inset, 0)
         }
     }
