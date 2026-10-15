@@ -113,6 +113,14 @@ impl Shader {
             Self::SharpBilinear => ScreenEffect::SharpBilinear,
         }
     }
+    pub fn includes_gba_color(self) -> bool {
+        matches!(self, Self::LcdGridV2Gba | Self::SimpletexGba)
+    }
+    pub fn core_colour(self, requested: bool) -> bool {
+        // GBA Color is already in the shader; avoid applying it twice
+        // through mGBA/gpSP core options when user enables correction.
+        requested && !self.includes_gba_color()
+    }
     fn step(self, values: &[Self], right: bool) -> Self {
         let at = values.iter().position(|v| *v == self).unwrap_or(0);
         values[if right { (at + 1) % values.len() }
@@ -609,7 +617,11 @@ mod tests {
             assert_eq!(Shader::GBA.iter().filter(|s| **s == shader).count(),1);
             let json=serde_json::to_string(&shader).unwrap();
             assert_eq!(serde_json::from_str::<Shader>(&json).unwrap(),shader);
+            assert_eq!(shader.core_colour(true), !shader.includes_gba_color());
         }
+        assert!(!Shader::SimpletexGba.core_colour(true));
+        assert!(!Shader::LcdGridV2Gba.core_colour(true));
+        assert!(Shader::Dot.core_colour(true));
     }
     #[test]
     fn gba_grid_v2_migration_keeps_original_gb_gbc() {

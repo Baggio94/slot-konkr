@@ -3045,7 +3045,8 @@ impl Engine {
             match GameSession::open(Path::new(local), &core_file, &storage,
                 core, platform, wants_state,
                 rom_stem, effective_settings.gb_palettes.then(|| effective_settings.palette_name()),
-                effective_settings.colour_for(platform),
+                effective_settings.shader_for(platform)
+                    .core_colour(effective_settings.colour_for(platform)),
                 self.ra_service.as_ref()) {
                 Ok(session) => {
                     self.link_identity = if platform == Platform::Gba {
@@ -3305,9 +3306,12 @@ impl Engine {
         if matches!(key,0|1|21) {
             self.gpu.set_screen_effect(view.shader_for(platform).effect());
         }
-        if matches!(key,2|22|23|24) {
+        // A shader change can switch to/from a preset with its own GBA Color.
+        // Recompute core colour here as well as when the correction toggle moves.
+        if matches!(key,0|1|21|2|22|23|24) {
             if let Some(session)=self.game.as_mut() {
-                session.set_colour_correction(view.colour_for(platform));
+                session.set_colour_correction(view.shader_for(platform)
+                    .core_colour(view.colour_for(platform)));
             }
         }
         if key==3 {
@@ -3380,7 +3384,8 @@ impl Engine {
         let platform=self.current_cart_platform();
         self.gpu.set_screen_effect(self.game_shader().effect());
         if let Some(session)=self.game.as_mut() {
-            session.set_colour_correction(globals.colour_for(platform));
+            session.set_colour_correction(globals.shader_for(platform)
+                .core_colour(globals.colour_for(platform)));
             session.set_gb_palette_mode(globals.gb_palettes,globals.palette_name());
         }
         FF_AUDIO_ENABLED.store(globals.ff_sound,Ordering::Release);
@@ -3662,8 +3667,10 @@ impl Engine {
             FF_AUDIO_ENABLED.store(self.settings.ff_sound, Ordering::Release);
             AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
         }
-        if matches!(key,2|22|23|24) {
-            let colour=self.settings.colour_for(self.current_cart_platform());
+        if matches!(key,0|1|21|2|22|23|24) {
+            let platform=self.current_cart_platform();
+            let colour=self.settings.shader_for(platform)
+                .core_colour(self.settings.colour_for(platform));
             if let Some(game) = self.game.as_mut() {
                 game.set_colour_correction(colour);
             }
