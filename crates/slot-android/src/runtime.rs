@@ -36,6 +36,7 @@ use slot_ui::{
     icon_face, badge_face, menu_face, Icon, LinkBadge, BOLT_PX, HUD_INK,
     Hud, HudKind, FfState, Toast, toast_face, QUICK_PITCH, opening, edge, centred_hints, LEGEND_GAP,
     sticker_face_konkr, StickerFields, STICKER_W, STICKER_H, quick_caret_face,
+    onboarding_instruction_face, onboarding_note_face,
 };
 
 // Android GLSurfaceView owns EGL context creation, current context and buffer swaps.
@@ -603,6 +604,8 @@ struct Engine {
     menu_textures: Vec<(slot_gfx::TexId, u32, u32)>,
     menu_hints: [(slot_gfx::TexId, u32); 2],
     first_run_hint: (slot_gfx::TexId, u32),
+    onboarding_note: (slot_gfx::TexId, u32),
+    shelf_no_games_hint: (slot_gfx::TexId, u32),
     shelf_status: u8,
     shelf_status_faces: [(slot_gfx::TexId, u32, u32); 8],
     shelf_status_start: (slot_gfx::TexId, u32),
@@ -853,7 +856,17 @@ impl Engine {
         // Authentic Slot raster/keycap for a clean library. Render it in the
         // GL scene rather than above it in an Android TextView.
         let first_run_hint = {
-            let face = hint_face("START", "Open menu to add ROMs");
+            let face = onboarding_instruction_face(
+                "PRESS", "START", ", THEN SELECT LIBRARY TO ADD GAMES");
+            (gpu.create_texture(face.w, face.h, &face.rgba), face.w)
+        };
+        let shelf_no_games_hint = {
+            let face = onboarding_instruction_face(
+                "PRESS", "START", "TO SELECT YOUR ROM FOLDER");
+            (gpu.create_texture(face.w, face.h, &face.rgba), face.w)
+        };
+        let onboarding_note = {
+            let face = onboarding_note_face("(UNZIPPED ROMS ONLY)");
             (gpu.create_texture(face.w, face.h, &face.rgba), face.w)
         };
         let shelf_status_faces = SHELF_STATUS_TEXT.map(|label| {
@@ -1093,6 +1106,8 @@ impl Engine {
             menu_textures,
             menu_hints,
             first_run_hint,
+            onboarding_note,
+            shelf_no_games_hint,
             shelf_status: 0,
             shelf_status_faces,
             shelf_status_start,
@@ -4847,13 +4862,26 @@ impl Engine {
                 if self.shelf_status != 1 {
                     // Exactly the upstream Slot START keycap; menus hide both
                     // messages and keycaps rather than leaving Android overlays.
-                    let (tex, w) = self.shelf_status_start;
+                    let (tex,w)=if self.shelf_status==2 {
+                        self.shelf_no_games_hint
+                    } else {
+                        self.shelf_status_start
+                    };
                     commands.push(Draw::Tex {
                         x: (OUT_W as f32 - w as f32) / 2.0,
                         y: 110.0,
                         w: w as f32, h: HINT_H as f32,
                         tex, alpha: 1.0,
                     });
+                    if self.shelf_status==2 {
+                        let (tex,w)=self.onboarding_note;
+                        commands.push(Draw::Tex {
+                            x: (OUT_W as f32 - w as f32) / 2.0,
+                            y: 140.0,
+                            w: w as f32, h: HINT_H as f32,
+                            tex, alpha: 0.76,
+                        });
+                    }
                 }
             } else if self.shelves.iter().all(|s| s.carts.is_empty()) {
                 let (tex, w) = self.first_run_hint;
@@ -4863,6 +4891,13 @@ impl Engine {
                     w: w as f32,
                     h: HINT_H as f32,
                     tex, alpha: 1.0,
+                });
+                let (tex,w)=self.onboarding_note;
+                commands.push(Draw::Tex {
+                    x: (OUT_W as f32 - w as f32) / 2.0,
+                    y: 64.0,
+                    w: w as f32, h: HINT_H as f32,
+                    tex, alpha: 0.76,
                 });
             }
         }

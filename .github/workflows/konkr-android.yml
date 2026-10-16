@@ -89,6 +89,8 @@ jobs:
         run: cargo test -p slot-achievements -p slot-retro
       - name: Test KONKR 3:2 scaling
         run: cargo test -p slot-gfx --no-default-features --test konkr
+      - name: Test full-width Slot onboarding prompts
+        run: cargo test -p slot-ui --lib onboarding_tests
       - name: Test original Slot v1.7 PNG and cartridge graphics
         run: cargo test -p slot-ui --test cart_material --test upstream_v17_assets --test native_resolution
       - name: Export authentic Slot keycap graphics for Android Apps
@@ -456,16 +458,16 @@ jobs:
           name: slot-konkr-0.2.0-signed-apk
           path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
-      - name: Verify QA104 signed APK and install-over identity
+      - name: Verify QA105 signed APK and install-over identity
         if: github.ref == 'refs/heads/fix/konkr-020-first-install-defaults'
         run: |
           set -euo pipefail
           APK=android/app/build/outputs/apk/release/app-release.apk
           test -s "$APK"
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt" dump badging "$APK" |
-            tee "$RUNNER_TEMP/konkr-qa104-badging.txt"
-          grep -F "package: name='fyi.slot.konkr' versionCode='104'" "$RUNNER_TEMP/konkr-qa104-badging.txt"
-          grep -F "versionName='0.2.0-first-install-defaults-qa104'" "$RUNNER_TEMP/konkr-qa104-badging.txt"
+            tee "$RUNNER_TEMP/konkr-qa105-badging.txt"
+          grep -F "package: name='fyi.slot.konkr' versionCode='105'" "$RUNNER_TEMP/konkr-qa105-badging.txt"
+          grep -F "versionName='0.2.0-onboarding-qa105'" "$RUNNER_TEMP/konkr-qa105-badging.txt"
           CERT="$("$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK")"
           echo "$CERT" | grep -Fi '4f42b8f0ac98f6a0102804ab51020ea0e7e2de7685c6ce09400a744de0b0fa2f'
           for abi in arm64-v8a x86_64; do
@@ -478,7 +480,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: github.ref == 'refs/heads/fix/konkr-020-first-install-defaults'
         with:
-          name: slot-konkr-0.2.0-first-install-defaults-qa104-signed-apk
+          name: slot-konkr-0.2.0-onboarding-qa105-signed-apk
           path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
       - name: Verify RC4 release APK is signed with permanent certificate

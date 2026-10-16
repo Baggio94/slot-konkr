@@ -94,6 +94,77 @@ pub fn hint_face(key: &str, label: &str) -> UndoFace {
     UndoFace { rgba, w, h: HINT_H }
 }
 
+/// Complete first-run instructions must never inherit the 140px footer
+/// hint limit, which dropped the tail of "OPEN MENU TO ADD ROMS".
+pub const ONBOARDING_MAX_W: u32 = OUT_W - 48;
+fn onboarding_text_width(text: &str, px: f32) -> u32 {
+    let Some(font)=text::label_font() else {return 8};
+    let spacing=(px*0.10).round();
+    text::line_width(font,&text.to_uppercase(),px,spacing).ceil() as u32+8
+}
+fn onboarding_band(text: &str, px: f32) -> UndoFace {
+    let w=onboarding_text_width(text,px);
+    let mut rgba=vec![0u8;(w*HINT_H*4) as usize];
+    if let Some(font)=text::label_font() {
+        let layout=text::fit(font,text,w as f32,1,px,px);
+        text::draw_centred(&mut rgba,w,HINT_H,&layout,INK);
+    }
+    UndoFace {rgba,w,h:HINT_H}
+}
+/// One wide single-line instruction with the ORIGINAL boxed keycap between
+/// the word "PRESS" and the rest of the instruction.
+pub fn onboarding_instruction_face(before: &str, key: &str, after: &str) -> UndoFace {
+    const GAP:u32=7;
+    let cap_w=cap_width(key);
+    let mut px=LABEL_PX;
+    while px>LABEL_MIN_PX &&
+        onboarding_text_width(before,px)+onboarding_text_width(after,px)
+            +cap_w+2*GAP>ONBOARDING_MAX_W {
+        px-=1.0;
+    }
+    let before=onboarding_band(before,px);
+    let after=onboarding_band(after,px);
+    let w=before.w+cap_w+after.w+2*GAP;
+    let mut rgba=vec![0u8;(w*HINT_H*4) as usize];
+    blit(&mut rgba,w,&before.rgba,before.w,before.h,0,0);
+    let x=before.w+GAP;
+    // Reuse the exact Slot cap renderer and copy only its cap pixels.
+    let cap=hint_face(key,"");
+    for row in 0..HINT_H {
+        let from=(row*cap.w*4) as usize;
+        let to=((row*w+x)*4) as usize;
+        let len=(cap_w*4) as usize;
+        rgba[to..to+len].copy_from_slice(&cap.rgba[from..from+len]);
+    }
+    blit(&mut rgba,w,&after.rgba,after.w,after.h,x+cap_w+GAP,0);
+    UndoFace {rgba,w,h:HINT_H}
+}
+/// Smaller but fully readable second line on BOTH empty-library screens.
+pub fn onboarding_note_face(text: &str) -> UndoFace {
+    onboarding_band(text,13.0)
+}
+#[cfg(test)]
+mod onboarding_tests {
+    use super::*;
+    #[test]
+    fn first_run_prompts_render_without_losing_words_or_exceeding_screen() {
+        for (before,key,after) in [
+            ("PRESS","START",", THEN SELECT LIBRARY TO ADD GAMES"),
+            ("PRESS","START","TO SELECT YOUR ROM FOLDER"),
+        ] {
+            let face=onboarding_instruction_face(before,key,after);
+            assert!(face.w<=ONBOARDING_MAX_W,"hint clips: {after}");
+            assert_eq!(face.h,HINT_H);
+            assert!(face.rgba.chunks_exact(4).any(|p|p[3]!=0));
+            assert!(onboarding_text_width(after,LABEL_PX)<ONBOARDING_MAX_W);
+        }
+        let note=onboarding_note_face("(UNZIPPED ROMS ONLY)");
+        assert!(note.w<=ONBOARDING_MAX_W);
+        assert!(note.rgba.chunks_exact(4).any(|p|p[3]!=0));
+        assert!(hint_width("START","Open Library")<=ONBOARDING_MAX_W);
+    }
+}
+
 pub fn word_width(text: &str) -> u32 {
     band_width(text)
 }
