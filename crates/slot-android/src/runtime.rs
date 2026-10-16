@@ -704,7 +704,8 @@ impl Engine {
         let size = (960, 640);
         let mut gpu = Compositor::new(&AndroidSurface { size }).map_err(|e| e.to_string())?;
         let settings = PATHS.lock().unwrap_or_else(|e| e.into_inner())
-            .as_ref().map(|(root, _)| Settings::load(root)).unwrap_or_default();
+            .as_ref().map(|(root, _)| Settings::load(root))
+            .unwrap_or_else(Settings::first_install_defaults);
         // Upstream Slot delegates colour correction to libretro core options.
         // Disable the dev13 approximate GPU grade to avoid double correction.
         gpu.set_colour_correction(false);

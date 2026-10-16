@@ -13,11 +13,10 @@ android {
         targetSdk = 32
         // Public Android candidate built from the consolidated Multiplayer Lab.
         // Same package ID and signing key: install -r must preserve user data.
-        // KONKR 0.2.0 stable promotion of QA code102.
-        // Monotonic versionCode 103 upgrades code102 in place.
-        // Existing app data, ROM paths, game saves and shaders are untouched.
-        versionCode = 103
-        versionName = "0.2.0"
+        // Post-0.2.0 private QA: change only fresh-install preferences.
+        // versionCode 104 upgrades the public 0.2.0 (code 103) in place.
+        versionCode = 104
+        versionName = "0.2.0-first-install-defaults-qa104"
         // One byte-identical APK on ARM64 KONKR and x86_64 Mac AVD.
         // Native libraries for BOTH ABIs are built/pinned by the same CI.
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }

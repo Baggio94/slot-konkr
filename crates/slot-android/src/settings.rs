@@ -166,7 +166,8 @@ pub struct Settings {
 }
 impl Default for Settings {
     fn default() -> Self {
-        // Dev13 settings survive upgrades. Do not change established defaults.
+        // Historical defaults for serde's partial legacy JSON. Do not change:
+        // old installs may omit fields and still need their prior values.
         Self { ff_speed: 2, ff_sound: true, colour_correction: false,
             rumble: true, shader_gba: Shader::Off, shader_gb: Shader::Off,
             shader_gbc: Shader::Off,
@@ -185,6 +186,20 @@ impl Default for Settings {
     }
 }
 impl Settings {
+    /// Defaults for a truly fresh KONKR install only. The serde Default above
+    /// is intentionally the legacy baseline for existing, sometimes partial,
+    /// settings JSON. Changing it would silently reset old users' choices.
+    pub fn first_install_defaults() -> Self {
+        let mut settings=Self::default();
+        settings.wallpaper=WallpaperPick::None;
+        settings.shader_gba=Shader::Lcd3x;
+        settings.shader_gbc=Shader::Lcd3x;
+        settings.shader_gb=Shader::Lcd3x;
+        settings.responsive_pacing=true;
+        settings.display_sync_pacing=true;
+        settings.run_ahead_frames=1;
+        settings
+    }
     pub fn load(dir: &Path) -> Self {
         fs::read(dir.join(NAME)).ok()
             .and_then(|b| {
@@ -237,7 +252,7 @@ impl Settings {
                     s.status_opt_in_v2 = true;
                 }
                 s
-            }).unwrap_or_default()
+            }).unwrap_or_else(Self::first_install_defaults)
     }
     pub fn save(&self, dir: &Path) -> io::Result<()> {
         fs::create_dir_all(dir)?;
@@ -601,6 +616,70 @@ mod tests {
         assert!(old.responsive_pacing && !old.display_sync_pacing);
     }
 
+    #[test]
+    fn fresh_install_configuration_matches_all_seven_settings_screenshots() {
+        let s=Settings::first_install_defaults();
+        use slot_store::Platform::{Gba,Gbc,Gb};
+        // GENERAL / WALLPAPER / INTERFACE
+        assert_eq!(s.wallpaper,WallpaperPick::None);
+        assert_eq!(s.appearance,Appearance::Dark);
+        assert_eq!(s.wallpaper_tint,WallpaperTint::Off);
+        assert!(!s.show_recents && !s.show_titles);
+        assert!(!s.show_wifi && !s.show_bluetooth && !s.show_integrations);
+        // SCREEN: three independent LCD3x selections, no grade, proper bezels
+        for platform in [Gba,Gbc,Gb] {
+            assert_eq!(s.shader_for(platform),Shader::Lcd3x);
+            assert!(!s.colour_for(platform));
+        }
+        assert_eq!(s.bezel_gbc,Bezel::Default);
+        assert_eq!(s.bezel_gb,Bezel::Default);
+        assert!(!s.gb_palettes);
+        // GAMEPLAY
+        assert_eq!(s.ff_speed,2);
+        assert!(s.ff_sound && s.rewind && s.turbo && s.rumble && s.eject_save);
+        // EMULATION: Display Sync is encoded by BOTH pacing flags on.
+        assert!(!s.show_fps);
+        assert!(s.responsive_pacing && s.display_sync_pacing);
+        assert_eq!(s.run_ahead_frames,1);
+    }
+    #[test]
+    fn missing_settings_file_gets_new_defaults_but_existing_json_is_untouched() {
+        let root=std::env::temp_dir().join(format!(
+            "slot-konkr-first-install-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&root).unwrap();
+        let fresh=Settings::load(&root);
+        assert_eq!(fresh,Settings::first_install_defaults());
+        assert!(!root.join(NAME).exists(), "loading must not write settings");
+        // Saved existing settings MUST survive upgrading from 0.2.0.
+        let mut customised=fresh.clone();
+        customised.shader_gba=Shader::Dot;
+        customised.shader_gbc=Shader::Grid;
+        customised.shader_gb=Shader::Simpletex;
+        customised.wallpaper=WallpaperPick::Default;
+        customised.responsive_pacing=false;
+        customised.display_sync_pacing=false;
+        customised.run_ahead_frames=0;
+        customised.show_recents=true;
+        customised.show_wifi=true;
+        customised.save(&root).unwrap();
+        assert_eq!(Settings::load(&root),customised);
+        // An older *partial* JSON must use old missing-field values, not
+        // freshly introduced LCD3x/Display Sync/Run-Ahead preferences.
+        std::fs::write(root.join(NAME),r#"{"ff_speed":4,"show_titles":true}"#).unwrap();
+        let previous=Settings::load(&root);
+        assert_eq!(previous.ff_speed,4);
+        assert!(previous.show_titles);
+        assert_eq!(previous.shader_gba,Shader::Off);
+        assert_eq!(previous.shader_gb,Shader::Off);
+        assert_eq!(previous.shader_gbc,Shader::Off);
+        assert_eq!(previous.wallpaper,WallpaperPick::Default);
+        assert!(!previous.responsive_pacing && !previous.display_sync_pacing);
+        assert_eq!(previous.run_ahead_frames,0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn defaults_preserve_dev13() {
         let s = Settings::default();
