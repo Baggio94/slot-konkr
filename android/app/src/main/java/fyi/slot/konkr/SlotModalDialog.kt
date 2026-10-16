@@ -39,11 +39,8 @@ internal class SlotModalDialog(
     private val fields = ArrayList<EditText>()
     private val dialog = object : Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen) {
         override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-            // Dialog dispatch does not reach MainActivity's AVD keyboard mapper.
-            // Keep ordinary letters when an EditText has focus.
-            val keyCode = SlotEmulatorKeys.dialogKeyCode(
-                event.keyCode, currentFocus is EditText
-            )
+            // Physical KONKR buttons, never synthetic Mac keyboard mapping.
+            val keyCode = event.keyCode
             when (keyCode) {
                 KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK -> {
                     if (event.action == KeyEvent.ACTION_DOWN &&

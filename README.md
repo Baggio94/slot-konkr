@@ -1,43 +1,55 @@
 # slot. for KONKR Pocket Advance
 
-An Android adaptation of [slot. by Brandon Kowalski](https://github.com/BrandonKowalski/slot), drawing on the [pvaibhav fork](https://github.com/pvaibhav/slot), for the **KONKR Pocket Advance** running Android 12 (960 × 640, 3:2). This fork is maintained separately from the Linux/H700 frontend.
+**An unofficial Android port of [slot.](https://github.com/BrandonKowalski/slot) for the KONKR Pocket Advance.**
 
-**Current public release: 0.2.0.** The signed universal Android APK is built from the tested code102 feature set, with a monotonically higher Android versionCode (103). See [the 0.2.0 release notes](docs/konkr/RELEASE-NOTES-0.2.0.md).
+Originally developed by **Brandon Kowalski** for a different handheld, slot. inspired this Android port, which also incorporates work from [pvaibhav/slot](https://github.com/pvaibhav/slot). This is a community adaptation, **not an official release by those authors** and not affiliated with KONKR/AYN.
 
-## Supported consoles and platforms
+## Built for the KONKR
 
-- **Game Boy Advance, Game Boy Color and Game Boy**, using uncompressed **.gba, .gbc, .gb** cartridge files.
-- KONKR Pocket Advance **ARM64**: primary physical test device.
-- Mac-hosted Android emulator **x86_64**: desktop QA target using the same universal APK.
-- Does not contain copyrighted games, commercial ROM sets, Nintendo BIOS or private save data.
+- Android 12, **ARM64 only**, 960 × 640 (3:2) display and controller-first navigation
+- Game Boy Advance, Game Boy Color and Game Boy cartridges: **unzipped** `.gba`, `.gbc`, `.gb` files
+- Original-inspired cartridge carousel, covers, custom labels, themes and **Cart Studio**
+- **mGBA** and **gpSP** libretro cores with save RAM / RTC, save states, rewind, fast-forward and carefully guarded run-ahead
+- **Ten GBA shader presets plus Off**; independent GB and GBC screen settings and bezels
+- **RetroAchievements**: online and offline earning/sync, notifications and account management
+- Link Cable / RFU multiplayer where supported by the game, emulation core and network
+- Library indexing, Favorites, optional Recents, custom artwork and preserved controller shortcuts
+- Optimized cartridge faces: 160-entry GPU LRU, background prefetch and on-device compressed cache
+- Auto-save on eject, per-game settings, RetroArch save compatibility and Cart Studio
+- No ROM, BIOS, account credentials or commercial assets from Nintendo are distributed
 
-## Features included in the Android port
+### Install
 
-- Faithful Slot cartridge carousel, system shelves, core picker, cartridge insertion/ejection visuals and sounds, screen options, customized labels and **Cart Studio**.
-- Improved cartridge loading: up to 160 GPU-cached faces, bounded background prefetch, a 160 MiB compressed on-device face cache reused across app starts, and per-frame GPU upload throttling during fast scrolling.
-- **10 GBA shader choices plus Off**, including LCD3x, Dot, LCD Grid V2, GBA-colour presets, zfast LCD, LCD1x, AGB-001, AGS-001 and Sharp Bilinear. Multi-pass RetroArch presets are adapted to the Android OpenGL ES renderer, not guaranteed pixel-identical.
-- Built-in **mGBA and gpSP**, game/core options, fast forward, rewind, Run-Ahead where safe, controller navigation and Slot-inspired menus.
-- **Save RAM and RTC**, save states, Undo and Polaroids, RetroArch-compatible SRAM and state import/export including RZIP v1, conservative conflict resolution.
-- **Share mGBA/gpSP Saves**: opt-in transfer of GBA SRAM only, disabled by default. Individual save states and RTC files are not merged between cores.
-- **RetroAchievements**: account status, online achievements, offline persistence/sync and in-game popups.
-- **Multiplayer**: Link Cable and game/core-supported Wireless/RFU, Host/Join, local discovery and IP fallback, compatible peer checks and consent-controlled ROM sharing. Tested mGBA Cable FireRed↔LeafGreen between Mac AVD and physical KONKR; not every game/core/mode pair is supported.
-- Android Apps launcher and optional launcher HOME role, status icons, Slot-styled dialogs and input shortcuts.
-- Cached library instantly shown at boot; quiet background refresh, changed-ROM detection, reuse of headers and safety while games run. Scans the **whole selected ROM tree** recursively and indexes supported GB/GBC/GBA cartridge files wherever they appear.
+1. Download the **signed ARM64 APK** from [Releases](https://github.com/Baggio94/slot-for-konkr/releases).
+2. Install it on the **KONKR Pocket Advance**. If updating an existing `fyi.slot.konkr` build, **install over it**: do not uninstall the old version or clear its data.
+3. Open slot., press **START**, then select **Library** and choose the folder containing your own unzipped GB/GBC/GBA ROMs.
+4. Select your own BIOS folder where applicable.
 
-## Install and upgrades
+**Application ID:** `fyi.slot.konkr`. The same permanent certificate as `Baggio94/slot-konkr` must sign every public update. Android `versionCode` increases monotonically (0.2.1 = 106). Changing the certificate would break normal upgrades.
 
-Get the **signed universal Android APK** from [this fork's Releases](https://github.com/Baggio94/slot-konkr/releases). The asset name includes **arm64-x86_64.apk**. Install the normal package **fyi.slot.konkr**, not the isolated Multiplayer Lab package.
+### First-install defaults
 
-Android Storage Access Framework lets you select your ROM directory and a BIOS folder where applicable. On a Mac Android emulator, the keyboard mapping is **Z → A**, **X → B**, **Enter → Start**, **Space → Select**, **Tab → Home/Mode**, arrows → D-pad. Z/X work in Slot-owned dialog menus but remain normal letters while editing account credentials or other text fields.
+Dark theme, no wallpaper, Recents Off, Game Titles Off; LCD3x for GBA/GBC/GB, no color correction; default GB/GBC bezels; Fast Forward 2× with sound, Rewind On, Turbo X/Y, Rumble On, Auto Save on Eject On; Display Sync pacing, 1-frame Run-Ahead, FPS display Off; Wi-Fi, Bluetooth and app status indicators Off. Existing users' saved preferences are never reset by an update.
 
-A normal same-certificate update with **adb install -r** preserves application data. Never uninstall the existing app, clear app data or overwrite SRAM to work around a signing mismatch. Check signing compatibility and the package identity instead.
+## Releases and validation
 
-Multiplayer ROM sharing is for **trusted local networks**: public-key peer identity authenticates devices but does not encrypt transferred content. The application does not guarantee every multiplayer mode or achievement set works for every ROM.
+The **public APK contains ARM64 libraries only**; it has no Mac emulator key mapping, Mac discovery bridge or experimental multiplayer sidecar. It is built from the same validated gameplay code maintained in the separate [development and QA repository](https://github.com/Baggio94/slot-konkr).
 
-## Source, licensing, and attribution
+Each signed production build checks Android identity, `versionCode`, signing certificate, ARM64 mGBA/gpSP/JNI libraries, original Cart Studio WASM and save/graphics regressions. Every public release includes SHA-256 checksums. Visual/performance parity of RetroArch multipass shader ports is not guaranteed pixel-perfect and should be tested on physical hardware.
 
-Original Slot by **Brandon Kowalski**; its Rust UI and Link inspiration, including the work in **pvaibhav/slot**, are preserved and credited. See [LICENSE](LICENSE), [licenses/](licenses/) and pinned [mGBA/gpSP build scripts](scripts/) and [mGBA patches](cores/mgba/). All upstream and third-party licenses continue to apply. Android APK distribution requires corresponding source and notices for included cores.
+## Development and source
 
-Developer information: [0.2.0 release notes](docs/konkr/RELEASE-NOTES-0.2.0.md), [previous 0.1.0 notes](docs/konkr/RELEASE-NOTES-0.1.0.md), [qualification checklist](docs/konkr/RELEASE-READINESS-0.1.0.md) and [development PR #29](https://github.com/Baggio94/slot-konkr/pull/29).
+This is the **production source tree**. Mac emulation, x86_64 builds, diagnostic tools, benchmarks and experimental branches belong in the [development lab](https://github.com/Baggio94/slot-konkr). Features are validated there, then transferred into a reviewable production candidate. The public source includes the native emulation code and scripts needed to rebuild it; do not publish only the APK.
 
-**Android release tags are prefixed konkr-v**, such as konkr-v0.1.0-rc.1 and konkr-v0.2.0. The separate upstream Linux/H700 release process still uses v* tags.
+To build locally, use JDK 17, Android SDK API 35, NDK 27.2.12479018, Rust 1.96, cargo-ndk and Gradle 8.7. The CI pipeline rebuilds the pinned native cores and bundled Cart Studio. Production signing requires the original certificate and secure signing secrets; **no keystore or private key is committed**.
+
+## Open source and credits
+
+- **[Brandon Kowalski — slot.](https://github.com/BrandonKowalski/slot)**: original project, user experience and foundational source
+- **[pvaibhav — slot fork](https://github.com/pvaibhav/slot)**: inherited improvements
+- **mGBA / gpSP / libretro / RetroAchievements contributors**: emulation and achievement components
+- Original shader creators and font/graphic authors: notices and licenses retained in [licenses/](licenses/), bundled asset notices and source headers
+
+The Slot-derived code remains under the repository's **GNU GPL v3** terms; relevant third-party components retain their own licenses. Attribution, copyright notices and corresponding source are required even though this GitHub repository is **not marked as a fork**.
+
+Please report device issues with the ROM platform, core, screen mode, Android version and steps to reproduce, without uploading commercial ROMs or copyrighted BIOS files.

@@ -37,7 +37,7 @@ internal class RaPanelDialog(
         activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen
     ) {
         override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-            val keyCode = SlotEmulatorKeys.dialogKeyCode(event.keyCode)
+            val keyCode = event.keyCode
             if (keyCode == KeyEvent.KEYCODE_BUTTON_B) {
                 if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) dismiss()
                 return true

@@ -13,13 +13,11 @@ android {
         targetSdk = 32
         // Public Android candidate built from the consolidated Multiplayer Lab.
         // Same package ID and signing key: install -r must preserve user data.
-        // Post-0.2.0 QA: fresh-install preferences and clear two-line guidance.
-        // versionCode 104 upgrades the public 0.2.0 (code 103) in place.
-        versionCode = 105
-        versionName = "0.2.0-onboarding-qa105"
-        // One byte-identical APK on ARM64 KONKR and x86_64 Mac AVD.
-        // Native libraries for BOTH ABIs are built/pinned by the same CI.
-        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+        // Dedicated KONKR ARM64 production release; preserves existing data.
+        // 106 upgrades 0.2.0 (103) and the last QA105 in place.
+        versionCode = 106
+        versionName = "0.2.1"
+        ndk { abiFilters += listOf("arm64-v8a") }
     }
 
     // This APK is distributed directly for KONKR Android 12 (not via Google
@@ -27,18 +25,6 @@ android {
     // suppress only Play's expired-target submission check, not other lint.
     lint {
         disable += "ExpiredTargetSdkVersion"
-    }
-
-    // An install-alongside standalone QA app. This NEVER replaces the
-    // physical console's fyi.slot.konkr beta or reads its app-private saves.
-    // Its own package is fyi.slot.konkr.lab, with a separate HOME-free manifest.
-    buildTypes {
-        create("multiplayerLab") {
-            initWith(getByName("debug"))
-            applicationIdSuffix = ".lab"
-            versionNameSuffix = "-sidecar"
-            matchingFallbacks += listOf("debug")
-        }
     }
 
     // A stable signing key can be provided by GitHub Actions secrets or a
@@ -59,11 +45,6 @@ android {
         }
         buildTypes {
             getByName("debug") {
-                signingConfig = signingConfigs.getByName("slotPersistent")
-            }
-            getByName("multiplayerLab") {
-                // Same update-stable certificate when secrets are available,
-                // but a distinct app ID even if those secrets are absent.
                 signingConfig = signingConfigs.getByName("slotPersistent")
             }
             getByName("release") {

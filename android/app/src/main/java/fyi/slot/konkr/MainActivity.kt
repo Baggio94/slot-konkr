@@ -38,8 +38,6 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import java.net.Inet4Address
-import java.net.InetSocketAddress
-import java.net.Socket
 import org.json.JSONObject
 import org.json.JSONArray
 import java.util.concurrent.ConcurrentHashMap
@@ -94,7 +92,6 @@ class MainActivity : Activity() {
     external fun nativeSurfaceChanged(width: Int, height: Int)
     external fun nativeDrawFrame()
     external fun nativeKey(code: Int, pressed: Boolean)
-    external fun nativeEmulatorKey(code: Int, pressed: Boolean)
     external fun nativeResetInput()
     external fun nativeExternalReturn()
     external fun nativePerformanceStats(): String?
@@ -140,8 +137,6 @@ class MainActivity : Activity() {
     external fun nativeLinkPeerRomDecision(choice: Int)
     external fun nativeLinkPeerLabel(): String?
     external fun nativeLinkNetworkReady(ipv4: String)
-    external fun nativeLinkDirectHost(addressPair: String)
-    external fun nativeLinkDiscoveryGame(): String?
     external fun nativeLinkNetworkError(reason: String)
     external fun nativeLinkNeedsMulticast(): Boolean
 
@@ -161,12 +156,6 @@ class MainActivity : Activity() {
     }
     private val raSmartRunning = AtomicBoolean(false)
     private val gameLoader = Executors.newSingleThreadExecutor()
-    // AVD-only; querying the Mac Bonjour bridge must never block GL/UI,
-    // Android AudioTrack, normal ROM loading or real KONKR Wi-Fi discovery.
-    private val linkBridgeWorker = Executors.newFixedThreadPool(2)
-    // Reject delayed results if the user cancelled and reopened the same
-    // game's Host/Join menu before an older Mac discovery request finished.
-    private val linkBridgeGeneration = AtomicInteger()
     // Independent physical QA package. It may read the same ROM and BIOS
     // folders, but MUST NOT import from or write to a selected RetroArch
     // Saves/States SAF folder belonging to the user's daily Slot installation.
@@ -262,88 +251,6 @@ class MainActivity : Activity() {
         catch (error: RuntimeException) { Log.w(TAG, "Link multicast release failed", error) }
     }
 
-    /** The AVD cannot receive the KONKR's LAN multicast. A Mac-side bridge
-     *  discovers the original Slot mDNS advertisement and exposes its IPv4
-     *  only through adb reverse tcp:7222 -> 127.0.0.1:7222. Host game/core
-     *  SHA-256, BIOS, backend and serial mode are STILL checked by native
-     *  Slot's strict KMLB v2 TCP handshake before any core state changes.
-     *
-     *  If the bridge is absent/times out, retain the original manual-IP
-     *  dialog. No new Android permission or public socket is required.
-     */
-    private fun tryLinkMacBridge(local: String, game: String) {
-        val generation = linkBridgeGeneration.incrementAndGet()
-        linkBridgeWorker.execute {
-            val host = try {
-                Socket().use { socket ->
-                    socket.connect(InetSocketAddress("127.0.0.1", 7222), 500)
-                    socket.soTimeout = 9000
-                    val out = socket.getOutputStream()
-                    out.write("FIND $game\n".toByteArray(Charsets.US_ASCII))
-                    out.flush()
-                    socket.getInputStream().bufferedReader(Charsets.US_ASCII).readLine()?.trim()
-                }
-            } catch (_: Exception) { null }
-            runOnUiThread {
-                if (isDestroyed || !resumed || 
-                    generation != linkBridgeGeneration.get() ||
-                    nativeLinkDiscoveryGame() != game) {
-                    return@runOnUiThread // Cancelled or a different cartridge
-                }
-                if (host != null && validLinkIpv4(host)) {
-                    Log.i(TAG, "Mac bridge found Slot Link host for $game")
-                    getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                        .putString("slot_link_host_ipv4", host).apply()
-                    nativeLinkDirectHost("$local,$host")
-                } else {
-                    // Typical absence: Mac helper not running, host not yet
-                    // advertising, firewall, or emulator not ADB-reversed.
-                    promptManualLinkJoin(local)
-                }
-            }
-        }
-    }
-
-    private fun validLinkIpv4(host: String): Boolean {
-        val octets = host.split('.')
-        return octets.size == 4 && octets.all { part ->
-            part.isNotEmpty() && part.length <= 3 &&
-                part.all(Char::isDigit) && (part.toIntOrNull() ?: -1) in 0..255
-        } && host != "0.0.0.0" && !host.startsWith("127.") &&
-            !host.startsWith("169.254.") && !host.startsWith("224.")
-    }
-
-    private fun promptManualLinkJoin(local: String) {
-        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-        var joined = false
-        val dialog = SlotModalDialog(
-            this,
-            "MULTIPLAYER — DIRECT JOIN",
-            "Mac discovery unavailable. Enter the KONKR host Wi-Fi IPv4 address.",
-            onDismiss = {
-                if (!joined) nativeLinkNetworkError("Direct Join cancelled")
-            }
-        )
-        val field = dialog.addInput("KONKR IP ADDRESS", "192.168.1.20").apply {
-            inputType = android.text.InputType.TYPE_CLASS_PHONE
-            typeface = SlotUi.font(this@MainActivity)
-            setText(prefs.getString("slot_link_host_ipv4", ""))
-        }
-        dialog.addButton("CANCEL") { dialog.dismiss() }
-        dialog.addButton("JOIN") {
-            val host = field.text.toString().trim()
-            if (!validLinkIpv4(host)) {
-                dialog.setError("Enter a valid LAN IPv4 address, such as 192.168.68.79.")
-            } else {
-                joined = true
-                prefs.edit().putString("slot_link_host_ipv4", host).apply()
-                dialog.dismiss()
-                nativeLinkDirectHost("$local,$host")
-            }
-        }
-        dialog.show()
-    }
-
     /** The peer has proven possession of an installation-bound Ed25519 key
      * before this UI appears. A14 never trusts IPs or legacy lab flags.
      * Keys are remembered only by Rust after a verified ROM exchange.
@@ -385,22 +292,6 @@ class MainActivity : Activity() {
         val address = linkWifiAddress()
         if (address == null) {
             nativeLinkNetworkError("Connect both consoles to the same Wi-Fi network")
-            return
-        }
-        // Android emulator's NAT does not support IGMP/mDNS reliably.
-        // For virtual KONKR testing, Join directly to the physical KONKR
-        // Host's LAN IP; DO NOT request an unusable Android MulticastLock.
-        val fingerprint = android.os.Build.FINGERPRINT.lowercase()
-        val hardware = android.os.Build.HARDWARE.lowercase()
-        if (fingerprint.startsWith("generic") || fingerprint.contains("sdk_gphone") ||
-            hardware.contains("ranchu") || hardware.contains("goldfish")) {
-            releaseLinkMulticast()
-            val game = nativeLinkDiscoveryGame()
-            if (game != null && game.matches(Regex("[A-Z0-9]{4}"))) {
-                tryLinkMacBridge(address, game)
-            } else {
-                promptManualLinkJoin(address)
-            }
             return
         }
         try {
@@ -915,33 +806,6 @@ class MainActivity : Activity() {
             (splash.parent as? FrameLayout)?.removeView(splash)
             startupSplash = null
         }.start()
-    }
-
-    // Intercept before GLSurfaceView consumes character keys. Android keyevent
-    // 96/97 reached libretro, but keyevent 54/52 (Z/X) did not reach
-    // Activity.onKeyDown on the AVD. Physical KONKR receives no remapping.
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        val button = SlotEmulatorKeys.translate(event.keyCode)
-        if (button != null) {
-            // Only Z/X on the Android emulator need an emulated-frame latch.
-            // Normal keys, actual controller buttons and the KONKR itself are
-            // kept on the unmodified input path.
-            val isGameplayTap = button == KeyEvent.KEYCODE_BUTTON_A ||
-                button == KeyEvent.KEYCODE_BUTTON_B
-            val sendKey: (Boolean) -> Unit = { down ->
-                if (isGameplayTap) nativeEmulatorKey(button, down)
-                else nativeKey(button, down)
-            }
-            when (event.action) {
-                KeyEvent.ACTION_DOWN -> {
-                    if (event.repeatCount == 0) sendKey(true)
-                    if (event.repeatCount == 0) Log.d(TAG, "AVD keyboard: ${event.keyCode} -> $button down")
-                }
-                KeyEvent.ACTION_UP -> sendKey(false)
-            }
-            return true
-        }
-        return super.dispatchKeyEvent(event)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -2250,7 +2114,6 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        linkBridgeGeneration.incrementAndGet()
         releaseLinkMulticast()
         Choreographer.getInstance().removeFrameCallback(vsyncCallback)
         raConnectivity?.let { manager ->
@@ -2265,7 +2128,6 @@ class MainActivity : Activity() {
         raLoginWorker.shutdownNow()
         raSmartWorker.shutdownNow()
         gameLoader.shutdownNow()
-        linkBridgeWorker.shutdownNow()
         uiHandler.removeCallbacks(pulse)
         if (::raAchievementOverlay.isInitialized) raAchievementOverlay.destroy()
         if (::shelfStatus.isInitialized) shelfStatus.close()
@@ -2276,7 +2138,6 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         resumed = false
-        linkBridgeGeneration.incrementAndGet()
         // Rust nativeSuspend aborts discovery/linked play; never keep a
         // multicast lock across Android background sleep.
         releaseLinkMulticast()

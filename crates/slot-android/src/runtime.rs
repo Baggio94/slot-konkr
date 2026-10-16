@@ -72,9 +72,6 @@ impl Surface for AndroidSurface {
 #[derive(Clone)]
 enum Input {
     Key(i32, bool),
-    // Dedicated Mac AVD keyboard events: a quick Z/X tap must survive until
-    // the emulator core has actually sampled it for one frame.
-    EmulatorKey(i32, bool),
     // Predefined shelf UI states from Android: no untrusted or long text on GL.
     ShelfStatus(u8),
     Reset,
@@ -90,50 +87,10 @@ enum Input {
     RaAccountConfigured,
     // Kotlin acquires the multicast lock before returning a Wi-Fi IPv4.
     LinkNetworkReady(String),
-    LinkDirectHost(String),
     LinkNetworkError(String),
     LinkPeerRomConsent(i32),
     RaPrefetchHash(String, u32),
     ExternalReturn,
-}
-
-/// AVD keyboard letters can press and release between two GL callbacks.
-/// The physical KONKR bypasses this latch entirely. Only A and B use it.
-#[derive(Default, Debug)]
-struct EmulatorKeyLatch {
-    waiting_for_frame: u16,
-    release_after_frame: u16,
-}
-
-impl EmulatorKeyLatch {
-    fn press(&mut self, mask: u16) {
-        self.waiting_for_frame |= mask;
-        self.release_after_frame &= !mask;
-    }
-
-    /// True means the normal key-up can be applied now. Otherwise we must
-    /// keep the key pressed until at least one real emulation frame succeeds.
-    fn release_now(&mut self, mask: u16) -> bool {
-        if self.waiting_for_frame & mask != 0 {
-            self.release_after_frame |= mask;
-            false
-        } else {
-            true
-        }
-    }
-
-    /// Called only after a successfully advanced libretro frame, never on
-    /// a GL draw, speculative run-ahead, paused menu or a waiting link frame.
-    fn on_emulated_frame(&mut self) -> u16 {
-        let releases = self.release_after_frame;
-        self.waiting_for_frame = 0;
-        self.release_after_frame = 0;
-        releases
-    }
-
-    fn reset(&mut self) {
-        *self = Self::default();
-    }
 }
 
 static INPUT: Mutex<VecDeque<Input>> = Mutex::new(VecDeque::new());
@@ -231,9 +188,6 @@ static PERF_ACTIVE: AtomicBool = AtomicBool::new(false);
 static SHELF_INDICATOR_FLAGS: AtomicI32 = AtomicI32::new(0);
 // Read-only lifecycle bit polled by Kotlin; never touch WifiManager on GL.
 static LINK_NEEDS_MULTICAST: AtomicBool = AtomicBool::new(false);
-// Read-only four-character game code for the optional Mac AVD DNS-SD bridge.
-// The actual Lab/2 peer handshake still validates SHA-256 of ROM, core, BIOS.
-static LINK_DISCOVERY_GAME: Mutex<Option<String>> = Mutex::new(None);
 // Authenticated peer key fingerprint, never a user-supplied device name.
 static LINK_PEER_LABEL: Mutex<Option<String>> = Mutex::new(None);
 
@@ -542,7 +496,6 @@ struct Engine {
     born: Instant,
     last: Instant,
     library_version: u64,
-    emulator_key_latch: EmulatorKeyLatch,
     texture_cache: VecDeque<(usize, usize, slot_gfx::TexId)>,
     last_cart_navigation: Instant,
     cart_render: CartRender,
@@ -1049,7 +1002,6 @@ impl Engine {
             born: now,
             last: now,
             library_version,
-            emulator_key_latch: EmulatorKeyLatch::default(),
             texture_cache: VecDeque::new(),
             last_cart_navigation: now,
             cart_render: CartRender::start(visuals_root.as_deref())?,
@@ -1347,7 +1299,6 @@ impl Engine {
     fn cancel_link_discovery(&mut self) {
         if let Some(starter) = self.link_starter.take() { starter.cancel(); }
         LINK_NEEDS_MULTICAST.store(false, Ordering::Release);
-        *LINK_DISCOVERY_GAME.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     fn enter_multiplayer_menu(&mut self) {
@@ -1477,8 +1428,6 @@ impl Engine {
             return;
         }
         self.cancel_link_discovery();
-        *LINK_DISCOVERY_GAME.lock().unwrap_or_else(|e| e.into_inner()) =
-            self.link_identity.as_ref().map(|identity| crate::link_compat::discovery_key(&identity.code).to_owned());
         let now = self.link_millis();
         self.link_worked_at = now;
         self.link_phase = LinkMenu::Working {
@@ -1813,32 +1762,6 @@ impl Engine {
                     LINK_NEEDS_MULTICAST.store(false, Ordering::Release);
                 }
             }
-            Input::LinkDirectHost(pair) => {
-                if matches!(self.overlay, ShelfOverlay::Multiplayer) &&
-                    matches!(self.link_phase, LinkMenu::Working {..}) {
-                    let result = (|| {
-                        if self.link_role != LinkRow::Join {
-                            return Err("Direct IP is supported for Join only".to_owned());
-                        }
-                        let (local, host) = pair.split_once(',')
-                            .ok_or_else(|| "Invalid direct IP address pair".to_owned())?;
-                        let local = local.parse::<Ipv4Addr>()
-                            .map_err(|_| "Invalid emulator local IPv4".to_owned())?;
-                        let host = host.parse::<Ipv4Addr>()
-                            .map_err(|_| "Invalid KONKR host IPv4".to_owned())?;
-                        let config = self.link_config()?;
-                        LinkStarter::spawn_direct_join(local, host, config)
-                            .map_err(|e| e.to_string())
-                    })();
-                    match result {
-                        Ok(starter) => {
-                            self.link_starter = Some(starter);
-                            LINK_NEEDS_MULTICAST.store(false, Ordering::Release);
-                        }
-                        Err(error) => self.fail_multiplayer(&error, LinkFail::Radio),
-                    }
-                }
-            }
             Input::LinkNetworkError(reason) => {
                 if matches!(self.overlay, ShelfOverlay::Multiplayer) &&
                     matches!(self.link_phase, LinkMenu::Working {..}) {
@@ -1924,7 +1847,6 @@ impl Engine {
                 }
             }
             Input::Reset => {
-                self.emulator_key_latch.reset();
                 self.reset_time_controls();
                 self.buttons = 0;
                 self.mode_down_at = None;
@@ -1947,7 +1869,6 @@ impl Engine {
                 }
             }
             Input::Suspend => {
-                self.emulator_key_latch.reset();
                 self.cancel_link_discovery();
                 if let Some(session) = self.game.as_mut() { session.end_multiplayer(); }
                 self.hud.set_link(LinkBadge::Off);
@@ -1979,7 +1900,6 @@ impl Engine {
             }
             Input::Exit => {
                 self.hud.set_link(LinkBadge::Off);
-                self.emulator_key_latch.reset();
                 self.cancel_link_discovery();
                 self.link_identity = None;
                 self.reset_time_controls();
@@ -2052,29 +1972,6 @@ impl Engine {
                 {
                     self.awaiting_game = false;
                     self.prepared_rom = Some(path);
-                }
-            }
-            Input::EmulatorKey(code, pressed) => {
-                // This pathway is called only for AVD keyboard Z/X (mapped to
-                // gamepad A/B); physical KONKR input always uses Input::Key.
-                let mask = controls(code);
-                if mask != ButtonMask::A && mask != ButtonMask::B {
-                    self.handle(Input::Key(code, pressed));
-                    return;
-                }
-                if !pressed && self.game.is_some()
-                    && matches!(self.overlay, ShelfOverlay::None)
-                    && !self.emulator_key_latch.release_now(mask)
-                {
-                    // Keep this press alive until libretro has seen it.
-                    return;
-                }
-                self.handle(Input::Key(code, pressed));
-                if pressed && self.game.is_some()
-                    && matches!(self.overlay, ShelfOverlay::None)
-                    && self.buttons & mask != 0
-                {
-                    self.emulator_key_latch.press(mask);
                 }
             }
             Input::Key(code, pressed) => {
@@ -4672,13 +4569,6 @@ impl Engine {
                 session.prepare_runahead(self.buttons, live.turbo,
                     profile.run_ahead_frames);
             }
-            if stepped > 0 && !self.rewind_held {
-                // Don't swallow taps if both key events were drained on the
-                // same display callback. This is AVD-only and follows the
-                // *real* core advance, not a predicted run-ahead frame.
-                let releases = self.emulator_key_latch.on_emulated_frame();
-                self.buttons &= !releases;
-            }
             if stepped > 1 {
                 self.perf_catchup = self.perf_catchup.saturating_add(1);
             }
@@ -5464,36 +5354,6 @@ mod ui_feedback_tests {
     }
 
     #[test]
-    fn avd_short_tap_is_held_until_one_actual_core_frame() {
-        let mut latch = EmulatorKeyLatch::default();
-        latch.press(ButtonMask::A);
-        assert!(!latch.release_now(ButtonMask::A));
-        assert_eq!(latch.on_emulated_frame(), ButtonMask::A);
-        assert_eq!(latch.on_emulated_frame(), 0);
-    }
-
-    #[test]
-    fn avd_held_key_releases_normally_after_first_frame() {
-        let mut latch = EmulatorKeyLatch::default();
-        latch.press(ButtonMask::B);
-        assert_eq!(latch.on_emulated_frame(), 0);
-        assert!(latch.release_now(ButtonMask::B));
-        assert_eq!(latch.on_emulated_frame(), 0);
-    }
-
-    #[test]
-    fn avd_waiting_multiplayer_frame_does_not_consume_release() {
-        let mut latch = EmulatorKeyLatch::default();
-        latch.press(ButtonMask::A);
-        assert!(!latch.release_now(ButtonMask::A));
-        // Linked frame hasn't advanced, so no on_emulated_frame call yet.
-        assert_eq!(latch.waiting_for_frame, ButtonMask::A);
-        assert_eq!(latch.on_emulated_frame(), ButtonMask::A);
-        latch.reset();
-        assert_eq!(latch.waiting_for_frame, 0);
-    }
-
-    #[test]
     fn background_library_swap_waits_for_idle_carousel() {
         assert!(may_apply_library_update(false, false, false));
         assert!(!may_apply_library_update(true, false, false));
@@ -5815,19 +5675,6 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeCanRefreshLibrary(
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeEmulatorKey(
-    _env: *mut c_void,
-    _activity: *mut c_void,
-    key: i32,
-    pressed: u8,
-) {
-    // No emulator events are synthesized for real physical KONKR controls.
-    if key != 96 && key != 97 { return; }
-    INPUT.lock().unwrap_or_else(|poison| poison.into_inner())
-        .push_back(Input::EmulatorKey(key, pressed != 0));
-}
-
-#[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeKey(
     _env: *mut c_void,
     _activity: *mut c_void,
@@ -5851,18 +5698,6 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetShelfStatus(
     } else { 0 };
     INPUT.lock().unwrap_or_else(|poison| poison.into_inner())
         .push_back(Input::ShelfStatus(safe));
-}
-
-/// AVD Mac bridge receives only the four-character ROM header code. It
-/// never handles gameplay, filenames, save data or the peer's fingerprints.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkDiscoveryGame(
-    env: JNIEnv<'_>, _activity: JObject<'_>,
-) -> jstring {
-    let code = LINK_DISCOVERY_GAME.lock()
-        .unwrap_or_else(|e| e.into_inner()).clone();
-    code.and_then(|value| env.new_string(value).ok())
-        .map_or(std::ptr::null_mut(), |value| value.into_raw())
 }
 
 /// Kotlin resolves the connected Wi-Fi interface and takes a MulticastLock
@@ -5895,16 +5730,6 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkNetworkReady(
     if let Ok(value) = env.get_string(&ipv4) {
         INPUT.lock().unwrap_or_else(|e| e.into_inner())
             .push_back(Input::LinkNetworkReady(value.to_string_lossy().into_owned()));
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLinkDirectHost(
-    mut env: JNIEnv<'_>, _this: JObject<'_>, address_pair: JString<'_>,
-) {
-    if let Ok(value) = env.get_string(&address_pair) {
-        INPUT.lock().unwrap_or_else(|e| e.into_inner())
-            .push_back(Input::LinkDirectHost(value.to_string_lossy().into_owned()));
     }
 }
 
