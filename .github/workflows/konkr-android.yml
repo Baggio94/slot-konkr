@@ -432,6 +432,30 @@ jobs:
           name: slot-konkr-0.1.0-rc2-stabilization-code102-signed-apk
           path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
+      - name: Verify signed 0.2.0 release APK and update identity
+        if: github.ref == 'refs/heads/release/konkr-android-0.2.0'
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          test -s "$APK"
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt" dump badging "$APK" | tee "$RUNNER_TEMP/konkr-020-badging.txt"
+          grep -F "package: name='fyi.slot.konkr' versionCode='103'" "$RUNNER_TEMP/konkr-020-badging.txt"
+          grep -F "versionName='0.2.0'" "$RUNNER_TEMP/konkr-020-badging.txt"
+          CERT="$("$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK")"
+          echo "$CERT" | grep -Fi '4f42b8f0ac98f6a0102804ab51020ea0e7e2de7685c6ce09400a744de0b0fa2f'
+          for abi in arm64-v8a x86_64; do
+            for core in slot_android mgba_libretro gpsp_libretro; do
+              unzip -Z -1 "$APK" | grep -Fx "lib/$abi/lib${core}.so"
+            done
+          done
+          unzip -Z -1 "$APK" | grep -Fx "assets/studio/pkg/slot_cart_studio_bg.wasm"
+          sha256sum "$APK"
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/release/konkr-android-0.2.0'
+        with:
+          name: slot-konkr-0.2.0-signed-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
       - name: Verify RC4 release APK is signed with permanent certificate
         if: startsWith(github.ref, 'refs/heads/release/')
         run: |
@@ -448,7 +472,7 @@ jobs:
           name: slot-konkr-rc4-release-apk
           path: android/app/build/outputs/apk/release/app-release.apk
       - uses: actions/upload-artifact@v4
-        if: startsWith(github.ref, 'refs/heads/release/konkr-android-')
+        if: github.ref == 'refs/heads/release/konkr-android-0.1.0-rc1-a14r2'
         with:
           name: slot-konkr-0.1.0-rc1-signed-apk
           path: android/app/build/outputs/apk/release/app-release.apk
@@ -605,3 +629,42 @@ jobs:
             --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease --latest=false \
             --title "slot. for KONKR Pocket Advance 0.1.0 RC1" \
             --notes-file public-release-notes.md
+
+  # One-shot stable publication on a frozen release branch. GitHub's
+  # authenticated Actions token creates the tag and GitHub Release only after
+  # both the Android and native mGBA continuity jobs pass on the same SHA.
+  publish-konkr-020-direct:
+    name: Publish KONKR Android 0.2.0
+    if: github.ref == 'refs/heads/release/konkr-android-0.2.0'
+    needs: [debug-apk, a6-a1-mgba-continuity]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: slot-konkr-0.2.0-signed-apk
+          path: release-assets
+      - name: Verify candidate and publish stable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="konkr-v0.2.0"
+          test "$GITHUB_REF" = 'refs/heads/release/konkr-android-0.2.0'
+          test "$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' android/app/build.gradle.kts | head -1)" = '0.2.0'
+          test "$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' android/app/build.gradle.kts | head -1)" = '103'
+          apk='release-assets/slot-konkr-0.2.0-arm64-x86_64.apk'
+          mv release-assets/app-release.apk "$apk"
+          test -s "$apk"
+          (cd release-assets && sha256sum "$(basename "$apk")" > SHA256SUMS.txt)
+          # Never retarget an existing public release to a different commit.
+          if gh api -X GET "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::Tag $tag already exists; aborting rather than overwriting it."
+            exit 1
+          fi
+          gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs"             -f "ref=refs/tags/$tag" -f "sha=$GITHUB_SHA" >/dev/null
+          cp docs/konkr/RELEASE-NOTES-0.2.0.md release-notes.md
+          printf '\nSource commit: %s\n' "$GITHUB_SHA" >> release-notes.md
+          gh release create "$tag" "$apk" release-assets/SHA256SUMS.txt             --repo "$GITHUB_REPOSITORY" --verify-tag --latest             --title "slot. for KONKR Pocket Advance 0.2.0"             --notes-file release-notes.md

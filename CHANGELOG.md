@@ -1,5 +1,14 @@
 # Changelog
 
+## KONKR Android 0.2.0 — public release
+
+- Promotes the QA code102 feature set to a signed, universal ARM64/x86_64 Android release (versionCode 103).
+- Adds 10 selectable GBA shader modes plus Off, with restored RetroArch Dot defaults and original LCD3x behavior. Complex RetroArch presets are GLES2 ports requiring further on-device parity measurements.
+- Optimizes cartridge scrolling and startup: 160 GPU texture slots (up from 96), two asynchronous raster workers, LZ4-compressed persistent artwork cache bounded to 160 MiB, idle-only background warming, and per-frame upload throttling.
+- Preserves original Slot carousel physics and full GBA/GB/GBC system labels, with safe non-destructive migration of previous screen and per-game shader preferences.
+- Retains RetroAchievements online/offline, Cart Studio, ROM indexing, mGBA/gpSP cores, compatible saves/states and supported Cable/RFU multiplayer.
+- Install over a same-certificate existing build. No ROMs, BIOS, account credentials or save files are bundled.
+
 ## KONKR Android 0.1.0-rc.1 — first complete public candidate
 
 - Consolidates the Android adaptation developed through Lab A14r2 into a single ARM64/x86_64 APK.
